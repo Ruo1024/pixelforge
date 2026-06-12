@@ -19,3 +19,25 @@
 - UI 字符串集中在 `pixel/ui/shell/strings.gd`；禁止裸 print。
 - 新 UI 组件必须接 ui_scale（`_scaled_int()`），禁止硬编码像素值。
 - 算法参考 perfectPixel（MIT，https://github.com/theamusing/perfectPixel）已在 README 标注；新增外部算法参考时同样需标注来源与协议。
+
+## 工程设计规范索引（按需精读，不要凭记忆写代码）
+
+规范本体在 `pixelforge-plan/`，本节只是路标。**首次接触本项目：先读 `pixelforge-plan/README.md`**——它定义了文档消费顺序、任务卡执行流程、以及"契约即法律"原则（发现契约缺陷不许静默绕过，须提修订建议待批准）。
+
+按操作场景的必读对照：
+
+| 你要做的事 | 动手前必读 |
+|---|---|
+| 任何写代码任务 | `01-architecture/ARCHITECTURE.md`（分层依赖规则、目录结构、编码规范、性能预算） |
+| 涉及 UI/交互决策 | `00-vision/PRODUCT.md`（UX 原则：像素清晰度优先、不打断创作流、批量优先） |
+| 改 .pxproj 读写 / 项目数据结构 | `02-contracts/PROJECT-FORMAT.md`（改动须新增迁移函数并升 format_version） |
+| 改节点图模型/执行器 | `02-contracts/GRAPH-SCHEMA.md` |
+| 改 AI provider / 任务队列 | `02-contracts/PROVIDER-API.md` |
+| 改插件加载 / 新内置模块 | `02-contracts/PLUGIN-API.md`（内置 provider 也按插件形态实现） |
+| 改风格预设 / 调色板 schema | `02-contracts/STYLE-PRESETS.md` |
+| 开工某里程碑/任务卡 | `03-milestones/` 对应文件 + `05-quality/QUALITY.md` 的 DoD 核查表 |
+| 改 core/pixel 算法 | `04-research/ALGORITHM_RESEARCH.md` + `06-algorithm-refs/perfectPixel/INTEGRATION.md`（哪些思路已吸收、哪些差异是有意为之） |
+| 写/补测试 | `05-quality/QUALITY.md`（测试金字塔、覆盖矩阵口径）；M1 覆盖现状见 `05-quality/COVERAGE-MATRIX-M1.md` |
+| 里程碑收尾 | 完成报告（diff 模式）→ `03-milestones/reports/`；跑对应 verify 脚本（含 git 干净度检查） |
+
+硬性提醒：`02-contracts/` 是跨模块接口的唯一事实来源，禁止私自更改；技术选型疑问先查 `04-research/RESEARCH-NOTES.md` 再做决定，不要重新调研已有结论。
