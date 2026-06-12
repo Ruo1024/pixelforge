@@ -43,3 +43,10 @@ check_p95 "grid_detect_p95_ms" 100
 check_p95 "cleanup_pipeline_p95_ms" 289
 
 echo "[M1.1 verify] completed"
+
+# --- milestone exit: working tree must be clean ---
+if [ -n "$(git status --porcelain)" ]; then
+  echo "❌ 工作区有未提交变更——里程碑出口要求 commit 后再签字"
+  exit 1
+fi
+echo "✅ git working tree clean"
