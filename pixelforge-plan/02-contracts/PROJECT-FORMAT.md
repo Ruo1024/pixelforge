@@ -16,6 +16,8 @@ my_project.pxproj (ZIP)
 ├── assets/
 │   ├── {asset_id}.png     # 素材位图（RGBA PNG，1:1 真像素，禁止预放大）
 │   └── {asset_id}.meta.json
+├── palettes/
+│   └── {palette_id}.json  # 用户导入的自定义调色板（可选，schema 见 STYLE-PRESETS.md §3）
 ├── boards/
 │   └── {board_id}.json    # 地图拼接画板（M5 定义详细 schema）
 ├── anim/
@@ -33,6 +35,13 @@ my_project.pxproj (ZIP)
   "created_at": "2026-06-11T10:00:00Z",
   "modified_at": "2026-06-11T12:34:56Z",
   "style_preset": { "...": "内嵌 StylePreset 对象，见 STYLE-PRESETS.md" },
+  "custom_palettes": [
+    {
+      "id": "custom_farm_12",
+      "name": "Farm 12",
+      "path": "palettes/custom_farm_12.json"
+    }
+  ],
   "entries": {
     "canvases": ["canvas"],
     "graphs": ["graph_main"],
@@ -44,6 +53,7 @@ my_project.pxproj (ZIP)
 
 规则：
 - `style_preset` 内嵌而非引用，保证项目文件自包含、可分享。
+- `custom_palettes` 可缺省；存在时每项 `path` 必须指向 ZIP 内 `palettes/{palette_id}.json`。打开项目时先注册这些调色板，再解析清洗参数或素材 provenance 中的 `palette_ref`。
 - 所有 id 用 `crypto.generate_uuid()` 风格的 UUIDv4 字符串（小写连字符）。
 - 时间一律 UTC ISO8601。
 
@@ -63,7 +73,12 @@ my_project.pxproj (ZIP)
     "seed": 12345,
     "parent_asset": null,          // 切分/编辑的来源素材 id
     "graph_id": "graph_main",      // 由哪张图产出（可空）
-    "created_at": "..."
+    "created_at": "...",
+    "cleanup": {                   // 可选；M1 清洗产物写入，旧项目可缺省
+      "source_asset": "parent-id",
+      "params": { "...": "JSON-safe PFCleanupParams" },
+      "report": { "...": "JSON-safe pipeline report" }
+    }
   },
   "palette_ref": "db32",          // 素材实际使用的调色板（可为内嵌色表）
   "anim": null                     // 有动画时指向 anim/{id}.anim.json

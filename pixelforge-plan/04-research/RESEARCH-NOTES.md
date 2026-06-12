@@ -66,3 +66,17 @@ RetroDiffusion 可商用｜OpenAI 可商用（输出不训练）｜Stability 年
 - ⚠ gpt-image 系列型号更替快（gpt-image-1 是否退役）。
 - ⚠ Godot 4.7 的 GraphEdit/TileMapLayer API 变化（升级评估卡触发）。
 - ⚠ FLUX/SD 像素 LoRA 生态月度演进（出厂 ComfyUI 模板的模型选择在 M7 时点重选最优）。
+
+## 附录 A. M1.1 GUT coverage 调研结论
+
+- 调研时间：2026-06-13。
+- 当前仓库 vendored GUT 未包含可搜索到的 `coverage` 命令、报告器或 headless 参数；`addons/gut/gut_cmdln.gd` 的现有出口参数只覆盖收集/运行/退出等流程。
+- 结论：M1.1 不把“代码行数比”包装成覆盖率数字，采用 `05-quality/COVERAGE-MATRIX-M1.md` 的 public API / 分支矩阵替代，并用 `pixel/scripts/check_m1_1_coverage_matrix.sh` 在出口脚本中校验矩阵引用的测试名真实存在。
+
+## 附录 B. Godot 4.6.3 headless 下 Image 线程安全调研（M1.1 批量压测）
+
+- 调研时间：2026-06-13（M1.1 批量帧时间测试实现期间），M1.1 改进期从完成报告风险区升格至此，供 M2+ 架构决策引用。
+- 现象：用 `WorkerThreadPool` 在 headless 模式下并行执行 `Image` 清洗（resample/quantize 全管线）不稳定——存在偶发崩溃/挂起，无可复现的最小用例但复现率足以阻断 CI。
+- 当前结论：M1.1 批量压测改为主线程分帧 Apply 口径（每帧处理一张 + `await` 一帧）；产品现有 TaskQueue 路径暂未改分帧。
+- 对 M2+ 的影响：若做大批量生产任务（批量抠图/切分/导出），必须先专项验证 `Image` 在线程内的安全边界（候选方案：每线程独立 `Image` 副本、仅在线程内做纯字节数组运算后主线程回写、或 Godot 官方 `Image` 线程安全声明确认后放开）。
+- 关联：`pixel/tests/integration/test_cleanup_batch_performance.gd` 头部注释、M1.1 完成报告 §5。

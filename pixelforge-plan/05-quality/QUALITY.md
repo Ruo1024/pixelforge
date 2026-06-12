@@ -46,6 +46,10 @@ PixelForge M0 当前采用 `pixel/scripts/verify_m0.sh`。后续若恢复 GitHub
 
 **契约测试**：PROVIDER-API/PLUGIN-API 各有参数化契约套件，新实现挂进来即跑全套——保证"接口即法律"可执行。
 
+### 2.1 M1.1 core 覆盖率替代口径
+
+Godot 4.6.3 + 当前 vendored GUT 版本未暴露可直接接入 headless 出口脚本的行覆盖率输出。M1.1 不伪造行覆盖数字，改用 `05-quality/COVERAGE-MATRIX-M1.md` 作为可验证替代统计：逐项列出 `core/pixel` 公开 API、关键分支、边界条件和对应 GUT 测试名；出口脚本必须抽查矩阵中的测试名真实存在，并禁止保留未覆盖空洞。M2 之后若升级测试工具链，可在不降低矩阵口径的前提下补回行覆盖数字。
+
 ## 3. 自动化流水线
 
 当前 PixelForge M0 使用本地 agent 门控；下列 CI 流水线是未来恢复 GitHub Actions 时的目标形态。

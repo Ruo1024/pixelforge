@@ -63,3 +63,7 @@ cd pixel
 ./scripts/run_tests.sh
 ./scripts/check_export_templates.sh
 ```
+
+## 致谢与算法参考
+
+- 像素网格检测/重采样部分参考了 [perfectPixel](https://github.com/theamusing/perfectPixel)（MIT License）的算法思路，提炼与整合分析见 `pixelforge-plan/06-algorithm-refs/perfectPixel/`。
