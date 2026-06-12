@@ -6,6 +6,7 @@ extends Control
 
 signal canvas_changed
 signal selection_changed(selected_ids: Array)
+signal cleanup_grid_changed(scale: float, offset: Vector2)
 
 const ZOOM_LEVELS := [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0]
 const DEFAULT_ZOOM_INDEX := 3
@@ -15,8 +16,10 @@ const GRID_MIN_ZOOM := 4.0
 const SELECTION_COLOR := Color(0.1, 0.85, 0.65, 1.0)
 const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
 const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
+const CLEANUP_PREVIEW_Z_INDEX := 4095
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
+const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const Log := preload("res://core/util/log_util.gd")
@@ -29,6 +32,12 @@ var item_layer := Node2D.new()
 
 var _items_by_id := {}
 var _selection: Variant = CanvasSelectionScript.new()
+var _cleanup_grid_overlay: Control = null
+var _cleanup_grid_active := false
+var _cleanup_grid_scale := 4.0
+var _cleanup_grid_offset := Vector2.ZERO
+var _cleanup_preview_sprite: Sprite2D = null
+var _cleanup_preview_source_item_id := ""
 var _is_panning := false
 var _last_mouse_position := Vector2.ZERO
 var _cull_elapsed := 0.0
@@ -46,6 +55,13 @@ func _ready() -> void:
 	item_layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	add_child(item_layer)
 
+	_cleanup_grid_overlay = CleanupGridOverlayScript.new()
+	_cleanup_grid_overlay.name = "CleanupGridOverlay"
+	_cleanup_grid_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_cleanup_grid_overlay.set_canvas(self)
+	_cleanup_grid_overlay.grid_changed.connect(_on_cleanup_grid_changed)
+	add_child(_cleanup_grid_overlay)
+
 	_update_layer_transform()
 	set_process(true)
 
@@ -55,10 +71,13 @@ func _process(delta: float) -> void:
 	if _cull_elapsed >= CULL_INTERVAL_SECONDS:
 		_cull_elapsed = 0.0
 		_update_item_visibility()
+	_update_cleanup_preview_alt_state()
 
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
+		if _cleanup_grid_overlay != null:
+			_cleanup_grid_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		_update_layer_transform()
 		queue_redraw()
 
@@ -207,6 +226,8 @@ func clear_canvas() -> void:
 	for item in _items_by_id.values():
 		item.queue_free()
 	_items_by_id.clear()
+	clear_cleanup_preview()
+	hide_cleanup_grid_overlay()
 	_selection.clear(false)
 	_suppress_change_signal = false
 	queue_redraw()
@@ -304,6 +325,74 @@ func get_selected_ids() -> Array:
 
 func select_ids(ids: Array) -> void:
 	_select_only(ids)
+
+
+func get_selected_sprite_snapshots() -> Array:
+	var snapshots := []
+	for item_id in _selection.get_selected_ids():
+		if not _items_by_id.has(item_id):
+			continue
+		var item: Node = _items_by_id[item_id]
+		if item.get_script() != CanvasItemSpriteScript:
+			continue
+		(
+			snapshots
+			. append(
+				{
+					"data": item.to_canvas_data(),
+					"image": item.duplicate_image(),
+				}
+			)
+		)
+	return snapshots
+
+
+func show_cleanup_preview(
+	source_item_id: String, preview_image: Image, opacity: float = 0.56
+) -> void:
+	if not _items_by_id.has(source_item_id):
+		clear_cleanup_preview()
+		return
+	var source_item: Node = _items_by_id[source_item_id]
+	if source_item.get_script() != CanvasItemSpriteScript:
+		clear_cleanup_preview()
+		return
+
+	if _cleanup_preview_sprite == null:
+		_cleanup_preview_sprite = Sprite2D.new()
+		_cleanup_preview_sprite.name = "CleanupPreview"
+		_cleanup_preview_sprite.centered = false
+		_cleanup_preview_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		item_layer.add_child(_cleanup_preview_sprite)
+
+	_cleanup_preview_source_item_id = source_item_id
+	_cleanup_preview_sprite.texture = ImageTexture.create_from_image(preview_image)
+	_cleanup_preview_sprite.position = source_item.position
+	_cleanup_preview_sprite.scale = source_item.scale
+	_cleanup_preview_sprite.z_index = CLEANUP_PREVIEW_Z_INDEX
+	_cleanup_preview_sprite.modulate = Color(1.0, 1.0, 1.0, clampf(opacity, 0.0, 1.0))
+	_update_cleanup_preview_alt_state()
+
+
+func clear_cleanup_preview() -> void:
+	_cleanup_preview_source_item_id = ""
+	if _cleanup_preview_sprite == null:
+		return
+	if is_instance_valid(_cleanup_preview_sprite):
+		_cleanup_preview_sprite.queue_free()
+	_cleanup_preview_sprite = null
+
+
+func show_cleanup_grid_overlay(scale: float, offset: Vector2) -> void:
+	_cleanup_grid_active = true
+	_cleanup_grid_scale = maxf(1.0, scale)
+	_cleanup_grid_offset = offset
+	_sync_cleanup_grid_overlay()
+
+
+func hide_cleanup_grid_overlay() -> void:
+	_cleanup_grid_active = false
+	_sync_cleanup_grid_overlay()
 
 
 func move_selected_by(delta: Vector2, record_undo: bool = true) -> void:
@@ -410,6 +499,7 @@ func _drag_selected_to(world_position: Vector2) -> void:
 			var item: Node = _items_by_id[item_id]
 			if not item.locked:
 				item.position = (_selection.drag_start_positions[item_id] + delta).round()
+	_sync_cleanup_grid_overlay()
 	queue_redraw()
 
 
@@ -470,6 +560,8 @@ func _remove_item_direct(item_id: String) -> void:
 	if not item.asset_id.is_empty():
 		AssetLibrary.release_ref(item.asset_id)
 	_items_by_id.erase(item_id)
+	if item_id == _cleanup_preview_source_item_id:
+		clear_cleanup_preview()
 	_selection.remove_item_reference(item_id)
 	item_layer.remove_child(item)
 	item.free()
@@ -501,6 +593,7 @@ func _apply_positions(positions: Dictionary) -> void:
 	for item_id in positions.keys():
 		if _items_by_id.has(item_id):
 			_items_by_id[item_id].position = Vector2(positions[item_id]).round()
+	_sync_cleanup_grid_overlay()
 	queue_redraw()
 
 
@@ -545,6 +638,7 @@ func _set_zoom_to_value(value: float) -> void:
 func _update_layer_transform() -> void:
 	item_layer.position = size * 0.5 - camera_center * camera_zoom
 	item_layer.scale = Vector2.ONE * camera_zoom
+	_sync_cleanup_grid_overlay()
 	queue_redraw()
 
 
@@ -590,5 +684,40 @@ func _emit_canvas_changed() -> void:
 
 
 func _on_selection_changed(selected_ids: Array) -> void:
+	if not selected_ids.has(_cleanup_preview_source_item_id):
+		clear_cleanup_preview()
+	_sync_cleanup_grid_overlay()
 	selection_changed.emit(selected_ids.duplicate())
 	queue_redraw()
+
+
+func _sync_cleanup_grid_overlay() -> void:
+	if _cleanup_grid_overlay == null:
+		return
+	var selected_ids: Array = _selection.get_selected_ids()
+	if (
+		not _cleanup_grid_active
+		or selected_ids.size() != 1
+		or not _items_by_id.has(selected_ids[0])
+	):
+		_cleanup_grid_overlay.configure(Rect2(), _cleanup_grid_scale, _cleanup_grid_offset, false)
+		return
+	var item: Node = _items_by_id[selected_ids[0]]
+	if item.get_script() != CanvasItemSpriteScript:
+		_cleanup_grid_overlay.configure(Rect2(), _cleanup_grid_scale, _cleanup_grid_offset, false)
+		return
+	_cleanup_grid_overlay.configure(
+		item.get_canvas_bounds(), _cleanup_grid_scale, _cleanup_grid_offset, true
+	)
+
+
+func _on_cleanup_grid_changed(scale: float, offset: Vector2) -> void:
+	_cleanup_grid_scale = scale
+	_cleanup_grid_offset = offset
+	cleanup_grid_changed.emit(scale, offset)
+
+
+func _update_cleanup_preview_alt_state() -> void:
+	if _cleanup_preview_sprite == null or not is_instance_valid(_cleanup_preview_sprite):
+		return
+	_cleanup_preview_sprite.visible = not Input.is_key_pressed(KEY_ALT)

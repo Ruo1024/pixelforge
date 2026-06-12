@@ -17,6 +17,7 @@ const FileIOScript := preload("res://infra/file_io.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const AppInfo := preload("res://core/util/app_info.gd")
 const Log := preload("res://core/util/log_util.gd")
+const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
 const MIGRATIONS: Array = []
 
 var current_project: Variant = ProjectModel.new()
@@ -33,6 +34,7 @@ func _ready() -> void:
 
 func new_project(name: String = "Untitled") -> void:
 	AssetLibrary.clear()
+	PaletteRegistry.clear_custom_palettes()
 	UndoService.clear()
 	current_project.reset(name)
 	project_loaded.emit(current_project)
@@ -45,6 +47,10 @@ func set_canvas_data(canvas_data: Dictionary, mark_dirty: bool = true) -> void:
 	if mark_dirty:
 		_emit_dirty(true)
 		EventBus.canvas_changed.emit()
+
+
+func mark_dirty() -> void:
+	_emit_dirty(true)
 
 
 func get_canvas_data() -> Dictionary:
@@ -88,9 +94,11 @@ func open_project(path: String) -> Error:
 
 	_normalize_loaded_project(manifest, canvas)
 
-	var asset_error := AssetLibrary.load_from_zip_files(files)
-	if asset_error != OK:
-		return asset_error
+	var load_error := PaletteRegistry.load_custom_palettes_from_project(files, manifest)
+	if load_error == OK:
+		load_error = AssetLibrary.load_from_zip_files(files)
+	if load_error != OK:
+		return load_error
 
 	current_project = ProjectModel.new()
 	current_project.manifest = manifest
@@ -159,6 +167,9 @@ func _save_to_path(path: String) -> Error:
 	var asset_entries := AssetLibrary.export_zip_entries()
 	for asset_path in asset_entries.keys():
 		entries[asset_path] = asset_entries[asset_path]
+	var palette_entries := PaletteRegistry.export_custom_zip_entries()
+	for palette_path in palette_entries.keys():
+		entries[palette_path] = palette_entries[palette_path]
 	return FileIOScript.zip_pack(entries, path)
 
 
@@ -170,6 +181,11 @@ func _update_manifest_before_save() -> void:
 	entries["canvases"] = ["canvas"]
 	entries["asset_count"] = AssetLibrary.get_all_meta().size()
 	current_project.manifest["entries"] = entries
+	var custom_palettes := PaletteRegistry.get_custom_manifest_entries()
+	if custom_palettes.is_empty():
+		current_project.manifest.erase("custom_palettes")
+	else:
+		current_project.manifest["custom_palettes"] = custom_palettes
 
 
 func _migrate_manifest(manifest: Dictionary) -> Error:
