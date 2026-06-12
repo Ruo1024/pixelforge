@@ -1,0 +1,25 @@
+{
+	"style_version": 1,
+	"id": "preset_hibit",
+	"name": "Hi-bit / Endesga 64",
+	"based_on": null,
+	"resolution_tier": "hibit",
+	"base_size": 48,
+	"tile_size": 16,
+	"palette": {
+		"ref": "endesga64",
+		"colors": []
+	},
+	"max_colors_per_sprite": 32,
+	"outline": "selective",
+	"dither": "none",
+	"dither_strength": 0.0,
+	"perspective": "three_quarter",
+	"anti_alias": false,
+	"prompt_template": {
+		"positive": "{subject}, high detail pixel art, {size_hint}, controlled palette",
+		"negative": "blurry, photorealistic, 3d render, noisy gradients",
+		"style_tags": "modern hi-bit game asset"
+	},
+	"provider_hints": {}
+}

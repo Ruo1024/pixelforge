@@ -1,0 +1,10 @@
+{
+	"id": "bw_2",
+	"name": "1bit Black and White",
+	"colors": [
+		"#000000",
+		"#FFFFFF"
+	],
+	"source": "lospec:1bit-black-and-white",
+	"license": "CC0"
+}

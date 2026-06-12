@@ -1,0 +1,25 @@
+{
+	"style_version": 1,
+	"id": "preset_gb",
+	"name": "Game Boy",
+	"based_on": null,
+	"resolution_tier": "gb",
+	"base_size": 16,
+	"tile_size": 16,
+	"palette": {
+		"ref": "gb_4",
+		"colors": []
+	},
+	"max_colors_per_sprite": 4,
+	"outline": "none",
+	"dither": "bayer4",
+	"dither_strength": 0.35,
+	"perspective": "side",
+	"anti_alias": false,
+	"prompt_template": {
+		"positive": "{subject}, Game Boy pixel art, {size_hint}, four color palette",
+		"negative": "blurry, anti-aliasing, gradients, photorealistic",
+		"style_tags": "monochrome handheld sprite"
+	},
+	"provider_hints": {}
+}
