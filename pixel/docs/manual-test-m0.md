@@ -69,6 +69,6 @@
 
 当前本机已验证：
 
-- GUT：29 tests / 224 asserts 全部通过。
-- headless 启动：通过；本机缺少 Godot 4.6.3 export templates，CI 会安装模板后执行检查。
+- GUT：30 tests / 225 asserts 全部通过。
+- headless 启动：通过；本机缺少 Godot 4.6.3 export templates，M0 本地 agent 门控只验证 headless 启动。
 - lint：严格模式通过；使用项目内临时 venv 安装 gdtoolkit 后，`gdformat --check` 与 `gdlint` 均已实际执行。

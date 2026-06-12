@@ -6,3 +6,4 @@
 - M0 修订: 禁用 viewport stretch 压缩，增加自动 UI scale，修复 Retina/高分屏下窗口与字体显示过小的问题。
 - M0 复审加固: 严格执行 gdtoolkit lint、模板化 export presets、补充任务取消/AssetLibrary 缓存计费测试，并拆出画布选择状态模块。
 - M0 二审加固: 补齐 TaskQueue running cancel 生命周期、未来项目格式拒开、Logger 日志清理、真实 LRU 验证、视口外 process 剔除、HTTP/WebSocket stub 签名和 M1 交接说明。
+- M0 验收口径: 采用本地 agent `verify_m0.sh` 作为出口门控，补 Windows fresh clone import、APPDATA/LOCALAPPDATA 隔离、atomic_write Windows 语义测试和 M0 精简索引。

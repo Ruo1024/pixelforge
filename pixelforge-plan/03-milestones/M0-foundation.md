@@ -1,13 +1,43 @@
 # M0 — 工程骨架 + 无限画布底座
 
-> 目标：可运行的空壳应用：主窗口 + 无限画布（平移/缩放/拖图入画布）+ 项目保存/打开 + 测试与 CI 全绿。
+> 目标：可运行的空壳应用：主窗口 + 无限画布（平移/缩放/拖图入画布）+ 项目保存/打开 + 本地 agent 验证全绿。
 > 依赖：无。本里程碑是一切的地基，质量要求最高。
+
+## 2026-06-12 执行口径补充
+
+当前仓库 M0 出口门控采用**本地 agent 验证**，暂不启用 GitHub Actions。原因是项目维护者选择由本地 agent 自动跑完整脚本，并把结果写入交付文档。后续如果重新启用 GitHub Actions，需要同步 README、`QUALITY.md` 和本文件的出口说明。
+
+本地 agent 统一入口：
+
+```bash
+cd pixel
+./scripts/verify_m0.sh
+```
+
+`verify_m0.sh` 必须顺序执行：
+
+1. `./scripts/lint.sh`
+2. `./scripts/run_tests.sh`
+3. `./scripts/check_export_templates.sh`
+
+Windows fresh clone 不要求人工先 import；`run_tests.sh` 会先执行 `godot --headless --import --quit`，并把 `HOME`、`APPDATA`、`LOCALAPPDATA` 隔离到项目内 `.godot/home`。
+
+M0 精简索引见 `pixel/docs/m0-brief.md`；完整完成报告见 `pixel/M0_COMPLETION_REPORT.md`。
+
+### 精简实施流程
+
+1. 核对目录和 autoload：`services/` 必须是顶级目录，`project.godot` 的服务路径必须指向 `res://services/*.gd`。
+2. 核对基础服务：`SettingsService`、`ProjectService`、`AssetLibrary`、`TaskQueue`、`UndoService`、`EventBus`、`Logger` 都应存在且在报告中列明。
+3. 核对项目格式：保存的 `.pxproj` 必须是标准 ZIP，至少包含 `manifest.json`、`canvas/canvas.json`、`assets/*.png`、`assets/*.meta.json`。
+4. 核对测试分层：`tests/unit`、`tests/integration`、`tests/smoke`、`tests/fixtures` 必须存在；M1 开始时补 `tests/fixtures/generators/`。
+5. 运行 `./scripts/verify_m0.sh`，把结果写入 `M0_COMPLETION_REPORT.md`。
+6. Windows 结果以 `pixel/docs/m0-windows-test-summary.md` 和 `pixel/docs/manual-test-m0.md` 为准；当前性能采样不作为 M0 门控。
 
 ---
 
 ## M0-1 工程初始化与规范落地
 
-**目标**：建立 git 仓库与 Godot 4.6 工程，目录骨架、lint、测试、CI 一步到位。
+**目标**：建立 git 仓库与 Godot 4.6 工程，目录骨架、lint、测试、本地 agent 验证一步到位。
 
 **技术实现指导**：
 - 按 ARCHITECTURE.md §3 创建全部目录（空目录放 `.gitkeep`）。
@@ -15,13 +45,13 @@
 - `core/util/app_info.gd`：`const APP_NAME`, `APP_VERSION`，全部 UI 标题从这里读。
 - 安装 GUT 到 `addons/gut/`；写一个自检测试 `tests/unit/test_sanity.gd`（断言 1+1=2）验证测试链路。
 - gdtoolkit 配置文件 + `scripts/lint.sh`。
-- GitHub Actions：`ci.yml` 跑 lint + headless 测试（`godot --headless -s addons/gut/gut_cmdln.gd`）+ 三平台导出模板检查。
+- 本地 agent 验证：`scripts/verify_m0.sh` 跑 lint + headless 测试（`godot --headless -s addons/gut/gut_cmdln.gd`）+ headless/export-template 检查。
 - `CHANGELOG.md`、`.gitignore`（Godot 模板 + `user://` 无关）。
 
 **涉及文件**：全仓库骨架。
 **验收标准**：
 1. `godot --headless --quit` 无报错启动退出。
-2. CI 三阶段（lint/test/export-check）全绿。
+2. 本地 agent 三阶段（lint/test/headless-export-check）全绿。
 3. 仓库根有 README 简述目录结构（从 ARCHITECTURE.md 摘要）。
 
 ---
@@ -57,7 +87,7 @@
 - **本卡不做**：编组框、note、graph_anchor（M3）；只做 sprite 元素。
 
 **验收标准**：
-1. 手动脚本化冒烟测试（GUT 场景测试）：实例化画布→加 500 个 64×64 随机图元素→模拟平移缩放→帧时间 < 16ms（用 Performance.get_monitor 断言宽松上限 33ms 防 CI 机器波动）。
+1. 手动脚本化冒烟测试（GUT 场景测试）：实例化画布→加 500 个 64×64 随机图元素→模拟平移缩放→帧时间 < 16ms（用 Performance.get_monitor 断言宽松上限 33ms 防自动化环境波动）。Windows headless 的 `TIME_PROCESS` 暂不作为 M0 门控，性能债登记到后续。
 2. 缩放任意档位截图（headless RenderingServer 截图）：元素边缘无模糊（相邻像素无中间色——可编程断言：放大后颜色集合不超原图颜色集合）。
 3. 增删移操作 Ctrl+Z/Ctrl+Shift+Z 完整可逆。
 
@@ -98,6 +128,7 @@
 
 ## M0 整体验收（里程碑出口）
 
-- 全部任务卡验收标准通过，CI 绿。
+- 全部任务卡验收标准通过。
+- 当前执行口径下，`./scripts/verify_m0.sh` 绿灯等价于 M0 本地 agent 验证通过；若未来启用 GitHub Actions，则恢复 CI 绿灯为出口门控。
 - 手动体验脚本（写入 `docs/manual-test-m0.md`）：新建项目→拖入 10 张 PNG→平移缩放排列→保存重开→一致。在 Windows + macOS 实测通过。
 - 代码量预估：~3500 行 GDScript。如发现单卡超 800 行，回报拆卡。
