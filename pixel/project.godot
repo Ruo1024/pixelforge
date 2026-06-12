@@ -1,0 +1,49 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="PixelForge"
+run/main_scene="res://ui/shell/main.tscn"
+config/features=PackedStringArray("4.6", "Forward Plus")
+run/low_processor_mode=true
+config/icon="res://icon.svg"
+
+[autoload]
+
+Logger="*res://infra/logger.gd"
+SettingsService="*res://services/settings_service.gd"
+EventBus="*res://services/event_bus.gd"
+AssetLibrary="*res://services/asset_library.gd"
+UndoService="*res://services/undo_service.gd"
+TaskQueue="*res://services/task_queue.gd"
+ProjectService="*res://services/project_service.gd"
+
+[display]
+
+window/size/viewport_width=1440
+window/size/viewport_height=900
+window/size/window_width_override=1440
+window/size/window_height_override=900
+window/size/min_width=1280
+window/size/min_height=800
+window/stretch/mode="disabled"
+window/stretch/aspect="ignore"
+window/stretch/scale=1.0
+window/stretch/scale_mode="fractional"
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+textures/canvas_textures/default_texture_filter=0
+rendering_device/driver.windows="d3d12"

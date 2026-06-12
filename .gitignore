@@ -1,0 +1,24 @@
+# macOS and local scratch
+.DS_Store
+zitXfz3h
+
+# Excluded local/reference material
+垃圾桶/
+godot-interactive-guide/
+
+# Godot generated state
+pixel/.godot/
+pixel/.import/
+pixel/android/
+pixel/export.cfg
+pixel/export_presets.cfg
+pixel/export_presets.cfg.bak
+pixel/*.translation
+pixel/*.tmp
+pixel/*.ziptmp
+pixel/*.log
+pixel/*.pxproj.tmp
+pixel/build/*
+!pixel/build/.gitkeep
+pixel/user/
+
