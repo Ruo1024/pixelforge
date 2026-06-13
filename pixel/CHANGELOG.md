@@ -13,3 +13,4 @@
 - M1.1: 新增 auto_k kmeans 策略、自定义调色板导入/预览/删除与项目持久化、core 覆盖矩阵门控、base_size 先验断言和 50 张分帧批量清洗性能断言。
 - M1.1 改进: kmeans 空簇重播种；批量压测负载加重与 strict/relaxed 性能口径；覆盖矩阵反向 API 完整性检查与 EXEMPT 豁免；verify_m1_1 p95 回归带；inspector 文案迁入 PFStrings；mac 显示初步修复（inspector 接入 ui_scale、残留 interface_scale 迁移、缩放决策链日志、Cmd 快捷键）；完成报告改 git diff 模式；content_scale_factor 迁移决策卡入 M2。详见 M1_1_IMPROVEMENT_REPORT.md。
 - mac 显示二次修复: 针对 `screen_get_scale=1.0` 且 `usable_rect` 为 macOS 点口径时自动检测仍落回 1.0 的复发场景，补 Retina 点尺寸兜底、窗口像素/点尺寸换算、窗口默认值日志和 smoke 覆盖；完整流程见 `MAC_DISPLAY_FIX_COMPLETION_REPORT.md`。
+- M2: 新增色键抠图、魔棒/矩形/套索选区模型、连通域切分、描边工具、spritesheet 导出器、顶栏批量 Matte/Slice/Outline 入口和 M2 自动化验收。

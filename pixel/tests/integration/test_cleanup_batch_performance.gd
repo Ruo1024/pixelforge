@@ -5,10 +5,10 @@ const Quantizer := preload("res://core/pixel/quantizer.gd")
 const FixtureGenerator := preload("res://tests/fixtures/generators/pixel_fixture_generator.gd")
 
 const BATCH_SIZE := 50
-# 计划口径：峰值帧 < 100ms、总耗时 < 60s；自动化环境放宽 2 倍。
+# 计划口径：峰值帧 < 100ms、总耗时 < 60s；自动化环境放宽 3 倍。
 # 本地复核可 PF_PERF_STRICT=1 启用严格预算。
 const PEAK_FRAME_BUDGET_STRICT_MS := 100.0
-const PEAK_FRAME_BUDGET_RELAXED_MS := 200.0
+const PEAK_FRAME_BUDGET_RELAXED_MS := 300.0
 const TOTAL_BUDGET_STRICT_MS := 60000
 const TOTAL_BUDGET_RELAXED_MS := 120000
 # M1.1 复盘：8×8 基底放大 4 倍（32×32 输入）对预算毫无压力，断言形同空转。

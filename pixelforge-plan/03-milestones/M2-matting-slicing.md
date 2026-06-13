@@ -109,6 +109,8 @@
 
 **临时缓解（M1.1 改进期已落地）**：`cleanup_inspector.gd` 已接入 `ui_scale` 注入；`_resolve_interface_scale()` 已加决策链日志与 mac 残留覆盖值迁移。
 
+**M2 实施结论（2026-06-13）**：维持自研 `ui_scale` 体系，本轮不迁移到 `content_scale_factor`。理由：M2 新增的可见 UI 入口仅为顶栏按钮，已复用 `main.gd::_add_toolbar_button()` 的 `_scaled_int()` 尺寸与主题字号；现有 smoke 覆盖继续保护 Retina/高密度显示的窗口与字号口径。`content_scale_factor` 迁移仍需真实 mac Retina、Windows 100%/150%、原生 `FileDialog` 与无限画布 fractional scale 联合走查，风险和改造面超出 M2 抠图/切分主线，建议后续单独立卡处理。
+
 ## M2 整体验收
 
 - v0.1 对外 alpha 完整故事：AI 图拖入 → 清洗 → 抠图 → 切分 → 描边统一 → 导出 spritesheet。手动测试脚本 docs/manual-test-m2.md 在双平台过。

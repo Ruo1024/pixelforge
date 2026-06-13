@@ -13,6 +13,8 @@ const AppInfo := preload("res://core/util/app_info.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Log := preload("res://core/util/log_util.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
+const Exporter := preload("res://services/exporter.gd")
+const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
 
 const DEFAULT_WINDOW_WIDTH := 1440
 const DEFAULT_WINDOW_HEIGHT := 900
@@ -52,10 +54,11 @@ var _open_dialog: FileDialog = null
 var _export_dialog: FileDialog = null
 var _recovery_dialog: ConfirmationDialog = null
 var _pending_recovery_path := ""
-var _pending_export_image: Image = null
+var _pending_export_snapshots: Array = []
 var _cleanup_task_id := ""
 var _preview_task_id := ""
 var _preview_token := 0
+var _m2_actions: Variant = null
 
 
 func _ready() -> void:
@@ -310,6 +313,9 @@ func _build_ui() -> void:
 	_add_toolbar_button(
 		top_bar, Strings.ACTION_SAVE_AS, func() -> void: _save_dialog.popup_centered_ratio(0.7)
 	)
+	_add_toolbar_button(top_bar, Strings.ACTION_MATTE, _matte_selection)
+	_add_toolbar_button(top_bar, Strings.ACTION_SLICE, _slice_selection)
+	_add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _outline_selection)
 	_add_toolbar_button(top_bar, Strings.ACTION_EXPORT_PNG, _export_selected_png)
 
 	var content := HSplitContainer.new()
@@ -344,6 +350,8 @@ func _build_ui() -> void:
 	bottom_bar.add_child(_status_label)
 
 	_create_file_dialogs()
+	_m2_actions = M2ActionController.new()
+	_m2_actions.setup(_canvas, _cleanup_inspector, _status_label)
 
 
 func _add_toolbar_button(parent: Control, text: String, callback: Callable) -> void:
@@ -607,10 +615,24 @@ func _on_cleanup_canceled() -> void:
 	_status_label.text = Strings.STATUS_CLEANUP_CANCELED
 
 
+func _matte_selection() -> void:
+	_m2_actions.matte_selection()
+
+
+func _slice_selection() -> void:
+	_m2_actions.slice_selection()
+
+
+func _outline_selection() -> void:
+	_m2_actions.outline_selection()
+
+
 func _cancel_cleanup_task() -> void:
-	if _cleanup_task_id.is_empty():
+	if not _cleanup_task_id.is_empty():
+		TaskQueue.cancel(_cleanup_task_id)
 		return
-	TaskQueue.cancel(_cleanup_task_id)
+	if _m2_actions != null:
+		_m2_actions.cancel_current_task()
 
 
 func _request_cleanup_preview(params: Dictionary) -> void:
@@ -722,26 +744,51 @@ func _export_selected_png() -> void:
 		_status_label.text = Strings.STATUS_EXPORT_EMPTY
 		return
 
-	_pending_export_image = snapshots[0]["image"]
+	_pending_export_snapshots = snapshots
 	var data: Dictionary = snapshots[0]["data"]
-	var default_name := String(data.get("asset_id", "sprite")).left(8)
+	var default_name := (
+		"spritesheet" if snapshots.size() > 1 else String(data.get("asset_id", "sprite")).left(8)
+	)
 	_export_dialog.current_file = "%s.png" % default_name
 	_export_dialog.popup_centered_ratio(0.7)
 
 
 func _export_png_path(path: String) -> void:
-	if _pending_export_image == null:
+	if _pending_export_snapshots.is_empty():
 		return
 	var target_path := path
 	if not target_path.to_lower().ends_with(".png"):
 		target_path += ".png"
 
-	var error := FileIOScript.save_png(_pending_export_image, target_path)
-	if error == OK:
-		_status_label.text = Strings.STATUS_EXPORTED
+	var error := OK
+	if _pending_export_snapshots.size() == 1:
+		error = Exporter.export_png(_pending_export_snapshots[0]["image"], target_path)
+		if error == OK:
+			_status_label.text = Strings.STATUS_EXPORTED
 	else:
+		var export_items := []
+		for index in range(_pending_export_snapshots.size()):
+			var snapshot: Dictionary = _pending_export_snapshots[index]
+			var data: Dictionary = snapshot["data"]
+			(
+				export_items
+				. append(
+					{
+						"name": String(data.get("asset_id", "sprite_%02d" % (index + 1))).left(16),
+						"image": snapshot["image"],
+					}
+				)
+			)
+		var result: Dictionary = Exporter.export_spritesheet(
+			export_items, target_path, {"columns": 0, "padding": 1, "image": target_path.get_file()}
+		)
+		error = int(result.get("error", OK))
+		if bool(result.get("ok", false)):
+			_status_label.text = Strings.STATUS_SPRITESHEET_EXPORTED
+
+	if error != OK:
 		Log.warn("PNG export failed", {"path": target_path, "error": error})
-	_pending_export_image = null
+	_pending_export_snapshots.clear()
 
 
 func _on_files_dropped(files: PackedStringArray) -> void:
