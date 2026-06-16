@@ -36,6 +36,15 @@ func set_active_tool(tool_id: String) -> void:
 	tool_changed.emit(tool_id)
 
 
+func clear_active_tool() -> void:
+	if _current_tool == null:
+		return
+	_current_tool.on_deactivate()
+	_current_tool = null
+	_current_tool_id = ""
+	tool_changed.emit("")
+
+
 func get_active_tool_id() -> String:
 	return _current_tool_id
 

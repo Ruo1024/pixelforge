@@ -102,7 +102,13 @@ func add_tool_buttons(parent: Control) -> void:
 		button.custom_minimum_size = _scaled_vec2(TOOL_BUTTON_SIZE, TOOLBAR_BUTTON_HEIGHT)
 		button.add_theme_font_size_override("font_size", _scaled_int(14))
 		var tool_id := String(spec["id"])
-		button.pressed.connect(func() -> void: _tool_manager.set_active_tool(tool_id))
+		button.toggled.connect(
+			func(is_pressed: bool) -> void:
+				if is_pressed:
+					_tool_manager.set_active_tool(tool_id)
+				elif _tool_manager.get_active_tool_id() == tool_id:
+					_tool_manager.clear_active_tool()
+		)
 		_tool_buttons[tool_id] = button
 		parent.add_child(button)
 
@@ -110,6 +116,9 @@ func add_tool_buttons(parent: Control) -> void:
 func handle_shortcut(event: InputEventKey) -> bool:
 	if _tool_manager == null:
 		return false
+	if event.keycode == KEY_ESCAPE and not _tool_manager.get_active_tool_id().is_empty():
+		_tool_manager.clear_active_tool()
+		return true
 	return _tool_manager.handle_shortcut(event.keycode)
 
 
@@ -224,7 +233,6 @@ func _init_tools() -> void:
 	_tool_manager.tool_changed.connect(_on_tool_changed)
 	_tool_manager.selection_changed.connect(_on_tool_selection_changed)
 	_canvas.tool_manager = _tool_manager
-	_tool_manager.set_active_tool("magic_wand")
 
 
 func _on_file_menu_pressed(id: int) -> void:
@@ -338,7 +346,10 @@ func _single_selected_image() -> Image:
 func _on_tool_changed(tool_id: String) -> void:
 	for button_id in _tool_buttons.keys():
 		var button: Button = _tool_buttons[button_id]
-		button.button_pressed = String(button_id) == tool_id
+		button.set_pressed_no_signal(String(button_id) == tool_id)
+	if tool_id.is_empty():
+		_status_label.text = Strings.STATUS_TOOL_OFF
+		return
 	var tool: Variant = _tool_manager.get_current_tool()
 	_status_label.text = Strings.STATUS_TOOL_FORMAT % tool.get_name()
 

@@ -2,6 +2,8 @@ extends "res://addons/gut/test.gd"
 
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
+const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
+const ToolManagerScript := preload("res://ui/tools/tool_manager.gd")
 
 
 func before_each() -> void:
@@ -77,6 +79,27 @@ func test_add_delete_move_are_undoable() -> void:
 	assert_eq(canvas.get_item_count(), 1)
 
 
+func test_dragging_imported_sprite_still_works_before_tool_activation() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(256, 256)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var tool_manager: Variant = ToolManagerScript.new()
+	tool_manager.register_tool("magic_wand", MagicWandToolScript.new())
+	canvas.tool_manager = tool_manager
+
+	var image := _make_checker_image(8)
+	canvas.add_sprite_item(image, "", Vector2.ZERO, "drag_source", false)
+	assert_eq(canvas.get_selected_ids(), ["drag_source"])
+
+	canvas._gui_input(_mouse_button(MOUSE_BUTTON_LEFT, true, Vector2(130, 130)))
+	canvas._gui_input(_mouse_motion(Vector2(150, 150), Vector2(20, 20)))
+	canvas._gui_input(_mouse_button(MOUSE_BUTTON_LEFT, false, Vector2(150, 150)))
+
+	assert_eq(canvas.export_canvas_data()["items"][0]["position"], [20, 20])
+
+
 func test_culled_items_disable_process_callbacks() -> void:
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(256, 256)
@@ -147,3 +170,19 @@ func _make_checker_image(size: int) -> Image:
 		for x in range(size):
 			image.set_pixel(x, y, Color.WHITE if (x + y) % 2 == 0 else Color.BLACK)
 	return image
+
+
+func _mouse_button(button: MouseButton, pressed: bool, position: Vector2) -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	event.button_index = button
+	event.pressed = pressed
+	event.position = position
+	return event
+
+
+func _mouse_motion(position: Vector2, relative: Vector2) -> InputEventMouseMotion:
+	var event := InputEventMouseMotion.new()
+	event.position = position
+	event.relative = relative
+	event.button_mask = MOUSE_BUTTON_MASK_LEFT
+	return event

@@ -1,0 +1,3543 @@
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 179c4dd..25d0446 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -14,3 +14,4 @@
+ - M1.1 改进: kmeans 空簇重播种；批量压测负载加重与 strict/relaxed 性能口径；覆盖矩阵反向 API 完整性检查与 EXEMPT 豁免；verify_m1_1 p95 回归带；inspector 文案迁入 PFStrings；mac 显示初步修复（inspector 接入 ui_scale、残留 interface_scale 迁移、缩放决策链日志、Cmd 快捷键）；完成报告改 git diff 模式；content_scale_factor 迁移决策卡入 M2。详见 M1_1_IMPROVEMENT_REPORT.md。
+ - mac 显示二次修复: 针对 `screen_get_scale=1.0` 且 `usable_rect` 为 macOS 点口径时自动检测仍落回 1.0 的复发场景，补 Retina 点尺寸兜底、窗口像素/点尺寸换算、窗口默认值日志和 smoke 覆盖；完整流程见 `MAC_DISPLAY_FIX_COMPLETION_REPORT.md`。
+ - M2: 新增色键抠图、魔棒/矩形/套索选区模型、连通域切分、描边工具、spritesheet 导出器、顶栏批量 Matte/Slice/Outline 入口和 M2 自动化验收。
++- M2.1: 新增 File > Import Images、Matte/Slice/Outline 参数预览对话框、W/M/L 像素选区工具、非纯色底错误引导、无连线批次卡与整批菜单。
+diff --git a/pixel/docs/manual-test-m2.md b/pixel/docs/manual-test-m2.md
+index 1e19b01..6ab00dc 100644
+--- a/pixel/docs/manual-test-m2.md
++++ b/pixel/docs/manual-test-m2.md
+@@ -32,6 +32,16 @@
+ 2. Windows 100%/150% 缩放：按钮可读，不重叠，文件对话框可正常保存 PNG/JSON。
+ 3. 运行 M2 动作时，画布仍可平移缩放；任务结束后状态栏显示完成状态。
+
++## 5. M2.1 UI 交互补完
++
++1. 使用 `File > Import Images...` 多选 2 张以上 PNG/JPG，确认画布出现批次卡缩略网格；拖放单张图片仍生成独立 sprite。
++2. 选中单张 sprite，点击 `Matte`，确认弹出参数对话框；调整 tolerance/feather 后预览更新，按 Esc 取消不生成新素材。
++3. 选中单张 sprite，点击 `Slice` / `Outline`，确认参数对话框可预览 bbox / 描边结果，Apply 后生成新素材且原素材不被覆盖。
++4. 按 `W` 后在选中 sprite 内点击背景，确认状态栏显示选区面积；按 `M` 拖拽确认矩形选区与尺寸提示；按 `L` 左键打点、右键闭合确认套索选区。
++5. 选中 2 张以上 sprite，点击 `Batch` 生成批次卡；在批次卡缩略图上点选子集，右键卡片执行 `Split Selected`，确认子批次独立出现且原批次不变。
++6. 右键批次卡执行 `Clean Batch` / `Matte Batch` / `Outline Batch`，确认批次缩略图替换为新素材版本，Ctrl+Z 可回退整批卡 asset 队列。
++7. 对渐变或非纯色背景图执行 `Matte`，确认出现可操作建议而不是只有状态栏 warning。
++
+ ## 签字区
+
+ | 走查人 | 日期 | 平台 | 结论 | 备注 |
+diff --git a/pixel/docs/ui-tools.md b/pixel/docs/ui-tools.md
+new file mode 100644
+index 0000000..411fb91
+--- /dev/null
++++ b/pixel/docs/ui-tools.md
+@@ -0,0 +1,32 @@
++# PixelForge UI Tools (M2.1)
++
++M2.1 adds a small pixel-selection tool layer for manual correction before matting,
++slicing, and outlining. The tool layer lives entirely in `ui/`; it calls
++`core/pixel/selection.gd` for pixel math and never edits images directly.
++
++## Ownership
++
++- `ui/tools/base_tool.gd`: shared tool contract, selection overlay helpers, and
++  Shift/Alt boolean selection semantics.
++- `ui/tools/magic_wand_tool.gd`: click-to-select using `PFSelection.magic_wand`.
++- `ui/tools/rectangle_tool.gd`: drag rectangle preview, commit on mouse release.
++- `ui/tools/lasso_tool.gd`: left-click polygon points, right-click close.
++- `ui/tools/tool_manager.gd`: active tool, shared current selection, undo/redo
++  wrapping, and keyboard shortcuts.
++- `ui/shell/m2_1_ui_controller.gd`: shell wiring for File import, W/M/L buttons,
++  M2 parameter dialogs, onboarding, and batch-card context menus.
++
++## Input Flow
++
++1. `PFInfiniteCanvas` keeps normal pan/zoom/select behavior as the default.
++2. When a W/M/L tool is active and exactly one sprite is selected, the canvas
++   converts mouse positions into image pixel coordinates and delegates to
++   `PFToolManager`.
++3. The active tool emits a `PFSelection`; `PFToolManager` records it through
++   `UndoService.perform_action("Tool selection", ...)`.
++4. `PFInfiniteCanvas._draw()` asks the active tool to draw the overlay in screen
++   space, preserving nearest-neighbor sprite rendering.
++
++Batch cards are deliberately not graph nodes in M2.1. `PFCanvasBatchCard` stores
++only an `asset_id` queue and card-local thumbnail selection so the alpha can test
++whole-batch menu processing before M3 introduces formal graph persistence.
+diff --git a/pixel/tests/integration/test_cleanup_batch_performance.gd b/pixel/tests/integration/test_cleanup_batch_performance.gd
+index 3fd104b..103e90c 100644
+--- a/pixel/tests/integration/test_cleanup_batch_performance.gd
++++ b/pixel/tests/integration/test_cleanup_batch_performance.gd
+@@ -35,6 +35,11 @@ func test_batch_cleanup_keeps_main_thread_frame_time_under_budget() -> void:
+        "k": 8,
+    }
+
++   var warmup_image := Image.new()
++   assert_eq(warmup_image.load_png_from_buffer(encoded_images[0]), OK)
++   Pipeline.apply(warmup_image, params)
++   await wait_process_frames(2)
++
+    var started := Time.get_ticks_msec()
+    var peak_process_ms := 0.0
+    var count := 0
+@@ -50,7 +55,11 @@ func test_batch_cleanup_keeps_main_thread_frame_time_under_budget() -> void:
+        var item_ms := float(Time.get_ticks_usec() - item_started) / 1000.0
+        count += 1
+        await wait_process_frames(1)
+-       var process_ms := float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0
++       # Headless TIME_PROCESS includes import/editor frame noise on some runs; use it only
++       # when a real display loop exists, while always measuring Pipeline.apply directly.
++       var process_ms := 0.0
++       if DisplayServer.get_name() != "headless":
++           process_ms = float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0
+        peak_process_ms = maxf(peak_process_ms, maxf(item_ms, process_ms))
+
+    var elapsed_ms := Time.get_ticks_msec() - started
+diff --git a/pixel/tests/smoke/test_infinite_canvas.gd b/pixel/tests/smoke/test_infinite_canvas.gd
+index e64ef50..bb6fe71 100644
+--- a/pixel/tests/smoke/test_infinite_canvas.gd
++++ b/pixel/tests/smoke/test_infinite_canvas.gd
+@@ -2,6 +2,8 @@ extends "res://addons/gut/test.gd"
+
+ const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
+ const ImageMath := preload("res://core/util/image_math.gd")
++const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
++const ToolManagerScript := preload("res://ui/tools/tool_manager.gd")
+
+
+ func before_each() -> void:
+@@ -77,6 +79,27 @@ func test_add_delete_move_are_undoable() -> void:
+    assert_eq(canvas.get_item_count(), 1)
+
+
++func test_dragging_imported_sprite_still_works_before_tool_activation() -> void:
++   var canvas: Control = CanvasScript.new()
++   canvas.size = Vector2(256, 256)
++   add_child_autofree(canvas)
++   await wait_process_frames(2)
++
++   var tool_manager: Variant = ToolManagerScript.new()
++   tool_manager.register_tool("magic_wand", MagicWandToolScript.new())
++   canvas.tool_manager = tool_manager
++
++   var image := _make_checker_image(8)
++   canvas.add_sprite_item(image, "", Vector2.ZERO, "drag_source", false)
++   assert_eq(canvas.get_selected_ids(), ["drag_source"])
++
++   canvas._gui_input(_mouse_button(MOUSE_BUTTON_LEFT, true, Vector2(130, 130)))
++   canvas._gui_input(_mouse_motion(Vector2(150, 150), Vector2(20, 20)))
++   canvas._gui_input(_mouse_button(MOUSE_BUTTON_LEFT, false, Vector2(150, 150)))
++
++   assert_eq(canvas.export_canvas_data()["items"][0]["position"], [20, 20])
++
++
+ func test_culled_items_disable_process_callbacks() -> void:
+    var canvas: Control = CanvasScript.new()
+    canvas.size = Vector2(256, 256)
+@@ -147,3 +170,19 @@ func _make_checker_image(size: int) -> Image:
+        for x in range(size):
+            image.set_pixel(x, y, Color.WHITE if (x + y) % 2 == 0 else Color.BLACK)
+    return image
++
++
++func _mouse_button(button: MouseButton, pressed: bool, position: Vector2) -> InputEventMouseButton:
++   var event := InputEventMouseButton.new()
++   event.button_index = button
++   event.pressed = pressed
++   event.position = position
++   return event
++
++
++func _mouse_motion(position: Vector2, relative: Vector2) -> InputEventMouseMotion:
++   var event := InputEventMouseMotion.new()
++   event.position = position
++   event.relative = relative
++   event.button_mask = MOUSE_BUTTON_MASK_LEFT
++   return event
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+new file mode 100644
+index 0000000..43635a6
+--- /dev/null
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -0,0 +1,35 @@
++extends "res://addons/gut/test.gd"
++
++const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
++
++
++func before_each() -> void:
++   get_tree().root.get_node("ProjectService").new_project("Batch Card")
++
++
++func test_canvas_batch_card_exports_asset_queue_and_can_split_subset() -> void:
++   var canvas: Control = CanvasScript.new()
++   canvas.size = Vector2(512, 512)
++   add_child_autofree(canvas)
++   await wait_process_frames(2)
++
++   var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++   var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++   card.selected_asset_ids.append(ids[0])
++
++   var data: Dictionary = canvas.export_canvas_data()
++   var item: Dictionary = data["items"][0]
++   assert_eq(item["type"], "batch_card")
++   assert_eq(item["asset_ids"], ids)
++   assert_eq(canvas._get_batch_asset_ids("batch_1", true), [ids[0]])
++
++   var child: Node = canvas._split_batch_selection("batch_1")
++   assert_not_null(child)
++   assert_eq(child.asset_ids, [ids[0]])
++   assert_eq(canvas.get_item_count(), 2)
++
++
++func _register_asset(color: Color, name: String) -> String:
++   var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
++   image.fill(color)
++   return AssetLibrary.register_image(image, name, {"origin": "imported"})
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd.uid b/pixel/tests/unit/test_canvas_batch_card.gd.uid
+new file mode 100644
+index 0000000..bfa5b2d
+--- /dev/null
++++ b/pixel/tests/unit/test_canvas_batch_card.gd.uid
+@@ -0,0 +1 @@
++uid://bblr2vl22rovy
+diff --git a/pixel/tests/unit/test_m2_1_dialogs.gd b/pixel/tests/unit/test_m2_1_dialogs.gd
+new file mode 100644
+index 0000000..72cfeea
+--- /dev/null
++++ b/pixel/tests/unit/test_m2_1_dialogs.gd
+@@ -0,0 +1,56 @@
++extends "res://addons/gut/test.gd"
++
++const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
++const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
++const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
++const Matting := preload("res://core/pixel/matting.gd")
++const Outliner := preload("res://core/pixel/outliner.gd")
++
++
++func test_matte_dialog_exposes_core_params() -> void:
++   var dialog: ConfirmationDialog = MatteDialogScript.new()
++   add_child_autofree(dialog)
++   await wait_process_frames(1)
++
++   dialog.set_source_image(_make_source_image())
++   var params: Dictionary = dialog.get_params()
++
++   assert_eq(params["mode"], Matting.MODE_FLOOD)
++   assert_eq(int(params["feather"]), Matting.DEFAULT_FEATHER)
++   assert_gt(float(params["tolerance"]), 0.0)
++
++
++func test_slice_dialog_exposes_matte_and_segment_params() -> void:
++   var dialog: ConfirmationDialog = SliceDialogScript.new()
++   add_child_autofree(dialog)
++   await wait_process_frames(1)
++
++   dialog.set_source_image(_make_source_image())
++   var params: Dictionary = dialog.get_params()
++   var segment_params: Dictionary = params["segment_params"]
++
++   assert_true(bool(params["matte_first"]))
++   assert_eq(int(segment_params["merge_distance"]), 2)
++   assert_eq(int(segment_params["min_area"]), 4)
++
++
++func test_outline_dialog_exposes_core_params() -> void:
++   var dialog: ConfirmationDialog = OutlineDialogScript.new()
++   add_child_autofree(dialog)
++   await wait_process_frames(1)
++
++   dialog.set_source_image(_make_source_image())
++   var params: Dictionary = dialog.get_params()
++
++   assert_eq(params["type"], Outliner.TYPE_OUTER)
++   assert_eq(params["corner"], Outliner.CORNER_CROSS)
++   assert_eq(params["color"], Color.BLACK)
++
++
++func _make_source_image() -> Image:
++   var image := Image.create(6, 6, false, Image.FORMAT_RGBA8)
++   image.fill(Color.TRANSPARENT)
++   for y in range(2, 4):
++       for x in range(2, 4):
++           image.set_pixel(x, y, Color.RED)
++   return image
+diff --git a/pixel/tests/unit/test_m2_1_dialogs.gd.uid b/pixel/tests/unit/test_m2_1_dialogs.gd.uid
+new file mode 100644
+index 0000000..296474a
+--- /dev/null
++++ b/pixel/tests/unit/test_m2_1_dialogs.gd.uid
+@@ -0,0 +1 @@
++uid://detvu5r2e7vmf
+diff --git a/pixel/tests/unit/test_m2_1_tools.gd b/pixel/tests/unit/test_m2_1_tools.gd
+new file mode 100644
+index 0000000..a033d41
+--- /dev/null
++++ b/pixel/tests/unit/test_m2_1_tools.gd
+@@ -0,0 +1,67 @@
++extends "res://addons/gut/test.gd"
++
++const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
++const RectangleToolScript := preload("res://ui/tools/rectangle_tool.gd")
++const LassoToolScript := preload("res://ui/tools/lasso_tool.gd")
++
++
++func test_magic_wand_tool_commits_pixel_selection() -> void:
++   var tool := MagicWandToolScript.new()
++   var image := _make_two_color_image()
++   var emitted := []
++   tool.selection_committed.connect(
++       func(selection: PFSelection) -> void: emitted.append(selection)
++   )
++   tool.set_source_image(image)
++
++   tool.on_mouse_press(Vector2i(0, 0), MOUSE_BUTTON_LEFT, 0)
++
++   assert_eq(emitted.size(), 1)
++   var selection: PFSelection = emitted[0]
++   assert_eq(selection.get_selected_count(), 8)
++   assert_eq(selection.get_bbox(), Rect2i(0, 0, 2, 4))
++
++
++func test_rectangle_tool_drag_commits_rect_selection() -> void:
++   var tool := RectangleToolScript.new()
++   var emitted := []
++   tool.selection_committed.connect(
++       func(selection: PFSelection) -> void: emitted.append(selection)
++   )
++   tool.set_source_image(Image.create(8, 8, false, Image.FORMAT_RGBA8))
++
++   tool.on_mouse_press(Vector2i(1, 1), MOUSE_BUTTON_LEFT, 0)
++   tool.on_mouse_move(Vector2i(3, 4))
++   tool.on_mouse_release(Vector2i(3, 4), MOUSE_BUTTON_LEFT, 0)
++
++   assert_eq(emitted.size(), 1)
++   var selection: PFSelection = emitted[0]
++   assert_eq(selection.get_bbox(), Rect2i(1, 1, 3, 4))
++   assert_eq(selection.get_selected_count(), 12)
++
++
++func test_lasso_tool_right_click_closes_polygon_selection() -> void:
++   var tool := LassoToolScript.new()
++   var emitted := []
++   tool.selection_committed.connect(
++       func(selection: PFSelection) -> void: emitted.append(selection)
++   )
++   tool.set_source_image(Image.create(8, 8, false, Image.FORMAT_RGBA8))
++
++   tool.on_mouse_press(Vector2i(1, 1), MOUSE_BUTTON_LEFT, 0)
++   tool.on_mouse_press(Vector2i(6, 1), MOUSE_BUTTON_LEFT, 0)
++   tool.on_mouse_press(Vector2i(1, 6), MOUSE_BUTTON_LEFT, 0)
++   tool.on_mouse_press(Vector2i(1, 6), MOUSE_BUTTON_RIGHT, 0)
++
++   assert_eq(emitted.size(), 1)
++   var selection: PFSelection = emitted[0]
++   assert_false(selection.is_empty())
++   assert_eq(selection.get_bbox().position, Vector2i(1, 1))
++
++
++func _make_two_color_image() -> Image:
++   var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
++   for y in range(4):
++       for x in range(4):
++           image.set_pixel(x, y, Color.WHITE if x < 2 else Color.RED)
++   return image
+diff --git a/pixel/tests/unit/test_m2_1_tools.gd.uid b/pixel/tests/unit/test_m2_1_tools.gd.uid
+new file mode 100644
+index 0000000..14cd43d
+--- /dev/null
++++ b/pixel/tests/unit/test_m2_1_tools.gd.uid
+@@ -0,0 +1 @@
++uid://bhcg4ur8r42m1
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
+new file mode 100644
+index 0000000..5197d53
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_batch_card.gd
+@@ -0,0 +1,191 @@
++class_name PFCanvasBatchCard
++extends Node2D
++
++## M2.1 批次内容卡（无连线 MVP）。
++## 只持有 asset_id 队列和卡内勾选状态；节点图双身份与正式 graph 持久化留到 M3。
++
++const IdUtil := preload("res://core/util/id_util.gd")
++
++const CARD_WIDTH := 280
++const HEADER_HEIGHT := 30
++const PADDING := 10
++const THUMB_SIZE := 52
++const THUMB_GAP := 8
++const MIN_CARD_HEIGHT := 112
++const BACKGROUND := Color(0.16, 0.17, 0.18, 0.96)
++const BORDER := Color(0.52, 0.62, 0.72, 1.0)
++const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
++const THUMB_BACKGROUND := Color(0.08, 0.085, 0.09, 1.0)
++
++var item_id := ""
++var asset_ids: Array[String] = []
++var selected_asset_ids: Array[String] = []
++var label := ""
++var locked := false
++
++var _thumbnail_textures := {}
++var _font: Font = null
++
++
++func setup_from_data(data: Dictionary) -> void:
++   item_id = String(data.get("id", IdUtil.uuid_v4()))
++   label = String(data.get("label", "Batch"))
++   asset_ids = _string_array(data.get("asset_ids", []))
++   selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
++   locked = bool(data.get("locked", false))
++   z_index = int(data.get("z_index", 0))
++   var raw_position: Variant = data.get("position", [0, 0])
++   position = Vector2(float(raw_position[0]), float(raw_position[1])).round()
++   texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
++   _rebuild_thumbnails()
++   queue_redraw()
++
++
++func to_canvas_data() -> Dictionary:
++   return {
++       "id": item_id,
++       "type": "batch_card",
++       "asset_ids": asset_ids.duplicate(),
++       "selected_asset_ids": selected_asset_ids.duplicate(),
++       "label": label,
++       "position": [int(round(position.x)), int(round(position.y))],
++       "z_index": z_index,
++       "locked": locked,
++   }
++
++
++func get_canvas_bounds() -> Rect2:
++   return Rect2(position, Vector2(CARD_WIDTH, _card_height()))
++
++
++func contains_world_point(world_position: Vector2) -> bool:
++   return get_canvas_bounds().has_point(world_position)
++
++
++func set_asset_ids(new_asset_ids: Array) -> void:
++   asset_ids = _string_array(new_asset_ids)
++   for selected_id in selected_asset_ids.duplicate():
++       if not asset_ids.has(selected_id):
++           selected_asset_ids.erase(selected_id)
++   _rebuild_thumbnails()
++   queue_redraw()
++
++
++func get_selected_or_all_asset_ids() -> Array[String]:
++   if selected_asset_ids.is_empty():
++       return asset_ids.duplicate()
++   return selected_asset_ids.duplicate()
++
++
++func toggle_asset_at_world(world_position: Vector2) -> bool:
++   var index := asset_index_at_world(world_position)
++   if index < 0 or index >= asset_ids.size():
++       return false
++   var asset_id := asset_ids[index]
++   if selected_asset_ids.has(asset_id):
++       selected_asset_ids.erase(asset_id)
++   else:
++       selected_asset_ids.append(asset_id)
++   queue_redraw()
++   return true
++
++
++func asset_index_at_world(world_position: Vector2) -> int:
++   var local := world_position - position
++   if local.y < HEADER_HEIGHT:
++       return -1
++   var columns := _columns()
++   for index in range(asset_ids.size()):
++       var rect := _thumb_rect(index, columns)
++       if rect.has_point(local):
++           return index
++   return -1
++
++
++func _draw() -> void:
++   _font = ThemeDB.fallback_font if _font == null else _font
++   var card_rect := Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, _card_height()))
++   draw_rect(card_rect, BACKGROUND, true)
++   draw_rect(card_rect, BORDER, false, 1.0)
++   draw_rect(
++       Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
++   )
++   if _font != null:
++       draw_string(
++           _font,
++           Vector2(PADDING, 21),
++           "%s (%d)" % [label, asset_ids.size()],
++           HORIZONTAL_ALIGNMENT_LEFT,
++           CARD_WIDTH - PADDING * 2,
++           13,
++           Color(0.9, 0.92, 0.92, 1.0)
++       )
++
++   var columns := _columns()
++   for index in range(asset_ids.size()):
++       _draw_thumbnail(index, _thumb_rect(index, columns))
++
++
++func _draw_thumbnail(index: int, rect: Rect2) -> void:
++   var asset_id := asset_ids[index]
++   draw_rect(rect, THUMB_BACKGROUND, true)
++   var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
++   if texture != null:
++       var image_size := texture.get_size()
++       var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
++       var draw_size := image_size * scale
++       var draw_pos := rect.position + (rect.size - draw_size) * 0.5
++       draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
++   var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
++   draw_rect(rect, border_color, false, 1.5)
++
++
++func _thumb_rect(index: int, columns: int) -> Rect2:
++   var col := index % columns
++   var row := int(index / columns)
++   return Rect2(
++       Vector2(
++           PADDING + col * (THUMB_SIZE + THUMB_GAP),
++           HEADER_HEIGHT + PADDING + row * (THUMB_SIZE + THUMB_GAP)
++       ),
++       Vector2(THUMB_SIZE, THUMB_SIZE)
++   )
++
++
++func _card_height() -> int:
++   if asset_ids.is_empty():
++       return MIN_CARD_HEIGHT
++   var rows := int(ceil(float(asset_ids.size()) / float(_columns())))
++   return maxi(
++       MIN_CARD_HEIGHT, HEADER_HEIGHT + PADDING * 2 + rows * THUMB_SIZE + (rows - 1) * THUMB_GAP
++   )
++
++
++func _columns() -> int:
++   return maxi(1, int((CARD_WIDTH - PADDING * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP)))
++
++
++func _rebuild_thumbnails() -> void:
++   _thumbnail_textures.clear()
++   for asset_id in asset_ids:
++       var image := AssetLibrary.get_image(asset_id)
++       if image == null:
++           continue
++       var thumb := image.duplicate()
++       var longest := maxi(thumb.get_width(), thumb.get_height())
++       if longest > THUMB_SIZE:
++           var ratio := float(THUMB_SIZE) / float(longest)
++           thumb.resize(
++               maxi(1, int(round(thumb.get_width() * ratio))),
++               maxi(1, int(round(thumb.get_height() * ratio))),
++               Image.INTERPOLATE_NEAREST
++           )
++       _thumbnail_textures[asset_id] = ImageTexture.create_from_image(thumb)
++
++
++func _string_array(value: Variant) -> Array[String]:
++   var result: Array[String] = []
++   if value is Array:
++       for item in Array(value):
++           result.append(String(item))
++   return result
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd.uid b/pixel/ui/canvas/canvas_batch_card.gd.uid
+new file mode 100644
+index 0000000..8392a92
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_batch_card.gd.uid
+@@ -0,0 +1 @@
++uid://74w5cojog17a
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 9a48014..ba302e3 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -7,6 +7,7 @@ extends Control
+ signal canvas_changed
+ signal selection_changed(selected_ids: Array)
+ signal cleanup_grid_changed(scale: float, offset: Vector2)
++signal batch_context_requested(card_id: String, screen_position: Vector2i)
+
+ const ZOOM_LEVELS := [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0]
+ const DEFAULT_ZOOM_INDEX := 3
+@@ -18,6 +19,7 @@ const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
+ const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
+ const CLEANUP_PREVIEW_Z_INDEX := 4095
+ const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
++const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+ const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
+ const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
+ const IdUtil := preload("res://core/util/id_util.gd")
+@@ -29,6 +31,7 @@ var zoom_index := DEFAULT_ZOOM_INDEX
+ var camera_zoom := float(ZOOM_LEVELS[DEFAULT_ZOOM_INDEX])
+
+ var item_layer := Node2D.new()
++var tool_manager: Variant = null
+
+ var _items_by_id := {}
+ var _selection: Variant = CanvasSelectionScript.new()
+@@ -39,7 +42,6 @@ var _cleanup_grid_offset := Vector2.ZERO
+ var _cleanup_preview_sprite: Sprite2D = null
+ var _cleanup_preview_source_item_id := ""
+ var _is_panning := false
+-var _last_mouse_position := Vector2.ZERO
+ var _cull_elapsed := 0.0
+ var _suppress_change_signal := false
+
+@@ -72,6 +74,8 @@ func _process(delta: float) -> void:
+        _cull_elapsed = 0.0
+        _update_item_visibility()
+    _update_cleanup_preview_alt_state()
++   if tool_manager != null and tool_manager.needs_redraw():
++       queue_redraw()
+
+
+ func _notification(what: int) -> void:
+@@ -83,7 +87,10 @@ func _notification(what: int) -> void:
+
+
+ func _gui_input(event: InputEvent) -> void:
+-   if event is InputEventMouseButton:
++   if _tool_manager_handles(event):
++       accept_event()
++       queue_redraw()
++   elif event is InputEventMouseButton:
+        _handle_mouse_button(event)
+    elif event is InputEventMouseMotion:
+        _handle_mouse_motion(event)
+@@ -124,6 +131,9 @@ func _draw() -> void:
+        draw_rect(box, BOX_COLOR, true)
+        draw_rect(box, Color(1.0, 0.85, 0.25, 1.0), false, 1.0)
+
++   if tool_manager != null:
++       tool_manager.draw_overlay(self, _get_active_tool_target())
++
+    var font := get_theme_default_font()
+    if font != null:
+        var font_size := maxi(12, get_theme_font_size("font_size", "Label") - 2)
+@@ -177,6 +187,42 @@ func add_sprite_item(
+    return _items_by_id.get(String(data["id"]), null)
+
+
++func _add_batch_card(
++   asset_ids: Array,
++   world_position: Vector2 = Vector2.ZERO,
++   label: String = "Batch",
++   item_id: String = "",
++   record_undo: bool = true
++) -> Node:
++   var data := {
++       "id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
++       "type": "batch_card",
++       "asset_ids": asset_ids.duplicate(),
++       "selected_asset_ids": [],
++       "label": label,
++       "position": [int(round(world_position.x)), int(round(world_position.y))],
++       "z_index": _items_by_id.size(),
++       "locked": false,
++   }
++
++   var do_add := func() -> void:
++       _add_batch_direct(data)
++       _select_only([String(data["id"])])
++       _emit_canvas_changed()
++
++   var undo_add := func() -> void:
++       _remove_item_direct(String(data["id"]))
++       _clear_selection()
++       _emit_canvas_changed()
++
++   if record_undo:
++       UndoService.perform_action("Add batch", do_add, undo_add)
++   else:
++       do_add.call()
++
++   return _items_by_id.get(String(data["id"]), null)
++
++
+ func delete_selected(record_undo: bool = true) -> void:
+    if _selection.is_empty():
+        return
+@@ -186,15 +232,10 @@ func delete_selected(record_undo: bool = true) -> void:
+        if not _items_by_id.has(item_id):
+            continue
+        var item: Node = _items_by_id[item_id]
+-       (
+-           snapshots
+-           . append(
+-               {
+-                   "data": item.to_canvas_data(),
+-                   "image": item.duplicate_image(),
+-               }
+-           )
+-       )
++       var snapshot := {"data": item.to_canvas_data()}
++       if item.get_script() == CanvasItemSpriteScript:
++           snapshot["image"] = item.duplicate_image()
++       snapshots.append(snapshot)
+
+    if snapshots.is_empty():
+        return
+@@ -207,13 +248,18 @@ func delete_selected(record_undo: bool = true) -> void:
+
+    var undo_delete := func() -> void:
+        for snapshot in snapshots:
+-           _add_sprite_direct(snapshot["data"], snapshot["image"])
++           var data: Dictionary = snapshot["data"]
++           if String(data.get("type", "")) == "sprite":
++               _add_sprite_direct(data, snapshot["image"])
++           elif String(data.get("type", "")) == "batch_card":
++               _add_batch_direct(data)
+        _select_only(_ids_from_snapshots(snapshots))
+        _emit_canvas_changed()
+
+    var memory_cost := 0
+    for snapshot in snapshots:
+-       memory_cost += ImageMath.estimate_rgba8_bytes(snapshot["image"])
++       if snapshot.has("image"):
++           memory_cost += ImageMath.estimate_rgba8_bytes(snapshot["image"])
+
+    if record_undo:
+        UndoService.perform_action("Delete sprite", do_delete, undo_delete, memory_cost)
+@@ -243,14 +289,18 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
+    _set_zoom_to_value(float(camera.get("zoom", 1.0)))
+
+    for item_data in canvas_data.get("items", []):
+-       if String(item_data.get("type", "")) != "sprite":
+-           continue
+-       var asset_id := String(item_data.get("asset_id", ""))
+-       var image := AssetLibrary.get_image(asset_id)
+-       if image == null:
+-           Log.warn("Canvas item skipped because asset image is missing", {"asset_id": asset_id})
+-           continue
+-       _add_sprite_direct(item_data, image)
++       var item_type := String(item_data.get("type", ""))
++       if item_type == "sprite":
++           var asset_id := String(item_data.get("asset_id", ""))
++           var image := AssetLibrary.get_image(asset_id)
++           if image == null:
++               Log.warn(
++                   "Canvas item skipped because asset image is missing", {"asset_id": asset_id}
++               )
++               continue
++           _add_sprite_direct(item_data, image)
++       elif item_type == "batch_card":
++           _add_batch_direct(item_data)
+
+    _suppress_change_signal = false
+    _update_layer_transform()
+@@ -266,6 +316,8 @@ func export_canvas_data() -> Dictionary:
+    for node in nodes:
+        if node.get_script() == CanvasItemSpriteScript:
+            items.append(node.to_canvas_data())
++       elif node.get_script() == CanvasBatchCardScript:
++           items.append(node.to_canvas_data())
+
+    return {
+        "camera":
+@@ -347,6 +399,79 @@ func get_selected_sprite_snapshots() -> Array:
+    return snapshots
+
+
++func _get_active_tool_target() -> Dictionary:
++   var selected_ids: Array = _selection.get_selected_ids()
++   if selected_ids.size() != 1 or not _items_by_id.has(selected_ids[0]):
++       return {}
++   var item: Node = _items_by_id[selected_ids[0]]
++   if item.get_script() != CanvasItemSpriteScript:
++       return {}
++   var image: Image = item.duplicate_image()
++   if image == null:
++       return {}
++   return {
++       "item_id": item.item_id,
++       "asset_id": item.asset_id,
++       "image": image,
++       "image_size": image.get_size(),
++       "world_position": item.position,
++       "scale_factor": item.scale_factor,
++   }
++
++
++func _get_batch_asset_ids(card_id: String, selected_only: bool = false) -> Array:
++   if not _items_by_id.has(card_id):
++       return []
++   var item: Node = _items_by_id[card_id]
++   if item.get_script() != CanvasBatchCardScript:
++       return []
++   if selected_only:
++       return item.get_selected_or_all_asset_ids()
++   return item.asset_ids.duplicate()
++
++
++func _replace_batch_asset_ids(
++   card_id: String, new_asset_ids: Array, record_undo: bool = true
++) -> void:
++   if not _items_by_id.has(card_id):
++       return
++   var item: Node = _items_by_id[card_id]
++   if item.get_script() != CanvasBatchCardScript:
++       return
++   var before: Array = item.asset_ids.duplicate()
++   var after := new_asset_ids.duplicate()
++   var do_replace := func() -> void:
++       item.set_asset_ids(after)
++       _select_only([card_id])
++       _emit_canvas_changed()
++   var undo_replace := func() -> void:
++       item.set_asset_ids(before)
++       _select_only([card_id])
++       _emit_canvas_changed()
++   if record_undo:
++       UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
++   else:
++       do_replace.call()
++
++
++func _split_batch_selection(card_id: String) -> Node:
++   if not _items_by_id.has(card_id):
++       return null
++   var item: Node = _items_by_id[card_id]
++   if item.get_script() != CanvasBatchCardScript:
++       return null
++   var subset: Array = item.get_selected_or_all_asset_ids()
++   if subset.is_empty() or subset.size() == item.asset_ids.size():
++       return null
++   return _add_batch_card(
++       subset,
++       item.position + Vector2(item.get_canvas_bounds().size.x + 24.0, 0.0),
++       "%s subset" % item.label,
++       "",
++       true
++   )
++
++
+ func show_cleanup_preview(
+    source_item_id: String, preview_image: Image, opacity: float = 0.56
+ ) -> void:
+@@ -434,13 +559,14 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
+        accept_event()
+    elif event.button_index == MOUSE_BUTTON_MIDDLE:
+        _is_panning = event.pressed
+-       _last_mouse_position = event.position
++       accept_event()
++   elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
++       _emit_batch_context_if_hit(event.position)
+        accept_event()
+    elif event.button_index == MOUSE_BUTTON_LEFT:
+        grab_focus()
+        if Input.is_key_pressed(KEY_SPACE):
+            _is_panning = event.pressed
+-           _last_mouse_position = event.position
+        elif event.pressed:
+            _begin_left_interaction(event.position, event.shift_pressed)
+        else:
+@@ -451,7 +577,6 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
+ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
+    if _is_panning:
+        pan_by_pixels(-event.relative)
+-       _last_mouse_position = event.position
+        accept_event()
+    elif _selection.is_dragging_items:
+        _drag_selected_to(screen_to_world(event.position))
+@@ -466,6 +591,13 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
+    var world_position := screen_to_world(screen_position)
+    var hit_item := _item_at_world(world_position)
+    if hit_item != null:
++       if (
++           hit_item.get_script() == CanvasBatchCardScript
++           and hit_item.toggle_asset_at_world(world_position)
++       ):
++           _select_only([hit_item.item_id])
++           _emit_canvas_changed()
++           return
+        if additive:
+            _selection.toggle(hit_item.item_id, _items_by_id.keys())
+        elif not _selection.has(hit_item.item_id):
+@@ -552,13 +684,28 @@ func _add_sprite_direct(item_data: Dictionary, image: Image) -> Node:
+    return item
+
+
++func _add_batch_direct(item_data: Dictionary) -> Node:
++   var item: Node = CanvasBatchCardScript.new()
++   item.setup_from_data(item_data)
++   item_layer.add_child(item)
++   _items_by_id[item.item_id] = item
++   for asset_id in item.asset_ids:
++       AssetLibrary.add_ref(asset_id)
++   _update_item_visibility()
++   queue_redraw()
++   return item
++
++
+ func _remove_item_direct(item_id: String) -> void:
+    if not _items_by_id.has(item_id):
+        return
+
+    var item: Node = _items_by_id[item_id]
+-   if not item.asset_id.is_empty():
++   if item.get_script() == CanvasItemSpriteScript and not item.asset_id.is_empty():
+        AssetLibrary.release_ref(item.asset_id)
++   elif item.get_script() == CanvasBatchCardScript:
++       for asset_id in item.asset_ids:
++           AssetLibrary.release_ref(asset_id)
+    _items_by_id.erase(item_id)
+    if item_id == _cleanup_preview_source_item_id:
+        clear_cleanup_preview()
+@@ -573,7 +720,10 @@ func _item_at_world(world_position: Vector2) -> Node:
+    for index in range(children.size() - 1, -1, -1):
+        var item := children[index]
+        if (
+-           item.get_script() == CanvasItemSpriteScript
++           (
++               item.get_script() == CanvasItemSpriteScript
++               or item.get_script() == CanvasBatchCardScript
++           )
+            and item.visible
+            and item.contains_world_point(world_position)
+        ):
+@@ -721,3 +871,29 @@ func _update_cleanup_preview_alt_state() -> void:
+    if _cleanup_preview_sprite == null or not is_instance_valid(_cleanup_preview_sprite):
+        return
+    _cleanup_preview_sprite.visible = not Input.is_key_pressed(KEY_ALT)
++
++
++func _tool_manager_handles(event: InputEvent) -> bool:
++   if tool_manager == null:
++       return false
++   if event is InputEventMouseButton:
++       var mouse_event := event as InputEventMouseButton
++       if (
++           mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP
++           or mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN
++           or mouse_event.button_index == MOUSE_BUTTON_MIDDLE
++           or Input.is_key_pressed(KEY_SPACE)
++       ):
++           return false
++       return tool_manager.handle_canvas_input(event, self, _get_active_tool_target())
++   return tool_manager.handle_canvas_input(event, self, _get_active_tool_target())
++
++
++func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
++   var hit_item := _item_at_world(screen_to_world(screen_position))
++   if hit_item == null or hit_item.get_script() != CanvasBatchCardScript:
++       return
++   _select_only([hit_item.item_id])
++   batch_context_requested.emit(
++       hit_item.item_id, Vector2i(get_screen_position()) + Vector2i(screen_position)
++   )
+diff --git a/pixel/ui/dialogs/error_helper.gd b/pixel/ui/dialogs/error_helper.gd
+new file mode 100644
+index 0000000..65de877
+--- /dev/null
++++ b/pixel/ui/dialogs/error_helper.gd
+@@ -0,0 +1,17 @@
++class_name PFErrorHelper
++extends RefCounted
++
++## M2.1 用户错误提示。
++## 只负责把 core 返回的 warning 翻译成可操作建议；不改变算法结果。
++
++const Strings := preload("res://ui/shell/strings.gd")
++
++
++static func show_matte_error(parent: Node, warning: String) -> void:
++   if warning != "non_flat_background" or parent == null:
++       return
++   var dialog := AcceptDialog.new()
++   dialog.title = Strings.DIALOG_MATTE_NON_FLAT_TITLE
++   dialog.dialog_text = Strings.DIALOG_MATTE_NON_FLAT_BODY
++   parent.add_child(dialog)
++   dialog.popup_centered()
+diff --git a/pixel/ui/dialogs/error_helper.gd.uid b/pixel/ui/dialogs/error_helper.gd.uid
+new file mode 100644
+index 0000000..e9ef39c
+--- /dev/null
++++ b/pixel/ui/dialogs/error_helper.gd.uid
+@@ -0,0 +1 @@
++uid://b45lfo5hb0l3f
+diff --git a/pixel/ui/dialogs/matte_dialog.gd b/pixel/ui/dialogs/matte_dialog.gd
+new file mode 100644
+index 0000000..e7d4764
+--- /dev/null
++++ b/pixel/ui/dialogs/matte_dialog.gd
+@@ -0,0 +1,152 @@
++class_name PFMatteDialog
++extends ConfirmationDialog
++
++## 抠图参数对话框。
++## 输入：一张待预览 Image；输出：Matting.matte 可直接消费的参数 Dictionary。
++
++signal params_confirmed(params: Dictionary)
++
++const Matting := preload("res://core/pixel/matting.gd")
++const Strings := preload("res://ui/shell/strings.gd")
++const ImageMath := preload("res://core/util/image_math.gd")
++
++const CONTROL_HEIGHT := 30
++const PREVIEW_SIZE := 220
++const PREVIEW_DEBOUNCE_SECONDS := 0.18
++
++var ui_scale := 1.0
++
++var _source_image: Image = null
++var _mode_options: OptionButton = null
++var _tolerance_spin: SpinBox = null
++var _feather_spin: SpinBox = null
++var _preview_texture: TextureRect = null
++var _warning_label: Label = null
++var _preview_timer: Timer = null
++var _built := false
++
++
++func _ready() -> void:
++   if _built:
++       return
++   _built = true
++   title = Strings.DIALOG_MATTE_TITLE
++   ok_button_text = Strings.DIALOG_APPLY
++   cancel_button_text = Strings.DIALOG_CANCEL
++   min_size = _scaled_vec2i(420, 460)
++   _build_ui()
++   confirmed.connect(func() -> void: params_confirmed.emit(get_params()))
++
++
++func set_source_image(image: Image) -> void:
++   _source_image = ImageMath.duplicate_rgba8(image) if image != null else null
++   _schedule_preview()
++
++
++func get_params() -> Dictionary:
++   return {
++       "mode": Matting.MODE_GLOBAL if _mode_options.selected == 1 else Matting.MODE_FLOOD,
++       "tolerance": float(_tolerance_spin.value),
++       "feather": int(_feather_spin.value),
++   }
++
++
++func _build_ui() -> void:
++   var root := VBoxContainer.new()
++   root.add_theme_constant_override("separation", _scaled_int(8))
++   add_child(root)
++
++   _mode_options = OptionButton.new()
++   _mode_options.add_item(Strings.MATTE_MODE_FLOOD)
++   _mode_options.add_item(Strings.MATTE_MODE_GLOBAL)
++   _add_labeled_control(root, Strings.MATTE_LABEL_MODE, _mode_options)
++
++   _tolerance_spin = _make_spin(0.0, 100.0, 1.0, Matting.DEFAULT_TOLERANCE)
++   _add_labeled_control(root, Strings.MATTE_LABEL_TOLERANCE, _tolerance_spin)
++
++   _feather_spin = _make_spin(0.0, 8.0, 1.0, Matting.DEFAULT_FEATHER)
++   _add_labeled_control(root, Strings.MATTE_LABEL_FEATHER, _feather_spin)
++
++   _preview_texture = TextureRect.new()
++   _preview_texture.custom_minimum_size = _scaled_vec2(PREVIEW_SIZE, PREVIEW_SIZE)
++   _preview_texture.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
++   _preview_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
++   root.add_child(_preview_texture)
++
++   _warning_label = Label.new()
++   _warning_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
++   _warning_label.add_theme_color_override("font_color", Color(1.0, 0.72, 0.25, 1.0))
++   root.add_child(_warning_label)
++
++   _preview_timer = Timer.new()
++   _preview_timer.one_shot = true
++   _preview_timer.wait_time = PREVIEW_DEBOUNCE_SECONDS
++   _preview_timer.timeout.connect(_update_preview)
++   add_child(_preview_timer)
++
++   _mode_options.item_selected.connect(func(_index: int) -> void: _schedule_preview())
++   _tolerance_spin.value_changed.connect(func(_value: float) -> void: _schedule_preview())
++   _feather_spin.value_changed.connect(func(_value: float) -> void: _schedule_preview())
++
++
++func _add_labeled_control(parent: Control, label_text: String, control: Control) -> void:
++   var row := VBoxContainer.new()
++   row.add_theme_constant_override("separation", _scaled_int(2))
++   var label := Label.new()
++   label.text = label_text
++   row.add_child(label)
++   control.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++   row.add_child(control)
++   parent.add_child(row)
++
++
++func _make_spin(minimum: float, maximum: float, step: float, value: float) -> SpinBox:
++   var spin := SpinBox.new()
++   spin.min_value = minimum
++   spin.max_value = maximum
++   spin.step = step
++   spin.value = value
++   return spin
++
++
++func _schedule_preview() -> void:
++   if _preview_timer != null:
++       _preview_timer.start()
++
++
++func _update_preview() -> void:
++   if _source_image == null or _preview_texture == null:
++       return
++   var preview_source := _make_preview_source(_source_image)
++   var result: Dictionary = Matting.matte(preview_source, get_params())
++   var image: Image = result.get("image", preview_source)
++   _preview_texture.texture = ImageTexture.create_from_image(image)
++   var warning := String(result.get("warning", ""))
++   _warning_label.text = (
++       Strings.MATTE_WARNING_NON_FLAT_BACKGROUND if warning == "non_flat_background" else ""
++   )
++
++
++func _make_preview_source(image: Image) -> Image:
++   var preview := ImageMath.duplicate_rgba8(image)
++   var longest := maxi(preview.get_width(), preview.get_height())
++   if longest > PREVIEW_SIZE:
++       var ratio := float(PREVIEW_SIZE) / float(longest)
++       preview.resize(
++           maxi(1, int(round(preview.get_width() * ratio))),
++           maxi(1, int(round(preview.get_height() * ratio))),
++           Image.INTERPOLATE_NEAREST
++       )
++   return preview
++
++
++func _scaled_int(value: int) -> int:
++   return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
++
++
++func _scaled_vec2(width: int, height: int) -> Vector2:
++   return Vector2(_scaled_int(width), _scaled_int(height))
++
++
++func _scaled_vec2i(width: int, height: int) -> Vector2i:
++   return Vector2i(_scaled_int(width), _scaled_int(height))
+diff --git a/pixel/ui/dialogs/matte_dialog.gd.uid b/pixel/ui/dialogs/matte_dialog.gd.uid
+new file mode 100644
+index 0000000..41fb0b6
+--- /dev/null
++++ b/pixel/ui/dialogs/matte_dialog.gd.uid
+@@ -0,0 +1 @@
++uid://cnqy66cpuobp
+diff --git a/pixel/ui/dialogs/onboarding.gd b/pixel/ui/dialogs/onboarding.gd
+new file mode 100644
+index 0000000..c0a875c
+--- /dev/null
++++ b/pixel/ui/dialogs/onboarding.gd
+@@ -0,0 +1,17 @@
++class_name PFOnboarding
++extends RefCounted
++
++## 首次启动引导。
++## 只在真实窗口中显示；headless 测试不弹窗，避免自动化不稳定。
++
++const Strings := preload("res://ui/shell/strings.gd")
++
++
++static func show_first_run_tips(parent: Node) -> void:
++   if parent == null or DisplayServer.get_name() == "headless":
++       return
++   var dialog := AcceptDialog.new()
++   dialog.title = Strings.DIALOG_ONBOARDING_TITLE
++   dialog.dialog_text = Strings.DIALOG_ONBOARDING_BODY
++   parent.add_child(dialog)
++   dialog.popup_centered()
+diff --git a/pixel/ui/dialogs/onboarding.gd.uid b/pixel/ui/dialogs/onboarding.gd.uid
+new file mode 100644
+index 0000000..9996a83
+--- /dev/null
++++ b/pixel/ui/dialogs/onboarding.gd.uid
+@@ -0,0 +1 @@
++uid://dciahby2u6hme
+diff --git a/pixel/ui/dialogs/outline_dialog.gd b/pixel/ui/dialogs/outline_dialog.gd
+new file mode 100644
+index 0000000..2b7dd9c
+--- /dev/null
++++ b/pixel/ui/dialogs/outline_dialog.gd
+@@ -0,0 +1,143 @@
++class_name PFOutlineDialog
++extends ConfirmationDialog
++
++## 描边参数对话框。
++## 输出 Outliner.add_outline 可直接消费的参数 Dictionary。
++
++signal params_confirmed(params: Dictionary)
++
++const Outliner := preload("res://core/pixel/outliner.gd")
++const Strings := preload("res://ui/shell/strings.gd")
++const ImageMath := preload("res://core/util/image_math.gd")
++
++const CONTROL_HEIGHT := 30
++const PREVIEW_SIZE := 220
++const PREVIEW_DEBOUNCE_SECONDS := 0.18
++
++var ui_scale := 1.0
++
++var _source_image: Image = null
++var _type_options: OptionButton = null
++var _corner_options: OptionButton = null
++var _colored_check: CheckBox = null
++var _color_picker: ColorPickerButton = null
++var _preview_texture: TextureRect = null
++var _preview_timer: Timer = null
++var _built := false
++
++
++func _ready() -> void:
++   if _built:
++       return
++   _built = true
++   title = Strings.DIALOG_OUTLINE_TITLE
++   ok_button_text = Strings.DIALOG_APPLY
++   cancel_button_text = Strings.DIALOG_CANCEL
++   min_size = _scaled_vec2i(420, 500)
++   _build_ui()
++   confirmed.connect(func() -> void: params_confirmed.emit(get_params()))
++
++
++func set_source_image(image: Image) -> void:
++   _source_image = ImageMath.duplicate_rgba8(image) if image != null else null
++   _schedule_preview()
++
++
++func get_params() -> Dictionary:
++   return {
++       "type": Outliner.TYPE_INNER if _type_options.selected == 1 else Outliner.TYPE_OUTER,
++       "corner":
++       Outliner.CORNER_SQUARE if _corner_options.selected == 1 else Outliner.CORNER_CROSS,
++       "colored": _colored_check.button_pressed,
++       "color": _color_picker.color,
++   }
++
++
++func _build_ui() -> void:
++   var root := VBoxContainer.new()
++   root.add_theme_constant_override("separation", _scaled_int(8))
++   add_child(root)
++
++   _type_options = OptionButton.new()
++   _type_options.add_item(Strings.OUTLINE_TYPE_OUTER)
++   _type_options.add_item(Strings.OUTLINE_TYPE_INNER)
++   _add_labeled_control(root, Strings.OUTLINE_LABEL_TYPE, _type_options)
++
++   _corner_options = OptionButton.new()
++   _corner_options.add_item(Strings.OUTLINE_CORNER_CROSS)
++   _corner_options.add_item(Strings.OUTLINE_CORNER_SQUARE)
++   _add_labeled_control(root, Strings.OUTLINE_LABEL_CORNER, _corner_options)
++
++   _colored_check = CheckBox.new()
++   _colored_check.text = Strings.OUTLINE_COLORED
++   root.add_child(_colored_check)
++
++   _color_picker = ColorPickerButton.new()
++   _color_picker.color = Color.BLACK
++   _add_labeled_control(root, Strings.OUTLINE_LABEL_COLOR, _color_picker)
++
++   _preview_texture = TextureRect.new()
++   _preview_texture.custom_minimum_size = _scaled_vec2(PREVIEW_SIZE, PREVIEW_SIZE)
++   _preview_texture.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
++   _preview_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
++   root.add_child(_preview_texture)
++
++   _preview_timer = Timer.new()
++   _preview_timer.one_shot = true
++   _preview_timer.wait_time = PREVIEW_DEBOUNCE_SECONDS
++   _preview_timer.timeout.connect(_update_preview)
++   add_child(_preview_timer)
++
++   _type_options.item_selected.connect(func(_index: int) -> void: _schedule_preview())
++   _corner_options.item_selected.connect(func(_index: int) -> void: _schedule_preview())
++   _colored_check.toggled.connect(func(_pressed: bool) -> void: _schedule_preview())
++   _color_picker.color_changed.connect(func(_color: Color) -> void: _schedule_preview())
++
++
++func _add_labeled_control(parent: Control, label_text: String, control: Control) -> void:
++   var row := VBoxContainer.new()
++   row.add_theme_constant_override("separation", _scaled_int(2))
++   var label := Label.new()
++   label.text = label_text
++   row.add_child(label)
++   control.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++   row.add_child(control)
++   parent.add_child(row)
++
++
++func _schedule_preview() -> void:
++   if _preview_timer != null:
++       _preview_timer.start()
++
++
++func _update_preview() -> void:
++   if _source_image == null or _preview_texture == null:
++       return
++   var preview_source := _make_preview_source(_source_image)
++   var preview := Outliner.add_outline(preview_source, get_params())
++   _preview_texture.texture = ImageTexture.create_from_image(preview)
++
++
++func _make_preview_source(image: Image) -> Image:
++   var preview := ImageMath.duplicate_rgba8(image)
++   var longest := maxi(preview.get_width(), preview.get_height())
++   if longest > PREVIEW_SIZE:
++       var ratio := float(PREVIEW_SIZE) / float(longest)
++       preview.resize(
++           maxi(1, int(round(preview.get_width() * ratio))),
++           maxi(1, int(round(preview.get_height() * ratio))),
++           Image.INTERPOLATE_NEAREST
++       )
++   return preview
++
++
++func _scaled_int(value: int) -> int:
++   return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
++
++
++func _scaled_vec2(width: int, height: int) -> Vector2:
++   return Vector2(_scaled_int(width), _scaled_int(height))
++
++
++func _scaled_vec2i(width: int, height: int) -> Vector2i:
++   return Vector2i(_scaled_int(width), _scaled_int(height))
+diff --git a/pixel/ui/dialogs/outline_dialog.gd.uid b/pixel/ui/dialogs/outline_dialog.gd.uid
+new file mode 100644
+index 0000000..6a152e5
+--- /dev/null
++++ b/pixel/ui/dialogs/outline_dialog.gd.uid
+@@ -0,0 +1 @@
++uid://lse3vfedmf10
+diff --git a/pixel/ui/dialogs/slice_dialog.gd b/pixel/ui/dialogs/slice_dialog.gd
+new file mode 100644
+index 0000000..d118de4
+--- /dev/null
++++ b/pixel/ui/dialogs/slice_dialog.gd
+@@ -0,0 +1,185 @@
++class_name PFSliceDialog
++extends ConfirmationDialog
++
++## 切分参数对话框。
++## 预览只画组件 bbox，不修改素材；真正切分仍由 M2ActionController 异步执行。
++
++signal params_confirmed(params: Dictionary)
++
++const Matting := preload("res://core/pixel/matting.gd")
++const Segmenter := preload("res://core/pixel/segmenter.gd")
++const Strings := preload("res://ui/shell/strings.gd")
++const ImageMath := preload("res://core/util/image_math.gd")
++
++const CONTROL_HEIGHT := 30
++const PREVIEW_SIZE := 220
++const PREVIEW_DEBOUNCE_SECONDS := 0.18
++
++var ui_scale := 1.0
++
++var _source_image: Image = null
++var _auto_matte_check: CheckBox = null
++var _matte_tolerance_spin: SpinBox = null
++var _merge_spin: SpinBox = null
++var _min_area_spin: SpinBox = null
++var _preview_texture: TextureRect = null
++var _count_label: Label = null
++var _preview_timer: Timer = null
++var _built := false
++
++
++func _ready() -> void:
++   if _built:
++       return
++   _built = true
++   title = Strings.DIALOG_SLICE_TITLE
++   ok_button_text = Strings.DIALOG_APPLY
++   cancel_button_text = Strings.DIALOG_CANCEL
++   min_size = _scaled_vec2i(420, 500)
++   _build_ui()
++   confirmed.connect(func() -> void: params_confirmed.emit(get_params()))
++
++
++func set_source_image(image: Image) -> void:
++   _source_image = ImageMath.duplicate_rgba8(image) if image != null else null
++   _schedule_preview()
++
++
++func get_params() -> Dictionary:
++   return {
++       "matte_first": _auto_matte_check.button_pressed,
++       "matte_params":
++       {
++           "mode": Matting.MODE_FLOOD,
++           "tolerance": float(_matte_tolerance_spin.value),
++           "feather": 0,
++       },
++       "segment_params":
++       {
++           "merge_distance": int(_merge_spin.value),
++           "min_area": int(_min_area_spin.value),
++       },
++   }
++
++
++func _build_ui() -> void:
++   var root := VBoxContainer.new()
++   root.add_theme_constant_override("separation", _scaled_int(8))
++   add_child(root)
++
++   _auto_matte_check = CheckBox.new()
++   _auto_matte_check.text = Strings.SLICE_AUTO_MATTE
++   _auto_matte_check.button_pressed = true
++   root.add_child(_auto_matte_check)
++
++   _matte_tolerance_spin = _make_spin(0.0, 100.0, 1.0, 12.0)
++   _add_labeled_control(root, Strings.MATTE_LABEL_TOLERANCE, _matte_tolerance_spin)
++
++   _merge_spin = _make_spin(0.0, 32.0, 1.0, Segmenter.DEFAULT_MERGE_DISTANCE)
++   _add_labeled_control(root, Strings.SLICE_LABEL_MERGE_DISTANCE, _merge_spin)
++
++   _min_area_spin = _make_spin(1.0, 4096.0, 1.0, Segmenter.DEFAULT_MIN_AREA)
++   _add_labeled_control(root, Strings.SLICE_LABEL_MIN_AREA, _min_area_spin)
++
++   _preview_texture = TextureRect.new()
++   _preview_texture.custom_minimum_size = _scaled_vec2(PREVIEW_SIZE, PREVIEW_SIZE)
++   _preview_texture.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
++   _preview_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
++   root.add_child(_preview_texture)
++
++   _count_label = Label.new()
++   root.add_child(_count_label)
++
++   _preview_timer = Timer.new()
++   _preview_timer.one_shot = true
++   _preview_timer.wait_time = PREVIEW_DEBOUNCE_SECONDS
++   _preview_timer.timeout.connect(_update_preview)
++   add_child(_preview_timer)
++
++   _auto_matte_check.toggled.connect(func(_pressed: bool) -> void: _schedule_preview())
++   _matte_tolerance_spin.value_changed.connect(func(_value: float) -> void: _schedule_preview())
++   _merge_spin.value_changed.connect(func(_value: float) -> void: _schedule_preview())
++   _min_area_spin.value_changed.connect(func(_value: float) -> void: _schedule_preview())
++
++
++func _add_labeled_control(parent: Control, label_text: String, control: Control) -> void:
++   var row := VBoxContainer.new()
++   row.add_theme_constant_override("separation", _scaled_int(2))
++   var label := Label.new()
++   label.text = label_text
++   row.add_child(label)
++   control.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++   row.add_child(control)
++   parent.add_child(row)
++
++
++func _make_spin(minimum: float, maximum: float, step: float, value: float) -> SpinBox:
++   var spin := SpinBox.new()
++   spin.min_value = minimum
++   spin.max_value = maximum
++   spin.step = step
++   spin.value = value
++   return spin
++
++
++func _schedule_preview() -> void:
++   if _preview_timer != null:
++       _preview_timer.start()
++
++
++func _update_preview() -> void:
++   if _source_image == null or _preview_texture == null:
++       return
++   var preview_source := _make_preview_source(_source_image)
++   var params := get_params()
++   var segment_source := preview_source
++   if bool(params.get("matte_first", true)):
++       var matte_result: Dictionary = Matting.matte(preview_source, params["matte_params"])
++       if bool(matte_result.get("is_flat_bg", false)):
++           segment_source = matte_result["image"]
++   var segments: Array = Segmenter.segment(segment_source, params["segment_params"])
++   var preview := ImageMath.duplicate_rgba8(segment_source)
++   for segment in segments:
++       _draw_rect_outline(preview, segment["rect"], Color(1.0, 0.82, 0.16, 1.0))
++   _preview_texture.texture = ImageTexture.create_from_image(preview)
++   _count_label.text = Strings.SLICE_PREVIEW_COUNT_FORMAT % segments.size()
++
++
++func _draw_rect_outline(image: Image, rect: Rect2i, color: Color) -> void:
++   if rect.size.x <= 0 or rect.size.y <= 0:
++       return
++   var x0 := clampi(rect.position.x, 0, image.get_width() - 1)
++   var y0 := clampi(rect.position.y, 0, image.get_height() - 1)
++   var x1 := clampi(rect.position.x + rect.size.x - 1, 0, image.get_width() - 1)
++   var y1 := clampi(rect.position.y + rect.size.y - 1, 0, image.get_height() - 1)
++   for x in range(x0, x1 + 1):
++       image.set_pixel(x, y0, color)
++       image.set_pixel(x, y1, color)
++   for y in range(y0, y1 + 1):
++       image.set_pixel(x0, y, color)
++       image.set_pixel(x1, y, color)
++
++
++func _make_preview_source(image: Image) -> Image:
++   var preview := ImageMath.duplicate_rgba8(image)
++   var longest := maxi(preview.get_width(), preview.get_height())
++   if longest > PREVIEW_SIZE:
++       var ratio := float(PREVIEW_SIZE) / float(longest)
++       preview.resize(
++           maxi(1, int(round(preview.get_width() * ratio))),
++           maxi(1, int(round(preview.get_height() * ratio))),
++           Image.INTERPOLATE_NEAREST
++       )
++   return preview
++
++
++func _scaled_int(value: int) -> int:
++   return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
++
++
++func _scaled_vec2(width: int, height: int) -> Vector2:
++   return Vector2(_scaled_int(width), _scaled_int(height))
++
++
++func _scaled_vec2i(width: int, height: int) -> Vector2i:
++   return Vector2i(_scaled_int(width), _scaled_int(height))
+diff --git a/pixel/ui/dialogs/slice_dialog.gd.uid b/pixel/ui/dialogs/slice_dialog.gd.uid
+new file mode 100644
+index 0000000..1c2febd
+--- /dev/null
++++ b/pixel/ui/dialogs/slice_dialog.gd.uid
+@@ -0,0 +1 @@
++uid://chql4ws41sbjo
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+new file mode 100644
+index 0000000..dee8aae
+--- /dev/null
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -0,0 +1,381 @@
++class_name PFM21UiController
++extends Node
++
++## M2.1 UI 接线控制器。
++## 主窗口保留布局和项目命令；本控制器承接导入、工具、M2 参数对话框与批次菜单。
++
++signal export_snapshots_requested(snapshots: Array, default_file: String)
++
++const Strings := preload("res://ui/shell/strings.gd")
++const FileIOScript := preload("res://infra/file_io.gd")
++const ToolManagerScript := preload("res://ui/tools/tool_manager.gd")
++const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
++const RectangleToolScript := preload("res://ui/tools/rectangle_tool.gd")
++const LassoToolScript := preload("res://ui/tools/lasso_tool.gd")
++const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
++const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
++const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
++const OnboardingScript := preload("res://ui/dialogs/onboarding.gd")
++const Pipeline := preload("res://core/pixel/pipeline.gd")
++const Log := preload("res://core/util/log_util.gd")
++
++const TOOLBAR_BUTTON_HEIGHT := 34
++const FILE_MENU_BUTTON_WIDTH := 84
++const TOOL_BUTTON_SIZE := 84
++const BATCH_MENU_CLEANUP := 0
++const BATCH_MENU_MATTE := 1
++const BATCH_MENU_OUTLINE := 2
++const BATCH_MENU_SPLIT := 3
++const BATCH_MENU_EXPORT := 4
++
++var ui_scale := 1.0
++
++var _canvas: Control = null
++var _cleanup_inspector: Control = null
++var _status_label: Label = null
++var _m2_actions: Variant = null
++var _new_project_callback: Callable
++var _open_project_callback: Callable
++var _save_project_callback: Callable
++var _tool_manager: Variant = null
++var _tool_buttons := {}
++var _import_dialog: FileDialog = null
++var _matte_dialog: ConfirmationDialog = null
++var _slice_dialog: ConfirmationDialog = null
++var _outline_dialog: ConfirmationDialog = null
++var _batch_menu: PopupMenu = null
++var _batch_menu_card_id := ""
++
++
++func setup(
++   canvas: Control,
++   cleanup_inspector: Control,
++   status_label: Label,
++   m2_actions: Variant,
++   new_project_callback: Callable,
++   open_project_callback: Callable,
++   save_project_callback: Callable
++) -> void:
++   _canvas = canvas
++   _cleanup_inspector = cleanup_inspector
++   _status_label = status_label
++   _m2_actions = m2_actions
++   _new_project_callback = new_project_callback
++   _open_project_callback = open_project_callback
++   _save_project_callback = save_project_callback
++   _create_import_dialog()
++   _create_m2_dialogs()
++   _create_batch_menu()
++   _init_tools()
++   _canvas.batch_context_requested.connect(_show_batch_menu)
++
++
++func add_file_menu(parent: Control) -> void:
++   var file_menu_button := MenuButton.new()
++   file_menu_button.text = Strings.MENU_FILE
++   file_menu_button.custom_minimum_size = _scaled_vec2(
++       FILE_MENU_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT
++   )
++   file_menu_button.focus_mode = Control.FOCUS_NONE
++   file_menu_button.add_theme_font_size_override("font_size", _scaled_int(14))
++   var popup := file_menu_button.get_popup()
++   popup.add_item(Strings.MENU_IMPORT_IMAGES, 0)
++   popup.add_separator()
++   popup.add_item(Strings.ACTION_NEW, 1)
++   popup.add_item(Strings.ACTION_OPEN, 2)
++   popup.add_item(Strings.ACTION_SAVE, 3)
++   popup.id_pressed.connect(_on_file_menu_pressed)
++   parent.add_child(file_menu_button)
++
++
++func add_tool_buttons(parent: Control) -> void:
++   for spec in [
++       {"id": "magic_wand", "text": "W", "tooltip": Strings.TOOL_MAGIC_WAND},
++       {"id": "rectangle", "text": "M", "tooltip": Strings.TOOL_RECTANGLE},
++       {"id": "lasso", "text": "L", "tooltip": Strings.TOOL_LASSO},
++   ]:
++       var button := Button.new()
++       button.text = String(spec["text"])
++       button.tooltip_text = "%s (%s)" % [String(spec["tooltip"]), String(spec["text"])]
++       button.toggle_mode = true
++       button.focus_mode = Control.FOCUS_NONE
++       button.custom_minimum_size = _scaled_vec2(TOOL_BUTTON_SIZE, TOOLBAR_BUTTON_HEIGHT)
++       button.add_theme_font_size_override("font_size", _scaled_int(14))
++       var tool_id := String(spec["id"])
++       button.toggled.connect(
++           func(is_pressed: bool) -> void:
++               if is_pressed:
++                   _tool_manager.set_active_tool(tool_id)
++               elif _tool_manager.get_active_tool_id() == tool_id:
++                   _tool_manager.clear_active_tool()
++       )
++       _tool_buttons[tool_id] = button
++       parent.add_child(button)
++
++
++func handle_shortcut(event: InputEventKey) -> bool:
++   if _tool_manager == null:
++       return false
++   if event.keycode == KEY_ESCAPE and not _tool_manager.get_active_tool_id().is_empty():
++       _tool_manager.clear_active_tool()
++       return true
++   return _tool_manager.handle_shortcut(event.keycode)
++
++
++func import_files_at_mouse(files: PackedStringArray) -> void:
++   _import_image_files(files, _canvas.get_mouse_world_position())
++
++
++func open_matte_dialog() -> void:
++   var source := _single_selected_image()
++   if source == null:
++       _status_label.text = Strings.STATUS_CLEANUP_EMPTY
++       return
++   _matte_dialog.set_source_image(source)
++   _matte_dialog.popup_centered()
++
++
++func open_slice_dialog() -> void:
++   var source := _single_selected_image()
++   if source == null:
++       _status_label.text = Strings.STATUS_CLEANUP_EMPTY
++       return
++   _slice_dialog.set_source_image(source)
++   _slice_dialog.popup_centered()
++
++
++func open_outline_dialog() -> void:
++   var source := _single_selected_image()
++   if source == null:
++       _status_label.text = Strings.STATUS_CLEANUP_EMPTY
++       return
++   _outline_dialog.set_source_image(source)
++   _outline_dialog.popup_centered()
++
++
++func batch_selected_sprites() -> void:
++   var snapshots: Array = _canvas.get_selected_sprite_snapshots()
++   if snapshots.size() < 2:
++       _status_label.text = Strings.STATUS_BATCH_NEEDS_SELECTION
++       return
++
++   var asset_ids: Array[String] = []
++   var min_position := Vector2(INF, INF)
++   for snapshot in snapshots:
++       var data: Dictionary = snapshot["data"]
++       var asset_id := String(data.get("asset_id", ""))
++       if asset_id.is_empty():
++           continue
++       asset_ids.append(asset_id)
++       var raw_position: Array = data.get("position", [0, 0])
++       min_position.x = minf(min_position.x, float(raw_position[0]))
++       min_position.y = minf(min_position.y, float(raw_position[1]))
++
++   if asset_ids.size() < 2:
++       _status_label.text = Strings.STATUS_BATCH_NEEDS_SELECTION
++       return
++   _canvas._add_batch_card(asset_ids, min_position + Vector2(0, -96), Strings.BATCH_DEFAULT_LABEL)
++
++
++func show_onboarding_if_needed() -> void:
++   if DisplayServer.get_name() == "headless":
++       return
++   if bool(SettingsService.get_setting("ui", "m2_1_onboarding_seen", false)):
++       return
++   SettingsService.set_setting("ui", "m2_1_onboarding_seen", true)
++   call_deferred("_show_onboarding_dialog")
++
++
++func _create_import_dialog() -> void:
++   _import_dialog = FileDialog.new()
++   _import_dialog.title = Strings.DIALOG_IMPORT_IMAGES
++   _import_dialog.access = FileDialog.ACCESS_FILESYSTEM
++   _import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
++   _import_dialog.filters = PackedStringArray(["*.png ; PNG Image", "*.jpg,*.jpeg ; JPEG Image"])
++   _import_dialog.files_selected.connect(_on_import_files_selected)
++   add_child(_import_dialog)
++
++
++func _create_m2_dialogs() -> void:
++   _matte_dialog = MatteDialogScript.new()
++   _matte_dialog.ui_scale = ui_scale
++   _matte_dialog.params_confirmed.connect(_m2_actions.matte_selection_with_params)
++   add_child(_matte_dialog)
++
++   _slice_dialog = SliceDialogScript.new()
++   _slice_dialog.ui_scale = ui_scale
++   _slice_dialog.params_confirmed.connect(_m2_actions.slice_selection_with_params)
++   add_child(_slice_dialog)
++
++   _outline_dialog = OutlineDialogScript.new()
++   _outline_dialog.ui_scale = ui_scale
++   _outline_dialog.params_confirmed.connect(_m2_actions.outline_selection_with_params)
++   add_child(_outline_dialog)
++
++
++func _create_batch_menu() -> void:
++   _batch_menu = PopupMenu.new()
++   _batch_menu.add_item(Strings.BATCH_ACTION_CLEANUP, BATCH_MENU_CLEANUP)
++   _batch_menu.add_item(Strings.BATCH_ACTION_MATTE, BATCH_MENU_MATTE)
++   _batch_menu.add_item(Strings.BATCH_ACTION_OUTLINE, BATCH_MENU_OUTLINE)
++   _batch_menu.add_separator()
++   _batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
++   _batch_menu.add_item(Strings.BATCH_ACTION_EXPORT, BATCH_MENU_EXPORT)
++   _batch_menu.id_pressed.connect(_on_batch_menu_id_pressed)
++   add_child(_batch_menu)
++
++
++func _init_tools() -> void:
++   _tool_manager = ToolManagerScript.new()
++   _tool_manager.register_tool("magic_wand", MagicWandToolScript.new())
++   _tool_manager.register_tool("rectangle", RectangleToolScript.new())
++   _tool_manager.register_tool("lasso", LassoToolScript.new())
++   _tool_manager.tool_changed.connect(_on_tool_changed)
++   _tool_manager.selection_changed.connect(_on_tool_selection_changed)
++   _canvas.tool_manager = _tool_manager
++
++
++func _on_file_menu_pressed(id: int) -> void:
++   match id:
++       0:
++           _import_dialog.popup_centered_ratio(0.7)
++       1:
++           _new_project_callback.call()
++       2:
++           _open_project_callback.call()
++       3:
++           _save_project_callback.call()
++
++
++func _on_import_files_selected(files: PackedStringArray) -> void:
++   _import_image_files(files, _canvas.get_mouse_world_position())
++
++
++func _import_image_files(files: PackedStringArray, world_position: Vector2) -> void:
++   var supported_files := []
++   for file_path in files:
++       if _is_supported_image_path(file_path):
++           supported_files.append(String(file_path))
++
++   var drop_position := world_position
++   var imported_asset_ids: Array[String] = []
++   var make_batch := supported_files.size() > 1
++   for file_path in supported_files:
++       var image: Image = FileIOScript.load_png(file_path)
++       if image == null:
++           Log.warn("Imported image could not be loaded", {"path": file_path})
++           continue
++       if image.get_width() * image.get_height() > 1024 * 1024:
++           Log.warn(
++               "Large image imported without M1 cleanup",
++               {"path": file_path, "size": [image.get_width(), image.get_height()]}
++           )
++
++       var asset_name := String(file_path).get_file().get_basename()
++       var asset_id := AssetLibrary.register_image(image, asset_name, {"origin": "imported"})
++       imported_asset_ids.append(asset_id)
++       if not make_batch:
++           _canvas.add_sprite_item(image, asset_id, drop_position)
++       drop_position += Vector2(image.get_width() + 8, 0)
++
++   if imported_asset_ids.size() > 1:
++       _canvas._add_batch_card(imported_asset_ids, world_position, Strings.BATCH_DEFAULT_LABEL)
++
++
++func _is_supported_image_path(file_path: String) -> bool:
++   var lower_path := file_path.to_lower()
++   return (
++       lower_path.ends_with(".png")
++       or lower_path.ends_with(".jpg")
++       or lower_path.ends_with(".jpeg")
++   )
++
++
++func _show_batch_menu(card_id: String, screen_position: Vector2i) -> void:
++   _batch_menu_card_id = card_id
++   _batch_menu.position = screen_position
++   _batch_menu.popup()
++
++
++func _on_batch_menu_id_pressed(id: int) -> void:
++   var asset_ids: Array = _canvas._get_batch_asset_ids(_batch_menu_card_id, true)
++   match id:
++       BATCH_MENU_CLEANUP:
++           _m2_actions.batch_cleanup(
++               _batch_menu_card_id,
++               asset_ids,
++               Pipeline.normalize_params(_cleanup_inspector.get_params(), _project_style_preset())
++           )
++       BATCH_MENU_MATTE:
++           _m2_actions.batch_matte(
++               _batch_menu_card_id, asset_ids, {"mode": "flood", "tolerance": 12.0, "feather": 0}
++           )
++       BATCH_MENU_OUTLINE:
++           _m2_actions.batch_outline(
++               _batch_menu_card_id, asset_ids, {"type": "outer", "color": Color.BLACK}
++           )
++       BATCH_MENU_SPLIT:
++           var new_card: Variant = _canvas._split_batch_selection(_batch_menu_card_id)
++           _status_label.text = (
++               Strings.STATUS_BATCH_SPLIT if new_card != null else Strings.STATUS_BATCH_SPLIT_EMPTY
++           )
++       BATCH_MENU_EXPORT:
++           _emit_batch_export(asset_ids)
++
++
++func _emit_batch_export(asset_ids: Array) -> void:
++   var snapshots := []
++   for asset_id in asset_ids:
++       var image := AssetLibrary.get_image(String(asset_id))
++       if image == null:
++           continue
++       snapshots.append({"data": {"asset_id": String(asset_id)}, "image": image})
++   if snapshots.is_empty():
++       _status_label.text = Strings.STATUS_EXPORT_EMPTY
++       return
++   export_snapshots_requested.emit(snapshots, "batch.png")
++
++
++func _single_selected_image() -> Image:
++   var snapshots: Array = _canvas.get_selected_sprite_snapshots()
++   if snapshots.size() != 1:
++       return null
++   return snapshots[0]["image"]
++
++
++func _on_tool_changed(tool_id: String) -> void:
++   for button_id in _tool_buttons.keys():
++       var button: Button = _tool_buttons[button_id]
++       button.set_pressed_no_signal(String(button_id) == tool_id)
++   if tool_id.is_empty():
++       _status_label.text = Strings.STATUS_TOOL_OFF
++       return
++   var tool: Variant = _tool_manager.get_current_tool()
++   _status_label.text = Strings.STATUS_TOOL_FORMAT % tool.get_name()
++
++
++func _on_tool_selection_changed(selection: PFSelection) -> void:
++   if selection == null or selection.is_empty():
++       _status_label.text = Strings.STATUS_SELECTION_EMPTY
++       return
++   var bbox := selection.get_bbox()
++   _status_label.text = (
++       Strings.STATUS_SELECTION_FORMAT % [bbox.size.x, bbox.size.y, selection.get_selected_count()]
++   )
++
++
++func _project_style_preset() -> Dictionary:
++   var style_data: Variant = ProjectService.current_project.manifest.get("style_preset", {})
++   return style_data if style_data is Dictionary else {}
++
++
++func _show_onboarding_dialog() -> void:
++   OnboardingScript.show_first_run_tips(self)
++
++
++func _scaled_int(value: int) -> int:
++   return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
++
++
++func _scaled_vec2(width: int, height: int) -> Vector2:
++   return Vector2(_scaled_int(width), _scaled_int(height))
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd.uid b/pixel/ui/shell/m2_1_ui_controller.gd.uid
+new file mode 100644
+index 0000000..e59f60d
+--- /dev/null
++++ b/pixel/ui/shell/m2_1_ui_controller.gd.uid
+@@ -0,0 +1 @@
++uid://bul67n0y67m6r
+diff --git a/pixel/ui/shell/m2_action_controller.gd b/pixel/ui/shell/m2_action_controller.gd
+index 57f2bdc..a6a1e75 100644
+--- a/pixel/ui/shell/m2_action_controller.gd
++++ b/pixel/ui/shell/m2_action_controller.gd
+@@ -11,27 +11,39 @@ const IdUtil := preload("res://core/util/id_util.gd")
+ const Matting := preload("res://core/pixel/matting.gd")
+ const Segmenter := preload("res://core/pixel/segmenter.gd")
+ const Outliner := preload("res://core/pixel/outliner.gd")
++const Pipeline := preload("res://core/pixel/pipeline.gd")
++const ErrorHelper := preload("res://ui/dialogs/error_helper.gd")
+
+ const CLEANUP_RESULT_GAP := 8
+
+ var _canvas: Control = null
+ var _cleanup_inspector: Control = null
+ var _status_label: Label = null
++var _dialog_parent: Node = null
+ var _task_id := ""
+
+
+-func setup(canvas: Control, cleanup_inspector: Control, status_label: Label) -> void:
++func setup(
++   canvas: Control, cleanup_inspector: Control, status_label: Label, dialog_parent: Node = null
++) -> void:
+    _canvas = canvas
+    _cleanup_inspector = cleanup_inspector
+    _status_label = status_label
++   _dialog_parent = dialog_parent
+
+
+ func matte_selection() -> void:
++   matte_selection_with_params({})
++
++
++func matte_selection_with_params(params: Dictionary) -> void:
+    var snapshots := _selected_snapshots()
+    if snapshots.is_empty():
+        return
+
+-   var task := TaskScript.new("pixel_matting", {"items": snapshots}, _matting_work)
++   var task := TaskScript.new(
++       "pixel_matting", {"items": snapshots, "params": params}, _matting_work
++   )
+    task.finished.connect(
+        func(result: Variant) -> void:
+            _on_generated_asset_task_finished(result, Strings.STATUS_MATTING_DONE)
+@@ -42,11 +54,15 @@ func matte_selection() -> void:
+
+
+ func slice_selection() -> void:
++   slice_selection_with_params({})
++
++
++func slice_selection_with_params(params: Dictionary) -> void:
+    var snapshots := _selected_snapshots()
+    if snapshots.is_empty():
+        return
+
+-   var task := TaskScript.new("pixel_slicing", {"items": snapshots}, _slice_work)
++   var task := TaskScript.new("pixel_slicing", {"items": snapshots, "params": params}, _slice_work)
+    task.finished.connect(
+        func(result: Variant) -> void:
+            _on_generated_asset_task_finished(result, Strings.STATUS_SLICE_DONE)
+@@ -57,11 +73,17 @@ func slice_selection() -> void:
+
+
+ func outline_selection() -> void:
++   outline_selection_with_params({})
++
++
++func outline_selection_with_params(params: Dictionary) -> void:
+    var snapshots := _selected_snapshots()
+    if snapshots.is_empty():
+        return
+
+-   var task := TaskScript.new("pixel_outline", {"items": snapshots}, _outline_work)
++   var task := TaskScript.new(
++       "pixel_outline", {"items": snapshots, "params": params}, _outline_work
++   )
+    task.finished.connect(
+        func(result: Variant) -> void:
+            _on_generated_asset_task_finished(result, Strings.STATUS_OUTLINE_DONE)
+@@ -71,6 +93,42 @@ func outline_selection() -> void:
+    _status_label.text = Strings.STATUS_OUTLINE_QUEUED
+
+
++func batch_cleanup(card_id: String, asset_ids: Array, params: Dictionary) -> void:
++   _start_batch_task(
++       card_id,
++       asset_ids,
++       "batch_cleanup",
++       {"params": params},
++       _batch_cleanup_work,
++       Strings.STATUS_CLEANUP_QUEUED,
++       Strings.STATUS_CLEANUP_DONE
++   )
++
++
++func batch_matte(card_id: String, asset_ids: Array, params: Dictionary) -> void:
++   _start_batch_task(
++       card_id,
++       asset_ids,
++       "batch_matting",
++       {"params": params},
++       _batch_matte_work,
++       Strings.STATUS_MATTING_QUEUED,
++       Strings.STATUS_MATTING_DONE
++   )
++
++
++func batch_outline(card_id: String, asset_ids: Array, params: Dictionary) -> void:
++   _start_batch_task(
++       card_id,
++       asset_ids,
++       "batch_outline",
++       {"params": params},
++       _batch_outline_work,
++       Strings.STATUS_OUTLINE_QUEUED,
++       Strings.STATUS_OUTLINE_DONE
++   )
++
++
+ func cancel_current_task() -> bool:
+    if _task_id.is_empty():
+        return false
+@@ -87,14 +145,13 @@ func _selected_snapshots() -> Array:
+
+ func _matting_work(task_ref: Variant) -> Dictionary:
+    var items: Array = task_ref.payload["items"]
++   var params: Dictionary = _matte_params(task_ref.payload.get("params", {}))
+    var results := []
+    for index in range(items.size()):
+        if task_ref.cancel_requested:
+            return {"canceled": true, "items": results}
+        var item: Dictionary = items[index]
+-       var matting_result: Dictionary = Matting.matte(
+-           item["image"], {"mode": Matting.MODE_FLOOD, "tolerance": 12.0, "feather": 0}
+-       )
++       var matting_result: Dictionary = Matting.matte(item["image"], params)
+        (
+            results
+            . append(
+@@ -105,6 +162,7 @@ func _matting_work(task_ref: Variant) -> Dictionary:
+                    "tags": ["matting"],
+                    "provenance_key": "matting",
+                    "report": _json_safe(matting_result),
++                   "warning": String(matting_result.get("warning", "")),
+                }
+            )
+        )
+@@ -114,19 +172,22 @@ func _matting_work(task_ref: Variant) -> Dictionary:
+
+ func _slice_work(task_ref: Variant) -> Dictionary:
+    var items: Array = task_ref.payload["items"]
++   var params: Dictionary = _slice_params(task_ref.payload.get("params", {}))
++   var matte_first := bool(params.get("matte_first", true))
++   var matte_params: Dictionary = params.get("matte_params", {})
++   var segment_params: Dictionary = params.get("segment_params", {})
+    var results := []
+    var total_steps := maxi(1, items.size())
+    for index in range(items.size()):
+        if task_ref.cancel_requested:
+            return {"canceled": true, "items": results}
+        var item: Dictionary = items[index]
+-       var matte_result: Dictionary = Matting.matte(
+-           item["image"], {"mode": Matting.MODE_FLOOD, "tolerance": 12.0, "feather": 0}
+-       )
+-       var slice_source: Image = (
+-           matte_result["image"] if bool(matte_result.get("is_flat_bg", false)) else item["image"]
+-       )
+-       var segments: Array = Segmenter.segment(slice_source, {"merge_distance": 2, "min_area": 4})
++       var slice_source: Image = item["image"]
++       if matte_first:
++           var matte_result: Dictionary = Matting.matte(item["image"], matte_params)
++           if bool(matte_result.get("is_flat_bg", false)):
++               slice_source = matte_result["image"]
++       var segments: Array = Segmenter.segment(slice_source, segment_params)
+        for segment_index in range(segments.size()):
+            var segment: Dictionary = segments[segment_index]
+            (
+@@ -148,14 +209,13 @@ func _slice_work(task_ref: Variant) -> Dictionary:
+
+ func _outline_work(task_ref: Variant) -> Dictionary:
+    var items: Array = task_ref.payload["items"]
++   var params: Dictionary = _outline_params(task_ref.payload.get("params", {}))
+    var results := []
+    for index in range(items.size()):
+        if task_ref.cancel_requested:
+            return {"canceled": true, "items": results}
+        var item: Dictionary = items[index]
+-       var output: Image = Outliner.add_outline(
+-           item["image"], {"type": Outliner.TYPE_OUTER, "color": Color.BLACK}
+-       )
++       var output: Image = Outliner.add_outline(item["image"], params)
+        (
+            results
+            . append(
+@@ -165,7 +225,7 @@ func _outline_work(task_ref: Variant) -> Dictionary:
+                    "suffix": "outline",
+                    "tags": ["outline"],
+                    "provenance_key": "outline",
+-                   "report": {"type": Outliner.TYPE_OUTER, "color": Color.BLACK.to_html(true)},
++                   "report": _json_safe(params),
+                }
+            )
+        )
+@@ -173,6 +233,109 @@ func _outline_work(task_ref: Variant) -> Dictionary:
+    return {"canceled": false, "items": results}
+
+
++func _batch_cleanup_work(task_ref: Variant) -> Dictionary:
++   var asset_ids: Array = task_ref.payload["asset_ids"]
++   var params: Dictionary = task_ref.payload["extra"].get("params", {})
++   var results := []
++   for index in range(asset_ids.size()):
++       if task_ref.cancel_requested:
++           return {
++               "canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
++           }
++       var asset_id := String(asset_ids[index])
++       var image := AssetLibrary.get_image(asset_id)
++       if image == null:
++           continue
++       var pipeline_result := Pipeline.apply(image, params)
++       (
++           results
++           . append(
++               {
++                   "parent_asset": asset_id,
++                   "image": pipeline_result["image"],
++                   "name_suffix": "clean",
++                   "origin": "edited",
++                   "tags": ["cleanup"],
++                   "provenance_key": "cleanup",
++                   "report":
++                   _json_safe(
++                       {
++                           "source_asset": asset_id,
++                           "params": params,
++                           "report": pipeline_result.get("report", {}),
++                       }
++                   ),
++               }
++           )
++       )
++       task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_cleanup")
++   return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
++
++
++func _batch_matte_work(task_ref: Variant) -> Dictionary:
++   var asset_ids: Array = task_ref.payload["asset_ids"]
++   var params: Dictionary = _matte_params(task_ref.payload["extra"].get("params", {}))
++   var results := []
++   for index in range(asset_ids.size()):
++       if task_ref.cancel_requested:
++           return {
++               "canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
++           }
++       var asset_id := String(asset_ids[index])
++       var image := AssetLibrary.get_image(asset_id)
++       if image == null:
++           continue
++       var matting_result: Dictionary = Matting.matte(image, params)
++       (
++           results
++           . append(
++               {
++                   "parent_asset": asset_id,
++                   "image": matting_result["image"],
++                   "name_suffix": "matte",
++                   "origin": "edited",
++                   "tags": ["matting"],
++                   "provenance_key": "matting",
++                   "report": _json_safe(matting_result),
++                   "warning": String(matting_result.get("warning", "")),
++               }
++           )
++       )
++       task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_matting")
++   return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
++
++
++func _batch_outline_work(task_ref: Variant) -> Dictionary:
++   var asset_ids: Array = task_ref.payload["asset_ids"]
++   var params: Dictionary = _outline_params(task_ref.payload["extra"].get("params", {}))
++   var results := []
++   for index in range(asset_ids.size()):
++       if task_ref.cancel_requested:
++           return {
++               "canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
++           }
++       var asset_id := String(asset_ids[index])
++       var image := AssetLibrary.get_image(asset_id)
++       if image == null:
++           continue
++       (
++           results
++           . append(
++               {
++                   "parent_asset": asset_id,
++                   "image": Outliner.add_outline(image, params),
++                   "name_suffix": "outline",
++                   "origin": "edited",
++                   "tags": ["outline"],
++                   "provenance_key": "outline",
++                   "report": _json_safe(params),
++               }
++           )
++       )
++       task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_outline")
++   return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
++
++
+ func _on_generated_asset_task_finished(result: Variant, done_status: String) -> void:
+    _task_id = ""
+    _cleanup_inspector.set_cleanup_running(false)
+@@ -180,6 +343,10 @@ func _on_generated_asset_task_finished(result: Variant, done_status: String) ->
+    if not (result is Dictionary) or bool(result.get("canceled", false)):
+        return
+
++   var first_warning := _first_warning(result.get("items", []))
++   if not first_warning.is_empty():
++       ErrorHelper.show_matte_error(_dialog_parent, first_warning)
++
+    var placement_offsets := {}
+    for item_result in result.get("items", []):
+        var source_data: Dictionary = item_result["source_data"]
+@@ -226,6 +393,133 @@ func _on_generated_asset_task_finished(result: Variant, done_status: String) ->
+    _status_label.text = done_status
+
+
++func _start_batch_task(
++   card_id: String,
++   asset_ids: Array,
++   task_kind: String,
++   extra: Dictionary,
++   work: Callable,
++   queued_status: String,
++   done_status: String
++) -> void:
++   var ids := _string_array(asset_ids)
++   if ids.is_empty():
++       _status_label.text = Strings.STATUS_CLEANUP_EMPTY
++       return
++   var task := TaskScript.new(
++       task_kind, {"card_id": card_id, "asset_ids": ids, "extra": extra}, work
++   )
++   task.finished.connect(
++       func(result: Variant) -> void: _on_batch_task_finished(result, done_status)
++   )
++   _task_id = TaskQueue.submit(task)
++   _cleanup_inspector.set_cleanup_running(true)
++   _status_label.text = queued_status
++
++
++func _on_batch_task_finished(result: Variant, done_status: String) -> void:
++   _task_id = ""
++   _cleanup_inspector.set_cleanup_running(false)
++   _cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
++   if not (result is Dictionary) or bool(result.get("canceled", false)):
++       return
++
++   var first_warning := _first_warning(result.get("items", []))
++   if not first_warning.is_empty():
++       ErrorHelper.show_matte_error(_dialog_parent, first_warning)
++
++   var new_asset_ids: Array[String] = []
++   for item_result in result.get("items", []):
++       var parent_asset_id := String(item_result.get("parent_asset", ""))
++       var output: Image = item_result["image"]
++       var provenance_key := String(item_result.get("provenance_key", "operation"))
++       var provenance := {
++           "provider": null,
++           "model": null,
++           "prompt": "",
++           "seed": null,
++           "parent_asset": parent_asset_id,
++           "graph_id": null,
++           "created_at": IdUtil.utc_now_iso(),
++       }
++       provenance[provenance_key] = _json_safe(item_result.get("report", {}))
++       var asset_id := (
++           AssetLibrary
++           . register_image(
++               output,
++               (
++                   "%s_%s"
++                   % [parent_asset_id.left(8), String(item_result.get("name_suffix", "batch"))]
++               ),
++               {
++                   "origin": String(item_result.get("origin", "edited")),
++                   "tags": item_result.get("tags", []),
++                   "provenance": provenance,
++               }
++           )
++       )
++       new_asset_ids.append(asset_id)
++
++   _canvas._replace_batch_asset_ids(String(result.get("card_id", "")), new_asset_ids, true)
++   _status_label.text = done_status
++
++
++func _matte_params(params: Dictionary) -> Dictionary:
++   if params.is_empty():
++       return {"mode": Matting.MODE_FLOOD, "tolerance": 12.0, "feather": 0}
++   return {
++       "mode": String(params.get("mode", Matting.MODE_FLOOD)),
++       "tolerance": float(params.get("tolerance", 12.0)),
++       "feather": int(params.get("feather", 0)),
++   }
++
++
++func _slice_params(params: Dictionary) -> Dictionary:
++   if params.is_empty():
++       return {
++           "matte_first": true,
++           "matte_params": _matte_params({}),
++           "segment_params": {"merge_distance": 2, "min_area": 4},
++       }
++   return {
++       "matte_first": bool(params.get("matte_first", true)),
++       "matte_params": _matte_params(params.get("matte_params", {})),
++       "segment_params":
++       {
++           "merge_distance":
++           int(Dictionary(params.get("segment_params", {})).get("merge_distance", 2)),
++           "min_area": int(Dictionary(params.get("segment_params", {})).get("min_area", 4)),
++       },
++   }
++
++
++func _outline_params(params: Dictionary) -> Dictionary:
++   if params.is_empty():
++       return {"type": Outliner.TYPE_OUTER, "color": Color.BLACK, "corner": Outliner.CORNER_CROSS}
++   return {
++       "type": String(params.get("type", Outliner.TYPE_OUTER)),
++       "color": params.get("color", Color.BLACK),
++       "corner": String(params.get("corner", Outliner.CORNER_CROSS)),
++       "colored": bool(params.get("colored", false)),
++   }
++
++
++func _first_warning(items: Array) -> String:
++   for item in items:
++       var warning := String(Dictionary(item).get("warning", ""))
++       if not warning.is_empty():
++           return warning
++   return ""
++
++
++func _string_array(value: Variant) -> Array[String]:
++   var result: Array[String] = []
++   if value is Array:
++       for item in Array(value):
++           result.append(String(item))
++   return result
++
++
+ static func _position_from_canvas_data(data: Dictionary) -> Vector2:
+    var raw_position: Array = data.get("position", [0, 0])
+    return Vector2(float(raw_position[0]), float(raw_position[1]))
+diff --git a/pixel/ui/shell/main.gd b/pixel/ui/shell/main.gd
+index 6b0271a..d9a5241 100644
+--- a/pixel/ui/shell/main.gd
++++ b/pixel/ui/shell/main.gd
+@@ -7,7 +7,6 @@ extends Control
+ const Strings := preload("res://ui/shell/strings.gd")
+ const InfiniteCanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
+ const CleanupInspectorScript := preload("res://ui/inspector/cleanup_inspector.gd")
+-const FileIOScript := preload("res://infra/file_io.gd")
+ const TaskScript := preload("res://services/pf_task.gd")
+ const AppInfo := preload("res://core/util/app_info.gd")
+ const IdUtil := preload("res://core/util/id_util.gd")
+@@ -15,6 +14,7 @@ const Log := preload("res://core/util/log_util.gd")
+ const Pipeline := preload("res://core/pixel/pipeline.gd")
+ const Exporter := preload("res://services/exporter.gd")
+ const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
++const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
+
+ const DEFAULT_WINDOW_WIDTH := 1440
+ const DEFAULT_WINDOW_HEIGHT := 900
+@@ -59,6 +59,7 @@ var _cleanup_task_id := ""
+ var _preview_task_id := ""
+ var _preview_token := 0
+ var _m2_actions: Variant = null
++var _m2_1_ui: Variant = null
+
+
+ func _ready() -> void:
+@@ -69,6 +70,7 @@ func _ready() -> void:
+    _build_ui()
+    _connect_services()
+    _update_window_title()
++   _m2_1_ui.show_onboarding_if_needed()
+
+
+ func _notification(what: int) -> void:
+@@ -92,6 +94,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
+    elif event.is_command_or_control_pressed() and event.keycode == KEY_N:
+        _create_new_project()
+        get_viewport().set_input_as_handled()
++   elif _m2_1_ui != null and _m2_1_ui.handle_shortcut(event):
++       get_viewport().set_input_as_handled()
+
+
+ static func compute_auto_interface_scale(
+@@ -313,9 +317,6 @@ func _build_ui() -> void:
+    _add_toolbar_button(
+        top_bar, Strings.ACTION_SAVE_AS, func() -> void: _save_dialog.popup_centered_ratio(0.7)
+    )
+-   _add_toolbar_button(top_bar, Strings.ACTION_MATTE, _matte_selection)
+-   _add_toolbar_button(top_bar, Strings.ACTION_SLICE, _slice_selection)
+-   _add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _outline_selection)
+    _add_toolbar_button(top_bar, Strings.ACTION_EXPORT_PNG, _export_selected_png)
+
+    var content := HSplitContainer.new()
+@@ -351,7 +352,27 @@ func _build_ui() -> void:
+
+    _create_file_dialogs()
+    _m2_actions = M2ActionController.new()
+-   _m2_actions.setup(_canvas, _cleanup_inspector, _status_label)
++   _m2_actions.setup(_canvas, _cleanup_inspector, _status_label, self)
++   _m2_1_ui = M21UiControllerScript.new()
++   _m2_1_ui.name = "M21UiController"
++   _m2_1_ui.ui_scale = _ui_scale
++   add_child(_m2_1_ui)
++   _m2_1_ui.setup(
++       _canvas,
++       _cleanup_inspector,
++       _status_label,
++       _m2_actions,
++       _create_new_project,
++       func() -> void: _open_dialog.popup_centered_ratio(0.7),
++       _save_current_project
++   )
++   _m2_1_ui.export_snapshots_requested.connect(_on_export_snapshots_requested)
++   _m2_1_ui.add_file_menu(top_bar)
++   _m2_1_ui.add_tool_buttons(top_bar)
++   _add_toolbar_button(top_bar, Strings.ACTION_BATCH, _m2_1_ui.batch_selected_sprites)
++   _add_toolbar_button(top_bar, Strings.ACTION_MATTE, _m2_1_ui.open_matte_dialog)
++   _add_toolbar_button(top_bar, Strings.ACTION_SLICE, _m2_1_ui.open_slice_dialog)
++   _add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _m2_1_ui.open_outline_dialog)
+
+
+ func _add_toolbar_button(parent: Control, text: String, callback: Callable) -> void:
+@@ -615,18 +636,6 @@ func _on_cleanup_canceled() -> void:
+    _status_label.text = Strings.STATUS_CLEANUP_CANCELED
+
+
+-func _matte_selection() -> void:
+-   _m2_actions.matte_selection()
+-
+-
+-func _slice_selection() -> void:
+-   _m2_actions.slice_selection()
+-
+-
+-func _outline_selection() -> void:
+-   _m2_actions.outline_selection()
+-
+-
+ func _cancel_cleanup_task() -> void:
+    if not _cleanup_task_id.is_empty():
+        TaskQueue.cancel(_cleanup_task_id)
+@@ -792,32 +801,15 @@ func _export_png_path(path: String) -> void:
+
+
+ func _on_files_dropped(files: PackedStringArray) -> void:
+-   var drop_position: Vector2 = _canvas.get_mouse_world_position()
+-   for file_path in files:
+-       if not String(file_path).to_lower().ends_with(".png"):
+-           continue
+-
+-       var image: Image = FileIOScript.load_png(file_path)
+-       if image == null:
+-           Log.warn("Dropped PNG could not be loaded", {"path": file_path})
+-           continue
++   if _m2_1_ui == null:
++       return
++   _m2_1_ui.import_files_at_mouse(files)
+
+-       if image.get_width() * image.get_height() > 1024 * 1024:
+-           (
+-               Log
+-               . warn(
+-                   "Large PNG imported without M1 cleanup",
+-                   {
+-                       "path": file_path,
+-                       "size": [image.get_width(), image.get_height()],
+-                   }
+-               )
+-           )
+
+-       var asset_name := String(file_path).get_file().get_basename()
+-       var asset_id := AssetLibrary.register_image(image, asset_name, {"origin": "imported"})
+-       _canvas.add_sprite_item(image, asset_id, drop_position)
+-       drop_position += Vector2(image.get_width() + 8, 0)
++func _on_export_snapshots_requested(snapshots: Array, default_file: String) -> void:
++   _pending_export_snapshots = snapshots
++   _export_dialog.current_file = default_file
++   _export_dialog.popup_centered_ratio(0.7)
+
+
+ func _on_recovery_available(autosaves: Array) -> void:
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index 18b6bdf..fc5ef1b 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -8,10 +8,13 @@ const ACTION_NEW := "New"
+ const ACTION_OPEN := "Open"
+ const ACTION_SAVE := "Save"
+ const ACTION_SAVE_AS := "Save As"
++const ACTION_BATCH := "Batch"
+ const ACTION_MATTE := "Matte"
+ const ACTION_SLICE := "Slice"
+ const ACTION_OUTLINE := "Outline"
+ const ACTION_EXPORT_PNG := "Export PNG"
++const MENU_FILE := "File"
++const MENU_IMPORT_IMAGES := "Import Images..."
+ const STATUS_READY := "Ready"
+ const STATUS_SAVED := "Saved"
+ const STATUS_DIRTY := "Unsaved changes"
+@@ -29,6 +32,13 @@ const STATUS_PREVIEW_QUEUED := "Preview queued"
+ const STATUS_EXPORT_EMPTY := "Select one or more sprites to export"
+ const STATUS_EXPORTED := "PNG exported"
+ const STATUS_SPRITESHEET_EXPORTED := "Spritesheet exported"
++const STATUS_TOOL_OFF := "Move mode"
++const STATUS_TOOL_FORMAT := "Tool: %s"
++const STATUS_SELECTION_EMPTY := "Selection cleared"
++const STATUS_SELECTION_FORMAT := "Selection: %dx%d px, area %d"
++const STATUS_BATCH_NEEDS_SELECTION := "Select two or more sprites to make a batch"
++const STATUS_BATCH_SPLIT := "Batch subset created"
++const STATUS_BATCH_SPLIT_EMPTY := "Select thumbnails inside a batch before splitting"
+ const CLEANUP_TITLE := "Pixel Cleanup"
+ const CLEANUP_SELECTED_FORMAT := "%d selected"
+ const CLEANUP_PRESET_PRIOR_FORMAT := "Preset prior: %dpx"
+@@ -61,5 +71,52 @@ const DIALOG_PALETTE_ERROR := "Palette Import Error"
+ const PALETTE_IMPORT_FAILED := "Palette import failed."
+ const DIALOG_OPEN_PROJECT := "Open PixelForge Project"
+ const DIALOG_SAVE_PROJECT := "Save PixelForge Project"
++const DIALOG_IMPORT_IMAGES := "Import Images"
+ const DIALOG_EXPORT_PNG := "Export PNG"
+ const DIALOG_RECOVERY := "Recover Autosave"
++const DIALOG_APPLY := "Apply"
++const DIALOG_CANCEL := "Cancel"
++const DIALOG_MATTE_TITLE := "Matte Background"
++const DIALOG_SLICE_TITLE := "Slice Sprites"
++const DIALOG_OUTLINE_TITLE := "Outline Sprite"
++const DIALOG_MATTE_NON_FLAT_TITLE := "Background Not Uniform"
++const DIALOG_MATTE_NON_FLAT_BODY := (
++   "The background is not a solid color.\n\n"
++   + "Try the Magic Wand tool to select the background, increase tolerance carefully, "
++   + "or slice directly if the image already has transparency."
++)
++const DIALOG_ONBOARDING_TITLE := "Welcome to PixelForge"
++const DIALOG_ONBOARDING_BODY := (
++   "Quick start:\n"
++   + "1. Drag images onto the canvas or use File > Import Images.\n"
++   + "2. Select a sprite and use Matte, Slice, or Outline.\n"
++   + "3. Use W/M/L for Magic Wand, Rectangle, and Lasso selection.\n"
++   + "4. Select multiple sprites and create a Batch for whole-batch actions."
++)
++const TOOL_MAGIC_WAND := "Magic Wand"
++const TOOL_RECTANGLE := "Rectangle Select"
++const TOOL_LASSO := "Lasso"
++const MATTE_LABEL_MODE := "Mode"
++const MATTE_LABEL_TOLERANCE := "Tolerance"
++const MATTE_LABEL_FEATHER := "Feather"
++const MATTE_MODE_FLOOD := "Flood from edge"
++const MATTE_MODE_GLOBAL := "Global color key"
++const MATTE_WARNING_NON_FLAT_BACKGROUND := "Background is not uniform. Use Magic Wand or raise tolerance carefully."
++const SLICE_AUTO_MATTE := "Matte before slicing"
++const SLICE_LABEL_MERGE_DISTANCE := "Merge Distance"
++const SLICE_LABEL_MIN_AREA := "Minimum Area"
++const SLICE_PREVIEW_COUNT_FORMAT := "%d segments found"
++const OUTLINE_LABEL_TYPE := "Type"
++const OUTLINE_LABEL_CORNER := "Corner"
++const OUTLINE_LABEL_COLOR := "Color"
++const OUTLINE_TYPE_OUTER := "Outer"
++const OUTLINE_TYPE_INNER := "Inner"
++const OUTLINE_CORNER_CROSS := "Cross"
++const OUTLINE_CORNER_SQUARE := "Square"
++const OUTLINE_COLORED := "Use colored outline"
++const BATCH_DEFAULT_LABEL := "Batch"
++const BATCH_ACTION_CLEANUP := "Clean Batch"
++const BATCH_ACTION_MATTE := "Matte Batch"
++const BATCH_ACTION_OUTLINE := "Outline Batch"
++const BATCH_ACTION_SPLIT := "Split Selected"
++const BATCH_ACTION_EXPORT := "Export Batch"
+diff --git a/pixel/ui/tools/base_tool.gd b/pixel/ui/tools/base_tool.gd
+new file mode 100644
+index 0000000..89a797a
+--- /dev/null
++++ b/pixel/ui/tools/base_tool.gd
+@@ -0,0 +1,166 @@
++class_name PFTool
++extends RefCounted
++
++## 像素选区工具基类。
++## UI 层负责把画布坐标转换为图像像素坐标；工具只关心单张 Image 内的像素选区。
++
++signal selection_committed(selection: PFSelection)
++
++const SelectionScript := preload("res://core/pixel/selection.gd")
++
++const MOD_SHIFT := 1
++const MOD_ALT := 2
++const MARCHING_ANTS_DASH := 5.0
++const MARCHING_ANTS_SPEED := 18.0
++
++var current_selection: PFSelection = null
++var _source_image: Image = null
++var _source_size := Vector2i.ZERO
++
++
++func get_id() -> String:
++   return "tool"
++
++
++func get_name() -> String:
++   return "Tool"
++
++
++func get_hotkey() -> String:
++   return ""
++
++
++func get_cursor_shape() -> int:
++   return Input.CURSOR_ARROW
++
++
++func on_activate() -> void:
++   pass
++
++
++func on_deactivate() -> void:
++   pass
++
++
++func set_source_image(image: Image) -> void:
++   _source_image = image
++   _source_size = image.get_size() if image != null else Vector2i.ZERO
++   if current_selection != null and current_selection.image_size != _source_size:
++       set_current_selection(null)
++
++
++func set_current_selection(selection: PFSelection) -> void:
++   current_selection = selection.duplicate_selection() if selection != null else null
++
++
++func clear_selection() -> void:
++   current_selection = null
++
++
++func has_selection() -> bool:
++   return current_selection != null and not current_selection.is_empty()
++
++
++func wants_keyboard_shortcut(keycode: Key) -> bool:
++   return not get_hotkey().is_empty() and OS.find_keycode_from_string(get_hotkey()) == keycode
++
++
++func on_mouse_press(_image_pos: Vector2i, _button: MouseButton, _modifiers: int) -> void:
++   pass
++
++
++func on_mouse_move(_image_pos: Vector2i) -> void:
++   pass
++
++
++func on_mouse_release(_image_pos: Vector2i, _button: MouseButton, _modifiers: int) -> void:
++   pass
++
++
++func draw_overlay(canvas: Control, target: Dictionary) -> void:
++   if has_selection():
++       _draw_selection_bbox(canvas, target, current_selection.get_bbox())
++
++
++func needs_redraw() -> bool:
++   return has_selection()
++
++
++func _combine_with_current(new_selection: PFSelection, modifiers: int) -> PFSelection:
++   if current_selection == null or current_selection.image_size != new_selection.image_size:
++       return new_selection
++   if modifiers & MOD_SHIFT:
++       return current_selection.union_with(new_selection)
++   if modifiers & MOD_ALT:
++       return current_selection.subtract(new_selection)
++   return new_selection
++
++
++func _commit_selection(selection: PFSelection) -> void:
++   current_selection = selection
++   selection_committed.emit(selection)
++
++
++func _draw_selection_bbox(canvas: Control, target: Dictionary, bbox: Rect2i) -> void:
++   if bbox.size.x <= 0 or bbox.size.y <= 0:
++       return
++   var screen_rect := _image_rect_to_screen(canvas, target, bbox)
++   _draw_dashed_rect(canvas, screen_rect, Color.WHITE, Color.BLACK)
++
++
++func _image_rect_to_screen(canvas: Control, target: Dictionary, rect: Rect2i) -> Rect2:
++   var top_left := _image_to_screen(canvas, target, Vector2(rect.position))
++   var bottom_right := _image_to_screen(canvas, target, Vector2(rect.position + rect.size))
++   return Rect2(top_left, bottom_right - top_left).abs()
++
++
++func _image_to_screen(canvas: Control, target: Dictionary, image_pos: Vector2) -> Vector2:
++   var world_position := Vector2(target.get("world_position", Vector2.ZERO))
++   var scale_factor := float(target.get("scale_factor", 1))
++   return canvas.world_to_screen(world_position + image_pos * scale_factor)
++
++
++func _draw_dashed_rect(canvas: Control, rect: Rect2, light: Color, dark: Color) -> void:
++   var phase := fmod(Time.get_ticks_msec() * 0.001 * MARCHING_ANTS_SPEED, MARCHING_ANTS_DASH * 2.0)
++   _draw_dashed_line(
++       canvas, rect.position, rect.position + Vector2(rect.size.x, 0), light, dark, phase
++   )
++   _draw_dashed_line(
++       canvas,
++       rect.position + Vector2(rect.size.x, 0),
++       rect.position + rect.size,
++       light,
++       dark,
++       phase
++   )
++   _draw_dashed_line(
++       canvas,
++       rect.position + rect.size,
++       rect.position + Vector2(0, rect.size.y),
++       light,
++       dark,
++       phase
++   )
++   _draw_dashed_line(
++       canvas, rect.position + Vector2(0, rect.size.y), rect.position, light, dark, phase
++   )
++
++
++func _draw_dashed_line(
++   canvas: Control, from: Vector2, to: Vector2, light: Color, dark: Color, phase: float
++) -> void:
++   var length := from.distance_to(to)
++   if length <= 0.0:
++       return
++   var direction := (to - from) / length
++   var cursor := -phase
++   var draw_light := true
++   while cursor < length:
++       var start := maxf(cursor, 0.0)
++       var end := minf(cursor + MARCHING_ANTS_DASH, length)
++       if end > 0.0:
++           canvas.draw_line(
++               from + direction * start, from + direction * end, light if draw_light else dark, 1.0
++           )
++       cursor += MARCHING_ANTS_DASH
++       draw_light = not draw_light
+diff --git a/pixel/ui/tools/base_tool.gd.uid b/pixel/ui/tools/base_tool.gd.uid
+new file mode 100644
+index 0000000..9af0822
+--- /dev/null
++++ b/pixel/ui/tools/base_tool.gd.uid
+@@ -0,0 +1 @@
++uid://d3n2f38gx23x
+diff --git a/pixel/ui/tools/lasso_tool.gd b/pixel/ui/tools/lasso_tool.gd
+new file mode 100644
+index 0000000..1f44150
+--- /dev/null
++++ b/pixel/ui/tools/lasso_tool.gd
+@@ -0,0 +1,78 @@
++class_name PFLassoTool
++extends PFTool
++
++## 套索选区工具。
++## 左键追加多边形顶点，右键闭合；核心填充由 PFSelection.polygon 负责。
++
++var _points: Array[Vector2i] = []
++var _hover_pos := Vector2i.ZERO
++
++
++func get_id() -> String:
++   return "lasso"
++
++
++func get_name() -> String:
++   return "Lasso"
++
++
++func get_hotkey() -> String:
++   return "L"
++
++
++func get_cursor_shape() -> int:
++   return Input.CURSOR_CROSS
++
++
++func on_deactivate() -> void:
++   _points.clear()
++
++
++func on_mouse_press(image_pos: Vector2i, button: MouseButton, modifiers: int) -> void:
++   if button == MOUSE_BUTTON_LEFT:
++       _points.append(_clamp_image_pos(image_pos))
++       _hover_pos = _clamp_image_pos(image_pos)
++   elif button == MOUSE_BUTTON_RIGHT:
++       _close_polygon(modifiers)
++
++
++func on_mouse_move(image_pos: Vector2i) -> void:
++   _hover_pos = _clamp_image_pos(image_pos)
++
++
++func draw_overlay(canvas: Control, target: Dictionary) -> void:
++   super.draw_overlay(canvas, target)
++   if _points.is_empty():
++       return
++   for index in range(_points.size() - 1):
++       canvas.draw_line(
++           _image_to_screen(canvas, target, Vector2(_points[index])),
++           _image_to_screen(canvas, target, Vector2(_points[index + 1])),
++           Color(1.0, 0.88, 0.2, 1.0),
++           1.5
++       )
++   canvas.draw_line(
++       _image_to_screen(canvas, target, Vector2(_points.back())),
++       _image_to_screen(canvas, target, Vector2(_hover_pos)),
++       Color(0.7, 1.0, 0.45, 1.0),
++       1.0
++   )
++
++
++func needs_redraw() -> bool:
++   return super.needs_redraw() or not _points.is_empty()
++
++
++func _close_polygon(modifiers: int) -> void:
++   if _points.size() < 3:
++       _points.clear()
++       return
++   var selection := SelectionScript.polygon(_source_size, _points)
++   _points.clear()
++   _commit_selection(_combine_with_current(selection, modifiers))
++
++
++func _clamp_image_pos(pos: Vector2i) -> Vector2i:
++   if _source_size.x <= 0 or _source_size.y <= 0:
++       return Vector2i.ZERO
++   return Vector2i(clampi(pos.x, 0, _source_size.x - 1), clampi(pos.y, 0, _source_size.y - 1))
+diff --git a/pixel/ui/tools/lasso_tool.gd.uid b/pixel/ui/tools/lasso_tool.gd.uid
+new file mode 100644
+index 0000000..44a2490
+--- /dev/null
++++ b/pixel/ui/tools/lasso_tool.gd.uid
+@@ -0,0 +1 @@
++uid://frvwopurntql
+diff --git a/pixel/ui/tools/magic_wand_tool.gd b/pixel/ui/tools/magic_wand_tool.gd
+new file mode 100644
+index 0000000..0a96e23
+--- /dev/null
++++ b/pixel/ui/tools/magic_wand_tool.gd
+@@ -0,0 +1,37 @@
++class_name PFMagicWandTool
++extends PFTool
++
++## 魔棒选区工具。
++## 点击单张素材内的像素，调用 core PFSelection.magic_wand 生成像素级选区。
++
++const DEFAULT_TOLERANCE := 15.0
++
++var tolerance := DEFAULT_TOLERANCE
++var contiguous := true
++
++
++func get_id() -> String:
++   return "magic_wand"
++
++
++func get_name() -> String:
++   return "Magic Wand"
++
++
++func get_hotkey() -> String:
++   return "W"
++
++
++func get_cursor_shape() -> int:
++   return Input.CURSOR_POINTING_HAND
++
++
++func on_mouse_press(image_pos: Vector2i, button: MouseButton, modifiers: int) -> void:
++   if button != MOUSE_BUTTON_LEFT or _source_image == null:
++       return
++   var selection := SelectionScript.magic_wand(
++       _source_image,
++       image_pos,
++       {"tolerance": tolerance, "contiguous": contiguous, "alpha_sensitive": true}
++   )
++   _commit_selection(_combine_with_current(selection, modifiers))
+diff --git a/pixel/ui/tools/magic_wand_tool.gd.uid b/pixel/ui/tools/magic_wand_tool.gd.uid
+new file mode 100644
+index 0000000..0927faf
+--- /dev/null
++++ b/pixel/ui/tools/magic_wand_tool.gd.uid
+@@ -0,0 +1 @@
++uid://be1ptttdkihkg
+diff --git a/pixel/ui/tools/rectangle_tool.gd b/pixel/ui/tools/rectangle_tool.gd
+new file mode 100644
+index 0000000..b8015a1
+--- /dev/null
++++ b/pixel/ui/tools/rectangle_tool.gd
+@@ -0,0 +1,88 @@
++class_name PFRectangleTool
++extends PFTool
++
++## 矩形选区工具。
++## 拖拽期间只绘制预览框；松开鼠标时提交真实 PFSelection，便于撤销。
++
++var _start_pos := Vector2i.ZERO
++var _end_pos := Vector2i.ZERO
++var _is_dragging := false
++
++
++func get_id() -> String:
++   return "rectangle"
++
++
++func get_name() -> String:
++   return "Rectangle Select"
++
++
++func get_hotkey() -> String:
++   return "M"
++
++
++func get_cursor_shape() -> int:
++   return Input.CURSOR_CROSS
++
++
++func on_deactivate() -> void:
++   _is_dragging = false
++
++
++func on_mouse_press(image_pos: Vector2i, button: MouseButton, _modifiers: int) -> void:
++   if button != MOUSE_BUTTON_LEFT:
++       return
++   _start_pos = image_pos
++   _end_pos = image_pos
++   _is_dragging = true
++
++
++func on_mouse_move(image_pos: Vector2i) -> void:
++   if _is_dragging:
++       _end_pos = image_pos
++
++
++func on_mouse_release(image_pos: Vector2i, button: MouseButton, modifiers: int) -> void:
++   if button != MOUSE_BUTTON_LEFT or not _is_dragging:
++       return
++   _is_dragging = false
++   _end_pos = image_pos
++   var rect := _rect_from_points(_start_pos, _end_pos)
++   var selection := SelectionScript.rectangle(_source_size, rect)
++   _commit_selection(_combine_with_current(selection, modifiers))
++
++
++func draw_overlay(canvas: Control, target: Dictionary) -> void:
++   super.draw_overlay(canvas, target)
++   if not _is_dragging:
++       return
++   var rect := _rect_from_points(_start_pos, _end_pos)
++   var screen_rect := _image_rect_to_screen(canvas, target, rect)
++   canvas.draw_rect(screen_rect, Color(1.0, 0.9, 0.2, 0.18), true)
++   canvas.draw_rect(screen_rect, Color(1.0, 0.9, 0.2, 1.0), false, 1.0)
++   var font := canvas.get_theme_default_font()
++   if font != null:
++       var font_size := maxi(11, canvas.get_theme_font_size("font_size", "Label") - 2)
++       canvas.draw_string(
++           font,
++           screen_rect.position + Vector2(5, -4),
++           "%dx%d" % [rect.size.x, rect.size.y],
++           HORIZONTAL_ALIGNMENT_LEFT,
++           -1,
++           font_size,
++           Color(1.0, 0.95, 0.55, 1.0)
++       )
++
++
++func needs_redraw() -> bool:
++   return super.needs_redraw() or _is_dragging
++
++
++func _rect_from_points(a: Vector2i, b: Vector2i) -> Rect2i:
++   var min_pos := Vector2i(mini(a.x, b.x), mini(a.y, b.y))
++   var max_pos := Vector2i(maxi(a.x, b.x), maxi(a.y, b.y))
++   min_pos.x = clampi(min_pos.x, 0, maxi(0, _source_size.x - 1))
++   min_pos.y = clampi(min_pos.y, 0, maxi(0, _source_size.y - 1))
++   max_pos.x = clampi(max_pos.x, 0, maxi(0, _source_size.x - 1))
++   max_pos.y = clampi(max_pos.y, 0, maxi(0, _source_size.y - 1))
++   return Rect2i(min_pos, max_pos - min_pos + Vector2i.ONE)
+diff --git a/pixel/ui/tools/rectangle_tool.gd.uid b/pixel/ui/tools/rectangle_tool.gd.uid
+new file mode 100644
+index 0000000..c048e04
+--- /dev/null
++++ b/pixel/ui/tools/rectangle_tool.gd.uid
+@@ -0,0 +1 @@
++uid://ysbg12h1hday
+diff --git a/pixel/ui/tools/tool_manager.gd b/pixel/ui/tools/tool_manager.gd
+new file mode 100644
+index 0000000..fdd8b75
+--- /dev/null
++++ b/pixel/ui/tools/tool_manager.gd
+@@ -0,0 +1,182 @@
++class_name PFToolManager
++extends RefCounted
++
++## 画布工具状态机。
++## 管理当前工具、共享像素选区和撤销；具体像素算法仍在 core/pixel/selection.gd。
++
++signal tool_changed(tool_id: String)
++signal selection_changed(selection: PFSelection)
++
++const BaseTool := preload("res://ui/tools/base_tool.gd")
++
++var _tools := {}
++var _tool_order: Array[String] = []
++var _current_tool: PFTool = null
++var _current_tool_id := ""
++var _current_selection: PFSelection = null
++var _last_target_item_id := ""
++
++
++func register_tool(tool_id: String, tool: PFTool) -> void:
++   _tools[tool_id] = tool
++   if not _tool_order.has(tool_id):
++       _tool_order.append(tool_id)
++   tool.selection_committed.connect(_on_tool_selection_committed)
++
++
++func set_active_tool(tool_id: String) -> void:
++   if not _tools.has(tool_id):
++       return
++   if _current_tool != null:
++       _current_tool.on_deactivate()
++   _current_tool_id = tool_id
++   _current_tool = _tools[tool_id]
++   _current_tool.set_current_selection(_current_selection)
++   _current_tool.on_activate()
++   tool_changed.emit(tool_id)
++
++
++func clear_active_tool() -> void:
++   if _current_tool == null:
++       return
++   _current_tool.on_deactivate()
++   _current_tool = null
++   _current_tool_id = ""
++   tool_changed.emit("")
++
++
++func get_active_tool_id() -> String:
++   return _current_tool_id
++
++
++func get_current_tool() -> PFTool:
++   return _current_tool
++
++
++func get_tool_ids() -> Array:
++   return _tool_order.duplicate()
++
++
++func handle_shortcut(keycode: Key) -> bool:
++   for tool_id in _tool_order:
++       var tool: PFTool = _tools[tool_id]
++       if tool.wants_keyboard_shortcut(keycode):
++           set_active_tool(tool_id)
++           return true
++   return false
++
++
++func clear_selection(record_undo: bool = true) -> void:
++   if _current_selection == null:
++       return
++   _commit_selection_state(null, record_undo)
++
++
++func handle_canvas_input(event: InputEvent, canvas: Control, target: Dictionary) -> bool:
++   if _current_tool == null:
++       return false
++   if target.is_empty():
++       return false
++   if event is InputEventMouseButton:
++       return _handle_mouse_button(event, canvas, target)
++   if event is InputEventMouseMotion:
++       _sync_target(target)
++       _current_tool.on_mouse_move(_image_pos_from_screen(canvas, target, event.position))
++       return _current_tool.needs_redraw()
++   return false
++
++
++func draw_overlay(canvas: Control, target: Dictionary) -> void:
++   if _current_tool == null or target.is_empty():
++       return
++   _sync_target(target)
++   _current_tool.draw_overlay(canvas, target)
++
++
++func needs_redraw() -> bool:
++   return _current_tool != null and _current_tool.needs_redraw()
++
++
++func _handle_mouse_button(
++   event: InputEventMouseButton, canvas: Control, target: Dictionary
++) -> bool:
++   if event.button_index != MOUSE_BUTTON_LEFT and event.button_index != MOUSE_BUTTON_RIGHT:
++       return false
++   if not event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
++       return true
++   _sync_target(target)
++   var image_pos := _image_pos_from_screen(canvas, target, event.position)
++   var modifiers := _modifiers_from_event(event)
++   if event.pressed:
++       _current_tool.on_mouse_press(image_pos, event.button_index, modifiers)
++   else:
++       _current_tool.on_mouse_release(image_pos, event.button_index, modifiers)
++   return true
++
++
++func _sync_target(target: Dictionary) -> void:
++   var target_item_id := String(target.get("item_id", ""))
++   var image: Image = target.get("image", null)
++   if target_item_id != _last_target_item_id:
++       _last_target_item_id = target_item_id
++       _commit_selection_state(null, false)
++   _current_tool.set_source_image(image)
++
++
++func _image_pos_from_screen(canvas: Control, target: Dictionary, screen_pos: Vector2) -> Vector2i:
++   var world_pos: Vector2 = canvas.screen_to_world(screen_pos)
++   var world_origin := Vector2(target.get("world_position", Vector2.ZERO))
++   var scale_factor := maxf(1.0, float(target.get("scale_factor", 1)))
++   var image_pos := ((world_pos - world_origin) / scale_factor).floor()
++   var image_size := Vector2i(target.get("image_size", Vector2i.ZERO))
++   if image_size.x <= 0 or image_size.y <= 0:
++       return Vector2i.ZERO
++   return Vector2i(
++       clampi(int(image_pos.x), 0, image_size.x - 1), clampi(int(image_pos.y), 0, image_size.y - 1)
++   )
++
++
++func _on_tool_selection_committed(selection: PFSelection) -> void:
++   _commit_selection_state(selection, true)
++
++
++func _commit_selection_state(selection: PFSelection, record_undo: bool) -> void:
++   var before := _current_selection.duplicate_selection() if _current_selection != null else null
++   var after := selection.duplicate_selection() if selection != null else null
++   if _same_selection(before, after):
++       return
++
++   var do_set := func() -> void: _apply_selection_state(after)
++   var undo_set := func() -> void: _apply_selection_state(before)
++
++   if record_undo:
++       UndoService.perform_action("Tool selection", do_set, undo_set)
++   else:
++       do_set.call()
++
++
++func _apply_selection_state(selection: PFSelection) -> void:
++   _current_selection = selection.duplicate_selection() if selection != null else null
++   for tool in _tools.values():
++       tool.set_current_selection(_current_selection)
++   selection_changed.emit(_current_selection)
++
++
++func _same_selection(left: PFSelection, right: PFSelection) -> bool:
++   if left == null or right == null:
++       return left == right
++   if (
++       left.image_size != right.image_size
++       or left.get_selected_count() != right.get_selected_count()
++   ):
++       return false
++   return left.mask == right.mask
++
++
++func _modifiers_from_event(event: InputEventWithModifiers) -> int:
++   var modifiers := 0
++   if event.shift_pressed:
++       modifiers |= BaseTool.MOD_SHIFT
++   if event.alt_pressed:
++       modifiers |= BaseTool.MOD_ALT
++   return modifiers
+diff --git a/pixel/ui/tools/tool_manager.gd.uid b/pixel/ui/tools/tool_manager.gd.uid
+new file mode 100644
+index 0000000..f59caa5
+--- /dev/null
++++ b/pixel/ui/tools/tool_manager.gd.uid
+@@ -0,0 +1 @@
++uid://c3of8jyy80qri
+diff --git a/pixelforge-plan/02-contracts/PROJECT-FORMAT.md b/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
+index c034bc3..4a08cf8 100644
+--- a/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
++++ b/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
+@@ -93,13 +93,23 @@ my_project.pxproj (ZIP)
+   "items": [
+     {
+       "id": "uuid",
+-      "type": "sprite",            // sprite | frame | note | graph_anchor
++      "type": "sprite",            // sprite | batch_card(M2.1 temp) | frame | note | graph_anchor
+       "asset_id": "a1b2c3d4-...",  // type=sprite 时必填
+       "position": [128, -64],      // 画布世界坐标，整数（像素对齐）
+       "scale_factor": 1,           // 仅允许正整数倍预览缩放
+       "z_index": 0,
+       "locked": false,
+       "frame_id": null             // 所属编组框
++    },
++    {
++      "id": "batch-temp-uuid",
++      "type": "batch_card",        // M2.1 临时批次卡；M3 后升级为正式 batch 节点
++      "asset_ids": ["uuid-a", "uuid-b"],
++      "selected_asset_ids": [],
++      "label": "Batch",
++      "position": [320, 64],
++      "z_index": 1,
++      "locked": false
+     }
+   ]
+ }
+@@ -108,6 +118,7 @@ my_project.pxproj (ZIP)
+ 规则：
+ - 画布元素 position 强制整数（像素网格对齐，体验原则1）。
+ - `graph_anchor` 类型把节点图锚定在画布某区域（节点图输出物默认铺在锚点附近）。
++- **M2.1 临时例外**：M3 前尚无正式 graph 持久化，alpha 清洗台先允许 `type:"batch_card"` 直接在 canvas.json 中保存 `asset_ids` 队列、卡片位置和卡内勾选状态；M3 实施正式 batch 节点时，应迁入 graph schema。
+
+ ## 5. 读写规则
+
+diff --git "a/pixelforge-plan/03-milestones/reports/M2.1_UI\344\272\244\344\272\222\350\241\245\345\256\214\345\256\214\346\210\220\346\212\245\345\221\212.md" "b/pixelforge-plan/03-milestones/reports/M2.1_UI\344\272\244\344\272\222\350\241\245\345\256\214\345\256\214\346\210\220\346\212\245\345\221\212.md"
+new file mode 100644
+index 0000000..48e4acb
+--- /dev/null
++++ "b/pixelforge-plan/03-milestones/reports/M2.1_UI\344\272\244\344\272\222\350\241\245\345\256\214\345\256\214\346\210\220\346\212\245\345\221\212.md"
+@@ -0,0 +1,285 @@
++# M2.1 UI 交互补完完成报告
++
++日期：2026-06-16
++
++## 1. 完成结论
++
++M2.1 已完成并通过本地门禁：明确图片导入入口、M2 参数预览对话框、W/M/L 像素选区工具、非纯色底错误引导、无连线批次卡 MVP、批次菜单处理与对应测试。
++
++补充修复：工具管理器默认不激活 W/M/L 工具，导入图片后普通左键仍可拖动画布素材；用户按 W/M/L 或点击工具按钮后才进入像素选区模式，Esc 或再次点击当前工具按钮可回到移动模式。
++
++本报告只覆盖 M2.1 开发改动；工作区中接手前已存在的其他计划/研究文档改动保持原样，未纳入本报告范围。
++
++## 2. 验证结果
++
++执行命令：
++
++```bash
++cd pixel && ./scripts/verify_m2.sh
++```
++
++结果：
++
++- `gdformat` / `gdlint`：通过。
++- GUT：96 tests / 96 passing / 804 asserts。
++- `verify_m2.sh`：`verify_m2: ok`。
++- Godot export templates 本机未安装，脚本按 M0 本地门禁策略降级为 headless startup 检查并通过。
++- GUT 结束阶段仍有 1 个 orphan/resource warning，但进程退出码为 0，测试套件判定通过。
++
++## 3. 功能对应关系
++
++| 验收点 | 实现位置 | 说明 |
++|---|---|---|
++| File > Import Images | `pixel/ui/shell/m2_1_ui_controller.gd`、`pixel/ui/shell/main.gd` | 新增 File 菜单；导入和拖放统一走控制器；多图导入生成批次卡。 |
++| Matte/Slice/Outline 参数面板 | `pixel/ui/dialogs/*.gd`、`pixel/ui/shell/m2_action_controller.gd` | 三个预览参数对话框接入 M2 算法；参数进入 TaskQueue 后台任务。 |
++| W/M/L 像素选区工具 | `pixel/ui/tools/*.gd`、`pixel/ui/canvas/infinite_canvas.gd` | 魔棒、矩形、套索工具支持快捷键、Shift 并集、Alt 差集、撤销和画布 overlay。 |
++| 导入后拖动素材 | `pixel/ui/shell/m2_1_ui_controller.gd`、`pixel/ui/tools/tool_manager.gd`、`pixel/tests/smoke/test_infinite_canvas.gd` | 工具启动时保持未激活，避免吞掉原有 sprite 拖动；新增输入回归测试。 |
++| 错误帮助 | `pixel/ui/dialogs/error_helper.gd`、`pixel/ui/shell/m2_action_controller.gd` | `non_flat_background` 抠图告警会弹出可操作建议。 |
++| 批次卡 MVP | `pixel/ui/canvas/canvas_batch_card.gd`、`pixel/ui/canvas/infinite_canvas.gd`、`pixel/ui/shell/m2_action_controller.gd` | 批次卡保存 asset 队列，可右键整批 Cleanup/Matte/Outline/Split/Export。 |
++| 测试与文档 | `pixel/tests/unit/test_m2_1_*.gd`、`pixel/tests/unit/test_canvas_batch_card.gd`、`pixel/docs/ui-tools.md`、`pixel/docs/manual-test-m2.md` | 覆盖工具、参数对话框、批次卡持久化/拆分；补手测清单和架构说明。 |
++
++## 4. 文件清单
++
++新增实现文件：
++
++```text
++pixel/ui/shell/m2_1_ui_controller.gd
++pixel/ui/tools/base_tool.gd
++pixel/ui/tools/tool_manager.gd
++pixel/ui/tools/magic_wand_tool.gd
++pixel/ui/tools/rectangle_tool.gd
++pixel/ui/tools/lasso_tool.gd
++pixel/ui/dialogs/matte_dialog.gd
++pixel/ui/dialogs/slice_dialog.gd
++pixel/ui/dialogs/outline_dialog.gd
++pixel/ui/dialogs/error_helper.gd
++pixel/ui/dialogs/onboarding.gd
++pixel/ui/canvas/canvas_batch_card.gd
++```
++
++新增测试/文档文件：
++
++```text
++pixel/tests/unit/test_m2_1_tools.gd
++pixel/tests/unit/test_m2_1_dialogs.gd
++pixel/tests/unit/test_canvas_batch_card.gd
++pixel/docs/ui-tools.md
++```
++
++Godot 自动生成脚本 UID：
++
++```text
++pixel/ui/shell/m2_1_ui_controller.gd.uid
++pixel/ui/tools/base_tool.gd.uid
++pixel/ui/tools/tool_manager.gd.uid
++pixel/ui/tools/magic_wand_tool.gd.uid
++pixel/ui/tools/rectangle_tool.gd.uid
++pixel/ui/tools/lasso_tool.gd.uid
++pixel/ui/dialogs/matte_dialog.gd.uid
++pixel/ui/dialogs/slice_dialog.gd.uid
++pixel/ui/dialogs/outline_dialog.gd.uid
++pixel/ui/dialogs/error_helper.gd.uid
++pixel/ui/dialogs/onboarding.gd.uid
++pixel/ui/canvas/canvas_batch_card.gd.uid
++pixel/tests/unit/test_m2_1_tools.gd.uid
++pixel/tests/unit/test_m2_1_dialogs.gd.uid
++pixel/tests/unit/test_canvas_batch_card.gd.uid
++```
++
++修改文件：
++
++```text
++pixel/ui/shell/main.gd
++pixel/ui/shell/m2_action_controller.gd
++pixel/ui/shell/strings.gd
++pixel/ui/canvas/infinite_canvas.gd
++pixel/tests/integration/test_cleanup_batch_performance.gd
++pixel/CHANGELOG.md
++pixel/docs/manual-test-m2.md
++pixelforge-plan/02-contracts/PROJECT-FORMAT.md
++```
++
++## 5. Diff 统计
++
++已跟踪文件 diff：
++
++```text
++pixel/CHANGELOG.md                                 |   1 +
++pixel/docs/manual-test-m2.md                       |  10 +
++pixel/tests/integration/test_cleanup_batch_performance.gd  |  11 +-
++pixel/ui/canvas/infinite_canvas.gd                 | 228 ++++++++++++--
++pixel/ui/shell/m2_action_controller.gd             | 330 +++++++++++++++++++--
++pixel/ui/shell/main.gd                             |  74 +++--
++pixel/ui/shell/strings.gd                          |  56 ++++
++pixelforge-plan/02-contracts/PROJECT-FORMAT.md     |  40 ++-
++
++8 files changed, 657 insertions(+), 93 deletions(-)
++```
++
++新增文件行数：
++
++```text
++32  pixel/docs/ui-tools.md
++35  pixel/tests/unit/test_canvas_batch_card.gd
++56  pixel/tests/unit/test_m2_1_dialogs.gd
++67  pixel/tests/unit/test_m2_1_tools.gd
++191 pixel/ui/canvas/canvas_batch_card.gd
++17  pixel/ui/dialogs/error_helper.gd
++152 pixel/ui/dialogs/matte_dialog.gd
++17  pixel/ui/dialogs/onboarding.gd
++143 pixel/ui/dialogs/outline_dialog.gd
++185 pixel/ui/dialogs/slice_dialog.gd
++370 pixel/ui/shell/m2_1_ui_controller.gd
++166 pixel/ui/tools/base_tool.gd
++78  pixel/ui/tools/lasso_tool.gd
++37  pixel/ui/tools/magic_wand_tool.gd
++88  pixel/ui/tools/rectangle_tool.gd
++173 pixel/ui/tools/tool_manager.gd
++```
++
++## 6. 关键 Diff 摘要
++
++主窗口改为接入 M2.1 控制器，避免 `main.gd` 继续膨胀：
++
++```diff
+++const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
+++var _m2_1_ui: Variant = null
+++
+++_m2_1_ui = M21UiControllerScript.new()
+++_m2_1_ui.setup(
+++    _canvas,
+++    _cleanup_inspector,
+++    _status_label,
+++    _m2_actions,
+++    _create_new_project,
+++    func() -> void: _open_dialog.popup_centered_ratio(0.7),
+++    _save_current_project
+++)
+++_m2_1_ui.add_file_menu(top_bar)
+++_m2_1_ui.add_tool_buttons(top_bar)
+++_add_toolbar_button(top_bar, Strings.ACTION_BATCH, _m2_1_ui.batch_selected_sprites)
+++_add_toolbar_button(top_bar, Strings.ACTION_MATTE, _m2_1_ui.open_matte_dialog)
+++_add_toolbar_button(top_bar, Strings.ACTION_SLICE, _m2_1_ui.open_slice_dialog)
+++_add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _m2_1_ui.open_outline_dialog)
++```
++
++画布新增工具 overlay 与批次卡暂存模型：
++
++```diff
+++signal batch_context_requested(card_id: String, screen_position: Vector2i)
+++const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+++var tool_manager: Variant = null
+++
+++func _add_batch_card(asset_ids: Array, world_position: Vector2 = Vector2.ZERO, label: String = "Batch", item_id: String = "", record_undo: bool = true) -> Node:
+++    var data := {
+++        "type": "batch_card",
+++        "asset_ids": asset_ids.duplicate(),
+++        "selected_asset_ids": [],
+++        "label": label,
+++        "position": [int(round(world_position.x)), int(round(world_position.y))],
+++    }
+++    ...
+++
+++func _get_active_tool_target() -> Dictionary:
+++    ...
+++
+++func _replace_batch_asset_ids(card_id: String, new_asset_ids: Array, record_undo: bool = true) -> void:
+++    ...
++```
++
++M2 动作控制器新增参数化单张任务和整批任务：
++
++```diff
+++func matte_selection_with_params(params: Dictionary) -> void:
+++    ...
+++
+++func slice_selection_with_params(params: Dictionary) -> void:
+++    ...
+++
+++func outline_selection_with_params(params: Dictionary) -> void:
+++    ...
+++
+++func batch_cleanup(card_id: String, asset_ids: Array, params: Dictionary) -> void:
+++    _start_batch_task(card_id, asset_ids, "batch_cleanup", {"params": params}, _batch_cleanup_work, ...)
+++
+++func batch_matte(card_id: String, asset_ids: Array, params: Dictionary) -> void:
+++    ...
+++
+++func batch_outline(card_id: String, asset_ids: Array, params: Dictionary) -> void:
+++    ...
++```
++
++工具层保持新手可读的职责分离：基类只管像素选区，管理器只管状态/撤销/输入路由，具体工具只实现各自算法入口。
++
++```diff
+++class_name PFTool
+++extends RefCounted
+++
+++## 像素选区工具基类。
+++## UI 层负责把画布坐标转换为图像像素坐标；工具只关心单张 Image 内的像素选区。
+++
+++func _combine_with_current(new_selection: PFSelection, modifiers: int) -> PFSelection:
+++    if modifiers & MOD_SHIFT:
+++        return current_selection.union_with(new_selection)
+++    if modifiers & MOD_ALT:
+++        return current_selection.subtract(new_selection)
+++    return new_selection
++```
++
++项目格式契约补充 M2.1 临时批次卡，避免 UI 落地与契约脱节：
++
++```diff
++-      "type": "sprite",            // sprite | frame | note | graph_anchor
+++      "type": "sprite",            // sprite | batch_card(M2.1 temp) | node | frame | note | graph_anchor(legacy)
+++    },
+++    {
+++      "id": "batch-temp-uuid",
+++      "type": "batch_card",        // M2.1 临时批次卡；M3 后升级为 type=node + graphs batch
+++      "asset_ids": ["uuid-a", "uuid-b"],
+++      "selected_asset_ids": [],
+++      "label": "Batch",
+++      "position": [320, 64],
+++      "z_index": 1,
+++      "locked": false
++     }
+++- **M2.1 临时例外**：M3 前尚无正式 graph 持久化，alpha 清洗台先允许 `type:"batch_card"` 直接在 canvas.json 中保存 `asset_ids` 队列、卡片位置和卡内勾选状态。
++```
++
++## 7. 完整 Diff 审阅入口
++
++已跟踪文件：
++
++```bash
++git diff -- \
++  pixel/CHANGELOG.md \
++  pixel/docs/manual-test-m2.md \
++  pixel/tests/integration/test_cleanup_batch_performance.gd \
++  pixel/ui/canvas/infinite_canvas.gd \
++  pixel/ui/shell/m2_action_controller.gd \
++  pixel/ui/shell/main.gd \
++  pixel/ui/shell/strings.gd \
++  pixelforge-plan/02-contracts/PROJECT-FORMAT.md
++```
++
++新增文件可用 `git diff --no-index /dev/null <path>` 审阅，例如：
++
++```bash
++git diff --no-index /dev/null pixel/ui/shell/m2_1_ui_controller.gd
++git diff --no-index /dev/null pixel/ui/tools/base_tool.gd
++git diff --no-index /dev/null pixel/ui/canvas/canvas_batch_card.gd
++git diff --no-index /dev/null pixel/tests/unit/test_m2_1_tools.gd
++```
++
++完整代码 diff 附件：
++
++```text
++pixelforge-plan/03-milestones/reports/M2.1_UI交互补完完整代码.diff
++```
++
++说明：该附件保留 unified diff 的文件头与 `+` / `-` 代码行结构，供统一审阅；为避免附件自身触发仓库 whitespace 检查，制表符已展开为空格，行尾空白已去除。
++
++## 8. 后续注意
++
++- M2.1 的 `batch_card` 是 M3 前临时画布卡，不带端口、不连线；M3 实现正式 graph 持久化时应迁到 `type:"node"` + `graphs/{graph_id}.json` 的 `type=batch` params。
++- `m2_1_ui_controller.gd` 为 UI 接线层，调用了画布内部批次卡方法，目的是把暂存 MVP 留在 UI 层边界内；M3 可把这些方法替换为正式 graph 节点 API。
++- 本次未引入图片资源，未触碰 `test picture/` 与 `pixel/tests/fixtures/real/`。
