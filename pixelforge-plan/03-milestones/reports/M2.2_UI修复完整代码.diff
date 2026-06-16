@@ -98,7 +98,7 @@ index 4329f40..8facc26 100644
  
  func test_add_delete_move_are_undoable() -> void:
 diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
-index bdad2dd..ba34fa2 100644
+index bdad2dd..c177f04 100644
 --- a/pixel/tests/smoke/test_main_window_ui.gd
 +++ b/pixel/tests/smoke/test_main_window_ui.gd
 @@ -12,7 +12,7 @@ func test_main_window_uses_readable_minimum_sizes() -> void:
@@ -125,7 +125,7 @@ index bdad2dd..ba34fa2 100644
  	await wait_process_frames(1)
  	assert_eq(int(slider.value), canvas.zoom_index)
  	assert_eq(label.text, "100%")
-@@ -65,6 +65,35 @@ func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
+@@ -65,6 +65,36 @@ func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
  	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 220), 2.0)
  
  
@@ -145,6 +145,7 @@ index bdad2dd..ba34fa2 100644
 +	var inspector: Control = main.get_node("Root/Content/CleanupInspector")
 +	var root: VBoxContainer = inspector.get_node("InspectorRoot")
 +
++	assert_gte(inspector.custom_minimum_size.x, 420.0)
 +	assert_not_null(root.get_node("CleanupScroll"))
 +	assert_not_null(root.get_node("CleanupActions/ApplyCleanupButton"))
 +	assert_eq(
@@ -336,9 +337,18 @@ index c0a875c..7620a94 100644
  	dialog.popup_centered()
 +	return dialog
 diff --git a/pixel/ui/inspector/cleanup_inspector.gd b/pixel/ui/inspector/cleanup_inspector.gd
-index 356bac4..a7eec46 100644
+index 356bac4..e8259af 100644
 --- a/pixel/ui/inspector/cleanup_inspector.gd
 +++ b/pixel/ui/inspector/cleanup_inspector.gd
+@@ -17,7 +17,7 @@ const Ditherer := preload("res://core/pixel/ditherer.gd")
+ const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
+ const Strings := preload("res://ui/shell/strings.gd")
+ 
+-const PANEL_WIDTH := 300
++const PANEL_WIDTH := 420
+ const CONTROL_HEIGHT := 30
+ const PREVIEW_DEBOUNCE_SECONDS := 0.3
+ const RESAMPLE_LABELS := ["Mode", "Center", "Median", "Edge Aware"]
 @@ -234,6 +234,7 @@ func show_report(report: Dictionary) -> void:
  
  func _build_ui() -> void:

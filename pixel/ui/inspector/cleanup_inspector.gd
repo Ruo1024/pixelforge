@@ -17,7 +17,7 @@ const Ditherer := preload("res://core/pixel/ditherer.gd")
 const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 
-const PANEL_WIDTH := 300
+const PANEL_WIDTH := 420
 const CONTROL_HEIGHT := 30
 const PREVIEW_DEBOUNCE_SECONDS := 0.3
 const RESAMPLE_LABELS := ["Mode", "Center", "Median", "Edge Aware"]
