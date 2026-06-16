@@ -329,6 +329,7 @@ func _build_ui() -> void:
 	_canvas.name = "InfiniteCanvas"
 	_canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_canvas.ui_scale = _ui_scale
 	content.add_child(_canvas)
 
 	_cleanup_inspector = CleanupInspectorScript.new()

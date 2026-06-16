@@ -14,6 +14,7 @@ const DEFAULT_ZOOM_INDEX := 3
 const CULL_INTERVAL_SECONDS := 0.1
 const CULL_PADDING_PIXELS := 128.0
 const GRID_MIN_ZOOM := 4.0
+const ZOOM_CONTROL_MARGIN := 12
 const SELECTION_COLOR := Color(0.1, 0.85, 0.65, 1.0)
 const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
 const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
@@ -21,6 +22,7 @@ const CLEANUP_PREVIEW_Z_INDEX := 4095
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
+const CanvasZoomControlScript := preload("res://ui/canvas/canvas_zoom_control.gd")
 const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
@@ -29,6 +31,7 @@ const Log := preload("res://core/util/log_util.gd")
 var camera_center := Vector2.ZERO
 var zoom_index := DEFAULT_ZOOM_INDEX
 var camera_zoom := float(ZOOM_LEVELS[DEFAULT_ZOOM_INDEX])
+var ui_scale := 1.0
 
 var item_layer := Node2D.new()
 var tool_manager: Variant = null
@@ -36,6 +39,7 @@ var tool_manager: Variant = null
 var _items_by_id := {}
 var _selection: Variant = CanvasSelectionScript.new()
 var _cleanup_grid_overlay: Control = null
+var _zoom_control: Control = null
 var _cleanup_grid_active := false
 var _cleanup_grid_scale := 4.0
 var _cleanup_grid_offset := Vector2.ZERO
@@ -64,6 +68,7 @@ func _ready() -> void:
 	_cleanup_grid_overlay.grid_changed.connect(_on_cleanup_grid_changed)
 	add_child(_cleanup_grid_overlay)
 
+	_create_zoom_control()
 	_update_layer_transform()
 	set_process(true)
 
@@ -123,7 +128,8 @@ func _draw() -> void:
 		if not _items_by_id.has(item_id):
 			continue
 		var item: Node = _items_by_id[item_id]
-		var screen_rect := _world_rect_to_screen(item.get_canvas_bounds())
+		var bounds: Rect2 = item.get_canvas_bounds()
+		var screen_rect := Rect2(world_to_screen(bounds.position), bounds.size * camera_zoom)
 		draw_rect(screen_rect.grow(2.0), SELECTION_COLOR, false, 2.0)
 
 	if _selection.is_box_selecting:
@@ -133,19 +139,6 @@ func _draw() -> void:
 
 	if tool_manager != null:
 		tool_manager.draw_overlay(self, _get_active_tool_target())
-
-	var font := get_theme_default_font()
-	if font != null:
-		var font_size := maxi(12, get_theme_font_size("font_size", "Label") - 2)
-		draw_string(
-			font,
-			Vector2(12, size.y - float(font_size + 3)),
-			"%d%%" % int(round(camera_zoom * 100.0)),
-			HORIZONTAL_ALIGNMENT_LEFT,
-			-1,
-			font_size,
-			Color(0.82, 0.84, 0.84, 1.0)
-		)
 
 
 func add_sprite_item(
@@ -348,8 +341,13 @@ func pan_by_pixels(pixel_delta: Vector2) -> void:
 
 
 func set_camera_zoom(value: float, screen_anchor: Vector2 = size * 0.5) -> void:
-	_set_zoom_to_value(value)
 	var anchor_world := screen_to_world(screen_anchor)
+	var old_zoom := camera_zoom
+	_set_zoom_to_value(value)
+	if is_equal_approx(old_zoom, camera_zoom):
+		if _zoom_control != null:
+			_zoom_control.set_zoom_state(zoom_index, camera_zoom)
+		return
 	camera_center = anchor_world - (screen_anchor - size * 0.5) / camera_zoom
 	_update_layer_transform()
 	_emit_canvas_changed()
@@ -387,15 +385,7 @@ func get_selected_sprite_snapshots() -> Array:
 		var item: Node = _items_by_id[item_id]
 		if item.get_script() != CanvasItemSpriteScript:
 			continue
-		(
-			snapshots
-			. append(
-				{
-					"data": item.to_canvas_data(),
-					"image": item.duplicate_image(),
-				}
-			)
-		)
+		snapshots.append({"data": item.to_canvas_data(), "image": item.duplicate_image()})
 	return snapshots
 
 
@@ -785,10 +775,26 @@ func _set_zoom_to_value(value: float) -> void:
 	camera_zoom = float(ZOOM_LEVELS[zoom_index])
 
 
+func _create_zoom_control() -> void:
+	_zoom_control = CanvasZoomControlScript.new()
+	_zoom_control.name = "ZoomControl"
+	_zoom_control.ui_scale = ui_scale
+	_zoom_control.configure_levels(ZOOM_LEVELS.size())
+	_zoom_control.set_bottom_left_margin(ZOOM_CONTROL_MARGIN)
+	_zoom_control.zoom_index_requested.connect(
+		func(target_index: int) -> void:
+			set_camera_zoom(float(ZOOM_LEVELS[target_index]), size * 0.5)
+	)
+	add_child(_zoom_control)
+	_zoom_control.set_zoom_state(zoom_index, camera_zoom)
+
+
 func _update_layer_transform() -> void:
 	item_layer.position = size * 0.5 - camera_center * camera_zoom
 	item_layer.scale = Vector2.ONE * camera_zoom
 	_sync_cleanup_grid_overlay()
+	if _zoom_control != null:
+		_zoom_control.set_zoom_state(zoom_index, camera_zoom)
 	queue_redraw()
 
 
@@ -802,11 +808,6 @@ func _update_item_visibility() -> void:
 		item.visible = is_visible
 		item.set_process(is_visible)
 		item.set_physics_process(is_visible)
-
-
-func _world_rect_to_screen(world_rect: Rect2) -> Rect2:
-	var position_screen := world_to_screen(world_rect.position)
-	return Rect2(position_screen, world_rect.size * camera_zoom)
 
 
 func _draw_pixel_grid() -> void:

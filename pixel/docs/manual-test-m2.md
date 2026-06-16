@@ -38,9 +38,10 @@
 2. 选中单张 sprite，点击 `Matte`，确认弹出参数对话框；调整 tolerance/feather 后预览更新，按 Esc 取消不生成新素材。
 3. 选中单张 sprite，点击 `Slice` / `Outline`，确认参数对话框可预览 bbox / 描边结果，Apply 后生成新素材且原素材不被覆盖。
 4. 按 `W` 后在选中 sprite 内点击背景，确认状态栏显示选区面积；按 `M` 拖拽确认矩形选区与尺寸提示；按 `L` 左键打点、右键闭合确认套索选区。
-5. 选中 2 张以上 sprite，点击 `Batch` 生成批次卡；在批次卡缩略图上点选子集，右键卡片执行 `Split Selected`，确认子批次独立出现且原批次不变。
-6. 右键批次卡执行 `Clean Batch` / `Matte Batch` / `Outline Batch`，确认批次缩略图替换为新素材版本，Ctrl+Z 可回退整批卡 asset 队列。
-7. 对渐变或非纯色背景图执行 `Matte`，确认出现可操作建议而不是只有状态栏 warning。
+5. 拖动左下角缩放滑条，确认画布按离散 zoom level 缩放且百分比标签同步；再用鼠标滚轮缩放，确认滑条位置同步变化。
+6. 选中 2 张以上 sprite，点击 `Batch` 生成批次卡；在批次卡缩略图上点选子集，右键卡片执行 `Split Selected`，确认子批次独立出现且原批次不变。
+7. 右键批次卡执行 `Clean Batch` / `Matte Batch` / `Outline Batch`，确认批次缩略图替换为新素材版本，Ctrl+Z 可回退整批卡 asset 队列。
+8. 对渐变或非纯色背景图执行 `Matte`，确认出现可操作建议而不是只有状态栏 warning。
 
 ## 签字区
 

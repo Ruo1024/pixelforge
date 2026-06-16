@@ -48,6 +48,28 @@ func test_zoom_uses_nearest_neighbor_color_set() -> void:
 	assert_eq(ImageMath.color_set(enlarged).size(), ImageMath.color_set(source).size())
 
 
+func test_zoom_slider_controls_canvas_zoom_and_syncs_with_wheel_steps() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(256, 256)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var slider: HSlider = canvas.get_node("ZoomControl/ZoomRow/ZoomSlider")
+	var label: Label = canvas.get_node("ZoomControl/ZoomRow/ZoomLabel")
+	assert_eq(int(slider.value), canvas.zoom_index)
+	assert_eq(label.text, "100%")
+
+	slider.value = 5
+	await wait_process_frames(1)
+	assert_almost_eq(canvas.camera_zoom, 4.0, 0.001)
+	assert_eq(label.text, "400%")
+
+	canvas.zoom_by_steps(-2, Vector2(128, 128))
+	await wait_process_frames(1)
+	assert_eq(int(slider.value), canvas.zoom_index)
+	assert_eq(label.text, "100%")
+
+
 func test_add_delete_move_are_undoable() -> void:
 	var undo := get_tree().root.get_node("UndoService")
 	var canvas: Control = CanvasScript.new()
