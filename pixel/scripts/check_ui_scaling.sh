@@ -21,6 +21,10 @@ if rg -n "add_theme_font_size_override\\([^,]+,\\s*[0-9]" ui --glob '*.gd'; then
   fail=1
 fi
 
+if rg -n "item_layer\\.position\\s*=" ui/canvas/infinite_canvas.gd | rg -v "snap_position_to_physical_pixel"; then
+  fail=1
+fi
+
 if [[ "${fail}" == "0" ]]; then
   echo "check_ui_scaling: ok"
 else

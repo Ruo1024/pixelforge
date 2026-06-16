@@ -84,6 +84,32 @@ func test_canvas_device_scale_rounds_fractional_content_scale() -> void:
 	assert_eq(CanvasScalePolicy.effective_art_pixel_px(1.0, 1.5), 2)
 
 
+func test_canvas_layer_position_snaps_to_physical_pixel_grid() -> void:
+	var raw_position := Vector2(150.125, 99.75)
+	var snapped_position := CanvasScalePolicy.snap_position_to_physical_pixel(raw_position, 1.5)
+
+	assert_true(CanvasScalePolicy.is_position_on_physical_pixel(snapped_position, 1.5))
+	assert_lte(absf(snapped_position.x - raw_position.x), 0.5 / 1.5 + 0.001)
+	assert_lte(absf(snapped_position.y - raw_position.y), 0.5 / 1.5 + 0.001)
+
+
+func test_canvas_transform_uses_snapped_layer_position() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(301, 201)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	canvas.camera_center = Vector2(0.25, 0.5)
+	canvas._set_viewport_scale_factor_for_test(1.5)
+	var world_position := Vector2(12.25, -3.5)
+	var screen_position: Vector2 = canvas.world_to_screen(world_position)
+	var roundtrip: Vector2 = canvas.screen_to_world(screen_position)
+
+	assert_true(CanvasScalePolicy.is_position_on_physical_pixel(canvas.item_layer.position, 1.5))
+	assert_almost_eq(roundtrip.x, world_position.x, 0.001)
+	assert_almost_eq(roundtrip.y, world_position.y, 0.001)
+
+
 func test_canvas_coordinates_use_compensated_logical_scale() -> void:
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(300, 200)

@@ -1,6 +1,8 @@
 extends "res://addons/gut/test.gd"
 
 const MainScript := preload("res://ui/shell/main.gd")
+const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
 
 
 func test_main_window_uses_readable_minimum_sizes() -> void:
@@ -50,30 +52,51 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
 
 
 func test_auto_interface_scale_detects_high_density_displays() -> void:
-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(2560, 1440)), 1.0)
-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(3840, 2160)), 1.5)
-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(5120, 3140)), 2.0)
-	assert_eq(MainScript.compute_auto_interface_scale(2.0, Vector2i(2560, 1600)), 2.0)
+	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(2560, 1440)), 1.0)
+	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(3840, 2160)), 1.5)
+	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(5120, 3140)), 2.0)
+	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(2.0, Vector2i(2560, 1600)), 2.0)
 
 
 func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1244, 778), "macOS", 0), 2.0)
-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1334, 834), "macOS", 0), 2.0)
-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 0), 2.0)
-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 96), 1.0)
-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 110), 1.0)
-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 220), 2.0)
+	assert_eq(
+		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1244, 778), "macOS", 0), 2.0
+	)
+	assert_eq(
+		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1334, 834), "macOS", 0), 2.0
+	)
+	assert_eq(
+		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 0), 2.0
+	)
+	assert_eq(
+		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 96),
+		1.0
+	)
+	assert_eq(
+		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 110),
+		1.0
+	)
+	assert_eq(
+		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 220),
+		2.0
+	)
 
 
 func test_interface_scale_preserves_readability_on_scaled_screens() -> void:
-	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(1334, 834)), 2.0)
-	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(1470, 956)), 2.0)
-	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(5120, 2982)), 2.0)
+	assert_eq(
+		InterfaceScalePolicy.fit_interface_scale_to_startup_screen(2.0, Vector2i(1334, 834)), 2.0
+	)
+	assert_eq(
+		InterfaceScalePolicy.fit_interface_scale_to_startup_screen(2.0, Vector2i(1470, 956)), 2.0
+	)
+	assert_eq(
+		InterfaceScalePolicy.fit_interface_scale_to_startup_screen(2.0, Vector2i(5120, 2982)), 2.0
+	)
 
 
 func test_content_scale_policy_uses_native_factor_without_reference_size() -> void:
 	var window := Window.new()
-	MainScript.apply_content_scale_policy(window, 1.5)
+	InterfaceScalePolicy.apply_content_scale_policy(window, 1.5)
 
 	assert_eq(window.content_scale_mode, Window.CONTENT_SCALE_MODE_DISABLED)
 	assert_eq(window.content_scale_aspect, Window.CONTENT_SCALE_ASPECT_IGNORE)
@@ -82,6 +105,36 @@ func test_content_scale_policy_uses_native_factor_without_reference_size() -> vo
 	assert_eq(window.content_scale_stretch, Window.CONTENT_SCALE_STRETCH_FRACTIONAL)
 
 	window.free()
+
+
+func test_live_rescale_detects_screen_signature_changes() -> void:
+	var base := {
+		"screen": 0,
+		"reported_scale": 1.0,
+		"screen_dpi": 96,
+		"usable_size": Vector2i(1920, 1080),
+	}
+	var same := base.duplicate()
+	var screen_changed := base.duplicate()
+	screen_changed["screen"] = 1
+	var scale_changed := base.duplicate()
+	scale_changed["reported_scale"] = 1.5
+	var dpi_changed := base.duplicate()
+	dpi_changed["screen_dpi"] = 144
+
+	assert_false(InterfaceScalePolicy.screen_scale_snapshot_changed(base, same))
+	assert_true(InterfaceScalePolicy.screen_scale_snapshot_changed(base, screen_changed))
+	assert_true(InterfaceScalePolicy.screen_scale_snapshot_changed(base, scale_changed))
+	assert_true(InterfaceScalePolicy.screen_scale_snapshot_changed(base, dpi_changed))
+
+
+func test_file_dialog_policy_uses_godot_drawn_dialogs() -> void:
+	var dialog := FileDialog.new()
+	dialog.use_native_dialog = true
+	DialogScalePolicy.configure_file_dialog(dialog)
+
+	assert_false(dialog.use_native_dialog)
+	dialog.free()
 
 
 func test_cleanup_inspector_keeps_apply_actions_reachable_below_scroll() -> void:

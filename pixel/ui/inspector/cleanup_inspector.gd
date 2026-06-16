@@ -16,6 +16,7 @@ const Quantizer := preload("res://core/pixel/quantizer.gd")
 const Ditherer := preload("res://core/pixel/ditherer.gd")
 const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
 const Strings := preload("res://ui/shell/strings.gd")
+const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 
 const PANEL_WIDTH := 420
 const CONTROL_HEIGHT := 30
@@ -409,6 +410,7 @@ func _make_options(labels: Array) -> OptionButton:
 
 func _create_palette_dialogs() -> void:
 	_palette_import_dialog = FileDialog.new()
+	DialogScalePolicy.configure_file_dialog(_palette_import_dialog)
 	_palette_import_dialog.title = Strings.DIALOG_IMPORT_PALETTE
 	_palette_import_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_palette_import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE

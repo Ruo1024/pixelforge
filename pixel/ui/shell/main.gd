@@ -16,6 +16,10 @@ const Exporter := preload("res://services/exporter.gd")
 const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
 const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
 const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
+const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
+const ScaleAudit := preload("res://ui/shell/scale_audit.gd")
+const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
 
 const DEFAULT_WINDOW_WIDTH := 1440
 const DEFAULT_WINDOW_HEIGHT := 900
@@ -24,18 +28,6 @@ const MIN_WINDOW_HEIGHT := 560
 const WINDOW_SCREEN_MARGIN := 80
 const UI_FONT_SIZE := 16
 const UI_SMALL_FONT_SIZE := 14
-const MIN_INTERFACE_SCALE := 1.0
-const MAX_INTERFACE_SCALE := 2.0
-const MAC_RETINA_DPI_THRESHOLD := 160
-const MAC_RETINA_LOGICAL_DPI_THRESHOLD := 120
-const MAC_RETINA_LOGICAL_MIN_WIDTH := 1100
-const MAC_RETINA_LOGICAL_MIN_HEIGHT := 700
-const MAC_RETINA_LOGICAL_MAX_WIDTH := 1800
-const MAC_RETINA_LOGICAL_MAX_HEIGHT := 1200
-const RETINA_WIDTH_THRESHOLD := 4800
-const RETINA_HEIGHT_THRESHOLD := 2800
-const LARGE_DISPLAY_WIDTH_THRESHOLD := 3200
-const LARGE_DISPLAY_HEIGHT_THRESHOLD := 1800
 const TOP_BAR_HEIGHT := 48
 const BOTTOM_BAR_HEIGHT := 32
 const TOOLBAR_BUTTON_WIDTH := 96
@@ -44,6 +36,8 @@ const ZOOM_CONTROL_MARGIN := 12
 const FLEXIBLE_WIDTH := 0
 const CLEANUP_RESULT_GAP := 8
 const PREVIEW_OPACITY := 0.56
+const SCALE_MONITOR_INTERVAL_SECONDS := 0.25
+const SCALE_RESOLVE_DEBOUNCE_SECONDS := 0.35
 
 var _project_filters := PackedStringArray(["*.pxproj ; PixelForge Project"])
 var _png_filters := PackedStringArray(["*.png ; PNG Image"])
@@ -64,23 +58,39 @@ var _preview_token := 0
 var _m2_actions: Variant = null
 var _m2_1_ui: Variant = null
 var _zoom_overlay: RefCounted = null
+var _live_rescale_enabled := true
+var _scale_monitor_elapsed := 0.0
+var _rescale_debounce_elapsed := 0.0
+var _rescale_pending := false
+var _rescale_in_progress := false
+var _last_screen_snapshot := {}
+var _pending_screen_snapshot := {}
 
 
 func _ready() -> void:
 	_interface_scale = _resolve_interface_scale()
+	_live_rescale_enabled = bool(SettingsService.get_setting("ui", "live_rescale", true))
 	_apply_viewport_scale_policy()
 	_apply_runtime_theme()
 	_apply_window_defaults()
 	_build_ui()
 	_connect_services()
+	_last_screen_snapshot = InterfaceScalePolicy.read_current_screen_snapshot()
+	set_process(DisplayServer.get_name() != "headless")
 	_update_window_title()
 	_m2_1_ui.show_onboarding_if_needed()
+	if ScaleAudit.is_requested():
+		call_deferred("_log_scale_audit")
 
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		ProjectService.mark_clean_shutdown()
 		get_tree().quit()
+
+
+func _process(delta: float) -> void:
+	_poll_live_rescale(delta)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -102,76 +112,20 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-static func compute_auto_interface_scale(
-	reported_scale: float, usable_size: Vector2i, os_name: String = "", screen_dpi: int = 0
-) -> float:
-	var scale := maxf(reported_scale, MIN_INTERFACE_SCALE)
-	if scale < 1.25:
-		if should_use_macos_retina_fallback(reported_scale, usable_size, os_name, screen_dpi):
-			scale = 2.0
-		elif usable_size.x >= RETINA_WIDTH_THRESHOLD or usable_size.y >= RETINA_HEIGHT_THRESHOLD:
-			scale = 2.0
-		elif (
-			usable_size.x >= LARGE_DISPLAY_WIDTH_THRESHOLD
-			or usable_size.y >= LARGE_DISPLAY_HEIGHT_THRESHOLD
-		):
-			scale = 1.5
-	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
-
-
-static func should_use_macos_retina_fallback(
-	reported_scale: float, usable_size: Vector2i, os_name: String = "", screen_dpi: int = 0
-) -> bool:
-	if os_name != "macOS" or reported_scale >= 1.25:
-		return false
-	if screen_dpi >= MAC_RETINA_DPI_THRESHOLD:
-		return true
-	var looks_like_retina_points := (
-		usable_size.x >= MAC_RETINA_LOGICAL_MIN_WIDTH
-		and usable_size.y >= MAC_RETINA_LOGICAL_MIN_HEIGHT
-		and usable_size.x <= MAC_RETINA_LOGICAL_MAX_WIDTH
-		and usable_size.y <= MAC_RETINA_LOGICAL_MAX_HEIGHT
-	)
-	return (
-		looks_like_retina_points
-		and (screen_dpi <= 0 or screen_dpi >= MAC_RETINA_LOGICAL_DPI_THRESHOLD)
-	)
-
-
-static func fit_interface_scale_to_startup_screen(scale: float, usable_size: Vector2i) -> float:
-	if usable_size.x <= 0 or usable_size.y <= 0:
-		return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
-	# 高分屏上 UI scale 是物理可读性的来源，不再为了启动窗口尺寸反向缩小。
-	# 窗口默认尺寸会独立夹取到屏幕内，面板溢出交给滚动容器处理。
-	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
-
-
-static func apply_content_scale_policy(root: Window, scale: float) -> void:
-	if root == null:
-		return
-	root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
-	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
-	root.content_scale_size = Vector2i.ZERO
-	root.content_scale_factor = clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
-	root.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_FRACTIONAL
-
-
 func _resolve_interface_scale() -> float:
 	if DisplayServer.get_name() == "headless":
-		return MIN_INTERFACE_SCALE
+		return InterfaceScalePolicy.MIN_INTERFACE_SCALE
 
-	var screen := DisplayServer.window_get_current_screen()
-	var reported_scale := DisplayServer.screen_get_scale(screen)
-	var usable_rect := DisplayServer.screen_get_usable_rect(screen)
-	var screen_dpi := DisplayServer.screen_get_dpi(screen)
-	var mac_retina_fallback := should_use_macos_retina_fallback(
-		reported_scale, usable_rect.size, OS.get_name(), screen_dpi
-	)
-	var auto_scale := compute_auto_interface_scale(
-		reported_scale, usable_rect.size, OS.get_name(), screen_dpi
+	return _resolve_interface_scale_from_snapshot(
+		InterfaceScalePolicy.read_current_screen_snapshot(), "startup"
 	)
 
+
+func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String) -> float:
 	var configured_scale := float(SettingsService.get_setting("ui", "interface_scale", 0.0))
+	var resolution := InterfaceScalePolicy.resolve_from_snapshot(
+		snapshot, configured_scale, OS.get_name()
+	)
 	# M0 复发复盘：manual-test-m0.md 曾指导测试者把 interface_scale 写成 1.0，
 	# 该值残留在 user://settings.cfg 后会永久旁路自动检测，在 Retina 屏表现为
 	# 界面缩小一半。一次性迁移：检测到 macOS Retina（自动检测 > 残留值）时
@@ -179,32 +133,29 @@ func _resolve_interface_scale() -> float:
 	if (
 		OS.get_name() == "macOS"
 		and is_equal_approx(configured_scale, 1.0)
-		and auto_scale > configured_scale
+		and float(resolution["detected_F"]) > configured_scale
 	):
 		Log.warn(
 			"Stale interface_scale=1.0 override on a scaled display; resetting to auto.",
-			{"auto_scale": auto_scale}
+			{"auto_scale": float(resolution["detected_F"])}
 		)
 		SettingsService.set_setting("ui", "interface_scale", 0.0)
 		configured_scale = 0.0
+		resolution = InterfaceScalePolicy.resolve_from_snapshot(
+			snapshot, configured_scale, OS.get_name()
+		)
 
-	var resolved := auto_scale
-	var source := "auto"
-	if configured_scale >= MIN_INTERFACE_SCALE:
-		resolved = clampf(configured_scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
-		source = "settings"
-
-	var unclamped_resolved := resolved
-	resolved = fit_interface_scale_to_startup_screen(resolved, usable_rect.size)
-	if resolved < unclamped_resolved:
+	var resolved := float(resolution["resolved"])
+	var usable_size := Vector2i(resolution["usable_size"])
+	if bool(resolution["clamped"]):
 		(
 			Log
 			. warn(
 				"Interface scale clamped to fit startup screen.",
 				{
-					"before": unclamped_resolved,
+					"before": float(resolution["before_clamp"]),
 					"after": resolved,
-					"usable_rect": [usable_rect.size.x, usable_rect.size.y],
+					"usable_rect": [usable_size.x, usable_size.y],
 				}
 			)
 		)
@@ -215,13 +166,17 @@ func _resolve_interface_scale() -> float:
 		. info(
 			"Interface scale resolved",
 			{
-				"source": source,
+				"reason": reason,
+				"source": String(resolution["source"]),
 				"resolved": resolved,
+				"detected_F": float(resolution["detected_F"]),
+				"applied_F": resolved,
 				"configured": configured_scale,
-				"reported_screen_scale": reported_scale,
-				"screen_dpi": screen_dpi,
-				"usable_rect": [usable_rect.size.x, usable_rect.size.y],
-				"mac_retina_fallback": mac_retina_fallback,
+				"reported_screen_scale": float(resolution["reported_screen_scale"]),
+				"screen_dpi": int(resolution["screen_dpi"]),
+				"usable_rect": [usable_size.x, usable_size.y],
+				"mac_retina_fallback": bool(resolution["mac_retina_fallback"]),
+				"current_screen": int(snapshot.get("screen", -1)),
 				"os": OS.get_name(),
 			}
 		)
@@ -230,7 +185,80 @@ func _resolve_interface_scale() -> float:
 
 
 func _apply_viewport_scale_policy() -> void:
-	apply_content_scale_policy(get_tree().root, _interface_scale)
+	InterfaceScalePolicy.apply_content_scale_policy(get_tree().root, _interface_scale)
+
+
+func _poll_live_rescale(delta: float) -> void:
+	if DisplayServer.get_name() == "headless" or not _live_rescale_enabled:
+		return
+
+	_scale_monitor_elapsed += delta
+	if _scale_monitor_elapsed >= SCALE_MONITOR_INTERVAL_SECONDS:
+		_scale_monitor_elapsed = 0.0
+		var current_snapshot := InterfaceScalePolicy.read_current_screen_snapshot()
+		if InterfaceScalePolicy.screen_scale_snapshot_changed(
+			_last_screen_snapshot, current_snapshot
+		):
+			if InterfaceScalePolicy.screen_scale_snapshot_changed(
+				_pending_screen_snapshot, current_snapshot
+			):
+				_pending_screen_snapshot = current_snapshot
+				_rescale_debounce_elapsed = 0.0
+			_rescale_pending = true
+
+	if not _rescale_pending:
+		return
+	_rescale_debounce_elapsed += delta
+	if _rescale_debounce_elapsed >= SCALE_RESOLVE_DEBOUNCE_SECONDS:
+		_apply_live_rescale(_pending_screen_snapshot)
+
+
+func _apply_live_rescale(screen_snapshot: Dictionary) -> void:
+	if _rescale_in_progress or screen_snapshot.is_empty():
+		return
+	_rescale_in_progress = true
+
+	var old_snapshot := _last_screen_snapshot.duplicate()
+	var old_scale := _interface_scale
+	_interface_scale = _resolve_interface_scale_from_snapshot(screen_snapshot, "live_rescale")
+	_apply_viewport_scale_policy()
+	_apply_runtime_theme()
+	_apply_window_minimum_size()
+	if _canvas != null:
+		_canvas.call("_update_layer_transform")
+		_canvas.call("_update_item_visibility")
+
+	_last_screen_snapshot = screen_snapshot
+	_pending_screen_snapshot = {}
+	_rescale_pending = false
+	_rescale_debounce_elapsed = 0.0
+	_rescale_in_progress = false
+
+	(
+		Log
+		. info(
+			"Interface scale reapplied",
+			{
+				"from_screen": int(old_snapshot.get("screen", -1)),
+				"to_screen": int(screen_snapshot.get("screen", -1)),
+				"from_F": old_scale,
+				"to_F": _interface_scale,
+				"current_screen": int(screen_snapshot.get("screen", -1)),
+			}
+		)
+	)
+	if ScaleAudit.is_requested():
+		_log_scale_audit()
+
+
+func _log_scale_audit() -> void:
+	var root_window := get_tree().root
+	ScaleAudit.log_scale_audit(
+		self,
+		_canvas,
+		_last_screen_snapshot,
+		root_window.content_scale_factor if root_window != null else 1.0
+	)
 
 
 func _apply_runtime_theme() -> void:
@@ -269,69 +297,26 @@ func _apply_window_defaults() -> void:
 	var window := get_window()
 	if window == null or DisplayServer.get_name() == "headless":
 		return
-
-	window.min_size = _logical_size_to_window_pixels(Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT))
-	var target_size := _logical_size_to_window_pixels(
-		Vector2i(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-	)
-	var usable_rect := DisplayServer.screen_get_usable_rect(window.current_screen)
-	if usable_rect.size.x > 0 and usable_rect.size.y > 0:
-		var margin := _logical_size_to_window_pixels(Vector2i(WINDOW_SCREEN_MARGIN, 0)).x
-		var usable_size_for_window := _usable_size_to_window_pixels(usable_rect.size)
-		var minimum_fit := _logical_size_to_window_pixels(Vector2i(960, 640))
-		var max_width := maxi(minimum_fit.x, usable_size_for_window.x - margin)
-		var max_height := maxi(minimum_fit.y, usable_size_for_window.y - margin)
-		target_size.x = mini(target_size.x, max_width)
-		target_size.y = mini(target_size.y, max_height)
-		target_size.x = maxi(target_size.x, mini(window.min_size.x, max_width))
-		target_size.y = maxi(target_size.y, mini(window.min_size.y, max_height))
-
-		window.size = target_size
-		var position_size := _window_pixels_to_screen_units(target_size)
-		window.position = usable_rect.position + (usable_rect.size - position_size) / 2
-	else:
-		window.size = target_size
-
-	(
-		Log
-		. info(
-			"Window defaults applied",
-			{
-				"content_scale_factor": _interface_scale,
-				"min_size": [window.min_size.x, window.min_size.y],
-				"target_size": [target_size.x, target_size.y],
-				"actual_size": [window.size.x, window.size.y],
-				"position": [window.position.x, window.position.y],
-				"usable_rect": [usable_rect.size.x, usable_rect.size.y],
-				"os": OS.get_name(),
-			}
+	Log.info(
+		"Window defaults applied",
+		WindowScalePolicy.apply_startup_defaults(
+			window,
+			_interface_scale,
+			Vector2i(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
+			Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
+			WINDOW_SCREEN_MARGIN,
+			OS.get_name()
 		)
 	)
 
 
-func _logical_size_to_window_pixels(size: Vector2i) -> Vector2i:
-	var factor := maxf(_interface_scale, MIN_INTERFACE_SCALE)
-	return Vector2i(
-		maxi(1, int(round(float(size.x) * factor))), maxi(1, int(round(float(size.y) * factor)))
+func _apply_window_minimum_size() -> void:
+	var window := get_window()
+	if window == null or DisplayServer.get_name() == "headless":
+		return
+	WindowScalePolicy.apply_minimum_size(
+		window, Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT), _interface_scale
 	)
-
-
-func _usable_size_to_window_pixels(size: Vector2i) -> Vector2i:
-	if OS.get_name() == "macOS" and _interface_scale > 1.0:
-		return Vector2i(
-			maxi(1, int(round(float(size.x) * _interface_scale))),
-			maxi(1, int(round(float(size.y) * _interface_scale)))
-		)
-	return size
-
-
-func _window_pixels_to_screen_units(size: Vector2i) -> Vector2i:
-	if OS.get_name() == "macOS" and _interface_scale > 1.0:
-		return Vector2i(
-			maxi(1, int(round(float(size.x) / _interface_scale))),
-			maxi(1, int(round(float(size.y) / _interface_scale)))
-		)
-	return size
 
 
 func _build_ui() -> void:
@@ -431,6 +416,7 @@ func _add_toolbar_button(parent: Control, text: String, callback: Callable) -> v
 
 func _create_file_dialogs() -> void:
 	_open_dialog = FileDialog.new()
+	DialogScalePolicy.configure_file_dialog(_open_dialog)
 	_open_dialog.title = Strings.DIALOG_OPEN_PROJECT
 	_open_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_open_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
@@ -439,6 +425,7 @@ func _create_file_dialogs() -> void:
 	add_child(_open_dialog)
 
 	_save_dialog = FileDialog.new()
+	DialogScalePolicy.configure_file_dialog(_save_dialog)
 	_save_dialog.title = Strings.DIALOG_SAVE_PROJECT
 	_save_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
@@ -447,6 +434,7 @@ func _create_file_dialogs() -> void:
 	add_child(_save_dialog)
 
 	_export_dialog = FileDialog.new()
+	DialogScalePolicy.configure_file_dialog(_export_dialog)
 	_export_dialog.title = Strings.DIALOG_EXPORT_PNG
 	_export_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_export_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
@@ -473,6 +461,7 @@ func _connect_services() -> void:
 	ProjectService.project_saved.connect(_on_project_saved)
 	ProjectService.dirty_changed.connect(_on_dirty_changed)
 	ProjectService.recovery_available.connect(_on_recovery_available)
+	SettingsService.setting_changed.connect(_on_setting_changed)
 
 	var window := get_window()
 	if window != null:
@@ -536,6 +525,16 @@ func _on_custom_palettes_changed() -> void:
 	ProjectService.mark_dirty()
 	_status_label.text = Strings.STATUS_DIRTY
 	_update_window_title()
+
+
+func _on_setting_changed(section: String, key: String, value: Variant) -> void:
+	if section != "ui" or key != "live_rescale":
+		return
+	_live_rescale_enabled = bool(value)
+	if not _live_rescale_enabled:
+		_rescale_pending = false
+		_pending_screen_snapshot = {}
+		_rescale_debounce_elapsed = 0.0
 
 
 func _sync_cleanup_inspector_with_project(project: Variant) -> void:

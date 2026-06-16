@@ -25,6 +25,8 @@ const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_prev
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
 const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
 const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
+const PixelGridRenderer := preload("res://ui/canvas/canvas_pixel_grid_renderer.gd")
+const ToolInputPolicy := preload("res://ui/canvas/canvas_tool_input_policy.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const Log := preload("res://core/util/log_util.gd")
@@ -326,11 +328,11 @@ func export_canvas_data() -> Dictionary:
 
 
 func screen_to_world(screen_position: Vector2) -> Vector2:
-	return camera_center + (screen_position - size * 0.5) / _get_art_logical_scale()
+	return (screen_position - item_layer.position) / _get_art_logical_scale()
 
 
 func world_to_screen(world_position: Vector2) -> Vector2:
-	return size * 0.5 + (world_position - camera_center) * _get_art_logical_scale()
+	return item_layer.position + world_position * _get_art_logical_scale()
 
 
 func _world_rect_to_screen(world_rect: Rect2) -> Rect2:
@@ -342,7 +344,13 @@ func get_mouse_world_position() -> Vector2:
 
 
 func pan_by_pixels(pixel_delta: Vector2) -> void:
-	camera_center += pixel_delta / _get_art_logical_scale()
+	var target_position := item_layer.position - pixel_delta
+	var snapped_position := ScalePolicy.snap_position_to_physical_pixel(
+		target_position, _resolve_viewport_scale_factor()
+	)
+	camera_center = ScalePolicy.camera_center_from_layer_position(
+		size, snapped_position, _get_art_logical_scale()
+	)
 	_update_layer_transform()
 	_emit_canvas_changed()
 
@@ -354,7 +362,7 @@ func set_camera_zoom(value: float, screen_anchor: Vector2 = size * 0.5) -> void:
 	if is_equal_approx(old_zoom, camera_zoom):
 		_emit_zoom_changed()
 		return
-	camera_center = anchor_world - (screen_anchor - size * 0.5) / _get_art_logical_scale()
+	camera_center = _camera_center_for_snapped_anchor(anchor_world, screen_anchor)
 	_update_layer_transform()
 	_emit_canvas_changed()
 	_emit_zoom_changed()
@@ -368,7 +376,7 @@ func zoom_by_steps(step_delta: int, screen_anchor: Vector2) -> void:
 	if is_equal_approx(old_zoom, camera_zoom):
 		_emit_zoom_changed()
 		return
-	camera_center = anchor_world - (screen_anchor - size * 0.5) / _get_art_logical_scale()
+	camera_center = _camera_center_for_snapped_anchor(anchor_world, screen_anchor)
 	_update_layer_transform()
 	_emit_canvas_changed()
 	_emit_zoom_changed()
@@ -772,8 +780,13 @@ func _set_viewport_scale_factor_for_test(viewport_scale_factor: float) -> void:
 
 
 func _update_layer_transform() -> void:
-	item_layer.position = size * 0.5 - camera_center * _get_art_logical_scale()
-	item_layer.scale = Vector2.ONE * _get_art_logical_scale()
+	var viewport_scale_factor := _resolve_viewport_scale_factor()
+	var art_logical_scale := _get_art_logical_scale()
+	var raw_position := size * 0.5 - camera_center * art_logical_scale
+	item_layer.position = ScalePolicy.snap_position_to_physical_pixel(
+		raw_position, viewport_scale_factor
+	)
+	item_layer.scale = Vector2.ONE * art_logical_scale
 	_sync_cleanup_grid_overlay()
 	queue_redraw()
 
@@ -808,22 +821,18 @@ func _get_art_logical_scale() -> float:
 	)
 
 
+func _camera_center_for_snapped_anchor(anchor_world: Vector2, screen_anchor: Vector2) -> Vector2:
+	return ScalePolicy.camera_center_for_snapped_anchor(
+		size,
+		anchor_world,
+		screen_anchor,
+		_get_art_logical_scale(),
+		_resolve_viewport_scale_factor()
+	)
+
+
 func _draw_pixel_grid() -> void:
-	var top_left := screen_to_world(Vector2.ZERO)
-	var bottom_right := screen_to_world(size)
-	var start_x := floori(top_left.x)
-	var end_x := ceili(bottom_right.x)
-	var start_y := floori(top_left.y)
-	var end_y := ceili(bottom_right.y)
-	var color := Color(1.0, 1.0, 1.0, 0.08)
-
-	for x in range(start_x, end_x + 1):
-		var screen_x := world_to_screen(Vector2(float(x), 0.0)).x
-		draw_line(Vector2(screen_x, 0.0), Vector2(screen_x, size.y), color, 1.0)
-
-	for y in range(start_y, end_y + 1):
-		var screen_y := world_to_screen(Vector2(0.0, float(y))).y
-		draw_line(Vector2(0.0, screen_y), Vector2(size.x, screen_y), color, 1.0)
+	PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
 
 
 func _emit_canvas_changed() -> void:
@@ -875,19 +884,9 @@ func _update_cleanup_preview_alt_state() -> void:
 
 
 func _tool_manager_handles(event: InputEvent) -> bool:
-	if tool_manager == null:
-		return false
-	if event is InputEventMouseButton:
-		var mouse_event := event as InputEventMouseButton
-		if (
-			mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP
-			or mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN
-			or mouse_event.button_index == MOUSE_BUTTON_MIDDLE
-			or Input.is_key_pressed(KEY_SPACE)
-		):
-			return false
-		return tool_manager.handle_canvas_input(event, self, _get_active_tool_target())
-	return tool_manager.handle_canvas_input(event, self, _get_active_tool_target())
+	return ToolInputPolicy.tool_manager_handles(
+		tool_manager, event, self, _get_active_tool_target()
+	)
 
 
 func _emit_batch_context_if_hit(screen_position: Vector2) -> void:

@@ -16,6 +16,7 @@ const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
 const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
 const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
 const OnboardingScript := preload("res://ui/dialogs/onboarding.gd")
+const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
 const Log := preload("res://core/util/log_util.gd")
 
@@ -193,6 +194,7 @@ func show_onboarding_if_needed() -> void:
 
 func _create_import_dialog() -> void:
 	_import_dialog = FileDialog.new()
+	DialogScalePolicy.configure_file_dialog(_import_dialog)
 	_import_dialog.title = Strings.DIALOG_IMPORT_IMAGES
 	_import_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
