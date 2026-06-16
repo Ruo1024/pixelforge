@@ -12,12 +12,11 @@ var zoom_control: Control = null
 var _canvas: Control = null
 
 
-func setup(parent: Control, canvas: Control, ui_scale: float, bottom_left_margin: int) -> void:
+func setup(parent: Control, canvas: Control, bottom_left_margin: int) -> void:
 	_canvas = canvas
 
 	zoom_control = CanvasZoomControlScript.new()
 	zoom_control.name = "ZoomControl"
-	zoom_control.ui_scale = ui_scale
 	zoom_control.configure_levels(InfiniteCanvasScript.ZOOM_LEVELS.size())
 	zoom_control.set_bottom_left_margin(bottom_left_margin)
 	zoom_control.zoom_index_requested.connect(_on_zoom_index_requested)

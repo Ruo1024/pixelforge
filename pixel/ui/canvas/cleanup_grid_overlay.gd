@@ -86,10 +86,10 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 
 func _draw_axis_lines(vertical: bool) -> void:
 	var step := grid_scale
-	var screen_step := step * float(canvas.camera_zoom)
+	var screen_step := step * float(canvas._get_art_logical_scale())
 	while screen_step < MIN_SCREEN_STEP:
 		step *= 2.0
-		screen_step = step * float(canvas.camera_zoom)
+		screen_step = step * float(canvas._get_art_logical_scale())
 
 	var origin := world_bounds.position.x if vertical else world_bounds.position.y
 	var limit := world_bounds.end.x if vertical else world_bounds.end.y
@@ -124,5 +124,4 @@ func _normalized_offset(offset: Vector2) -> Vector2:
 
 
 func _world_rect_to_screen(bounds: Rect2) -> Rect2:
-	var top_left: Vector2 = canvas.world_to_screen(bounds.position)
-	return Rect2(top_left, bounds.size * float(canvas.camera_zoom))
+	return canvas._world_rect_to_screen(bounds)

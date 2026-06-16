@@ -41,12 +41,13 @@ const BOTTOM_BAR_HEIGHT := 32
 const TOOLBAR_BUTTON_WIDTH := 96
 const TOOLBAR_BUTTON_HEIGHT := 34
 const ZOOM_CONTROL_MARGIN := 12
+const FLEXIBLE_WIDTH := 0
 const CLEANUP_RESULT_GAP := 8
 const PREVIEW_OPACITY := 0.56
 
 var _project_filters := PackedStringArray(["*.pxproj ; PixelForge Project"])
 var _png_filters := PackedStringArray(["*.png ; PNG Image"])
-var _ui_scale := 1.0
+var _interface_scale := 1.0
 var _canvas: Control = null
 var _cleanup_inspector: Control = null
 var _title_label: Label = null
@@ -66,7 +67,7 @@ var _zoom_overlay: RefCounted = null
 
 
 func _ready() -> void:
-	_ui_scale = _resolve_interface_scale()
+	_interface_scale = _resolve_interface_scale()
 	_apply_viewport_scale_policy()
 	_apply_runtime_theme()
 	_apply_window_defaults()
@@ -145,6 +146,16 @@ static func fit_interface_scale_to_startup_screen(scale: float, usable_size: Vec
 	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
 
 
+static func apply_content_scale_policy(root: Window, scale: float) -> void:
+	if root == null:
+		return
+	root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
+	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
+	root.content_scale_size = Vector2i.ZERO
+	root.content_scale_factor = clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+	root.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_FRACTIONAL
+
+
 func _resolve_interface_scale() -> float:
 	if DisplayServer.get_name() == "headless":
 		return MIN_INTERFACE_SCALE
@@ -219,12 +230,7 @@ func _resolve_interface_scale() -> float:
 
 
 func _apply_viewport_scale_policy() -> void:
-	var root := get_tree().root
-	root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
-	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
-	root.content_scale_size = Vector2i.ZERO
-	root.content_scale_factor = 1.0
-	root.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_FRACTIONAL
+	apply_content_scale_policy(get_tree().root, _interface_scale)
 
 
 func _apply_runtime_theme() -> void:
@@ -233,7 +239,7 @@ func _apply_runtime_theme() -> void:
 
 func _build_app_theme() -> Theme:
 	var app_theme := Theme.new()
-	app_theme.default_font_size = _scaled_int(UI_FONT_SIZE)
+	app_theme.default_font_size = UI_FONT_SIZE
 
 	for type_name in [
 		"Button",
@@ -250,11 +256,11 @@ func _build_app_theme() -> Theme:
 		"Tree",
 		"Window",
 	]:
-		app_theme.set_font_size("font_size", type_name, _scaled_int(UI_FONT_SIZE))
+		app_theme.set_font_size("font_size", type_name, UI_FONT_SIZE)
 
-	app_theme.set_font_size("font_size", "Button", _scaled_int(UI_SMALL_FONT_SIZE))
-	app_theme.set_font_size("font_size", "PopupMenu", _scaled_int(UI_SMALL_FONT_SIZE))
-	app_theme.set_constant("h_separation", "HBoxContainer", _scaled_int(8))
+	app_theme.set_font_size("font_size", "Button", UI_SMALL_FONT_SIZE)
+	app_theme.set_font_size("font_size", "PopupMenu", UI_SMALL_FONT_SIZE)
+	app_theme.set_constant("h_separation", "HBoxContainer", 8)
 	app_theme.set_constant("v_separation", "VBoxContainer", 0)
 	return app_theme
 
@@ -264,21 +270,24 @@ func _apply_window_defaults() -> void:
 	if window == null or DisplayServer.get_name() == "headless":
 		return
 
-	window.min_size = _scaled_vec2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
-	var target_size := _scaled_vec2i(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+	window.min_size = _logical_size_to_window_pixels(Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT))
+	var target_size := _logical_size_to_window_pixels(
+		Vector2i(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+	)
 	var usable_rect := DisplayServer.screen_get_usable_rect(window.current_screen)
 	if usable_rect.size.x > 0 and usable_rect.size.y > 0:
-		var margin := _scaled_int(WINDOW_SCREEN_MARGIN)
-		var usable_size_for_window := _window_pixel_size_from_screen_points(usable_rect.size)
-		var max_width := maxi(_scaled_int(960), usable_size_for_window.x - margin)
-		var max_height := maxi(_scaled_int(640), usable_size_for_window.y - margin)
+		var margin := _logical_size_to_window_pixels(Vector2i(WINDOW_SCREEN_MARGIN, 0)).x
+		var usable_size_for_window := _usable_size_to_window_pixels(usable_rect.size)
+		var minimum_fit := _logical_size_to_window_pixels(Vector2i(960, 640))
+		var max_width := maxi(minimum_fit.x, usable_size_for_window.x - margin)
+		var max_height := maxi(minimum_fit.y, usable_size_for_window.y - margin)
 		target_size.x = mini(target_size.x, max_width)
 		target_size.y = mini(target_size.y, max_height)
 		target_size.x = maxi(target_size.x, mini(window.min_size.x, max_width))
 		target_size.y = maxi(target_size.y, mini(window.min_size.y, max_height))
 
 		window.size = target_size
-		var position_size := _screen_point_size_from_window_pixels(target_size)
+		var position_size := _window_pixels_to_screen_units(target_size)
 		window.position = usable_rect.position + (usable_rect.size - position_size) / 2
 	else:
 		window.size = target_size
@@ -288,7 +297,7 @@ func _apply_window_defaults() -> void:
 		. info(
 			"Window defaults applied",
 			{
-				"ui_scale": _ui_scale,
+				"content_scale_factor": _interface_scale,
 				"min_size": [window.min_size.x, window.min_size.y],
 				"target_size": [target_size.x, target_size.y],
 				"actual_size": [window.size.x, window.size.y],
@@ -300,23 +309,33 @@ func _apply_window_defaults() -> void:
 	)
 
 
-func _window_pixel_size_from_screen_points(size: Vector2i) -> Vector2i:
-	if OS.get_name() == "macOS" and _ui_scale > 1.0:
-		return Vector2i(_scaled_int(size.x), _scaled_int(size.y))
+func _logical_size_to_window_pixels(size: Vector2i) -> Vector2i:
+	var factor := maxf(_interface_scale, MIN_INTERFACE_SCALE)
+	return Vector2i(
+		maxi(1, int(round(float(size.x) * factor))), maxi(1, int(round(float(size.y) * factor)))
+	)
+
+
+func _usable_size_to_window_pixels(size: Vector2i) -> Vector2i:
+	if OS.get_name() == "macOS" and _interface_scale > 1.0:
+		return Vector2i(
+			maxi(1, int(round(float(size.x) * _interface_scale))),
+			maxi(1, int(round(float(size.y) * _interface_scale)))
+		)
 	return size
 
 
-func _screen_point_size_from_window_pixels(size: Vector2i) -> Vector2i:
-	if OS.get_name() == "macOS" and _ui_scale > 1.0:
+func _window_pixels_to_screen_units(size: Vector2i) -> Vector2i:
+	if OS.get_name() == "macOS" and _interface_scale > 1.0:
 		return Vector2i(
-			maxi(1, int(round(float(size.x) / _ui_scale))),
-			maxi(1, int(round(float(size.y) / _ui_scale)))
+			maxi(1, int(round(float(size.x) / _interface_scale))),
+			maxi(1, int(round(float(size.y) / _interface_scale)))
 		)
 	return size
 
 
 func _build_ui() -> void:
-	custom_minimum_size = _scaled_vec2(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+	custom_minimum_size = Vector2(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
 
 	var root := VBoxContainer.new()
 	root.name = "Root"
@@ -325,14 +344,14 @@ func _build_ui() -> void:
 
 	var top_bar := HBoxContainer.new()
 	top_bar.name = "TopBar"
-	top_bar.custom_minimum_size = Vector2(0, _scaled_int(TOP_BAR_HEIGHT))
+	top_bar.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, TOP_BAR_HEIGHT)
 	top_bar.alignment = BoxContainer.ALIGNMENT_END
 	root.add_child(top_bar)
 
 	_title_label = Label.new()
 	_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_title_label.add_theme_font_size_override("font_size", _scaled_int(UI_FONT_SIZE))
+	_title_label.add_theme_font_size_override("font_size", UI_FONT_SIZE)
 	top_bar.add_child(_title_label)
 
 	_add_toolbar_button(top_bar, Strings.ACTION_NEW, _create_new_project)
@@ -355,26 +374,23 @@ func _build_ui() -> void:
 	_canvas.name = "InfiniteCanvas"
 	_canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_canvas.ui_scale = _ui_scale
 	content.add_child(_canvas)
 
 	_cleanup_inspector = CleanupInspectorScript.new()
 	_cleanup_inspector.name = "CleanupInspector"
 	_cleanup_inspector.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	# 缩放注入必须在 add_child 之前完成：inspector 在 _ready 中按 ui_scale 构建 UI。
-	_cleanup_inspector.ui_scale = _ui_scale
 	content.add_child(_cleanup_inspector)
 
 	var bottom_bar := HBoxContainer.new()
 	bottom_bar.name = "BottomBar"
-	bottom_bar.custom_minimum_size = Vector2(0, _scaled_int(BOTTOM_BAR_HEIGHT))
+	bottom_bar.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, BOTTOM_BAR_HEIGHT)
 	root.add_child(bottom_bar)
 
 	_status_label = Label.new()
 	_status_label.text = Strings.STATUS_READY
 	_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_status_label.add_theme_font_size_override("font_size", _scaled_int(UI_SMALL_FONT_SIZE))
+	_status_label.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
 	bottom_bar.add_child(_status_label)
 
 	_create_file_dialogs()
@@ -382,7 +398,6 @@ func _build_ui() -> void:
 	_m2_actions.setup(_canvas, _cleanup_inspector, _status_label, self)
 	_m2_1_ui = M21UiControllerScript.new()
 	_m2_1_ui.name = "M21UiController"
-	_m2_1_ui.ui_scale = _ui_scale
 	add_child(_m2_1_ui)
 	_m2_1_ui.setup(
 		_canvas,
@@ -401,29 +416,17 @@ func _build_ui() -> void:
 	_add_toolbar_button(top_bar, Strings.ACTION_SLICE, _m2_1_ui.open_slice_dialog)
 	_add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _m2_1_ui.open_outline_dialog)
 	_zoom_overlay = ZoomOverlayControllerScript.new()
-	_zoom_overlay.setup(self, _canvas, _ui_scale, ZOOM_CONTROL_MARGIN)
+	_zoom_overlay.setup(self, _canvas, ZOOM_CONTROL_MARGIN)
 
 
 func _add_toolbar_button(parent: Control, text: String, callback: Callable) -> void:
 	var button := Button.new()
 	button.text = text
-	button.custom_minimum_size = _scaled_vec2(TOOLBAR_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT)
+	button.custom_minimum_size = Vector2(TOOLBAR_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT)
 	button.focus_mode = Control.FOCUS_NONE
-	button.add_theme_font_size_override("font_size", _scaled_int(UI_SMALL_FONT_SIZE))
+	button.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
 	button.pressed.connect(callback)
 	parent.add_child(button)
-
-
-func _scaled_int(value: int) -> int:
-	return maxi(1, int(round(float(value) * _ui_scale)))
-
-
-func _scaled_vec2(width: int, height: int) -> Vector2:
-	return Vector2(_scaled_int(width), _scaled_int(height))
-
-
-func _scaled_vec2i(width: int, height: int) -> Vector2i:
-	return Vector2i(_scaled_int(width), _scaled_int(height))
 
 
 func _create_file_dialogs() -> void:
@@ -888,11 +891,9 @@ static func _json_safe(value: Variant) -> Variant:
 				output.append(_json_safe(item))
 			return output
 		TYPE_VECTOR2:
-			var vector := Vector2(value)
-			return [vector.x, vector.y]
+			return [value.x, value.y]
 		TYPE_VECTOR2I:
-			var vector_i := Vector2i(value)
-			return [vector_i.x, vector_i.y]
+			return [value.x, value.y]
 		TYPE_COLOR:
 			return Color(value).to_html(true)
 		_:

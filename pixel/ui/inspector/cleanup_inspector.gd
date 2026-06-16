@@ -49,11 +49,9 @@ const PALETTE_PREVIEW_HEIGHT := 18
 const TITLE_FONT_SIZE := 16
 const LABEL_FONT_SIZE := 13
 const PRIOR_FONT_SIZE := 12
-
-# 由 shell 在 add_child 之前注入（见 main.gd::_build_ui）。
-# M1.1 复盘：本面板曾全部使用硬编码像素值，绕过了 M0 建立的界面缩放体系，
-# 在 macOS Retina（2x）上呈现为一半物理尺寸。所有尺寸/字号必须经 _scaled_int()。
-var ui_scale := 1.0
+const ROOT_SEPARATION := 8
+const ROW_SEPARATION := 2
+const FLEXIBLE_WIDTH := 0
 
 var _selection_label: Label = null
 var _auto_detect_check: CheckBox = null
@@ -87,7 +85,7 @@ var _suppress_param_signal := false
 
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(_scaled_int(PANEL_WIDTH), 0)
+	custom_minimum_size = Vector2(PANEL_WIDTH, 0)
 	_build_ui()
 	set_selection_count(0)
 
@@ -235,12 +233,12 @@ func show_report(report: Dictionary) -> void:
 func _build_ui() -> void:
 	var root := VBoxContainer.new()
 	root.name = "InspectorRoot"
-	root.add_theme_constant_override("separation", _scaled_int(8))
+	root.add_theme_constant_override("separation", ROOT_SEPARATION)
 	add_child(root)
 
 	var title := Label.new()
 	title.text = Strings.CLEANUP_TITLE
-	title.add_theme_font_size_override("font_size", _scaled_int(TITLE_FONT_SIZE))
+	title.add_theme_font_size_override("font_size", TITLE_FONT_SIZE)
 	root.add_child(title)
 
 	_selection_label = Label.new()
@@ -255,14 +253,14 @@ func _build_ui() -> void:
 	var controls := VBoxContainer.new()
 	controls.name = "CleanupControls"
 	controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	controls.add_theme_constant_override("separation", _scaled_int(8))
+	controls.add_theme_constant_override("separation", ROOT_SEPARATION)
 	scroll.add_child(controls)
 
 	_auto_detect_check = _make_check(Strings.CLEANUP_AUTO_DETECT, true)
 	controls.add_child(_auto_detect_check)
 
 	_style_prior_label = Label.new()
-	_style_prior_label.add_theme_font_size_override("font_size", _scaled_int(PRIOR_FONT_SIZE))
+	_style_prior_label.add_theme_font_size_override("font_size", PRIOR_FONT_SIZE)
 	_style_prior_label.visible = false
 	controls.add_child(_style_prior_label)
 
@@ -298,15 +296,13 @@ func _build_ui() -> void:
 	refresh_palette_options("db32")
 
 	_palette_preview = TextureRect.new()
-	_palette_preview.custom_minimum_size = Vector2(
-		_scaled_int(PALETTE_PREVIEW_WIDTH), _scaled_int(PALETTE_PREVIEW_HEIGHT)
-	)
+	_palette_preview.custom_minimum_size = Vector2(PALETTE_PREVIEW_WIDTH, PALETTE_PREVIEW_HEIGHT)
 	_palette_preview.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 	controls.add_child(_palette_preview)
 
 	_delete_palette_button = Button.new()
 	_delete_palette_button.text = Strings.CLEANUP_DELETE_PALETTE
-	_delete_palette_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
+	_delete_palette_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	_delete_palette_button.disabled = true
 	_delete_palette_button.pressed.connect(_delete_selected_custom_palette)
 	controls.add_child(_delete_palette_button)
@@ -334,13 +330,13 @@ func _build_ui() -> void:
 
 	var action_row := HBoxContainer.new()
 	action_row.name = "CleanupActions"
-	action_row.add_theme_constant_override("separation", _scaled_int(8))
+	action_row.add_theme_constant_override("separation", ROOT_SEPARATION)
 	root.add_child(action_row)
 
 	_apply_button = Button.new()
 	_apply_button.name = "ApplyCleanupButton"
 	_apply_button.text = Strings.CLEANUP_APPLY
-	_apply_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
+	_apply_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	_apply_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_apply_button.pressed.connect(func() -> void: apply_requested.emit(get_params()))
 	action_row.add_child(_apply_button)
@@ -348,7 +344,7 @@ func _build_ui() -> void:
 	_cancel_button = Button.new()
 	_cancel_button.name = "CancelCleanupButton"
 	_cancel_button.text = Strings.CLEANUP_CANCEL
-	_cancel_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
+	_cancel_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	_cancel_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_cancel_button.disabled = true
 	_cancel_button.pressed.connect(func() -> void: cancel_requested.emit())
@@ -366,10 +362,10 @@ func _build_ui() -> void:
 
 func _add_labeled_control(parent: Control, label_text: String, control: Control) -> Control:
 	var row := VBoxContainer.new()
-	row.add_theme_constant_override("separation", _scaled_int(2))
+	row.add_theme_constant_override("separation", ROW_SEPARATION)
 	var label := Label.new()
 	label.text = label_text
-	label.add_theme_font_size_override("font_size", _scaled_int(LABEL_FONT_SIZE))
+	label.add_theme_font_size_override("font_size", LABEL_FONT_SIZE)
 	row.add_child(label)
 	row.add_child(control)
 	parent.add_child(row)
@@ -389,7 +385,7 @@ func _make_spin(minimum: float, maximum: float, step: float, value: float) -> Sp
 	spin.max_value = maximum
 	spin.step = step
 	spin.value = value
-	spin.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
+	spin.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	return spin
 
 
@@ -399,20 +395,16 @@ func _make_slider(minimum: float, maximum: float, step: float, value: float) -> 
 	slider.max_value = maximum
 	slider.step = step
 	slider.value = value
-	slider.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
+	slider.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	return slider
 
 
 func _make_options(labels: Array) -> OptionButton:
 	var options := OptionButton.new()
-	options.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
+	options.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	for label in labels:
 		options.add_item(String(label))
 	return options
-
-
-func _scaled_int(value: int) -> int:
-	return int(round(value * maxf(ui_scale, 1.0)))
 
 
 func _create_palette_dialogs() -> void:

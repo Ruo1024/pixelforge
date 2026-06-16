@@ -20,6 +20,7 @@ const Pipeline := preload("res://core/pixel/pipeline.gd")
 const Log := preload("res://core/util/log_util.gd")
 
 const TOOLBAR_BUTTON_HEIGHT := 34
+const TOOLBAR_FONT_SIZE := 14
 const FILE_MENU_BUTTON_WIDTH := 84
 const TOOL_BUTTON_SIZE := 84
 const BATCH_MENU_CLEANUP := 0
@@ -28,8 +29,6 @@ const BATCH_MENU_OUTLINE := 2
 const BATCH_MENU_SPLIT := 3
 const BATCH_MENU_EXPORT := 4
 const SELECTION_TOOLS_VISIBLE := false
-
-var ui_scale := 1.0
 
 var _canvas: Control = null
 var _cleanup_inspector: Control = null
@@ -74,11 +73,9 @@ func setup(
 func add_file_menu(parent: Control) -> void:
 	var file_menu_button := MenuButton.new()
 	file_menu_button.text = Strings.MENU_FILE
-	file_menu_button.custom_minimum_size = _scaled_vec2(
-		FILE_MENU_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT
-	)
+	file_menu_button.custom_minimum_size = Vector2(FILE_MENU_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT)
 	file_menu_button.focus_mode = Control.FOCUS_NONE
-	file_menu_button.add_theme_font_size_override("font_size", _scaled_int(14))
+	file_menu_button.add_theme_font_size_override("font_size", TOOLBAR_FONT_SIZE)
 	var popup := file_menu_button.get_popup()
 	popup.add_item(Strings.MENU_IMPORT_IMAGES, 0)
 	popup.add_separator()
@@ -102,8 +99,8 @@ func add_tool_buttons(parent: Control) -> void:
 		button.tooltip_text = "%s (%s)" % [String(spec["tooltip"]), String(spec["text"])]
 		button.toggle_mode = true
 		button.focus_mode = Control.FOCUS_NONE
-		button.custom_minimum_size = _scaled_vec2(TOOL_BUTTON_SIZE, TOOLBAR_BUTTON_HEIGHT)
-		button.add_theme_font_size_override("font_size", _scaled_int(14))
+		button.custom_minimum_size = Vector2(TOOL_BUTTON_SIZE, TOOLBAR_BUTTON_HEIGHT)
+		button.add_theme_font_size_override("font_size", TOOLBAR_FONT_SIZE)
 		var tool_id := String(spec["id"])
 		button.toggled.connect(
 			func(is_pressed: bool) -> void:
@@ -206,17 +203,14 @@ func _create_import_dialog() -> void:
 
 func _create_m2_dialogs() -> void:
 	_matte_dialog = MatteDialogScript.new()
-	_matte_dialog.ui_scale = ui_scale
 	_matte_dialog.params_confirmed.connect(_m2_actions.matte_selection_with_params)
 	add_child(_matte_dialog)
 
 	_slice_dialog = SliceDialogScript.new()
-	_slice_dialog.ui_scale = ui_scale
 	_slice_dialog.params_confirmed.connect(_m2_actions.slice_selection_with_params)
 	add_child(_slice_dialog)
 
 	_outline_dialog = OutlineDialogScript.new()
-	_outline_dialog.ui_scale = ui_scale
 	_outline_dialog.params_confirmed.connect(_m2_actions.outline_selection_with_params)
 	add_child(_outline_dialog)
 
@@ -404,11 +398,3 @@ func _show_onboarding_dialog() -> void:
 	var mark_seen := func() -> void: SettingsService.set_setting("ui", "m2_1_onboarding_seen", true)
 	dialog.confirmed.connect(mark_seen, CONNECT_ONE_SHOT)
 	dialog.close_requested.connect(mark_seen, CONNECT_ONE_SHOT)
-
-
-func _scaled_int(value: int) -> int:
-	return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
-
-
-func _scaled_vec2(width: int, height: int) -> Vector2:
-	return Vector2(_scaled_int(width), _scaled_int(height))

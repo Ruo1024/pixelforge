@@ -12,10 +12,13 @@ const Strings := preload("res://ui/shell/strings.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 
 const CONTROL_HEIGHT := 30
+const DIALOG_WIDTH := 420
+const DIALOG_HEIGHT := 500
 const PREVIEW_SIZE := 220
 const PREVIEW_DEBOUNCE_SECONDS := 0.18
-
-var ui_scale := 1.0
+const ROOT_SEPARATION := 8
+const ROW_SEPARATION := 2
+const FLEXIBLE_WIDTH := 0
 
 var _source_image: Image = null
 var _auto_matte_check: CheckBox = null
@@ -35,7 +38,7 @@ func _ready() -> void:
 	title = Strings.DIALOG_SLICE_TITLE
 	ok_button_text = Strings.DIALOG_APPLY
 	cancel_button_text = Strings.DIALOG_CANCEL
-	min_size = _scaled_vec2i(420, 500)
+	min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
 	_build_ui()
 	confirmed.connect(func() -> void: params_confirmed.emit(get_params()))
 
@@ -64,7 +67,7 @@ func get_params() -> Dictionary:
 
 func _build_ui() -> void:
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", _scaled_int(8))
+	root.add_theme_constant_override("separation", ROOT_SEPARATION)
 	add_child(root)
 
 	_auto_matte_check = CheckBox.new()
@@ -82,7 +85,7 @@ func _build_ui() -> void:
 	_add_labeled_control(root, Strings.SLICE_LABEL_MIN_AREA, _min_area_spin)
 
 	_preview_texture = TextureRect.new()
-	_preview_texture.custom_minimum_size = _scaled_vec2(PREVIEW_SIZE, PREVIEW_SIZE)
+	_preview_texture.custom_minimum_size = Vector2(PREVIEW_SIZE, PREVIEW_SIZE)
 	_preview_texture.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 	_preview_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	root.add_child(_preview_texture)
@@ -104,11 +107,11 @@ func _build_ui() -> void:
 
 func _add_labeled_control(parent: Control, label_text: String, control: Control) -> void:
 	var row := VBoxContainer.new()
-	row.add_theme_constant_override("separation", _scaled_int(2))
+	row.add_theme_constant_override("separation", ROW_SEPARATION)
 	var label := Label.new()
 	label.text = label_text
 	row.add_child(label)
-	control.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
+	control.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	row.add_child(control)
 	parent.add_child(row)
 
@@ -171,15 +174,3 @@ func _make_preview_source(image: Image) -> Image:
 			Image.INTERPOLATE_NEAREST
 		)
 	return preview
-
-
-func _scaled_int(value: int) -> int:
-	return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
-
-
-func _scaled_vec2(width: int, height: int) -> Vector2:
-	return Vector2(_scaled_int(width), _scaled_int(height))
-
-
-func _scaled_vec2i(width: int, height: int) -> Vector2i:
-	return Vector2i(_scaled_int(width), _scaled_int(height))

@@ -17,7 +17,7 @@
 
 ## 工程约定
 - UI 字符串集中在 `pixel/ui/shell/strings.gd`；禁止裸 print。
-- 新 UI 组件必须接 ui_scale（`_scaled_int()`），禁止硬编码像素值。
+- UI 缩放统一由 `Window.content_scale_factor` 继承，禁止 `_scaled_int()` / 手动 `ui_scale` 注入 / 硬编码像素字号；画布美术按"反向补偿 + 设备像素整数对齐"自管（规范本体见 `ARCHITECTURE.md §5`，守护见 `pixel/scripts/check_ui_scaling.sh`）。
 - 算法参考 perfectPixel（MIT，https://github.com/theamusing/perfectPixel）已在 README 标注；新增外部算法参考时同样需标注来源与协议。
 
 ## 工程设计规范索引（按需精读，不要凭记忆写代码）

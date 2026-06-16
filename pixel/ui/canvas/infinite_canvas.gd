@@ -19,10 +19,11 @@ const GRID_MIN_ZOOM := 4.0
 const SELECTION_COLOR := Color(0.1, 0.85, 0.65, 1.0)
 const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
 const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
-const CLEANUP_PREVIEW_Z_INDEX := 4095
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
+const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
 const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
@@ -31,19 +32,18 @@ const Log := preload("res://core/util/log_util.gd")
 var camera_center := Vector2.ZERO
 var zoom_index := DEFAULT_ZOOM_INDEX
 var camera_zoom := float(ZOOM_LEVELS[DEFAULT_ZOOM_INDEX])
-var ui_scale := 1.0
 
 var item_layer := Node2D.new()
 var tool_manager: Variant = null
 
+var _viewport_scale_factor_override := 0.0
 var _items_by_id := {}
 var _selection: Variant = CanvasSelectionScript.new()
 var _cleanup_grid_overlay: Control = null
 var _cleanup_grid_active := false
 var _cleanup_grid_scale := 4.0
 var _cleanup_grid_offset := Vector2.ZERO
-var _cleanup_preview_sprite: Sprite2D = null
-var _cleanup_preview_source_item_id := ""
+var _cleanup_preview: Variant = CanvasCleanupPreviewScript.new()
 var _is_panning := false
 var _cull_elapsed := 0.0
 var _suppress_change_signal := false
@@ -120,7 +120,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), BACKGROUND_COLOR, true)
-	if camera_zoom >= GRID_MIN_ZOOM:
+	if (
+		ScalePolicy.compute_art_physical_scale(camera_zoom, _resolve_viewport_scale_factor())
+		>= GRID_MIN_ZOOM
+	):
 		_draw_pixel_grid()
 
 	for item_id in _selection.selected_ids:
@@ -128,7 +131,7 @@ func _draw() -> void:
 			continue
 		var item: Node = _items_by_id[item_id]
 		var bounds: Rect2 = item.get_canvas_bounds()
-		var screen_rect := Rect2(world_to_screen(bounds.position), bounds.size * camera_zoom)
+		var screen_rect := _world_rect_to_screen(bounds)
 		draw_rect(screen_rect.grow(2.0), SELECTION_COLOR, false, 2.0)
 
 	if _selection.is_box_selecting:
@@ -323,11 +326,15 @@ func export_canvas_data() -> Dictionary:
 
 
 func screen_to_world(screen_position: Vector2) -> Vector2:
-	return camera_center + (screen_position - size * 0.5) / camera_zoom
+	return camera_center + (screen_position - size * 0.5) / _get_art_logical_scale()
 
 
 func world_to_screen(world_position: Vector2) -> Vector2:
-	return size * 0.5 + (world_position - camera_center) * camera_zoom
+	return size * 0.5 + (world_position - camera_center) * _get_art_logical_scale()
+
+
+func _world_rect_to_screen(world_rect: Rect2) -> Rect2:
+	return Rect2(world_to_screen(world_rect.position), world_rect.size * _get_art_logical_scale())
 
 
 func get_mouse_world_position() -> Vector2:
@@ -335,7 +342,7 @@ func get_mouse_world_position() -> Vector2:
 
 
 func pan_by_pixels(pixel_delta: Vector2) -> void:
-	camera_center += pixel_delta / camera_zoom
+	camera_center += pixel_delta / _get_art_logical_scale()
 	_update_layer_transform()
 	_emit_canvas_changed()
 
@@ -347,7 +354,7 @@ func set_camera_zoom(value: float, screen_anchor: Vector2 = size * 0.5) -> void:
 	if is_equal_approx(old_zoom, camera_zoom):
 		_emit_zoom_changed()
 		return
-	camera_center = anchor_world - (screen_anchor - size * 0.5) / camera_zoom
+	camera_center = anchor_world - (screen_anchor - size * 0.5) / _get_art_logical_scale()
 	_update_layer_transform()
 	_emit_canvas_changed()
 	_emit_zoom_changed()
@@ -361,7 +368,7 @@ func zoom_by_steps(step_delta: int, screen_anchor: Vector2) -> void:
 	if is_equal_approx(old_zoom, camera_zoom):
 		_emit_zoom_changed()
 		return
-	camera_center = anchor_world - (screen_anchor - size * 0.5) / camera_zoom
+	camera_center = anchor_world - (screen_anchor - size * 0.5) / _get_art_logical_scale()
 	_update_layer_transform()
 	_emit_canvas_changed()
 	_emit_zoom_changed()
@@ -467,37 +474,11 @@ func _split_batch_selection(card_id: String) -> Node:
 func show_cleanup_preview(
 	source_item_id: String, preview_image: Image, opacity: float = 0.56
 ) -> void:
-	if not _items_by_id.has(source_item_id):
-		clear_cleanup_preview()
-		return
-	var source_item: Node = _items_by_id[source_item_id]
-	if source_item.get_script() != CanvasItemSpriteScript:
-		clear_cleanup_preview()
-		return
-
-	if _cleanup_preview_sprite == null:
-		_cleanup_preview_sprite = Sprite2D.new()
-		_cleanup_preview_sprite.name = "CleanupPreview"
-		_cleanup_preview_sprite.centered = false
-		_cleanup_preview_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		item_layer.add_child(_cleanup_preview_sprite)
-
-	_cleanup_preview_source_item_id = source_item_id
-	_cleanup_preview_sprite.texture = ImageTexture.create_from_image(preview_image)
-	_cleanup_preview_sprite.position = source_item.position
-	_cleanup_preview_sprite.scale = source_item.scale
-	_cleanup_preview_sprite.z_index = CLEANUP_PREVIEW_Z_INDEX
-	_cleanup_preview_sprite.modulate = Color(1.0, 1.0, 1.0, clampf(opacity, 0.0, 1.0))
-	_update_cleanup_preview_alt_state()
+	_cleanup_preview.show(item_layer, _items_by_id, source_item_id, preview_image, opacity)
 
 
 func clear_cleanup_preview() -> void:
-	_cleanup_preview_source_item_id = ""
-	if _cleanup_preview_sprite == null:
-		return
-	if is_instance_valid(_cleanup_preview_sprite):
-		_cleanup_preview_sprite.queue_free()
-	_cleanup_preview_sprite = null
+	_cleanup_preview.clear()
 
 
 func show_cleanup_grid_overlay(scale: float, offset: Vector2) -> void:
@@ -707,7 +688,7 @@ func _remove_item_direct(item_id: String) -> void:
 		for asset_id in item.asset_ids:
 			AssetLibrary.release_ref(asset_id)
 	_items_by_id.erase(item_id)
-	if item_id == _cleanup_preview_source_item_id:
+	if item_id == _cleanup_preview.source_item_id:
 		clear_cleanup_preview()
 	_selection.remove_item_reference(item_id)
 	item_layer.remove_child(item)
@@ -785,23 +766,46 @@ func _set_zoom_to_value(value: float) -> void:
 	camera_zoom = float(ZOOM_LEVELS[zoom_index])
 
 
+func _set_viewport_scale_factor_for_test(viewport_scale_factor: float) -> void:
+	_viewport_scale_factor_override = maxf(viewport_scale_factor, 1.0)
+	_update_layer_transform()
+
+
 func _update_layer_transform() -> void:
-	item_layer.position = size * 0.5 - camera_center * camera_zoom
-	item_layer.scale = Vector2.ONE * camera_zoom
+	item_layer.position = size * 0.5 - camera_center * _get_art_logical_scale()
+	item_layer.scale = Vector2.ONE * _get_art_logical_scale()
 	_sync_cleanup_grid_overlay()
 	queue_redraw()
 
 
 func _update_item_visibility() -> void:
+	var scale := _get_art_logical_scale()
 	var visible_world := Rect2(
-		screen_to_world(Vector2.ZERO) - Vector2.ONE * CULL_PADDING_PIXELS / camera_zoom,
-		size / camera_zoom + Vector2.ONE * CULL_PADDING_PIXELS * 2.0 / camera_zoom
+		screen_to_world(Vector2.ZERO) - Vector2.ONE * CULL_PADDING_PIXELS / scale,
+		size / scale + Vector2.ONE * CULL_PADDING_PIXELS * 2.0 / scale
 	)
 	for item in _items_by_id.values():
 		var is_visible := visible_world.intersects(item.get_canvas_bounds())
 		item.visible = is_visible
 		item.set_process(is_visible)
 		item.set_physics_process(is_visible)
+
+
+func _resolve_viewport_scale_factor() -> float:
+	if _viewport_scale_factor_override >= 1.0:
+		return _viewport_scale_factor_override
+	if not is_inside_tree():
+		return 1.0
+	var root := get_tree().root
+	if root == null:
+		return 1.0
+	return maxf(root.content_scale_factor, 1.0)
+
+
+func _get_art_logical_scale() -> float:
+	return maxf(
+		ScalePolicy.compute_art_logical_scale(camera_zoom, _resolve_viewport_scale_factor()), 0.0001
+	)
 
 
 func _draw_pixel_grid() -> void:
@@ -833,7 +837,7 @@ func _emit_zoom_changed() -> void:
 
 
 func _on_selection_changed(selected_ids: Array) -> void:
-	if not selected_ids.has(_cleanup_preview_source_item_id):
+	if not selected_ids.has(_cleanup_preview.source_item_id):
 		clear_cleanup_preview()
 	_sync_cleanup_grid_overlay()
 	selection_changed.emit(selected_ids.duplicate())
@@ -867,9 +871,7 @@ func _on_cleanup_grid_changed(scale: float, offset: Vector2) -> void:
 
 
 func _update_cleanup_preview_alt_state() -> void:
-	if _cleanup_preview_sprite == null or not is_instance_valid(_cleanup_preview_sprite):
-		return
-	_cleanup_preview_sprite.visible = not Input.is_key_pressed(KEY_ALT)
+	_cleanup_preview.update_alt_state()
 
 
 func _tool_manager_handles(event: InputEvent) -> bool:

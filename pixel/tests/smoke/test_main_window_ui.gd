@@ -71,6 +71,19 @@ func test_interface_scale_preserves_readability_on_scaled_screens() -> void:
 	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(5120, 2982)), 2.0)
 
 
+func test_content_scale_policy_uses_native_factor_without_reference_size() -> void:
+	var window := Window.new()
+	MainScript.apply_content_scale_policy(window, 1.5)
+
+	assert_eq(window.content_scale_mode, Window.CONTENT_SCALE_MODE_DISABLED)
+	assert_eq(window.content_scale_aspect, Window.CONTENT_SCALE_ASPECT_IGNORE)
+	assert_eq(window.content_scale_size, Vector2i.ZERO)
+	assert_almost_eq(window.content_scale_factor, 1.5, 0.001)
+	assert_eq(window.content_scale_stretch, Window.CONTENT_SCALE_STRETCH_FRACTIONAL)
+
+	window.free()
+
+
 func test_cleanup_inspector_keeps_apply_actions_reachable_below_scroll() -> void:
 	var main: Control = MainScript.new()
 	add_child_autofree(main)

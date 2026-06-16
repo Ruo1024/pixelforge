@@ -1,0 +1,1418 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 79f7696..dc47fb1 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -17,7 +17,7 @@
+ 
+ ## 工程约定
+ - UI 字符串集中在 `pixel/ui/shell/strings.gd`；禁止裸 print。
+-- 新 UI 组件必须接 ui_scale（`_scaled_int()`），禁止硬编码像素值。
++- UI 缩放统一由 `Window.content_scale_factor` 继承，禁止 `_scaled_int()` / 手动 `ui_scale` 注入 / 硬编码像素字号；画布美术按"反向补偿 + 设备像素整数对齐"自管（规范本体见 `ARCHITECTURE.md §5`，守护见 `pixel/scripts/check_ui_scaling.sh`）。
+ - 算法参考 perfectPixel（MIT，https://github.com/theamusing/perfectPixel）已在 README 标注；新增外部算法参考时同样需标注来源与协议。
+ 
+ ## 工程设计规范索引（按需精读，不要凭记忆写代码）
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index e2f17cf..2d06b9b 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -16,3 +16,4 @@
+ - M2: 新增色键抠图、魔棒/矩形/套索选区模型、连通域切分、描边工具、spritesheet 导出器、顶栏批量 Matte/Slice/Outline 入口和 M2 自动化验收。
+ - M2.1: 新增 File > Import Images、Matte/Slice/Outline 参数预览对话框、W/M/L 像素选区工具、左下角缩放滑条、非纯色底错误引导、无连线批次卡与整批菜单。
+ - M2.2: 修复高分屏缩放钳制、清洗台矮窗可达性、批次卡可读尺寸与导入取景、滚轮缩放过冲、导出空选区提示、描边低 alpha 噪点和首启引导标记时机；暂隐藏未接入算法的 W/M/L 工具入口。
++- M2.3: UI 缩放迁移到 `content_scale_factor`；删除组件级 `ui_scale` / `_scaled_int` 约定，画布按设备整数倍率反向补偿，并新增 M2.3 缩放守护脚本与回归测试。
+diff --git a/pixel/scripts/check_ui_scaling.sh b/pixel/scripts/check_ui_scaling.sh
+new file mode 100755
+index 0000000..ef94e56
+--- /dev/null
++++ b/pixel/scripts/check_ui_scaling.sh
+@@ -0,0 +1,29 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/.."
++
++fail=0
++
++if rg -n "_scaled_int|_scaled_vec2" ui --glob '*.gd'; then
++  fail=1
++fi
++
++if rg -n "ui_scale" ui --glob '*.gd' | rg -v "# scale-exempt"; then
++  fail=1
++fi
++
++if rg -n "custom_minimum_size\\s*=\\s*Vector2i?\\(\\s*[0-9]" ui --glob '*.gd'; then
++  fail=1
++fi
++
++if rg -n "add_theme_font_size_override\\([^,]+,\\s*[0-9]" ui --glob '*.gd'; then
++  fail=1
++fi
++
++if [[ "${fail}" == "0" ]]; then
++  echo "check_ui_scaling: ok"
++else
++  echo "banned UI scaling pattern found" >&2
++  exit 1
++fi
+diff --git a/pixel/scripts/verify_m2_3.sh b/pixel/scripts/verify_m2_3.sh
+new file mode 100755
+index 0000000..aac2a40
+--- /dev/null
++++ b/pixel/scripts/verify_m2_3.sh
+@@ -0,0 +1,18 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/.."
++
++./scripts/lint.sh
++./scripts/run_tests.sh
++./scripts/check_ui_scaling.sh
++./scripts/check_export_templates.sh
++
++if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
++  if git diff --cached --name-only | grep -iE '\.png$|\.jpe?g$' >/dev/null; then
++    echo "Staged image files are not allowed for M2.3 commits." >&2
++    exit 1
++  fi
++fi
++
++echo "verify_m2_3: ok"
+diff --git a/pixel/tests/smoke/test_infinite_canvas.gd b/pixel/tests/smoke/test_infinite_canvas.gd
+index 8facc26..9674055 100644
+--- a/pixel/tests/smoke/test_infinite_canvas.gd
++++ b/pixel/tests/smoke/test_infinite_canvas.gd
+@@ -1,6 +1,7 @@
+ extends "res://addons/gut/test.gd"
+ 
+ const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
++const CanvasScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
+ const ImageMath := preload("res://core/util/image_math.gd")
+ const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
+ const ToolManagerScript := preload("res://ui/tools/tool_manager.gd")
+@@ -74,6 +75,64 @@ func test_canvas_emits_zoom_changed_for_direct_and_step_zoom() -> void:
+ 	assert_almost_eq(canvas.camera_zoom, 2.0, 0.001)
+ 
+ 
++func test_canvas_device_scale_rounds_fractional_content_scale() -> void:
++	assert_eq(CanvasScalePolicy.compute_canvas_device_scale(1.0), 1)
++	assert_eq(CanvasScalePolicy.compute_canvas_device_scale(1.49), 1)
++	assert_eq(CanvasScalePolicy.compute_canvas_device_scale(1.5), 2)
++	assert_eq(CanvasScalePolicy.compute_canvas_device_scale(2.0), 2)
++	assert_eq(CanvasScalePolicy.effective_art_pixel_px(0.125, 1.5), 1)
++	assert_eq(CanvasScalePolicy.effective_art_pixel_px(1.0, 1.5), 2)
++
++
++func test_canvas_coordinates_use_compensated_logical_scale() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(300, 200)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	canvas._set_viewport_scale_factor_for_test(1.5)
++	var expected_scale := CanvasScalePolicy.compute_art_logical_scale(1.0, 1.5)
++	var world_position := Vector2(12.0, -6.0)
++	var screen_position: Vector2 = canvas.world_to_screen(world_position)
++	var roundtrip: Vector2 = canvas.screen_to_world(screen_position)
++
++	assert_almost_eq(canvas._get_art_logical_scale(), expected_scale, 0.001)
++	assert_almost_eq(canvas.item_layer.scale.x, expected_scale, 0.001)
++	assert_almost_eq(canvas.item_layer.scale.y, expected_scale, 0.001)
++	assert_almost_eq(roundtrip.x, world_position.x, 0.001)
++	assert_almost_eq(roundtrip.y, world_position.y, 0.001)
++
++
++func test_zoom_anchor_stays_fixed_with_fractional_content_scale() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(320, 240)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	canvas._set_viewport_scale_factor_for_test(1.5)
++	var anchor := Vector2(240, 120)
++	var before: Vector2 = canvas.screen_to_world(anchor)
++	canvas.zoom_by_steps(2, anchor)
++	var after: Vector2 = canvas.screen_to_world(anchor)
++
++	assert_almost_eq(after.x, before.x, 0.001)
++	assert_almost_eq(after.y, before.y, 0.001)
++	assert_eq(CanvasScalePolicy.compute_canvas_device_scale(1.5), 2)
++
++
++func test_pan_uses_compensated_logical_scale() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(320, 240)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	canvas._set_viewport_scale_factor_for_test(1.5)
++	canvas.pan_by_pixels(Vector2(20, 0))
++
++	assert_almost_eq(canvas.camera_center.x, 15.0, 0.001)
++	assert_almost_eq(canvas.camera_center.y, 0.0, 0.001)
++
++
+ func test_wheel_zoom_is_rate_limited() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(256, 256)
+@@ -186,6 +245,7 @@ func test_cleanup_grid_overlay_emits_dragged_offset() -> void:
+ 	canvas.size = Vector2(256, 256)
+ 	add_child_autofree(canvas)
+ 	await wait_process_frames(2)
++	canvas._set_viewport_scale_factor_for_test(1.5)
+ 
+ 	var emitted := []
+ 	var image := _make_checker_image(16)
+@@ -198,8 +258,11 @@ func test_cleanup_grid_overlay_emits_dragged_offset() -> void:
+ 	)
+ 	canvas.show_cleanup_grid_overlay(4.0, Vector2.ZERO)
+ 	var overlay: Control = canvas.get_node("CleanupGridOverlay")
++	var overlay_rect: Rect2 = overlay._world_rect_to_screen(Rect2(Vector2.ZERO, Vector2(16, 16)))
+ 	overlay.grid_changed.emit(4.0, Vector2(1.5, 2.0))
+ 
++	assert_almost_eq(overlay_rect.size.x, 16.0 * canvas._get_art_logical_scale(), 0.001)
++	assert_almost_eq(overlay_rect.size.y, 16.0 * canvas._get_art_logical_scale(), 0.001)
+ 	assert_eq(emitted[0], 4.0)
+ 	assert_eq(emitted[1], Vector2(1.5, 2.0))
+ 
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index c177f04..9fb0592 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -71,6 +71,19 @@ func test_interface_scale_preserves_readability_on_scaled_screens() -> void:
+ 	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(5120, 2982)), 2.0)
+ 
+ 
++func test_content_scale_policy_uses_native_factor_without_reference_size() -> void:
++	var window := Window.new()
++	MainScript.apply_content_scale_policy(window, 1.5)
++
++	assert_eq(window.content_scale_mode, Window.CONTENT_SCALE_MODE_DISABLED)
++	assert_eq(window.content_scale_aspect, Window.CONTENT_SCALE_ASPECT_IGNORE)
++	assert_eq(window.content_scale_size, Vector2i.ZERO)
++	assert_almost_eq(window.content_scale_factor, 1.5, 0.001)
++	assert_eq(window.content_scale_stretch, Window.CONTENT_SCALE_STRETCH_FRACTIONAL)
++
++	window.free()
++
++
+ func test_cleanup_inspector_keeps_apply_actions_reachable_below_scroll() -> void:
+ 	var main: Control = MainScript.new()
+ 	add_child_autofree(main)
+diff --git a/pixel/ui/canvas/canvas_cleanup_preview.gd b/pixel/ui/canvas/canvas_cleanup_preview.gd
+new file mode 100644
+index 0000000..66651af
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_cleanup_preview.gd
+@@ -0,0 +1,58 @@
++class_name PFCanvasCleanupPreview
++extends RefCounted
++
++## 清洗预览 sprite 管理器。
++## 输入：源画布元素与预览 Image；输出：挂在 item_layer 上的半透明预览 Sprite2D。
++
++const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
++const CLEANUP_PREVIEW_Z_INDEX := 4095
++
++var source_item_id := ""
++
++var _sprite: Sprite2D = null
++
++
++func show(
++	item_layer: Node2D,
++	items_by_id: Dictionary,
++	source_id: String,
++	preview_image: Image,
++	opacity: float
++) -> void:
++	if not items_by_id.has(source_id):
++		clear()
++		return
++	var source_item: Node = items_by_id[source_id]
++	if source_item.get_script() != CanvasItemSpriteScript:
++		clear()
++		return
++
++	if _sprite == null:
++		_sprite = Sprite2D.new()
++		_sprite.name = "CleanupPreview"
++		_sprite.centered = false
++		_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
++		item_layer.add_child(_sprite)
++
++	source_item_id = source_id
++	_sprite.texture = ImageTexture.create_from_image(preview_image)
++	_sprite.position = source_item.position
++	_sprite.scale = source_item.scale
++	_sprite.z_index = CLEANUP_PREVIEW_Z_INDEX
++	_sprite.modulate = Color(1.0, 1.0, 1.0, clampf(opacity, 0.0, 1.0))
++	update_alt_state()
++
++
++func clear() -> void:
++	source_item_id = ""
++	if _sprite == null:
++		return
++	if is_instance_valid(_sprite):
++		_sprite.queue_free()
++	_sprite = null
++
++
++func update_alt_state() -> void:
++	if _sprite == null or not is_instance_valid(_sprite):
++		return
++	_sprite.visible = not Input.is_key_pressed(KEY_ALT)
+diff --git a/pixel/ui/canvas/canvas_cleanup_preview.gd.uid b/pixel/ui/canvas/canvas_cleanup_preview.gd.uid
+new file mode 100644
+index 0000000..19bfc9b
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_cleanup_preview.gd.uid
+@@ -0,0 +1 @@
++uid://nvabe2875i55
+diff --git a/pixel/ui/canvas/canvas_scale_policy.gd b/pixel/ui/canvas/canvas_scale_policy.gd
+new file mode 100644
+index 0000000..bb9ed6a
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_scale_policy.gd
+@@ -0,0 +1,30 @@
++class_name PFCanvasScalePolicy
++extends RefCounted
++
++## 画布美术缩放策略。
++## 输入：viewport content scale factor 与相机缩放；输出：设备整数倍率和逻辑坐标倍率。
++
++
++static func compute_canvas_device_scale(viewport_scale_factor: float) -> int:
++	return maxi(1, int(round(maxf(viewport_scale_factor, 1.0))))
++
++
++static func compute_canvas_compensation_scale(viewport_scale_factor: float) -> float:
++	var safe_factor := maxf(viewport_scale_factor, 1.0)
++	return float(compute_canvas_device_scale(safe_factor)) / safe_factor
++
++
++static func compute_art_logical_scale(
++	camera_zoom_value: float, viewport_scale_factor: float
++) -> float:
++	return maxf(camera_zoom_value, 0.0) * compute_canvas_compensation_scale(viewport_scale_factor)
++
++
++static func compute_art_physical_scale(
++	camera_zoom_value: float, viewport_scale_factor: float
++) -> float:
++	return maxf(camera_zoom_value, 0.0) * float(compute_canvas_device_scale(viewport_scale_factor))
++
++
++static func effective_art_pixel_px(camera_zoom_value: float, viewport_scale_factor: float) -> int:
++	return maxi(1, int(round(compute_art_physical_scale(camera_zoom_value, viewport_scale_factor))))
+diff --git a/pixel/ui/canvas/canvas_scale_policy.gd.uid b/pixel/ui/canvas/canvas_scale_policy.gd.uid
+new file mode 100644
+index 0000000..a4f15a5
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_scale_policy.gd.uid
+@@ -0,0 +1 @@
++uid://dfh8dht4jods7
+diff --git a/pixel/ui/canvas/canvas_zoom_control.gd b/pixel/ui/canvas/canvas_zoom_control.gd
+index 17405ca..205f58a 100644
+--- a/pixel/ui/canvas/canvas_zoom_control.gd
++++ b/pixel/ui/canvas/canvas_zoom_control.gd
+@@ -16,8 +16,7 @@ const PANEL_RADIUS := 6
+ const PANEL_PADDING_X := 10
+ const PANEL_PADDING_Y := 6
+ const OVERLAY_Z_INDEX := 4095
+-
+-var ui_scale := 1.0
++const ROW_SEPARATION := 8
+ 
+ var _bottom_left_margin := 12
+ var _level_count := 1
+@@ -44,8 +43,8 @@ func set_bottom_left_margin(margin: int) -> void:
+ 	_apply_bottom_left_offsets()
+ 
+ 
+-func get_scaled_size() -> Vector2:
+-	return _scaled_vec2(CONTROL_WIDTH, CONTROL_HEIGHT)
++func get_logical_size() -> Vector2:
++	return Vector2(CONTROL_WIDTH, CONTROL_HEIGHT)
+ 
+ 
+ func set_zoom_state(index: int, zoom: float) -> void:
+@@ -63,30 +62,30 @@ func _build_ui() -> void:
+ 	z_as_relative = false
+ 	z_index = OVERLAY_Z_INDEX
+ 	tooltip_text = Strings.ZOOM_CONTROL_TOOLTIP
+-	custom_minimum_size = get_scaled_size()
++	custom_minimum_size = get_logical_size()
+ 
+ 	var background := StyleBoxFlat.new()
+ 	background.bg_color = Color(0.07, 0.075, 0.08, 0.88)
+ 	background.border_color = Color(0.32, 0.38, 0.38, 0.85)
+-	background.set_border_width_all(_scaled_int(1))
+-	background.set_corner_radius_all(_scaled_int(PANEL_RADIUS))
+-	background.content_margin_left = _scaled_int(PANEL_PADDING_X)
+-	background.content_margin_right = _scaled_int(PANEL_PADDING_X)
+-	background.content_margin_top = _scaled_int(PANEL_PADDING_Y)
+-	background.content_margin_bottom = _scaled_int(PANEL_PADDING_Y)
++	background.set_border_width_all(1)
++	background.set_corner_radius_all(PANEL_RADIUS)
++	background.content_margin_left = PANEL_PADDING_X
++	background.content_margin_right = PANEL_PADDING_X
++	background.content_margin_top = PANEL_PADDING_Y
++	background.content_margin_bottom = PANEL_PADDING_Y
+ 	add_theme_stylebox_override("panel", background)
+ 
+ 	var row := HBoxContainer.new()
+ 	row.name = "ZoomRow"
+ 	row.mouse_filter = Control.MOUSE_FILTER_PASS
+-	row.add_theme_constant_override("separation", _scaled_int(8))
++	row.add_theme_constant_override("separation", ROW_SEPARATION)
+ 	add_child(row)
+ 
+ 	_label = Label.new()
+ 	_label.name = "ZoomLabel"
+ 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+ 	_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+-	_label.custom_minimum_size = Vector2(_scaled_int(LABEL_WIDTH), 0)
++	_label.custom_minimum_size = Vector2(LABEL_WIDTH, 0)
+ 	row.add_child(_label)
+ 
+ 	_slider = HSlider.new()
+@@ -98,7 +97,7 @@ func _build_ui() -> void:
+ 	_slider.tick_count = _level_count
+ 	_slider.ticks_on_borders = true
+ 	_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+-	_slider.custom_minimum_size = Vector2(_scaled_int(SLIDER_WIDTH), 0)
++	_slider.custom_minimum_size = Vector2(SLIDER_WIDTH, 0)
+ 	_slider.tooltip_text = Strings.ZOOM_CONTROL_TOOLTIP
+ 	_slider.value_changed.connect(_on_slider_value_changed)
+ 	row.add_child(_slider)
+@@ -111,18 +110,10 @@ func _on_slider_value_changed(value: float) -> void:
+ 
+ 
+ func _apply_bottom_left_offsets() -> void:
+-	var margin := _scaled_int(_bottom_left_margin)
+-	var control_size := get_scaled_size()
++	var margin := _bottom_left_margin
++	var control_size := get_logical_size()
+ 	set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+ 	offset_left = margin
+ 	offset_top = -control_size.y - margin
+ 	offset_right = margin + control_size.x
+ 	offset_bottom = -margin
+-
+-
+-func _scaled_int(value: int) -> int:
+-	return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
+-
+-
+-func _scaled_vec2(width: int, height: int) -> Vector2:
+-	return Vector2(_scaled_int(width), _scaled_int(height))
+diff --git a/pixel/ui/canvas/cleanup_grid_overlay.gd b/pixel/ui/canvas/cleanup_grid_overlay.gd
+index a0abc48..6543700 100644
+--- a/pixel/ui/canvas/cleanup_grid_overlay.gd
++++ b/pixel/ui/canvas/cleanup_grid_overlay.gd
+@@ -86,10 +86,10 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
+ 
+ func _draw_axis_lines(vertical: bool) -> void:
+ 	var step := grid_scale
+-	var screen_step := step * float(canvas.camera_zoom)
++	var screen_step := step * float(canvas._get_art_logical_scale())
+ 	while screen_step < MIN_SCREEN_STEP:
+ 		step *= 2.0
+-		screen_step = step * float(canvas.camera_zoom)
++		screen_step = step * float(canvas._get_art_logical_scale())
+ 
+ 	var origin := world_bounds.position.x if vertical else world_bounds.position.y
+ 	var limit := world_bounds.end.x if vertical else world_bounds.end.y
+@@ -124,5 +124,4 @@ func _normalized_offset(offset: Vector2) -> Vector2:
+ 
+ 
+ func _world_rect_to_screen(bounds: Rect2) -> Rect2:
+-	var top_left: Vector2 = canvas.world_to_screen(bounds.position)
+-	return Rect2(top_left, bounds.size * float(canvas.camera_zoom))
++	return canvas._world_rect_to_screen(bounds)
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 65dba29..1b4c2b4 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -19,10 +19,11 @@ const GRID_MIN_ZOOM := 4.0
+ const SELECTION_COLOR := Color(0.1, 0.85, 0.65, 1.0)
+ const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
+ const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
+-const CLEANUP_PREVIEW_Z_INDEX := 4095
+ const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
+ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
++const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
+ const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
++const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
+ const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
+ const IdUtil := preload("res://core/util/id_util.gd")
+ const ImageMath := preload("res://core/util/image_math.gd")
+@@ -31,19 +32,18 @@ const Log := preload("res://core/util/log_util.gd")
+ var camera_center := Vector2.ZERO
+ var zoom_index := DEFAULT_ZOOM_INDEX
+ var camera_zoom := float(ZOOM_LEVELS[DEFAULT_ZOOM_INDEX])
+-var ui_scale := 1.0
+ 
+ var item_layer := Node2D.new()
+ var tool_manager: Variant = null
+ 
++var _viewport_scale_factor_override := 0.0
+ var _items_by_id := {}
+ var _selection: Variant = CanvasSelectionScript.new()
+ var _cleanup_grid_overlay: Control = null
+ var _cleanup_grid_active := false
+ var _cleanup_grid_scale := 4.0
+ var _cleanup_grid_offset := Vector2.ZERO
+-var _cleanup_preview_sprite: Sprite2D = null
+-var _cleanup_preview_source_item_id := ""
++var _cleanup_preview: Variant = CanvasCleanupPreviewScript.new()
+ var _is_panning := false
+ var _cull_elapsed := 0.0
+ var _suppress_change_signal := false
+@@ -120,7 +120,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
+ 
+ func _draw() -> void:
+ 	draw_rect(Rect2(Vector2.ZERO, size), BACKGROUND_COLOR, true)
+-	if camera_zoom >= GRID_MIN_ZOOM:
++	if (
++		ScalePolicy.compute_art_physical_scale(camera_zoom, _resolve_viewport_scale_factor())
++		>= GRID_MIN_ZOOM
++	):
+ 		_draw_pixel_grid()
+ 
+ 	for item_id in _selection.selected_ids:
+@@ -128,7 +131,7 @@ func _draw() -> void:
+ 			continue
+ 		var item: Node = _items_by_id[item_id]
+ 		var bounds: Rect2 = item.get_canvas_bounds()
+-		var screen_rect := Rect2(world_to_screen(bounds.position), bounds.size * camera_zoom)
++		var screen_rect := _world_rect_to_screen(bounds)
+ 		draw_rect(screen_rect.grow(2.0), SELECTION_COLOR, false, 2.0)
+ 
+ 	if _selection.is_box_selecting:
+@@ -323,11 +326,15 @@ func export_canvas_data() -> Dictionary:
+ 
+ 
+ func screen_to_world(screen_position: Vector2) -> Vector2:
+-	return camera_center + (screen_position - size * 0.5) / camera_zoom
++	return camera_center + (screen_position - size * 0.5) / _get_art_logical_scale()
+ 
+ 
+ func world_to_screen(world_position: Vector2) -> Vector2:
+-	return size * 0.5 + (world_position - camera_center) * camera_zoom
++	return size * 0.5 + (world_position - camera_center) * _get_art_logical_scale()
++
++
++func _world_rect_to_screen(world_rect: Rect2) -> Rect2:
++	return Rect2(world_to_screen(world_rect.position), world_rect.size * _get_art_logical_scale())
+ 
+ 
+ func get_mouse_world_position() -> Vector2:
+@@ -335,7 +342,7 @@ func get_mouse_world_position() -> Vector2:
+ 
+ 
+ func pan_by_pixels(pixel_delta: Vector2) -> void:
+-	camera_center += pixel_delta / camera_zoom
++	camera_center += pixel_delta / _get_art_logical_scale()
+ 	_update_layer_transform()
+ 	_emit_canvas_changed()
+ 
+@@ -347,7 +354,7 @@ func set_camera_zoom(value: float, screen_anchor: Vector2 = size * 0.5) -> void:
+ 	if is_equal_approx(old_zoom, camera_zoom):
+ 		_emit_zoom_changed()
+ 		return
+-	camera_center = anchor_world - (screen_anchor - size * 0.5) / camera_zoom
++	camera_center = anchor_world - (screen_anchor - size * 0.5) / _get_art_logical_scale()
+ 	_update_layer_transform()
+ 	_emit_canvas_changed()
+ 	_emit_zoom_changed()
+@@ -361,7 +368,7 @@ func zoom_by_steps(step_delta: int, screen_anchor: Vector2) -> void:
+ 	if is_equal_approx(old_zoom, camera_zoom):
+ 		_emit_zoom_changed()
+ 		return
+-	camera_center = anchor_world - (screen_anchor - size * 0.5) / camera_zoom
++	camera_center = anchor_world - (screen_anchor - size * 0.5) / _get_art_logical_scale()
+ 	_update_layer_transform()
+ 	_emit_canvas_changed()
+ 	_emit_zoom_changed()
+@@ -467,37 +474,11 @@ func _split_batch_selection(card_id: String) -> Node:
+ func show_cleanup_preview(
+ 	source_item_id: String, preview_image: Image, opacity: float = 0.56
+ ) -> void:
+-	if not _items_by_id.has(source_item_id):
+-		clear_cleanup_preview()
+-		return
+-	var source_item: Node = _items_by_id[source_item_id]
+-	if source_item.get_script() != CanvasItemSpriteScript:
+-		clear_cleanup_preview()
+-		return
+-
+-	if _cleanup_preview_sprite == null:
+-		_cleanup_preview_sprite = Sprite2D.new()
+-		_cleanup_preview_sprite.name = "CleanupPreview"
+-		_cleanup_preview_sprite.centered = false
+-		_cleanup_preview_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+-		item_layer.add_child(_cleanup_preview_sprite)
+-
+-	_cleanup_preview_source_item_id = source_item_id
+-	_cleanup_preview_sprite.texture = ImageTexture.create_from_image(preview_image)
+-	_cleanup_preview_sprite.position = source_item.position
+-	_cleanup_preview_sprite.scale = source_item.scale
+-	_cleanup_preview_sprite.z_index = CLEANUP_PREVIEW_Z_INDEX
+-	_cleanup_preview_sprite.modulate = Color(1.0, 1.0, 1.0, clampf(opacity, 0.0, 1.0))
+-	_update_cleanup_preview_alt_state()
++	_cleanup_preview.show(item_layer, _items_by_id, source_item_id, preview_image, opacity)
+ 
+ 
+ func clear_cleanup_preview() -> void:
+-	_cleanup_preview_source_item_id = ""
+-	if _cleanup_preview_sprite == null:
+-		return
+-	if is_instance_valid(_cleanup_preview_sprite):
+-		_cleanup_preview_sprite.queue_free()
+-	_cleanup_preview_sprite = null
++	_cleanup_preview.clear()
+ 
+ 
+ func show_cleanup_grid_overlay(scale: float, offset: Vector2) -> void:
+@@ -707,7 +688,7 @@ func _remove_item_direct(item_id: String) -> void:
+ 		for asset_id in item.asset_ids:
+ 			AssetLibrary.release_ref(asset_id)
+ 	_items_by_id.erase(item_id)
+-	if item_id == _cleanup_preview_source_item_id:
++	if item_id == _cleanup_preview.source_item_id:
+ 		clear_cleanup_preview()
+ 	_selection.remove_item_reference(item_id)
+ 	item_layer.remove_child(item)
+@@ -785,17 +766,23 @@ func _set_zoom_to_value(value: float) -> void:
+ 	camera_zoom = float(ZOOM_LEVELS[zoom_index])
+ 
+ 
++func _set_viewport_scale_factor_for_test(viewport_scale_factor: float) -> void:
++	_viewport_scale_factor_override = maxf(viewport_scale_factor, 1.0)
++	_update_layer_transform()
++
++
+ func _update_layer_transform() -> void:
+-	item_layer.position = size * 0.5 - camera_center * camera_zoom
+-	item_layer.scale = Vector2.ONE * camera_zoom
++	item_layer.position = size * 0.5 - camera_center * _get_art_logical_scale()
++	item_layer.scale = Vector2.ONE * _get_art_logical_scale()
+ 	_sync_cleanup_grid_overlay()
+ 	queue_redraw()
+ 
+ 
+ func _update_item_visibility() -> void:
++	var scale := _get_art_logical_scale()
+ 	var visible_world := Rect2(
+-		screen_to_world(Vector2.ZERO) - Vector2.ONE * CULL_PADDING_PIXELS / camera_zoom,
+-		size / camera_zoom + Vector2.ONE * CULL_PADDING_PIXELS * 2.0 / camera_zoom
++		screen_to_world(Vector2.ZERO) - Vector2.ONE * CULL_PADDING_PIXELS / scale,
++		size / scale + Vector2.ONE * CULL_PADDING_PIXELS * 2.0 / scale
+ 	)
+ 	for item in _items_by_id.values():
+ 		var is_visible := visible_world.intersects(item.get_canvas_bounds())
+@@ -804,6 +791,23 @@ func _update_item_visibility() -> void:
+ 		item.set_physics_process(is_visible)
+ 
+ 
++func _resolve_viewport_scale_factor() -> float:
++	if _viewport_scale_factor_override >= 1.0:
++		return _viewport_scale_factor_override
++	if not is_inside_tree():
++		return 1.0
++	var root := get_tree().root
++	if root == null:
++		return 1.0
++	return maxf(root.content_scale_factor, 1.0)
++
++
++func _get_art_logical_scale() -> float:
++	return maxf(
++		ScalePolicy.compute_art_logical_scale(camera_zoom, _resolve_viewport_scale_factor()), 0.0001
++	)
++
++
+ func _draw_pixel_grid() -> void:
+ 	var top_left := screen_to_world(Vector2.ZERO)
+ 	var bottom_right := screen_to_world(size)
+@@ -833,7 +837,7 @@ func _emit_zoom_changed() -> void:
+ 
+ 
+ func _on_selection_changed(selected_ids: Array) -> void:
+-	if not selected_ids.has(_cleanup_preview_source_item_id):
++	if not selected_ids.has(_cleanup_preview.source_item_id):
+ 		clear_cleanup_preview()
+ 	_sync_cleanup_grid_overlay()
+ 	selection_changed.emit(selected_ids.duplicate())
+@@ -867,9 +871,7 @@ func _on_cleanup_grid_changed(scale: float, offset: Vector2) -> void:
+ 
+ 
+ func _update_cleanup_preview_alt_state() -> void:
+-	if _cleanup_preview_sprite == null or not is_instance_valid(_cleanup_preview_sprite):
+-		return
+-	_cleanup_preview_sprite.visible = not Input.is_key_pressed(KEY_ALT)
++	_cleanup_preview.update_alt_state()
+ 
+ 
+ func _tool_manager_handles(event: InputEvent) -> bool:
+diff --git a/pixel/ui/dialogs/matte_dialog.gd b/pixel/ui/dialogs/matte_dialog.gd
+index e7d4764..a69adcc 100644
+--- a/pixel/ui/dialogs/matte_dialog.gd
++++ b/pixel/ui/dialogs/matte_dialog.gd
+@@ -11,10 +11,13 @@ const Strings := preload("res://ui/shell/strings.gd")
+ const ImageMath := preload("res://core/util/image_math.gd")
+ 
+ const CONTROL_HEIGHT := 30
++const DIALOG_WIDTH := 420
++const DIALOG_HEIGHT := 460
+ const PREVIEW_SIZE := 220
+ const PREVIEW_DEBOUNCE_SECONDS := 0.18
+-
+-var ui_scale := 1.0
++const ROOT_SEPARATION := 8
++const ROW_SEPARATION := 2
++const FLEXIBLE_WIDTH := 0
+ 
+ var _source_image: Image = null
+ var _mode_options: OptionButton = null
+@@ -33,7 +36,7 @@ func _ready() -> void:
+ 	title = Strings.DIALOG_MATTE_TITLE
+ 	ok_button_text = Strings.DIALOG_APPLY
+ 	cancel_button_text = Strings.DIALOG_CANCEL
+-	min_size = _scaled_vec2i(420, 460)
++	min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
+ 	_build_ui()
+ 	confirmed.connect(func() -> void: params_confirmed.emit(get_params()))
+ 
+@@ -53,7 +56,7 @@ func get_params() -> Dictionary:
+ 
+ func _build_ui() -> void:
+ 	var root := VBoxContainer.new()
+-	root.add_theme_constant_override("separation", _scaled_int(8))
++	root.add_theme_constant_override("separation", ROOT_SEPARATION)
+ 	add_child(root)
+ 
+ 	_mode_options = OptionButton.new()
+@@ -68,7 +71,7 @@ func _build_ui() -> void:
+ 	_add_labeled_control(root, Strings.MATTE_LABEL_FEATHER, _feather_spin)
+ 
+ 	_preview_texture = TextureRect.new()
+-	_preview_texture.custom_minimum_size = _scaled_vec2(PREVIEW_SIZE, PREVIEW_SIZE)
++	_preview_texture.custom_minimum_size = Vector2(PREVIEW_SIZE, PREVIEW_SIZE)
+ 	_preview_texture.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+ 	_preview_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+ 	root.add_child(_preview_texture)
+@@ -91,11 +94,11 @@ func _build_ui() -> void:
+ 
+ func _add_labeled_control(parent: Control, label_text: String, control: Control) -> void:
+ 	var row := VBoxContainer.new()
+-	row.add_theme_constant_override("separation", _scaled_int(2))
++	row.add_theme_constant_override("separation", ROW_SEPARATION)
+ 	var label := Label.new()
+ 	label.text = label_text
+ 	row.add_child(label)
+-	control.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++	control.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
+ 	row.add_child(control)
+ 	parent.add_child(row)
+ 
+@@ -138,15 +141,3 @@ func _make_preview_source(image: Image) -> Image:
+ 			Image.INTERPOLATE_NEAREST
+ 		)
+ 	return preview
+-
+-
+-func _scaled_int(value: int) -> int:
+-	return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
+-
+-
+-func _scaled_vec2(width: int, height: int) -> Vector2:
+-	return Vector2(_scaled_int(width), _scaled_int(height))
+-
+-
+-func _scaled_vec2i(width: int, height: int) -> Vector2i:
+-	return Vector2i(_scaled_int(width), _scaled_int(height))
+diff --git a/pixel/ui/dialogs/outline_dialog.gd b/pixel/ui/dialogs/outline_dialog.gd
+index 2b7dd9c..946c9d1 100644
+--- a/pixel/ui/dialogs/outline_dialog.gd
++++ b/pixel/ui/dialogs/outline_dialog.gd
+@@ -11,10 +11,13 @@ const Strings := preload("res://ui/shell/strings.gd")
+ const ImageMath := preload("res://core/util/image_math.gd")
+ 
+ const CONTROL_HEIGHT := 30
++const DIALOG_WIDTH := 420
++const DIALOG_HEIGHT := 500
+ const PREVIEW_SIZE := 220
+ const PREVIEW_DEBOUNCE_SECONDS := 0.18
+-
+-var ui_scale := 1.0
++const ROOT_SEPARATION := 8
++const ROW_SEPARATION := 2
++const FLEXIBLE_WIDTH := 0
+ 
+ var _source_image: Image = null
+ var _type_options: OptionButton = null
+@@ -33,7 +36,7 @@ func _ready() -> void:
+ 	title = Strings.DIALOG_OUTLINE_TITLE
+ 	ok_button_text = Strings.DIALOG_APPLY
+ 	cancel_button_text = Strings.DIALOG_CANCEL
+-	min_size = _scaled_vec2i(420, 500)
++	min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
+ 	_build_ui()
+ 	confirmed.connect(func() -> void: params_confirmed.emit(get_params()))
+ 
+@@ -55,7 +58,7 @@ func get_params() -> Dictionary:
+ 
+ func _build_ui() -> void:
+ 	var root := VBoxContainer.new()
+-	root.add_theme_constant_override("separation", _scaled_int(8))
++	root.add_theme_constant_override("separation", ROOT_SEPARATION)
+ 	add_child(root)
+ 
+ 	_type_options = OptionButton.new()
+@@ -77,7 +80,7 @@ func _build_ui() -> void:
+ 	_add_labeled_control(root, Strings.OUTLINE_LABEL_COLOR, _color_picker)
+ 
+ 	_preview_texture = TextureRect.new()
+-	_preview_texture.custom_minimum_size = _scaled_vec2(PREVIEW_SIZE, PREVIEW_SIZE)
++	_preview_texture.custom_minimum_size = Vector2(PREVIEW_SIZE, PREVIEW_SIZE)
+ 	_preview_texture.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+ 	_preview_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+ 	root.add_child(_preview_texture)
+@@ -96,11 +99,11 @@ func _build_ui() -> void:
+ 
+ func _add_labeled_control(parent: Control, label_text: String, control: Control) -> void:
+ 	var row := VBoxContainer.new()
+-	row.add_theme_constant_override("separation", _scaled_int(2))
++	row.add_theme_constant_override("separation", ROW_SEPARATION)
+ 	var label := Label.new()
+ 	label.text = label_text
+ 	row.add_child(label)
+-	control.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++	control.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
+ 	row.add_child(control)
+ 	parent.add_child(row)
+ 
+@@ -129,15 +132,3 @@ func _make_preview_source(image: Image) -> Image:
+ 			Image.INTERPOLATE_NEAREST
+ 		)
+ 	return preview
+-
+-
+-func _scaled_int(value: int) -> int:
+-	return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
+-
+-
+-func _scaled_vec2(width: int, height: int) -> Vector2:
+-	return Vector2(_scaled_int(width), _scaled_int(height))
+-
+-
+-func _scaled_vec2i(width: int, height: int) -> Vector2i:
+-	return Vector2i(_scaled_int(width), _scaled_int(height))
+diff --git a/pixel/ui/dialogs/slice_dialog.gd b/pixel/ui/dialogs/slice_dialog.gd
+index d118de4..6d86c43 100644
+--- a/pixel/ui/dialogs/slice_dialog.gd
++++ b/pixel/ui/dialogs/slice_dialog.gd
+@@ -12,10 +12,13 @@ const Strings := preload("res://ui/shell/strings.gd")
+ const ImageMath := preload("res://core/util/image_math.gd")
+ 
+ const CONTROL_HEIGHT := 30
++const DIALOG_WIDTH := 420
++const DIALOG_HEIGHT := 500
+ const PREVIEW_SIZE := 220
+ const PREVIEW_DEBOUNCE_SECONDS := 0.18
+-
+-var ui_scale := 1.0
++const ROOT_SEPARATION := 8
++const ROW_SEPARATION := 2
++const FLEXIBLE_WIDTH := 0
+ 
+ var _source_image: Image = null
+ var _auto_matte_check: CheckBox = null
+@@ -35,7 +38,7 @@ func _ready() -> void:
+ 	title = Strings.DIALOG_SLICE_TITLE
+ 	ok_button_text = Strings.DIALOG_APPLY
+ 	cancel_button_text = Strings.DIALOG_CANCEL
+-	min_size = _scaled_vec2i(420, 500)
++	min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
+ 	_build_ui()
+ 	confirmed.connect(func() -> void: params_confirmed.emit(get_params()))
+ 
+@@ -64,7 +67,7 @@ func get_params() -> Dictionary:
+ 
+ func _build_ui() -> void:
+ 	var root := VBoxContainer.new()
+-	root.add_theme_constant_override("separation", _scaled_int(8))
++	root.add_theme_constant_override("separation", ROOT_SEPARATION)
+ 	add_child(root)
+ 
+ 	_auto_matte_check = CheckBox.new()
+@@ -82,7 +85,7 @@ func _build_ui() -> void:
+ 	_add_labeled_control(root, Strings.SLICE_LABEL_MIN_AREA, _min_area_spin)
+ 
+ 	_preview_texture = TextureRect.new()
+-	_preview_texture.custom_minimum_size = _scaled_vec2(PREVIEW_SIZE, PREVIEW_SIZE)
++	_preview_texture.custom_minimum_size = Vector2(PREVIEW_SIZE, PREVIEW_SIZE)
+ 	_preview_texture.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+ 	_preview_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+ 	root.add_child(_preview_texture)
+@@ -104,11 +107,11 @@ func _build_ui() -> void:
+ 
+ func _add_labeled_control(parent: Control, label_text: String, control: Control) -> void:
+ 	var row := VBoxContainer.new()
+-	row.add_theme_constant_override("separation", _scaled_int(2))
++	row.add_theme_constant_override("separation", ROW_SEPARATION)
+ 	var label := Label.new()
+ 	label.text = label_text
+ 	row.add_child(label)
+-	control.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++	control.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
+ 	row.add_child(control)
+ 	parent.add_child(row)
+ 
+@@ -171,15 +174,3 @@ func _make_preview_source(image: Image) -> Image:
+ 			Image.INTERPOLATE_NEAREST
+ 		)
+ 	return preview
+-
+-
+-func _scaled_int(value: int) -> int:
+-	return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
+-
+-
+-func _scaled_vec2(width: int, height: int) -> Vector2:
+-	return Vector2(_scaled_int(width), _scaled_int(height))
+-
+-
+-func _scaled_vec2i(width: int, height: int) -> Vector2i:
+-	return Vector2i(_scaled_int(width), _scaled_int(height))
+diff --git a/pixel/ui/inspector/cleanup_inspector.gd b/pixel/ui/inspector/cleanup_inspector.gd
+index e8259af..47a1fd1 100644
+--- a/pixel/ui/inspector/cleanup_inspector.gd
++++ b/pixel/ui/inspector/cleanup_inspector.gd
+@@ -49,11 +49,9 @@ const PALETTE_PREVIEW_HEIGHT := 18
+ const TITLE_FONT_SIZE := 16
+ const LABEL_FONT_SIZE := 13
+ const PRIOR_FONT_SIZE := 12
+-
+-# 由 shell 在 add_child 之前注入（见 main.gd::_build_ui）。
+-# M1.1 复盘：本面板曾全部使用硬编码像素值，绕过了 M0 建立的界面缩放体系，
+-# 在 macOS Retina（2x）上呈现为一半物理尺寸。所有尺寸/字号必须经 _scaled_int()。
+-var ui_scale := 1.0
++const ROOT_SEPARATION := 8
++const ROW_SEPARATION := 2
++const FLEXIBLE_WIDTH := 0
+ 
+ var _selection_label: Label = null
+ var _auto_detect_check: CheckBox = null
+@@ -87,7 +85,7 @@ var _suppress_param_signal := false
+ 
+ 
+ func _ready() -> void:
+-	custom_minimum_size = Vector2(_scaled_int(PANEL_WIDTH), 0)
++	custom_minimum_size = Vector2(PANEL_WIDTH, 0)
+ 	_build_ui()
+ 	set_selection_count(0)
+ 
+@@ -235,12 +233,12 @@ func show_report(report: Dictionary) -> void:
+ func _build_ui() -> void:
+ 	var root := VBoxContainer.new()
+ 	root.name = "InspectorRoot"
+-	root.add_theme_constant_override("separation", _scaled_int(8))
++	root.add_theme_constant_override("separation", ROOT_SEPARATION)
+ 	add_child(root)
+ 
+ 	var title := Label.new()
+ 	title.text = Strings.CLEANUP_TITLE
+-	title.add_theme_font_size_override("font_size", _scaled_int(TITLE_FONT_SIZE))
++	title.add_theme_font_size_override("font_size", TITLE_FONT_SIZE)
+ 	root.add_child(title)
+ 
+ 	_selection_label = Label.new()
+@@ -255,14 +253,14 @@ func _build_ui() -> void:
+ 	var controls := VBoxContainer.new()
+ 	controls.name = "CleanupControls"
+ 	controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+-	controls.add_theme_constant_override("separation", _scaled_int(8))
++	controls.add_theme_constant_override("separation", ROOT_SEPARATION)
+ 	scroll.add_child(controls)
+ 
+ 	_auto_detect_check = _make_check(Strings.CLEANUP_AUTO_DETECT, true)
+ 	controls.add_child(_auto_detect_check)
+ 
+ 	_style_prior_label = Label.new()
+-	_style_prior_label.add_theme_font_size_override("font_size", _scaled_int(PRIOR_FONT_SIZE))
++	_style_prior_label.add_theme_font_size_override("font_size", PRIOR_FONT_SIZE)
+ 	_style_prior_label.visible = false
+ 	controls.add_child(_style_prior_label)
+ 
+@@ -298,15 +296,13 @@ func _build_ui() -> void:
+ 	refresh_palette_options("db32")
+ 
+ 	_palette_preview = TextureRect.new()
+-	_palette_preview.custom_minimum_size = Vector2(
+-		_scaled_int(PALETTE_PREVIEW_WIDTH), _scaled_int(PALETTE_PREVIEW_HEIGHT)
+-	)
++	_palette_preview.custom_minimum_size = Vector2(PALETTE_PREVIEW_WIDTH, PALETTE_PREVIEW_HEIGHT)
+ 	_palette_preview.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+ 	controls.add_child(_palette_preview)
+ 
+ 	_delete_palette_button = Button.new()
+ 	_delete_palette_button.text = Strings.CLEANUP_DELETE_PALETTE
+-	_delete_palette_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++	_delete_palette_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
+ 	_delete_palette_button.disabled = true
+ 	_delete_palette_button.pressed.connect(_delete_selected_custom_palette)
+ 	controls.add_child(_delete_palette_button)
+@@ -334,13 +330,13 @@ func _build_ui() -> void:
+ 
+ 	var action_row := HBoxContainer.new()
+ 	action_row.name = "CleanupActions"
+-	action_row.add_theme_constant_override("separation", _scaled_int(8))
++	action_row.add_theme_constant_override("separation", ROOT_SEPARATION)
+ 	root.add_child(action_row)
+ 
+ 	_apply_button = Button.new()
+ 	_apply_button.name = "ApplyCleanupButton"
+ 	_apply_button.text = Strings.CLEANUP_APPLY
+-	_apply_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++	_apply_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
+ 	_apply_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+ 	_apply_button.pressed.connect(func() -> void: apply_requested.emit(get_params()))
+ 	action_row.add_child(_apply_button)
+@@ -348,7 +344,7 @@ func _build_ui() -> void:
+ 	_cancel_button = Button.new()
+ 	_cancel_button.name = "CancelCleanupButton"
+ 	_cancel_button.text = Strings.CLEANUP_CANCEL
+-	_cancel_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++	_cancel_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
+ 	_cancel_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+ 	_cancel_button.disabled = true
+ 	_cancel_button.pressed.connect(func() -> void: cancel_requested.emit())
+@@ -366,10 +362,10 @@ func _build_ui() -> void:
+ 
+ func _add_labeled_control(parent: Control, label_text: String, control: Control) -> Control:
+ 	var row := VBoxContainer.new()
+-	row.add_theme_constant_override("separation", _scaled_int(2))
++	row.add_theme_constant_override("separation", ROW_SEPARATION)
+ 	var label := Label.new()
+ 	label.text = label_text
+-	label.add_theme_font_size_override("font_size", _scaled_int(LABEL_FONT_SIZE))
++	label.add_theme_font_size_override("font_size", LABEL_FONT_SIZE)
+ 	row.add_child(label)
+ 	row.add_child(control)
+ 	parent.add_child(row)
+@@ -389,7 +385,7 @@ func _make_spin(minimum: float, maximum: float, step: float, value: float) -> Sp
+ 	spin.max_value = maximum
+ 	spin.step = step
+ 	spin.value = value
+-	spin.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++	spin.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
+ 	return spin
+ 
+ 
+@@ -399,22 +395,18 @@ func _make_slider(minimum: float, maximum: float, step: float, value: float) ->
+ 	slider.max_value = maximum
+ 	slider.step = step
+ 	slider.value = value
+-	slider.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++	slider.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
+ 	return slider
+ 
+ 
+ func _make_options(labels: Array) -> OptionButton:
+ 	var options := OptionButton.new()
+-	options.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
++	options.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
+ 	for label in labels:
+ 		options.add_item(String(label))
+ 	return options
+ 
+ 
+-func _scaled_int(value: int) -> int:
+-	return int(round(value * maxf(ui_scale, 1.0)))
+-
+-
+ func _create_palette_dialogs() -> void:
+ 	_palette_import_dialog = FileDialog.new()
+ 	_palette_import_dialog.title = Strings.DIALOG_IMPORT_PALETTE
+diff --git a/pixel/ui/shell/canvas_zoom_overlay_controller.gd b/pixel/ui/shell/canvas_zoom_overlay_controller.gd
+index c328478..87f4957 100644
+--- a/pixel/ui/shell/canvas_zoom_overlay_controller.gd
++++ b/pixel/ui/shell/canvas_zoom_overlay_controller.gd
+@@ -12,12 +12,11 @@ var zoom_control: Control = null
+ var _canvas: Control = null
+ 
+ 
+-func setup(parent: Control, canvas: Control, ui_scale: float, bottom_left_margin: int) -> void:
++func setup(parent: Control, canvas: Control, bottom_left_margin: int) -> void:
+ 	_canvas = canvas
+ 
+ 	zoom_control = CanvasZoomControlScript.new()
+ 	zoom_control.name = "ZoomControl"
+-	zoom_control.ui_scale = ui_scale
+ 	zoom_control.configure_levels(InfiniteCanvasScript.ZOOM_LEVELS.size())
+ 	zoom_control.set_bottom_left_margin(bottom_left_margin)
+ 	zoom_control.zoom_index_requested.connect(_on_zoom_index_requested)
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index f2c7d6e..a4cbdc9 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -20,6 +20,7 @@ const Pipeline := preload("res://core/pixel/pipeline.gd")
+ const Log := preload("res://core/util/log_util.gd")
+ 
+ const TOOLBAR_BUTTON_HEIGHT := 34
++const TOOLBAR_FONT_SIZE := 14
+ const FILE_MENU_BUTTON_WIDTH := 84
+ const TOOL_BUTTON_SIZE := 84
+ const BATCH_MENU_CLEANUP := 0
+@@ -29,8 +30,6 @@ const BATCH_MENU_SPLIT := 3
+ const BATCH_MENU_EXPORT := 4
+ const SELECTION_TOOLS_VISIBLE := false
+ 
+-var ui_scale := 1.0
+-
+ var _canvas: Control = null
+ var _cleanup_inspector: Control = null
+ var _status_label: Label = null
+@@ -74,11 +73,9 @@ func setup(
+ func add_file_menu(parent: Control) -> void:
+ 	var file_menu_button := MenuButton.new()
+ 	file_menu_button.text = Strings.MENU_FILE
+-	file_menu_button.custom_minimum_size = _scaled_vec2(
+-		FILE_MENU_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT
+-	)
++	file_menu_button.custom_minimum_size = Vector2(FILE_MENU_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT)
+ 	file_menu_button.focus_mode = Control.FOCUS_NONE
+-	file_menu_button.add_theme_font_size_override("font_size", _scaled_int(14))
++	file_menu_button.add_theme_font_size_override("font_size", TOOLBAR_FONT_SIZE)
+ 	var popup := file_menu_button.get_popup()
+ 	popup.add_item(Strings.MENU_IMPORT_IMAGES, 0)
+ 	popup.add_separator()
+@@ -102,8 +99,8 @@ func add_tool_buttons(parent: Control) -> void:
+ 		button.tooltip_text = "%s (%s)" % [String(spec["tooltip"]), String(spec["text"])]
+ 		button.toggle_mode = true
+ 		button.focus_mode = Control.FOCUS_NONE
+-		button.custom_minimum_size = _scaled_vec2(TOOL_BUTTON_SIZE, TOOLBAR_BUTTON_HEIGHT)
+-		button.add_theme_font_size_override("font_size", _scaled_int(14))
++		button.custom_minimum_size = Vector2(TOOL_BUTTON_SIZE, TOOLBAR_BUTTON_HEIGHT)
++		button.add_theme_font_size_override("font_size", TOOLBAR_FONT_SIZE)
+ 		var tool_id := String(spec["id"])
+ 		button.toggled.connect(
+ 			func(is_pressed: bool) -> void:
+@@ -206,17 +203,14 @@ func _create_import_dialog() -> void:
+ 
+ func _create_m2_dialogs() -> void:
+ 	_matte_dialog = MatteDialogScript.new()
+-	_matte_dialog.ui_scale = ui_scale
+ 	_matte_dialog.params_confirmed.connect(_m2_actions.matte_selection_with_params)
+ 	add_child(_matte_dialog)
+ 
+ 	_slice_dialog = SliceDialogScript.new()
+-	_slice_dialog.ui_scale = ui_scale
+ 	_slice_dialog.params_confirmed.connect(_m2_actions.slice_selection_with_params)
+ 	add_child(_slice_dialog)
+ 
+ 	_outline_dialog = OutlineDialogScript.new()
+-	_outline_dialog.ui_scale = ui_scale
+ 	_outline_dialog.params_confirmed.connect(_m2_actions.outline_selection_with_params)
+ 	add_child(_outline_dialog)
+ 
+@@ -404,11 +398,3 @@ func _show_onboarding_dialog() -> void:
+ 	var mark_seen := func() -> void: SettingsService.set_setting("ui", "m2_1_onboarding_seen", true)
+ 	dialog.confirmed.connect(mark_seen, CONNECT_ONE_SHOT)
+ 	dialog.close_requested.connect(mark_seen, CONNECT_ONE_SHOT)
+-
+-
+-func _scaled_int(value: int) -> int:
+-	return maxi(1, int(round(float(value) * maxf(ui_scale, 1.0))))
+-
+-
+-func _scaled_vec2(width: int, height: int) -> Vector2:
+-	return Vector2(_scaled_int(width), _scaled_int(height))
+diff --git a/pixel/ui/shell/main.gd b/pixel/ui/shell/main.gd
+index e84c635..cd94ed6 100644
+--- a/pixel/ui/shell/main.gd
++++ b/pixel/ui/shell/main.gd
+@@ -41,12 +41,13 @@ const BOTTOM_BAR_HEIGHT := 32
+ const TOOLBAR_BUTTON_WIDTH := 96
+ const TOOLBAR_BUTTON_HEIGHT := 34
+ const ZOOM_CONTROL_MARGIN := 12
++const FLEXIBLE_WIDTH := 0
+ const CLEANUP_RESULT_GAP := 8
+ const PREVIEW_OPACITY := 0.56
+ 
+ var _project_filters := PackedStringArray(["*.pxproj ; PixelForge Project"])
+ var _png_filters := PackedStringArray(["*.png ; PNG Image"])
+-var _ui_scale := 1.0
++var _interface_scale := 1.0
+ var _canvas: Control = null
+ var _cleanup_inspector: Control = null
+ var _title_label: Label = null
+@@ -66,7 +67,7 @@ var _zoom_overlay: RefCounted = null
+ 
+ 
+ func _ready() -> void:
+-	_ui_scale = _resolve_interface_scale()
++	_interface_scale = _resolve_interface_scale()
+ 	_apply_viewport_scale_policy()
+ 	_apply_runtime_theme()
+ 	_apply_window_defaults()
+@@ -145,6 +146,16 @@ static func fit_interface_scale_to_startup_screen(scale: float, usable_size: Vec
+ 	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+ 
+ 
++static func apply_content_scale_policy(root: Window, scale: float) -> void:
++	if root == null:
++		return
++	root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
++	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
++	root.content_scale_size = Vector2i.ZERO
++	root.content_scale_factor = clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
++	root.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_FRACTIONAL
++
++
+ func _resolve_interface_scale() -> float:
+ 	if DisplayServer.get_name() == "headless":
+ 		return MIN_INTERFACE_SCALE
+@@ -219,12 +230,7 @@ func _resolve_interface_scale() -> float:
+ 
+ 
+ func _apply_viewport_scale_policy() -> void:
+-	var root := get_tree().root
+-	root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
+-	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
+-	root.content_scale_size = Vector2i.ZERO
+-	root.content_scale_factor = 1.0
+-	root.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_FRACTIONAL
++	apply_content_scale_policy(get_tree().root, _interface_scale)
+ 
+ 
+ func _apply_runtime_theme() -> void:
+@@ -233,7 +239,7 @@ func _apply_runtime_theme() -> void:
+ 
+ func _build_app_theme() -> Theme:
+ 	var app_theme := Theme.new()
+-	app_theme.default_font_size = _scaled_int(UI_FONT_SIZE)
++	app_theme.default_font_size = UI_FONT_SIZE
+ 
+ 	for type_name in [
+ 		"Button",
+@@ -250,11 +256,11 @@ func _build_app_theme() -> Theme:
+ 		"Tree",
+ 		"Window",
+ 	]:
+-		app_theme.set_font_size("font_size", type_name, _scaled_int(UI_FONT_SIZE))
++		app_theme.set_font_size("font_size", type_name, UI_FONT_SIZE)
+ 
+-	app_theme.set_font_size("font_size", "Button", _scaled_int(UI_SMALL_FONT_SIZE))
+-	app_theme.set_font_size("font_size", "PopupMenu", _scaled_int(UI_SMALL_FONT_SIZE))
+-	app_theme.set_constant("h_separation", "HBoxContainer", _scaled_int(8))
++	app_theme.set_font_size("font_size", "Button", UI_SMALL_FONT_SIZE)
++	app_theme.set_font_size("font_size", "PopupMenu", UI_SMALL_FONT_SIZE)
++	app_theme.set_constant("h_separation", "HBoxContainer", 8)
+ 	app_theme.set_constant("v_separation", "VBoxContainer", 0)
+ 	return app_theme
+ 
+@@ -264,21 +270,24 @@ func _apply_window_defaults() -> void:
+ 	if window == null or DisplayServer.get_name() == "headless":
+ 		return
+ 
+-	window.min_size = _scaled_vec2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+-	var target_size := _scaled_vec2i(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
++	window.min_size = _logical_size_to_window_pixels(Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT))
++	var target_size := _logical_size_to_window_pixels(
++		Vector2i(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
++	)
+ 	var usable_rect := DisplayServer.screen_get_usable_rect(window.current_screen)
+ 	if usable_rect.size.x > 0 and usable_rect.size.y > 0:
+-		var margin := _scaled_int(WINDOW_SCREEN_MARGIN)
+-		var usable_size_for_window := _window_pixel_size_from_screen_points(usable_rect.size)
+-		var max_width := maxi(_scaled_int(960), usable_size_for_window.x - margin)
+-		var max_height := maxi(_scaled_int(640), usable_size_for_window.y - margin)
++		var margin := _logical_size_to_window_pixels(Vector2i(WINDOW_SCREEN_MARGIN, 0)).x
++		var usable_size_for_window := _usable_size_to_window_pixels(usable_rect.size)
++		var minimum_fit := _logical_size_to_window_pixels(Vector2i(960, 640))
++		var max_width := maxi(minimum_fit.x, usable_size_for_window.x - margin)
++		var max_height := maxi(minimum_fit.y, usable_size_for_window.y - margin)
+ 		target_size.x = mini(target_size.x, max_width)
+ 		target_size.y = mini(target_size.y, max_height)
+ 		target_size.x = maxi(target_size.x, mini(window.min_size.x, max_width))
+ 		target_size.y = maxi(target_size.y, mini(window.min_size.y, max_height))
+ 
+ 		window.size = target_size
+-		var position_size := _screen_point_size_from_window_pixels(target_size)
++		var position_size := _window_pixels_to_screen_units(target_size)
+ 		window.position = usable_rect.position + (usable_rect.size - position_size) / 2
+ 	else:
+ 		window.size = target_size
+@@ -288,7 +297,7 @@ func _apply_window_defaults() -> void:
+ 		. info(
+ 			"Window defaults applied",
+ 			{
+-				"ui_scale": _ui_scale,
++				"content_scale_factor": _interface_scale,
+ 				"min_size": [window.min_size.x, window.min_size.y],
+ 				"target_size": [target_size.x, target_size.y],
+ 				"actual_size": [window.size.x, window.size.y],
+@@ -300,23 +309,33 @@ func _apply_window_defaults() -> void:
+ 	)
+ 
+ 
+-func _window_pixel_size_from_screen_points(size: Vector2i) -> Vector2i:
+-	if OS.get_name() == "macOS" and _ui_scale > 1.0:
+-		return Vector2i(_scaled_int(size.x), _scaled_int(size.y))
++func _logical_size_to_window_pixels(size: Vector2i) -> Vector2i:
++	var factor := maxf(_interface_scale, MIN_INTERFACE_SCALE)
++	return Vector2i(
++		maxi(1, int(round(float(size.x) * factor))), maxi(1, int(round(float(size.y) * factor)))
++	)
++
++
++func _usable_size_to_window_pixels(size: Vector2i) -> Vector2i:
++	if OS.get_name() == "macOS" and _interface_scale > 1.0:
++		return Vector2i(
++			maxi(1, int(round(float(size.x) * _interface_scale))),
++			maxi(1, int(round(float(size.y) * _interface_scale)))
++		)
+ 	return size
+ 
+ 
+-func _screen_point_size_from_window_pixels(size: Vector2i) -> Vector2i:
+-	if OS.get_name() == "macOS" and _ui_scale > 1.0:
++func _window_pixels_to_screen_units(size: Vector2i) -> Vector2i:
++	if OS.get_name() == "macOS" and _interface_scale > 1.0:
+ 		return Vector2i(
+-			maxi(1, int(round(float(size.x) / _ui_scale))),
+-			maxi(1, int(round(float(size.y) / _ui_scale)))
++			maxi(1, int(round(float(size.x) / _interface_scale))),
++			maxi(1, int(round(float(size.y) / _interface_scale)))
+ 		)
+ 	return size
+ 
+ 
+ func _build_ui() -> void:
+-	custom_minimum_size = _scaled_vec2(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
++	custom_minimum_size = Vector2(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+ 
+ 	var root := VBoxContainer.new()
+ 	root.name = "Root"
+@@ -325,14 +344,14 @@ func _build_ui() -> void:
+ 
+ 	var top_bar := HBoxContainer.new()
+ 	top_bar.name = "TopBar"
+-	top_bar.custom_minimum_size = Vector2(0, _scaled_int(TOP_BAR_HEIGHT))
++	top_bar.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, TOP_BAR_HEIGHT)
+ 	top_bar.alignment = BoxContainer.ALIGNMENT_END
+ 	root.add_child(top_bar)
+ 
+ 	_title_label = Label.new()
+ 	_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+ 	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+-	_title_label.add_theme_font_size_override("font_size", _scaled_int(UI_FONT_SIZE))
++	_title_label.add_theme_font_size_override("font_size", UI_FONT_SIZE)
+ 	top_bar.add_child(_title_label)
+ 
+ 	_add_toolbar_button(top_bar, Strings.ACTION_NEW, _create_new_project)
+@@ -355,26 +374,23 @@ func _build_ui() -> void:
+ 	_canvas.name = "InfiniteCanvas"
+ 	_canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+ 	_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
+-	_canvas.ui_scale = _ui_scale
+ 	content.add_child(_canvas)
+ 
+ 	_cleanup_inspector = CleanupInspectorScript.new()
+ 	_cleanup_inspector.name = "CleanupInspector"
+ 	_cleanup_inspector.size_flags_vertical = Control.SIZE_EXPAND_FILL
+-	# 缩放注入必须在 add_child 之前完成：inspector 在 _ready 中按 ui_scale 构建 UI。
+-	_cleanup_inspector.ui_scale = _ui_scale
+ 	content.add_child(_cleanup_inspector)
+ 
+ 	var bottom_bar := HBoxContainer.new()
+ 	bottom_bar.name = "BottomBar"
+-	bottom_bar.custom_minimum_size = Vector2(0, _scaled_int(BOTTOM_BAR_HEIGHT))
++	bottom_bar.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, BOTTOM_BAR_HEIGHT)
+ 	root.add_child(bottom_bar)
+ 
+ 	_status_label = Label.new()
+ 	_status_label.text = Strings.STATUS_READY
+ 	_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+ 	_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+-	_status_label.add_theme_font_size_override("font_size", _scaled_int(UI_SMALL_FONT_SIZE))
++	_status_label.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
+ 	bottom_bar.add_child(_status_label)
+ 
+ 	_create_file_dialogs()
+@@ -382,7 +398,6 @@ func _build_ui() -> void:
+ 	_m2_actions.setup(_canvas, _cleanup_inspector, _status_label, self)
+ 	_m2_1_ui = M21UiControllerScript.new()
+ 	_m2_1_ui.name = "M21UiController"
+-	_m2_1_ui.ui_scale = _ui_scale
+ 	add_child(_m2_1_ui)
+ 	_m2_1_ui.setup(
+ 		_canvas,
+@@ -401,31 +416,19 @@ func _build_ui() -> void:
+ 	_add_toolbar_button(top_bar, Strings.ACTION_SLICE, _m2_1_ui.open_slice_dialog)
+ 	_add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _m2_1_ui.open_outline_dialog)
+ 	_zoom_overlay = ZoomOverlayControllerScript.new()
+-	_zoom_overlay.setup(self, _canvas, _ui_scale, ZOOM_CONTROL_MARGIN)
++	_zoom_overlay.setup(self, _canvas, ZOOM_CONTROL_MARGIN)
+ 
+ 
+ func _add_toolbar_button(parent: Control, text: String, callback: Callable) -> void:
+ 	var button := Button.new()
+ 	button.text = text
+-	button.custom_minimum_size = _scaled_vec2(TOOLBAR_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT)
++	button.custom_minimum_size = Vector2(TOOLBAR_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT)
+ 	button.focus_mode = Control.FOCUS_NONE
+-	button.add_theme_font_size_override("font_size", _scaled_int(UI_SMALL_FONT_SIZE))
++	button.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
+ 	button.pressed.connect(callback)
+ 	parent.add_child(button)
+ 
+ 
+-func _scaled_int(value: int) -> int:
+-	return maxi(1, int(round(float(value) * _ui_scale)))
+-
+-
+-func _scaled_vec2(width: int, height: int) -> Vector2:
+-	return Vector2(_scaled_int(width), _scaled_int(height))
+-
+-
+-func _scaled_vec2i(width: int, height: int) -> Vector2i:
+-	return Vector2i(_scaled_int(width), _scaled_int(height))
+-
+-
+ func _create_file_dialogs() -> void:
+ 	_open_dialog = FileDialog.new()
+ 	_open_dialog.title = Strings.DIALOG_OPEN_PROJECT
+@@ -888,11 +891,9 @@ static func _json_safe(value: Variant) -> Variant:
+ 				output.append(_json_safe(item))
+ 			return output
+ 		TYPE_VECTOR2:
+-			var vector := Vector2(value)
+-			return [vector.x, vector.y]
++			return [value.x, value.y]
+ 		TYPE_VECTOR2I:
+-			var vector_i := Vector2i(value)
+-			return [vector_i.x, vector_i.y]
++			return [value.x, value.y]
+ 		TYPE_COLOR:
+ 			return Color(value).to_html(true)
+ 		_:
+diff --git a/pixelforge-plan/01-architecture/ARCHITECTURE.md b/pixelforge-plan/01-architecture/ARCHITECTURE.md
+index 73b2c05..2474d17 100644
+--- a/pixelforge-plan/01-architecture/ARCHITECTURE.md
++++ b/pixelforge-plan/01-architecture/ARCHITECTURE.md
+@@ -143,6 +143,7 @@ class_name PFTask
+ - 信号命名过去式（`task_finished`），方法命令式（`run_task`）。
+ - 每个 core 类文件头部注释块：职责一句话 + 输入输出契约 + 引用的契约文档（如 `# contract: 02-contracts/GRAPH-SCHEMA.md §3`）。
+ - 魔法数字一律提常量；用户可见字符串集中到 `ui/shell/strings.gd`（为未来 i18n 留口，v1.0 前 UI 英文、注释与文档中文——与 HexDungeon 项目同样的 CJK 字体考量，待打包自带 CJK 字体后再上中文 UI）。
++- **UI 缩放**：界面缩放由 `Window.content_scale_factor`（启动按 `_resolve_interface_scale()` 检测）统一驱动，所有 Control 尺寸/字号写逻辑常量、由 factor 等比放大，禁止 `_scaled_int()` 与组件级 `ui_scale` 注入。画布美术不随 chrome 二次放大：设备倍率 `F_canvas = max(1, round(F))`，净美术放大 = `camera_zoom × F_canvas`（整数对齐、NEAREST 硬边）。新增 UI 不需要任何缩放接线；`scripts/check_ui_scaling.sh` 做静态守护，合法例外用 `# scale-exempt:` 放行。
+ 
+ ## 6. 测试策略摘要（详见 05-quality/QUALITY.md）
+ 

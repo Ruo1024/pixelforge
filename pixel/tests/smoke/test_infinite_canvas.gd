@@ -1,6 +1,7 @@
 extends "res://addons/gut/test.gd"
 
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
+const CanvasScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
 const ToolManagerScript := preload("res://ui/tools/tool_manager.gd")
@@ -72,6 +73,64 @@ func test_canvas_emits_zoom_changed_for_direct_and_step_zoom() -> void:
 	assert_eq(events[1]["index"], 6)
 	assert_almost_eq(events[1]["zoom"], 2.0, 0.001)
 	assert_almost_eq(canvas.camera_zoom, 2.0, 0.001)
+
+
+func test_canvas_device_scale_rounds_fractional_content_scale() -> void:
+	assert_eq(CanvasScalePolicy.compute_canvas_device_scale(1.0), 1)
+	assert_eq(CanvasScalePolicy.compute_canvas_device_scale(1.49), 1)
+	assert_eq(CanvasScalePolicy.compute_canvas_device_scale(1.5), 2)
+	assert_eq(CanvasScalePolicy.compute_canvas_device_scale(2.0), 2)
+	assert_eq(CanvasScalePolicy.effective_art_pixel_px(0.125, 1.5), 1)
+	assert_eq(CanvasScalePolicy.effective_art_pixel_px(1.0, 1.5), 2)
+
+
+func test_canvas_coordinates_use_compensated_logical_scale() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(300, 200)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	canvas._set_viewport_scale_factor_for_test(1.5)
+	var expected_scale := CanvasScalePolicy.compute_art_logical_scale(1.0, 1.5)
+	var world_position := Vector2(12.0, -6.0)
+	var screen_position: Vector2 = canvas.world_to_screen(world_position)
+	var roundtrip: Vector2 = canvas.screen_to_world(screen_position)
+
+	assert_almost_eq(canvas._get_art_logical_scale(), expected_scale, 0.001)
+	assert_almost_eq(canvas.item_layer.scale.x, expected_scale, 0.001)
+	assert_almost_eq(canvas.item_layer.scale.y, expected_scale, 0.001)
+	assert_almost_eq(roundtrip.x, world_position.x, 0.001)
+	assert_almost_eq(roundtrip.y, world_position.y, 0.001)
+
+
+func test_zoom_anchor_stays_fixed_with_fractional_content_scale() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(320, 240)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	canvas._set_viewport_scale_factor_for_test(1.5)
+	var anchor := Vector2(240, 120)
+	var before: Vector2 = canvas.screen_to_world(anchor)
+	canvas.zoom_by_steps(2, anchor)
+	var after: Vector2 = canvas.screen_to_world(anchor)
+
+	assert_almost_eq(after.x, before.x, 0.001)
+	assert_almost_eq(after.y, before.y, 0.001)
+	assert_eq(CanvasScalePolicy.compute_canvas_device_scale(1.5), 2)
+
+
+func test_pan_uses_compensated_logical_scale() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(320, 240)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	canvas._set_viewport_scale_factor_for_test(1.5)
+	canvas.pan_by_pixels(Vector2(20, 0))
+
+	assert_almost_eq(canvas.camera_center.x, 15.0, 0.001)
+	assert_almost_eq(canvas.camera_center.y, 0.0, 0.001)
 
 
 func test_wheel_zoom_is_rate_limited() -> void:
@@ -186,6 +245,7 @@ func test_cleanup_grid_overlay_emits_dragged_offset() -> void:
 	canvas.size = Vector2(256, 256)
 	add_child_autofree(canvas)
 	await wait_process_frames(2)
+	canvas._set_viewport_scale_factor_for_test(1.5)
 
 	var emitted := []
 	var image := _make_checker_image(16)
@@ -198,8 +258,11 @@ func test_cleanup_grid_overlay_emits_dragged_offset() -> void:
 	)
 	canvas.show_cleanup_grid_overlay(4.0, Vector2.ZERO)
 	var overlay: Control = canvas.get_node("CleanupGridOverlay")
+	var overlay_rect: Rect2 = overlay._world_rect_to_screen(Rect2(Vector2.ZERO, Vector2(16, 16)))
 	overlay.grid_changed.emit(4.0, Vector2(1.5, 2.0))
 
+	assert_almost_eq(overlay_rect.size.x, 16.0 * canvas._get_art_logical_scale(), 0.001)
+	assert_almost_eq(overlay_rect.size.y, 16.0 * canvas._get_art_logical_scale(), 0.001)
 	assert_eq(emitted[0], 4.0)
 	assert_eq(emitted[1], Vector2(1.5, 2.0))
 

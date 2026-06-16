@@ -143,6 +143,7 @@ class_name PFTask
 - 信号命名过去式（`task_finished`），方法命令式（`run_task`）。
 - 每个 core 类文件头部注释块：职责一句话 + 输入输出契约 + 引用的契约文档（如 `# contract: 02-contracts/GRAPH-SCHEMA.md §3`）。
 - 魔法数字一律提常量；用户可见字符串集中到 `ui/shell/strings.gd`（为未来 i18n 留口，v1.0 前 UI 英文、注释与文档中文——与 HexDungeon 项目同样的 CJK 字体考量，待打包自带 CJK 字体后再上中文 UI）。
+- **UI 缩放**：界面缩放由 `Window.content_scale_factor`（启动按 `_resolve_interface_scale()` 检测）统一驱动，所有 Control 尺寸/字号写逻辑常量、由 factor 等比放大，禁止 `_scaled_int()` 与组件级 `ui_scale` 注入。画布美术不随 chrome 二次放大：设备倍率 `F_canvas = max(1, round(F))`，净美术放大 = `camera_zoom × F_canvas`（整数对齐、NEAREST 硬边）。新增 UI 不需要任何缩放接线；`scripts/check_ui_scaling.sh` 做静态守护，合法例外用 `# scale-exempt:` 放行。
 
 ## 6. 测试策略摘要（详见 05-quality/QUALITY.md）
 
