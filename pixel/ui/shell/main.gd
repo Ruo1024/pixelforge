@@ -19,8 +19,8 @@ const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay
 
 const DEFAULT_WINDOW_WIDTH := 1440
 const DEFAULT_WINDOW_HEIGHT := 900
-const MIN_WINDOW_WIDTH := 1280
-const MIN_WINDOW_HEIGHT := 800
+const MIN_WINDOW_WIDTH := 1080
+const MIN_WINDOW_HEIGHT := 560
 const WINDOW_SCREEN_MARGIN := 80
 const UI_FONT_SIZE := 16
 const UI_SMALL_FONT_SIZE := 14
@@ -140,10 +140,9 @@ static func should_use_macos_retina_fallback(
 static func fit_interface_scale_to_startup_screen(scale: float, usable_size: Vector2i) -> float:
 	if usable_size.x <= 0 or usable_size.y <= 0:
 		return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
-	var fit_width := float(usable_size.x - WINDOW_SCREEN_MARGIN) / float(MIN_WINDOW_WIDTH)
-	var fit_height := float(usable_size.y - WINDOW_SCREEN_MARGIN) / float(MIN_WINDOW_HEIGHT)
-	var fit_scale := maxf(MIN_INTERFACE_SCALE, minf(fit_width, fit_height))
-	return clampf(minf(scale, fit_scale), MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+	# 高分屏上 UI scale 是物理可读性的来源，不再为了启动窗口尺寸反向缩小。
+	# 窗口默认尺寸会独立夹取到屏幕内，面板溢出交给滚动容器处理。
+	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
 
 
 func _resolve_interface_scale() -> float:
@@ -780,7 +779,7 @@ func _cleanup_params_with_project_style(params: Dictionary) -> Dictionary:
 func _export_selected_png() -> void:
 	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
 	if snapshots.is_empty():
-		_status_label.text = Strings.STATUS_EXPORT_EMPTY
+		_show_status_notice(Strings.STATUS_EXPORT_EMPTY)
 		return
 
 	_pending_export_snapshots = snapshots
@@ -827,6 +826,7 @@ func _export_png_path(path: String) -> void:
 
 	if error != OK:
 		Log.warn("PNG export failed", {"path": target_path, "error": error})
+		_show_status_notice(Strings.STATUS_EXPORT_FAILED)
 	_pending_export_snapshots.clear()
 
 
@@ -840,6 +840,12 @@ func _on_export_snapshots_requested(snapshots: Array, default_file: String) -> v
 	_pending_export_snapshots = snapshots
 	_export_dialog.current_file = default_file
 	_export_dialog.popup_centered_ratio(0.7)
+
+
+func _show_status_notice(message: String) -> void:
+	_status_label.text = message
+	if DisplayServer.get_name() != "headless":
+		OS.alert(message, Strings.DIALOG_NOTICE)
 
 
 func _on_recovery_available(autosaves: Array) -> void:

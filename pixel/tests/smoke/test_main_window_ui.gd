@@ -12,7 +12,7 @@ func test_main_window_uses_readable_minimum_sizes() -> void:
 	var top_bar: Control = root.get_node("TopBar")
 	var bottom_bar: Control = root.get_node("BottomBar")
 
-	assert_eq(main.custom_minimum_size, Vector2(1280, 800))
+	assert_eq(main.custom_minimum_size, Vector2(1080, 560))
 	assert_eq(top_bar.custom_minimum_size.y, 48.0)
 	assert_eq(bottom_bar.custom_minimum_size.y, 32.0)
 
@@ -38,12 +38,12 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
 	assert_eq(int(slider.value), canvas.zoom_index)
 	assert_eq(label.text, "100%")
 
-	slider.value = 5
+	slider.value = 8
 	await wait_process_frames(1)
 	assert_almost_eq(canvas.camera_zoom, 4.0, 0.001)
 	assert_eq(label.text, "400%")
 
-	canvas.zoom_by_steps(-2, canvas.size * 0.5)
+	canvas.zoom_by_steps(-4, canvas.size * 0.5)
 	await wait_process_frames(1)
 	assert_eq(int(slider.value), canvas.zoom_index)
 	assert_eq(label.text, "100%")
@@ -65,6 +65,35 @@ func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
 	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 220), 2.0)
 
 
-func test_interface_scale_is_clamped_when_startup_screen_cannot_fit_scaled_window() -> void:
-	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(1334, 834)), 1.0)
+func test_interface_scale_preserves_readability_on_scaled_screens() -> void:
+	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(1334, 834)), 2.0)
+	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(1470, 956)), 2.0)
 	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(5120, 2982)), 2.0)
+
+
+func test_cleanup_inspector_keeps_apply_actions_reachable_below_scroll() -> void:
+	var main: Control = MainScript.new()
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var inspector: Control = main.get_node("Root/Content/CleanupInspector")
+	var root: VBoxContainer = inspector.get_node("InspectorRoot")
+
+	assert_not_null(root.get_node("CleanupScroll"))
+	assert_not_null(root.get_node("CleanupActions/ApplyCleanupButton"))
+	assert_eq(
+		root.get_node("CleanupActions/ApplyCleanupButton").get_parent().name, "CleanupActions"
+	)
+
+
+func test_selection_tool_buttons_are_hidden_until_selection_actions_are_wired() -> void:
+	var main: Control = MainScript.new()
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var top_bar: Control = main.get_node("Root/TopBar")
+	for child in top_bar.get_children():
+		if child is Button:
+			assert_ne(child.text, "W")
+			assert_ne(child.text, "M")
+			assert_ne(child.text, "L")

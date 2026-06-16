@@ -234,6 +234,7 @@ func show_report(report: Dictionary) -> void:
 
 func _build_ui() -> void:
 	var root := VBoxContainer.new()
+	root.name = "InspectorRoot"
 	root.add_theme_constant_override("separation", _scaled_int(8))
 	add_child(root)
 
@@ -245,43 +246,55 @@ func _build_ui() -> void:
 	_selection_label = Label.new()
 	root.add_child(_selection_label)
 
+	var scroll := ScrollContainer.new()
+	scroll.name = "CleanupScroll"
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(scroll)
+
+	var controls := VBoxContainer.new()
+	controls.name = "CleanupControls"
+	controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	controls.add_theme_constant_override("separation", _scaled_int(8))
+	scroll.add_child(controls)
+
 	_auto_detect_check = _make_check(Strings.CLEANUP_AUTO_DETECT, true)
-	root.add_child(_auto_detect_check)
+	controls.add_child(_auto_detect_check)
 
 	_style_prior_label = Label.new()
 	_style_prior_label.add_theme_font_size_override("font_size", _scaled_int(PRIOR_FONT_SIZE))
 	_style_prior_label.visible = false
-	root.add_child(_style_prior_label)
+	controls.add_child(_style_prior_label)
 
 	_resample_check = _make_check(Strings.CLEANUP_RUN_RESAMPLE, true)
-	root.add_child(_resample_check)
+	controls.add_child(_resample_check)
 
 	_quantize_check = _make_check(Strings.CLEANUP_RUN_QUANTIZE, true)
-	root.add_child(_quantize_check)
+	controls.add_child(_quantize_check)
 
 	_scale_spin = _make_spin(1.0, 64.0, 0.1, 4.0)
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_SCALE, _scale_spin)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_SCALE, _scale_spin)
 
 	_offset_x_spin = _make_spin(0.0, 64.0, 0.25, 0.0)
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_OFFSET_X, _offset_x_spin)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_OFFSET_X, _offset_x_spin)
 
 	_offset_y_spin = _make_spin(0.0, 64.0, 0.25, 0.0)
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_OFFSET_Y, _offset_y_spin)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_OFFSET_Y, _offset_y_spin)
 
 	_resample_options = _make_options(RESAMPLE_LABELS)
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_RESAMPLE, _resample_options)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_RESAMPLE, _resample_options)
 
 	_quantize_options = _make_options(QUANTIZE_LABELS)
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_QUANTIZE, _quantize_options)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_QUANTIZE, _quantize_options)
 
 	_auto_k_strategy_options = _make_options(AUTO_K_STRATEGY_LABELS)
 	_auto_k_strategy_options.tooltip_text = Strings.CLEANUP_AUTO_K_TOOLTIP
 	_auto_k_strategy_row = _add_labeled_control(
-		root, Strings.CLEANUP_LABEL_AUTO_K_STRATEGY, _auto_k_strategy_options
+		controls, Strings.CLEANUP_LABEL_AUTO_K_STRATEGY, _auto_k_strategy_options
 	)
 
 	_palette_options = _make_options([])
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_PALETTE, _palette_options)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_PALETTE, _palette_options)
 	refresh_palette_options("db32")
 
 	_palette_preview = TextureRect.new()
@@ -289,48 +302,57 @@ func _build_ui() -> void:
 		_scaled_int(PALETTE_PREVIEW_WIDTH), _scaled_int(PALETTE_PREVIEW_HEIGHT)
 	)
 	_palette_preview.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
-	root.add_child(_palette_preview)
+	controls.add_child(_palette_preview)
 
 	_delete_palette_button = Button.new()
 	_delete_palette_button.text = Strings.CLEANUP_DELETE_PALETTE
 	_delete_palette_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
 	_delete_palette_button.disabled = true
 	_delete_palette_button.pressed.connect(_delete_selected_custom_palette)
-	root.add_child(_delete_palette_button)
+	controls.add_child(_delete_palette_button)
 	_update_palette_controls()
 
 	_k_spin = _make_spin(2.0, 256.0, 1.0, 16.0)
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_MAX_COLORS, _k_spin)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_MAX_COLORS, _k_spin)
 
 	_dither_options = _make_options(DITHER_LABELS)
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_DITHER, _dither_options)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_DITHER, _dither_options)
 
 	_strength_slider = _make_slider(0.0, 1.0, 0.05, 0.0)
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_STRENGTH, _strength_slider)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_STRENGTH, _strength_slider)
 
 	_chroma_slider = _make_slider(0.0, 0.25, 0.01, 0.0)
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_CHROMA, _chroma_slider)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_CHROMA, _chroma_slider)
 
 	_density_slider = _make_slider(0.0, 1.0, 0.05, 1.0)
-	_add_labeled_control(root, Strings.CLEANUP_LABEL_DENSITY, _density_slider)
-
-	_apply_button = Button.new()
-	_apply_button.text = Strings.CLEANUP_APPLY
-	_apply_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
-	_apply_button.pressed.connect(func() -> void: apply_requested.emit(get_params()))
-	root.add_child(_apply_button)
-
-	_cancel_button = Button.new()
-	_cancel_button.text = Strings.CLEANUP_CANCEL
-	_cancel_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
-	_cancel_button.disabled = true
-	_cancel_button.pressed.connect(func() -> void: cancel_requested.emit())
-	root.add_child(_cancel_button)
+	_add_labeled_control(controls, Strings.CLEANUP_LABEL_DENSITY, _density_slider)
 
 	_report_label = Label.new()
 	_report_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_report_label.text = Strings.CLEANUP_NO_REPORT
-	root.add_child(_report_label)
+	controls.add_child(_report_label)
+
+	var action_row := HBoxContainer.new()
+	action_row.name = "CleanupActions"
+	action_row.add_theme_constant_override("separation", _scaled_int(8))
+	root.add_child(action_row)
+
+	_apply_button = Button.new()
+	_apply_button.name = "ApplyCleanupButton"
+	_apply_button.text = Strings.CLEANUP_APPLY
+	_apply_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
+	_apply_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_apply_button.pressed.connect(func() -> void: apply_requested.emit(get_params()))
+	action_row.add_child(_apply_button)
+
+	_cancel_button = Button.new()
+	_cancel_button.name = "CancelCleanupButton"
+	_cancel_button.text = Strings.CLEANUP_CANCEL
+	_cancel_button.custom_minimum_size = Vector2(0, _scaled_int(CONTROL_HEIGHT))
+	_cancel_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cancel_button.disabled = true
+	_cancel_button.pressed.connect(func() -> void: cancel_requested.emit())
+	action_row.add_child(_cancel_button)
 
 	_preview_timer = Timer.new()
 	_preview_timer.one_shot = true

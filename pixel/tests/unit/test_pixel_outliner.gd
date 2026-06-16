@@ -45,6 +45,21 @@ func test_selective_outer_outline_respects_lower_half_mask() -> void:
 	assert_eq(outlined.get_pixel(2, 5).to_html(false), Color.BLACK.to_html(false))
 
 
+func test_outer_outline_does_not_expand_low_alpha_fringe_noise() -> void:
+	var source := Image.create(3, 3, false, Image.FORMAT_RGBA8)
+	source.fill(Color.TRANSPARENT)
+	source.set_pixel(1, 1, Color.RED)
+	source.set_pixel(2, 1, Color(1.0, 0.0, 0.0, 0.1))
+
+	var outlined: Image = Outliner.add_outline(
+		source, {"type": Outliner.TYPE_OUTER, "color": Color.BLACK, "corner": Outliner.CORNER_CROSS}
+	)
+
+	assert_eq(outlined.get_pixel(3, 2).to_html(false), Color.BLACK.to_html(false))
+	assert_eq(outlined.get_pixel(4, 2).a, 0.0)
+	assert_eq(_color_count(outlined), 3)
+
+
 func _make_disk_sprite() -> Image:
 	var image := Image.create(9, 9, false, Image.FORMAT_RGBA8)
 	image.fill(Color.TRANSPARENT)
@@ -70,3 +85,11 @@ func _alpha_iou(left: Image, right: Image) -> float:
 	if union == 0:
 		return 1.0
 	return float(intersection) / float(union)
+
+
+func _color_count(image: Image) -> int:
+	var colors := {}
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			colors[image.get_pixel(x, y).to_html(true)] = true
+	return colors.size()

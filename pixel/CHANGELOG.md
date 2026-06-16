@@ -15,3 +15,4 @@
 - mac 显示二次修复: 针对 `screen_get_scale=1.0` 且 `usable_rect` 为 macOS 点口径时自动检测仍落回 1.0 的复发场景，补 Retina 点尺寸兜底、窗口像素/点尺寸换算、窗口默认值日志和 smoke 覆盖；完整流程见 `MAC_DISPLAY_FIX_COMPLETION_REPORT.md`。
 - M2: 新增色键抠图、魔棒/矩形/套索选区模型、连通域切分、描边工具、spritesheet 导出器、顶栏批量 Matte/Slice/Outline 入口和 M2 自动化验收。
 - M2.1: 新增 File > Import Images、Matte/Slice/Outline 参数预览对话框、W/M/L 像素选区工具、左下角缩放滑条、非纯色底错误引导、无连线批次卡与整批菜单。
+- M2.2: 修复高分屏缩放钳制、清洗台矮窗可达性、批次卡可读尺寸与导入取景、滚轮缩放过冲、导出空选区提示、描边低 alpha 噪点和首启引导标记时机；暂隐藏未接入算法的 W/M/L 工具入口。

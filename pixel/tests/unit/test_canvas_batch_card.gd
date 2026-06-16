@@ -17,6 +17,9 @@ func test_canvas_batch_card_exports_asset_queue_and_can_split_subset() -> void:
 	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 	card.selected_asset_ids.append(ids[0])
 
+	assert_gte(card.get_canvas_bounds().size.x, 600.0)
+	assert_gte(card.get_canvas_bounds().size.y, 216.0)
+
 	var data: Dictionary = canvas.export_canvas_data()
 	var item: Dictionary = data["items"][0]
 	assert_eq(item["type"], "batch_card")

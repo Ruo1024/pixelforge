@@ -27,6 +27,7 @@ const BATCH_MENU_MATTE := 1
 const BATCH_MENU_OUTLINE := 2
 const BATCH_MENU_SPLIT := 3
 const BATCH_MENU_EXPORT := 4
+const SELECTION_TOOLS_VISIBLE := false
 
 var ui_scale := 1.0
 
@@ -89,6 +90,8 @@ func add_file_menu(parent: Control) -> void:
 
 
 func add_tool_buttons(parent: Control) -> void:
+	if not SELECTION_TOOLS_VISIBLE:
+		return
 	for spec in [
 		{"id": "magic_wand", "text": "W", "tooltip": Strings.TOOL_MAGIC_WAND},
 		{"id": "rectangle", "text": "M", "tooltip": Strings.TOOL_RECTANGLE},
@@ -119,6 +122,8 @@ func handle_shortcut(event: InputEventKey) -> bool:
 	if event.keycode == KEY_ESCAPE and not _tool_manager.get_active_tool_id().is_empty():
 		_tool_manager.clear_active_tool()
 		return true
+	if not SELECTION_TOOLS_VISIBLE:
+		return false
 	return _tool_manager.handle_shortcut(event.keycode)
 
 
@@ -174,7 +179,11 @@ func batch_selected_sprites() -> void:
 	if asset_ids.size() < 2:
 		_status_label.text = Strings.STATUS_BATCH_NEEDS_SELECTION
 		return
-	_canvas._add_batch_card(asset_ids, min_position + Vector2(0, -96), Strings.BATCH_DEFAULT_LABEL)
+	var card: Node = _canvas._add_batch_card(
+		asset_ids, min_position + Vector2(0, -96), Strings.BATCH_DEFAULT_LABEL
+	)
+	if card != null:
+		_focus_canvas_on_card(card)
 
 
 func show_onboarding_if_needed() -> void:
@@ -182,7 +191,6 @@ func show_onboarding_if_needed() -> void:
 		return
 	if bool(SettingsService.get_setting("ui", "m2_1_onboarding_seen", false)):
 		return
-	SettingsService.set_setting("ui", "m2_1_onboarding_seen", true)
 	call_deferred("_show_onboarding_dialog")
 
 
@@ -279,7 +287,11 @@ func _import_image_files(files: PackedStringArray, world_position: Vector2) -> v
 		drop_position += Vector2(image.get_width() + 8, 0)
 
 	if imported_asset_ids.size() > 1:
-		_canvas._add_batch_card(imported_asset_ids, world_position, Strings.BATCH_DEFAULT_LABEL)
+		var card: Node = _canvas._add_batch_card(
+			imported_asset_ids, world_position, Strings.BATCH_DEFAULT_LABEL
+		)
+		if card != null:
+			_focus_canvas_on_card(card)
 
 
 func _is_supported_image_path(file_path: String) -> bool:
@@ -336,6 +348,22 @@ func _emit_batch_export(asset_ids: Array) -> void:
 	export_snapshots_requested.emit(snapshots, "batch.png")
 
 
+func _focus_canvas_on_card(card: Node) -> void:
+	var bounds: Rect2 = card.get_canvas_bounds()
+	if (
+		bounds.size.x <= 0.0
+		or bounds.size.y <= 0.0
+		or _canvas.size.x <= 0.0
+		or _canvas.size.y <= 0.0
+	):
+		return
+	var target_zoom := minf(
+		_canvas.size.x * 0.62 / bounds.size.x, _canvas.size.y * 0.62 / bounds.size.y
+	)
+	_canvas.set_camera_zoom(target_zoom, _canvas.size * 0.5)
+	_canvas.pan_by_pixels(_canvas.world_to_screen(bounds.get_center()) - _canvas.size * 0.5)
+
+
 func _single_selected_image() -> Image:
 	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
 	if snapshots.size() != 1:
@@ -370,7 +398,12 @@ func _project_style_preset() -> Dictionary:
 
 
 func _show_onboarding_dialog() -> void:
-	OnboardingScript.show_first_run_tips(self)
+	var dialog: AcceptDialog = OnboardingScript.show_first_run_tips(self)
+	if dialog == null:
+		return
+	var mark_seen := func() -> void: SettingsService.set_setting("ui", "m2_1_onboarding_seen", true)
+	dialog.confirmed.connect(mark_seen, CONNECT_ONE_SHOT)
+	dialog.close_requested.connect(mark_seen, CONNECT_ONE_SHOT)
 
 
 func _scaled_int(value: int) -> int:

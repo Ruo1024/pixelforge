@@ -62,16 +62,30 @@ func test_canvas_emits_zoom_changed_for_direct_and_step_zoom() -> void:
 	canvas.set_camera_zoom(4.0, Vector2(128, 128))
 	await wait_process_frames(1)
 	assert_eq(events.size(), 1)
-	assert_eq(events[0]["index"], 5)
+	assert_eq(events[0]["index"], 8)
 	assert_almost_eq(events[0]["zoom"], 4.0, 0.001)
 	assert_almost_eq(canvas.camera_zoom, 4.0, 0.001)
 
 	canvas.zoom_by_steps(-2, Vector2(128, 128))
 	await wait_process_frames(1)
 	assert_eq(events.size(), 2)
-	assert_eq(events[1]["index"], 3)
-	assert_almost_eq(events[1]["zoom"], 1.0, 0.001)
-	assert_almost_eq(canvas.camera_zoom, 1.0, 0.001)
+	assert_eq(events[1]["index"], 6)
+	assert_almost_eq(events[1]["zoom"], 2.0, 0.001)
+	assert_almost_eq(canvas.camera_zoom, 2.0, 0.001)
+
+
+func test_wheel_zoom_is_rate_limited() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(256, 256)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	canvas._handle_wheel_zoom(1, Vector2(128, 128))
+	var first_zoom_index: int = canvas.zoom_index
+	canvas._handle_wheel_zoom(1, Vector2(128, 128))
+
+	assert_eq(first_zoom_index, 5)
+	assert_eq(canvas.zoom_index, first_zoom_index)
 
 
 func test_add_delete_move_are_undoable() -> void:

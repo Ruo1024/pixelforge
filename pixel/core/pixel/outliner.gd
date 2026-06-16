@@ -18,8 +18,9 @@ const TYPE_INNER := "inner"  ## 内描边
 const CORNER_CROSS := "cross"  ## 十字核（4-连通）
 const CORNER_SQUARE := "square"  ## 方核（8-连通，含角）
 
-## alpha 前景阈值
-const ALPHA_THRESHOLD := 0.004
+## alpha 前景阈值。
+## AI 图常带低 alpha 抗锯齿边缘；描边前把它们当透明，避免噪点外壳被继续膨胀。
+const ALPHA_THRESHOLD := 0.5
 
 
 ## 添加描边。
@@ -31,7 +32,7 @@ const ALPHA_THRESHOLD := 0.004
 ##   "mask"       : PackedByteArray（可选，尺寸=w*h）— selective 模式：仅在 mask==1 处描边
 ## 返回 Image（外描边时尺寸 = 原始 +2，内描边时尺寸不变）。
 static func add_outline(source: Image, params: Dictionary = {}) -> Image:
-	var image := ImageMath.duplicate_rgba8(source)
+	var image := _with_binary_alpha(ImageMath.duplicate_rgba8(source))
 	var outline_type := String(params.get("type", TYPE_OUTER))
 	var base_color: Color = params.get("color", Color.BLACK)
 	var colored := bool(params.get("colored", false))
@@ -49,7 +50,7 @@ static func add_outline(source: Image, params: Dictionary = {}) -> Image:
 ##   "corner"    : String  — "cross" / "square"
 ## 返回 Image（尺寸缩小 -2，等于移除外描边后的原始尺寸）。
 static func remove_outline(source: Image, params: Dictionary = {}) -> Image:
-	var image := ImageMath.duplicate_rgba8(source)
+	var image := _with_binary_alpha(ImageMath.duplicate_rgba8(source))
 	var corner := String(params.get("corner", CORNER_CROSS))
 	var has_reference_color := params.has("color")
 	var reference_color: Color = params.get("color", Color.BLACK)
@@ -250,3 +251,16 @@ static func _get_dirs(corner: String) -> Array[Vector2i]:
 		]
 	# 默认 cross（十字核）
 	return [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+
+
+static func _with_binary_alpha(source: Image) -> Image:
+	var output := ImageMath.duplicate_rgba8(source)
+	for y in range(output.get_height()):
+		for x in range(output.get_width()):
+			var color := output.get_pixel(x, y)
+			if color.a < ALPHA_THRESHOLD:
+				output.set_pixel(x, y, Color.TRANSPARENT)
+			else:
+				color.a = 1.0
+				output.set_pixel(x, y, color)
+	return output

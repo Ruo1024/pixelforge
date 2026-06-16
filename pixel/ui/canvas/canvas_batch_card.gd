@@ -6,12 +6,13 @@ extends Node2D
 
 const IdUtil := preload("res://core/util/id_util.gd")
 
-const CARD_WIDTH := 280
-const HEADER_HEIGHT := 30
-const PADDING := 10
-const THUMB_SIZE := 52
-const THUMB_GAP := 8
-const MIN_CARD_HEIGHT := 112
+const CARD_WIDTH := 600
+const HEADER_HEIGHT := 40
+const PADDING := 16
+const THUMB_SIZE := 128
+const THUMB_TEXTURE_SIZE := 192
+const THUMB_GAP := 12
+const MIN_CARD_HEIGHT := 216
 const BACKGROUND := Color(0.16, 0.17, 0.18, 0.96)
 const BORDER := Color(0.52, 0.62, 0.72, 1.0)
 const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
@@ -113,11 +114,11 @@ func _draw() -> void:
 	if _font != null:
 		draw_string(
 			_font,
-			Vector2(PADDING, 21),
+			Vector2(PADDING, 28),
 			"%s (%d)" % [label, asset_ids.size()],
 			HORIZONTAL_ALIGNMENT_LEFT,
 			CARD_WIDTH - PADDING * 2,
-			13,
+			18,
 			Color(0.9, 0.92, 0.92, 1.0)
 		)
 
@@ -173,8 +174,8 @@ func _rebuild_thumbnails() -> void:
 			continue
 		var thumb := image.duplicate()
 		var longest := maxi(thumb.get_width(), thumb.get_height())
-		if longest > THUMB_SIZE:
-			var ratio := float(THUMB_SIZE) / float(longest)
+		if longest > THUMB_TEXTURE_SIZE:
+			var ratio := float(THUMB_TEXTURE_SIZE) / float(longest)
 			thumb.resize(
 				maxi(1, int(round(thumb.get_width() * ratio))),
 				maxi(1, int(round(thumb.get_height() * ratio))),

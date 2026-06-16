@@ -10,8 +10,9 @@ signal cleanup_grid_changed(scale: float, offset: Vector2)
 signal batch_context_requested(card_id: String, screen_position: Vector2i)
 signal zoom_changed(zoom_index: int, camera_zoom: float)
 
-const ZOOM_LEVELS := [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0]
-const DEFAULT_ZOOM_INDEX := 3
+const ZOOM_LEVELS := [0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
+const DEFAULT_ZOOM_INDEX := 4
+const WHEEL_ZOOM_MIN_INTERVAL_MSEC := 80
 const CULL_INTERVAL_SECONDS := 0.1
 const CULL_PADDING_PIXELS := 128.0
 const GRID_MIN_ZOOM := 4.0
@@ -46,6 +47,7 @@ var _cleanup_preview_source_item_id := ""
 var _is_panning := false
 var _cull_elapsed := 0.0
 var _suppress_change_signal := false
+var _last_wheel_zoom_msec := -1000000
 
 
 func _ready() -> void:
@@ -542,10 +544,10 @@ func move_selected_by(delta: Vector2, record_undo: bool = true) -> void:
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
-		zoom_by_steps(1, event.position)
+		_handle_wheel_zoom(1, event.position)
 		accept_event()
 	elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
-		zoom_by_steps(-1, event.position)
+		_handle_wheel_zoom(-1, event.position)
 		accept_event()
 	elif event.button_index == MOUSE_BUTTON_MIDDLE:
 		_is_panning = event.pressed
@@ -562,6 +564,14 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		else:
 			_finish_left_interaction(event.position)
 		accept_event()
+
+
+func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:
+	var now_msec := Time.get_ticks_msec()
+	if now_msec - _last_wheel_zoom_msec < WHEEL_ZOOM_MIN_INTERVAL_MSEC:
+		return
+	_last_wheel_zoom_msec = now_msec
+	zoom_by_steps(step_delta, screen_anchor)
 
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
