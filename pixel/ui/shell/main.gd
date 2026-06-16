@@ -134,6 +134,15 @@ static func should_use_macos_retina_fallback(
 	)
 
 
+static func fit_interface_scale_to_startup_screen(scale: float, usable_size: Vector2i) -> float:
+	if usable_size.x <= 0 or usable_size.y <= 0:
+		return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+	var fit_width := float(usable_size.x - WINDOW_SCREEN_MARGIN) / float(MIN_WINDOW_WIDTH)
+	var fit_height := float(usable_size.y - WINDOW_SCREEN_MARGIN) / float(MIN_WINDOW_HEIGHT)
+	var fit_scale := maxf(MIN_INTERFACE_SCALE, minf(fit_width, fit_height))
+	return clampf(minf(scale, fit_scale), MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+
+
 func _resolve_interface_scale() -> float:
 	if DisplayServer.get_name() == "headless":
 		return MIN_INTERFACE_SCALE
@@ -171,6 +180,21 @@ func _resolve_interface_scale() -> float:
 	if configured_scale >= MIN_INTERFACE_SCALE:
 		resolved = clampf(configured_scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
 		source = "settings"
+
+	var unclamped_resolved := resolved
+	resolved = fit_interface_scale_to_startup_screen(resolved, usable_rect.size)
+	if resolved < unclamped_resolved:
+		(
+			Log
+			. warn(
+				"Interface scale clamped to fit startup screen.",
+				{
+					"before": unclamped_resolved,
+					"after": resolved,
+					"usable_rect": [usable_rect.size.x, usable_rect.size.y],
+				}
+			)
+		)
 
 	# 决策链日志：mac 缩放问题排查的第一手证据（screen scale / usable rect / 来源）。
 	(
