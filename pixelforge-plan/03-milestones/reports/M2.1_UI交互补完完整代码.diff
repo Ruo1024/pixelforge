@@ -97,7 +97,7 @@ index 3fd104b..103e90c 100644
 
     var elapsed_ms := Time.get_ticks_msec() - started
 diff --git a/pixel/tests/smoke/test_infinite_canvas.gd b/pixel/tests/smoke/test_infinite_canvas.gd
-index e64ef50..5ce5954 100644
+index e64ef50..4329f40 100644
 --- a/pixel/tests/smoke/test_infinite_canvas.gd
 +++ b/pixel/tests/smoke/test_infinite_canvas.gd
 @@ -2,6 +2,8 @@ extends "res://addons/gut/test.gd"
@@ -109,38 +109,40 @@ index e64ef50..5ce5954 100644
 
 
  func before_each() -> void:
-@@ -46,6 +48,30 @@ func test_zoom_uses_nearest_neighbor_color_set() -> void:
+@@ -46,6 +48,32 @@ func test_zoom_uses_nearest_neighbor_color_set() -> void:
     assert_eq(ImageMath.color_set(enlarged).size(), ImageMath.color_set(source).size())
 
 
-+func test_zoom_slider_controls_canvas_zoom_and_syncs_with_wheel_steps() -> void:
++func test_canvas_emits_zoom_changed_for_direct_and_step_zoom() -> void:
 +   var canvas: Control = CanvasScript.new()
 +   canvas.size = Vector2(256, 256)
 +   add_child_autofree(canvas)
 +   await wait_process_frames(2)
 +
-+   var slider: HSlider = canvas.get_node("ZoomControl/ZoomRow/ZoomSlider")
-+   var label: Label = canvas.get_node("ZoomControl/ZoomRow/ZoomLabel")
-+   var zoom_control: Control = canvas.get_node("ZoomControl")
-+   assert_gt(zoom_control.z_index, canvas.item_layer.z_index)
-+   assert_eq(int(slider.value), canvas.zoom_index)
-+   assert_eq(label.text, "100%")
++   var events := []
++   canvas.zoom_changed.connect(
++       func(index: int, zoom: float) -> void: events.append({"index": index, "zoom": zoom})
++   )
 +
-+   slider.value = 5
++   canvas.set_camera_zoom(4.0, Vector2(128, 128))
 +   await wait_process_frames(1)
++   assert_eq(events.size(), 1)
++   assert_eq(events[0]["index"], 5)
++   assert_almost_eq(events[0]["zoom"], 4.0, 0.001)
 +   assert_almost_eq(canvas.camera_zoom, 4.0, 0.001)
-+   assert_eq(label.text, "400%")
 +
 +   canvas.zoom_by_steps(-2, Vector2(128, 128))
 +   await wait_process_frames(1)
-+   assert_eq(int(slider.value), canvas.zoom_index)
-+   assert_eq(label.text, "100%")
++   assert_eq(events.size(), 2)
++   assert_eq(events[1]["index"], 3)
++   assert_almost_eq(events[1]["zoom"], 1.0, 0.001)
++   assert_almost_eq(canvas.camera_zoom, 1.0, 0.001)
 +
 +
  func test_add_delete_move_are_undoable() -> void:
     var undo := get_tree().root.get_node("UndoService")
     var canvas: Control = CanvasScript.new()
-@@ -77,6 +103,27 @@ func test_add_delete_move_are_undoable() -> void:
+@@ -77,6 +105,27 @@ func test_add_delete_move_are_undoable() -> void:
     assert_eq(canvas.get_item_count(), 1)
 
 
@@ -168,7 +170,7 @@ index e64ef50..5ce5954 100644
  func test_culled_items_disable_process_callbacks() -> void:
     var canvas: Control = CanvasScript.new()
     canvas.size = Vector2(256, 256)
-@@ -147,3 +194,19 @@ func _make_checker_image(size: int) -> Image:
+@@ -147,3 +196,19 @@ func _make_checker_image(size: int) -> Image:
         for x in range(size):
             image.set_pixel(x, y, Color.WHITE if (x + y) % 2 == 0 else Color.BLACK)
     return image
@@ -189,10 +191,44 @@ index e64ef50..5ce5954 100644
 +   event.button_mask = MOUSE_BUTTON_MASK_LEFT
 +   return event
 diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
-index aa0b6de..1eb737c 100644
+index aa0b6de..bdad2dd 100644
 --- a/pixel/tests/smoke/test_main_window_ui.gd
 +++ b/pixel/tests/smoke/test_main_window_ui.gd
-@@ -36,3 +36,8 @@ func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
+@@ -22,6 +22,33 @@ func test_main_window_uses_readable_minimum_sizes() -> void:
+            assert_gte(child.custom_minimum_size.y, 34.0)
+
+
++func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
++   var main: Control = MainScript.new()
++   main.size = Vector2(1280, 800)
++   add_child_autofree(main)
++   await wait_process_frames(2)
++
++   var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
++   var zoom_control: Control = main.get_node("ZoomControl")
++   var slider: HSlider = zoom_control.get_node("ZoomRow/ZoomSlider")
++   var label: Label = zoom_control.get_node("ZoomRow/ZoomLabel")
++
++   assert_eq(zoom_control.get_parent(), main)
++   assert_gt(zoom_control.z_index, canvas.item_layer.z_index)
++   assert_eq(int(slider.value), canvas.zoom_index)
++   assert_eq(label.text, "100%")
++
++   slider.value = 5
++   await wait_process_frames(1)
++   assert_almost_eq(canvas.camera_zoom, 4.0, 0.001)
++   assert_eq(label.text, "400%")
++
++   canvas.zoom_by_steps(-2, canvas.size * 0.5)
++   await wait_process_frames(1)
++   assert_eq(int(slider.value), canvas.zoom_index)
++   assert_eq(label.text, "100%")
++
++
+ func test_auto_interface_scale_detects_high_density_displays() -> void:
+    assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(2560, 1440)), 1.0)
+    assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(3840, 2160)), 1.5)
+@@ -36,3 +63,8 @@ func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
     assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 96), 1.0)
     assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 110), 1.0)
     assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 220), 2.0)
@@ -744,33 +780,27 @@ index 0000000..11df898
 @@ -0,0 +1 @@
 +uid://b2fup4dl27mis
 diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
-index 9a48014..5128183 100644
+index 9a48014..43be303 100644
 --- a/pixel/ui/canvas/infinite_canvas.gd
 +++ b/pixel/ui/canvas/infinite_canvas.gd
-@@ -7,18 +7,22 @@ extends Control
+@@ -7,6 +7,8 @@ extends Control
  signal canvas_changed
  signal selection_changed(selected_ids: Array)
  signal cleanup_grid_changed(scale: float, offset: Vector2)
 +signal batch_context_requested(card_id: String, screen_position: Vector2i)
++signal zoom_changed(zoom_index: int, camera_zoom: float)
 
  const ZOOM_LEVELS := [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0]
  const DEFAULT_ZOOM_INDEX := 3
- const CULL_INTERVAL_SECONDS := 0.1
- const CULL_PADDING_PIXELS := 128.0
- const GRID_MIN_ZOOM := 4.0
-+const ZOOM_CONTROL_MARGIN := 12
- const SELECTION_COLOR := Color(0.1, 0.85, 0.65, 1.0)
- const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
+@@ -18,6 +20,7 @@ const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
  const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
  const CLEANUP_PREVIEW_Z_INDEX := 4095
  const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 +const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
  const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
-+const CanvasZoomControlScript := preload("res://ui/canvas/canvas_zoom_control.gd")
  const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
  const IdUtil := preload("res://core/util/id_util.gd")
- const ImageMath := preload("res://core/util/image_math.gd")
-@@ -27,19 +31,21 @@ const Log := preload("res://core/util/log_util.gd")
+@@ -27,8 +30,10 @@ const Log := preload("res://core/util/log_util.gd")
  var camera_center := Vector2.ZERO
  var zoom_index := DEFAULT_ZOOM_INDEX
  var camera_zoom := float(ZOOM_LEVELS[DEFAULT_ZOOM_INDEX])
@@ -781,11 +811,7 @@ index 9a48014..5128183 100644
 
  var _items_by_id := {}
  var _selection: Variant = CanvasSelectionScript.new()
- var _cleanup_grid_overlay: Control = null
-+var _zoom_control: Control = null
- var _cleanup_grid_active := false
- var _cleanup_grid_scale := 4.0
- var _cleanup_grid_offset := Vector2.ZERO
+@@ -39,7 +44,6 @@ var _cleanup_grid_offset := Vector2.ZERO
  var _cleanup_preview_sprite: Sprite2D = null
  var _cleanup_preview_source_item_id := ""
  var _is_panning := false
@@ -793,15 +819,7 @@ index 9a48014..5128183 100644
  var _cull_elapsed := 0.0
  var _suppress_change_signal := false
 
-@@ -62,6 +68,7 @@ func _ready() -> void:
-    _cleanup_grid_overlay.grid_changed.connect(_on_cleanup_grid_changed)
-    add_child(_cleanup_grid_overlay)
-
-+   _create_zoom_control()
-    _update_layer_transform()
-    set_process(true)
-
-@@ -72,6 +79,8 @@ func _process(delta: float) -> void:
+@@ -72,6 +76,8 @@ func _process(delta: float) -> void:
         _cull_elapsed = 0.0
         _update_item_visibility()
     _update_cleanup_preview_alt_state()
@@ -810,7 +828,7 @@ index 9a48014..5128183 100644
 
 
  func _notification(what: int) -> void:
-@@ -83,7 +92,10 @@ func _notification(what: int) -> void:
+@@ -83,7 +89,10 @@ func _notification(what: int) -> void:
 
 
  func _gui_input(event: InputEvent) -> void:
@@ -822,7 +840,7 @@ index 9a48014..5128183 100644
         _handle_mouse_button(event)
     elif event is InputEventMouseMotion:
         _handle_mouse_motion(event)
-@@ -116,7 +128,8 @@ func _draw() -> void:
+@@ -116,7 +125,8 @@ func _draw() -> void:
         if not _items_by_id.has(item_id):
             continue
         var item: Node = _items_by_id[item_id]
@@ -832,7 +850,7 @@ index 9a48014..5128183 100644
         draw_rect(screen_rect.grow(2.0), SELECTION_COLOR, false, 2.0)
 
     if _selection.is_box_selecting:
-@@ -124,18 +137,8 @@ func _draw() -> void:
+@@ -124,18 +134,8 @@ func _draw() -> void:
         draw_rect(box, BOX_COLOR, true)
         draw_rect(box, Color(1.0, 0.85, 0.25, 1.0), false, 1.0)
 
@@ -853,7 +871,7 @@ index 9a48014..5128183 100644
 
 
  func add_sprite_item(
-@@ -177,6 +180,42 @@ func add_sprite_item(
+@@ -177,6 +177,42 @@ func add_sprite_item(
     return _items_by_id.get(String(data["id"]), null)
 
 
@@ -896,7 +914,7 @@ index 9a48014..5128183 100644
  func delete_selected(record_undo: bool = true) -> void:
     if _selection.is_empty():
         return
-@@ -186,15 +225,10 @@ func delete_selected(record_undo: bool = true) -> void:
+@@ -186,15 +222,10 @@ func delete_selected(record_undo: bool = true) -> void:
         if not _items_by_id.has(item_id):
             continue
         var item: Node = _items_by_id[item_id]
@@ -916,7 +934,7 @@ index 9a48014..5128183 100644
 
     if snapshots.is_empty():
         return
-@@ -207,13 +241,18 @@ func delete_selected(record_undo: bool = true) -> void:
+@@ -207,13 +238,18 @@ func delete_selected(record_undo: bool = true) -> void:
 
     var undo_delete := func() -> void:
         for snapshot in snapshots:
@@ -937,7 +955,7 @@ index 9a48014..5128183 100644
 
     if record_undo:
         UndoService.perform_action("Delete sprite", do_delete, undo_delete, memory_cost)
-@@ -243,14 +282,18 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
+@@ -243,18 +279,23 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
     _set_zoom_to_value(float(camera.get("zoom", 1.0)))
 
     for item_data in canvas_data.get("items", []):
@@ -964,7 +982,12 @@ index 9a48014..5128183 100644
 
     _suppress_change_signal = false
     _update_layer_transform()
-@@ -266,6 +309,8 @@ func export_canvas_data() -> Dictionary:
+    _update_item_visibility()
++   _emit_zoom_changed()
+    queue_redraw()
+
+
+@@ -266,6 +307,8 @@ func export_canvas_data() -> Dictionary:
     for node in nodes:
         if node.get_script() == CanvasItemSpriteScript:
             items.append(node.to_canvas_data())
@@ -973,7 +996,7 @@ index 9a48014..5128183 100644
 
     return {
         "camera":
-@@ -296,8 +341,13 @@ func pan_by_pixels(pixel_delta: Vector2) -> void:
+@@ -296,11 +339,16 @@ func pan_by_pixels(pixel_delta: Vector2) -> void:
 
 
  func set_camera_zoom(value: float, screen_anchor: Vector2 = size * 0.5) -> void:
@@ -982,12 +1005,28 @@ index 9a48014..5128183 100644
 +   var old_zoom := camera_zoom
 +   _set_zoom_to_value(value)
 +   if is_equal_approx(old_zoom, camera_zoom):
-+       if _zoom_control != null:
-+           _zoom_control.set_zoom_state(zoom_index, camera_zoom)
++       _emit_zoom_changed()
 +       return
     camera_center = anchor_world - (screen_anchor - size * 0.5) / camera_zoom
     _update_layer_transform()
     _emit_canvas_changed()
++   _emit_zoom_changed()
+
+
+ func zoom_by_steps(step_delta: int, screen_anchor: Vector2) -> void:
+@@ -309,10 +357,12 @@ func zoom_by_steps(step_delta: int, screen_anchor: Vector2) -> void:
+    zoom_index = clampi(zoom_index + step_delta, 0, ZOOM_LEVELS.size() - 1)
+    camera_zoom = float(ZOOM_LEVELS[zoom_index])
+    if is_equal_approx(old_zoom, camera_zoom):
++       _emit_zoom_changed()
+        return
+    camera_center = anchor_world - (screen_anchor - size * 0.5) / camera_zoom
+    _update_layer_transform()
+    _emit_canvas_changed()
++   _emit_zoom_changed()
+
+
+ func get_item_count() -> int:
 @@ -335,18 +385,83 @@ func get_selected_sprite_snapshots() -> Array:
         var item: Node = _items_by_id[item_id]
         if item.get_script() != CanvasItemSpriteScript:
@@ -1162,34 +1201,7 @@ index 9a48014..5128183 100644
             and item.visible
             and item.contains_world_point(world_position)
         ):
-@@ -635,10 +775,26 @@ func _set_zoom_to_value(value: float) -> void:
-    camera_zoom = float(ZOOM_LEVELS[zoom_index])
-
-
-+func _create_zoom_control() -> void:
-+   _zoom_control = CanvasZoomControlScript.new()
-+   _zoom_control.name = "ZoomControl"
-+   _zoom_control.ui_scale = ui_scale
-+   _zoom_control.configure_levels(ZOOM_LEVELS.size())
-+   _zoom_control.set_bottom_left_margin(ZOOM_CONTROL_MARGIN)
-+   _zoom_control.zoom_index_requested.connect(
-+       func(target_index: int) -> void:
-+           set_camera_zoom(float(ZOOM_LEVELS[target_index]), size * 0.5)
-+   )
-+   add_child(_zoom_control)
-+   _zoom_control.set_zoom_state(zoom_index, camera_zoom)
-+
-+
- func _update_layer_transform() -> void:
-    item_layer.position = size * 0.5 - camera_center * camera_zoom
-    item_layer.scale = Vector2.ONE * camera_zoom
-    _sync_cleanup_grid_overlay()
-+   if _zoom_control != null:
-+       _zoom_control.set_zoom_state(zoom_index, camera_zoom)
-    queue_redraw()
-
-
-@@ -654,11 +810,6 @@ func _update_item_visibility() -> void:
+@@ -654,11 +794,6 @@ func _update_item_visibility() -> void:
         item.set_physics_process(is_visible)
 
 
@@ -1201,7 +1213,18 @@ index 9a48014..5128183 100644
  func _draw_pixel_grid() -> void:
     var top_left := screen_to_world(Vector2.ZERO)
     var bottom_right := screen_to_world(size)
-@@ -721,3 +872,29 @@ func _update_cleanup_preview_alt_state() -> void:
+@@ -683,6 +818,10 @@ func _emit_canvas_changed() -> void:
+    canvas_changed.emit()
+
+
++func _emit_zoom_changed() -> void:
++   zoom_changed.emit(zoom_index, camera_zoom)
++
++
+ func _on_selection_changed(selected_ids: Array) -> void:
+    if not selected_ids.has(_cleanup_preview_source_item_id):
+        clear_cleanup_preview()
+@@ -721,3 +860,29 @@ func _update_cleanup_preview_alt_state() -> void:
     if _cleanup_preview_sprite == null or not is_instance_valid(_cleanup_preview_sprite):
         return
     _cleanup_preview_sprite.visible = not Input.is_key_pressed(KEY_ALT)
@@ -1810,6 +1833,59 @@ index 0000000..1c2febd
 +++ b/pixel/ui/dialogs/slice_dialog.gd.uid
 @@ -0,0 +1 @@
 +uid://chql4ws41sbjo
+diff --git a/pixel/ui/shell/canvas_zoom_overlay_controller.gd b/pixel/ui/shell/canvas_zoom_overlay_controller.gd
+new file mode 100644
+index 0000000..c328478
+--- /dev/null
++++ b/pixel/ui/shell/canvas_zoom_overlay_controller.gd
+@@ -0,0 +1,40 @@
++class_name PFCanvasZoomOverlayController
++extends RefCounted
++
++## 主窗口缩放 overlay 接线器。
++## 职责：把 PFCanvasZoomControl 挂到主窗口，并同步滑条输入与画布缩放状态。
++
++const CanvasZoomControlScript := preload("res://ui/canvas/canvas_zoom_control.gd")
++const InfiniteCanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
++
++var zoom_control: Control = null
++
++var _canvas: Control = null
++
++
++func setup(parent: Control, canvas: Control, ui_scale: float, bottom_left_margin: int) -> void:
++   _canvas = canvas
++
++   zoom_control = CanvasZoomControlScript.new()
++   zoom_control.name = "ZoomControl"
++   zoom_control.ui_scale = ui_scale
++   zoom_control.configure_levels(InfiniteCanvasScript.ZOOM_LEVELS.size())
++   zoom_control.set_bottom_left_margin(bottom_left_margin)
++   zoom_control.zoom_index_requested.connect(_on_zoom_index_requested)
++   parent.add_child(zoom_control)
++
++   _canvas.zoom_changed.connect(_sync_from_canvas)
++   _sync_from_canvas(_canvas.zoom_index, _canvas.camera_zoom)
++
++
++func _on_zoom_index_requested(index: int) -> void:
++   if _canvas == null:
++       return
++   var target_index := clampi(index, 0, InfiniteCanvasScript.ZOOM_LEVELS.size() - 1)
++   _canvas.set_camera_zoom(float(InfiniteCanvasScript.ZOOM_LEVELS[target_index]))
++
++
++func _sync_from_canvas(index: int, zoom: float) -> void:
++   if zoom_control == null:
++       return
++   zoom_control.set_zoom_state(index, zoom)
+diff --git a/pixel/ui/shell/canvas_zoom_overlay_controller.gd.uid b/pixel/ui/shell/canvas_zoom_overlay_controller.gd.uid
+new file mode 100644
+index 0000000..77a20db
+--- /dev/null
++++ b/pixel/ui/shell/canvas_zoom_overlay_controller.gd.uid
+@@ -0,0 +1 @@
++uid://cxxdvd1t6jlne
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 new file mode 100644
 index 0000000..dee8aae
@@ -2666,7 +2742,7 @@ index 57f2bdc..a6a1e75 100644
     var raw_position: Array = data.get("position", [0, 0])
     return Vector2(float(raw_position[0]), float(raw_position[1]))
 diff --git a/pixel/ui/shell/main.gd b/pixel/ui/shell/main.gd
-index 6b0271a..c2249d5 100644
+index 6b0271a..5bf5de5 100644
 --- a/pixel/ui/shell/main.gd
 +++ b/pixel/ui/shell/main.gd
 @@ -7,7 +7,6 @@ extends Control
@@ -2677,23 +2753,33 @@ index 6b0271a..c2249d5 100644
  const TaskScript := preload("res://services/pf_task.gd")
  const AppInfo := preload("res://core/util/app_info.gd")
  const IdUtil := preload("res://core/util/id_util.gd")
-@@ -15,6 +14,7 @@ const Log := preload("res://core/util/log_util.gd")
+@@ -15,6 +14,8 @@ const Log := preload("res://core/util/log_util.gd")
  const Pipeline := preload("res://core/pixel/pipeline.gd")
  const Exporter := preload("res://services/exporter.gd")
  const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
 +const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
++const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
 
  const DEFAULT_WINDOW_WIDTH := 1440
  const DEFAULT_WINDOW_HEIGHT := 900
-@@ -59,6 +59,7 @@ var _cleanup_task_id := ""
+@@ -39,6 +40,7 @@ const TOP_BAR_HEIGHT := 48
+ const BOTTOM_BAR_HEIGHT := 32
+ const TOOLBAR_BUTTON_WIDTH := 96
+ const TOOLBAR_BUTTON_HEIGHT := 34
++const ZOOM_CONTROL_MARGIN := 12
+ const CLEANUP_RESULT_GAP := 8
+ const PREVIEW_OPACITY := 0.56
+
+@@ -59,6 +61,8 @@ var _cleanup_task_id := ""
  var _preview_task_id := ""
  var _preview_token := 0
  var _m2_actions: Variant = null
 +var _m2_1_ui: Variant = null
++var _zoom_overlay: RefCounted = null
 
 
  func _ready() -> void:
-@@ -69,6 +70,7 @@ func _ready() -> void:
+@@ -69,6 +73,7 @@ func _ready() -> void:
     _build_ui()
     _connect_services()
     _update_window_title()
@@ -2701,7 +2787,7 @@ index 6b0271a..c2249d5 100644
 
 
  func _notification(what: int) -> void:
-@@ -92,6 +94,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
+@@ -92,6 +97,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
     elif event.is_command_or_control_pressed() and event.keycode == KEY_N:
         _create_new_project()
         get_viewport().set_input_as_handled()
@@ -2710,7 +2796,7 @@ index 6b0271a..c2249d5 100644
 
 
  static func compute_auto_interface_scale(
-@@ -130,6 +134,15 @@ static func should_use_macos_retina_fallback(
+@@ -130,6 +137,15 @@ static func should_use_macos_retina_fallback(
     )
 
 
@@ -2726,7 +2812,7 @@ index 6b0271a..c2249d5 100644
  func _resolve_interface_scale() -> float:
     if DisplayServer.get_name() == "headless":
         return MIN_INTERFACE_SCALE
-@@ -168,6 +181,21 @@ func _resolve_interface_scale() -> float:
+@@ -168,6 +184,21 @@ func _resolve_interface_scale() -> float:
         resolved = clampf(configured_scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
         source = "settings"
 
@@ -2748,7 +2834,7 @@ index 6b0271a..c2249d5 100644
     # 决策链日志：mac 缩放问题排查的第一手证据（screen scale / usable rect / 来源）。
     (
         Log
-@@ -313,9 +341,6 @@ func _build_ui() -> void:
+@@ -313,9 +344,6 @@ func _build_ui() -> void:
     _add_toolbar_button(
         top_bar, Strings.ACTION_SAVE_AS, func() -> void: _save_dialog.popup_centered_ratio(0.7)
     )
@@ -2758,7 +2844,7 @@ index 6b0271a..c2249d5 100644
     _add_toolbar_button(top_bar, Strings.ACTION_EXPORT_PNG, _export_selected_png)
 
     var content := HSplitContainer.new()
-@@ -328,6 +353,7 @@ func _build_ui() -> void:
+@@ -328,6 +356,7 @@ func _build_ui() -> void:
     _canvas.name = "InfiniteCanvas"
     _canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     _canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2766,7 +2852,7 @@ index 6b0271a..c2249d5 100644
     content.add_child(_canvas)
 
     _cleanup_inspector = CleanupInspectorScript.new()
-@@ -351,7 +377,27 @@ func _build_ui() -> void:
+@@ -351,7 +380,29 @@ func _build_ui() -> void:
 
     _create_file_dialogs()
     _m2_actions = M2ActionController.new()
@@ -2792,10 +2878,12 @@ index 6b0271a..c2249d5 100644
 +   _add_toolbar_button(top_bar, Strings.ACTION_MATTE, _m2_1_ui.open_matte_dialog)
 +   _add_toolbar_button(top_bar, Strings.ACTION_SLICE, _m2_1_ui.open_slice_dialog)
 +   _add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _m2_1_ui.open_outline_dialog)
++   _zoom_overlay = ZoomOverlayControllerScript.new()
++   _zoom_overlay.setup(self, _canvas, _ui_scale, ZOOM_CONTROL_MARGIN)
 
 
  func _add_toolbar_button(parent: Control, text: String, callback: Callable) -> void:
-@@ -615,18 +661,6 @@ func _on_cleanup_canceled() -> void:
+@@ -615,18 +666,6 @@ func _on_cleanup_canceled() -> void:
     _status_label.text = Strings.STATUS_CLEANUP_CANCELED
 
 
@@ -2814,7 +2902,7 @@ index 6b0271a..c2249d5 100644
  func _cancel_cleanup_task() -> void:
     if not _cleanup_task_id.is_empty():
         TaskQueue.cancel(_cleanup_task_id)
-@@ -792,32 +826,15 @@ func _export_png_path(path: String) -> void:
+@@ -792,32 +831,15 @@ func _export_png_path(path: String) -> void:
 
 
  func _on_files_dropped(files: PackedStringArray) -> void:
@@ -3595,10 +3683,10 @@ index c034bc3..4a08cf8 100644
 
 diff --git "a/pixelforge-plan/03-milestones/reports/M2.1_UI\344\272\244\344\272\222\350\241\245\345\256\214\345\256\214\346\210\220\346\212\245\345\221\212.md" "b/pixelforge-plan/03-milestones/reports/M2.1_UI\344\272\244\344\272\222\350\241\245\345\256\214\345\256\214\346\210\220\346\212\245\345\221\212.md"
 new file mode 100644
-index 0000000..14533d7
+index 0000000..01913ac
 --- /dev/null
 +++ "b/pixelforge-plan/03-milestones/reports/M2.1_UI\344\272\244\344\272\222\350\241\245\345\256\214\345\256\214\346\210\220\346\212\245\345\221\212.md"
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,345 @@
 +# M2.1 UI 交互补完完成报告
 +
 +日期：2026-06-16
@@ -3611,7 +3699,7 @@ index 0000000..14533d7
 +
 +追加修改：画布左下角新增离散 zoom level 缩放滑条，降低鼠标滚轮缩放过头的概率；滚轮缩放、程序缩放和滑条显示保持双向同步。
 +
-+再次修复：截图复核发现缩放滑条可能被画布 sprite 绘制层盖住；`PFCanvasZoomControl` 已设置为高层级 overlay，并补充测试断言其 z-index 高于画布内容层。
++再次修复：截图复核发现缩放滑条仍未出现在内屏布局中；控件已从 `PFInfiniteCanvas` 子节点提升为 `PFMain/ZoomControl` 主窗口级 overlay，由 `PFCanvasZoomOverlayController` 监听 `PFInfiniteCanvas.zoom_changed` 做双向同步。这样滑条不再依赖画布内容区域是否被分割容器裁剪，同时保留高 z-index。
 +
 +内屏启动修复：macOS 内屏直接启动时，`usable_rect` 可能是点坐标口径（如 `1334×834`），旧逻辑仍套用 `ui_scale=2.0`，导致 `min_size=[2560,1600]` 超出启动屏幕并出现黑窗。现新增启动屏幕适配夹取，确保有效 UI scale 不会超过当前屏幕能容纳的最小窗口尺寸；物理像素口径大屏仍保留 2x。
 +
@@ -3628,7 +3716,7 @@ index 0000000..14533d7
 +结果：
 +
 +- `gdformat` / `gdlint`：通过。
-+- GUT：98 tests / 98 passing / 813 asserts。
++- GUT：99 tests / 99 passing / 822 asserts。
 +- `verify_m2.sh`：`verify_m2: ok`。
 +- Godot export templates 本机未安装，脚本按 M0 本地门禁策略降级为 headless startup 检查并通过。
 +- GUT 结束阶段仍有 1 个 orphan/resource warning，但进程退出码为 0，测试套件判定通过。
@@ -3641,7 +3729,7 @@ index 0000000..14533d7
 +| Matte/Slice/Outline 参数面板 | `pixel/ui/dialogs/*.gd`、`pixel/ui/shell/m2_action_controller.gd` | 三个预览参数对话框接入 M2 算法；参数进入 TaskQueue 后台任务。 |
 +| W/M/L 像素选区工具 | `pixel/ui/tools/*.gd`、`pixel/ui/canvas/infinite_canvas.gd` | 魔棒、矩形、套索工具支持快捷键、Shift 并集、Alt 差集、撤销和画布 overlay。 |
 +| 导入后拖动素材 | `pixel/ui/shell/m2_1_ui_controller.gd`、`pixel/ui/tools/tool_manager.gd`、`pixel/tests/smoke/test_infinite_canvas.gd` | 工具启动时保持未激活，避免吞掉原有 sprite 拖动；新增输入回归测试。 |
-+| 左下角缩放滑条 | `pixel/ui/canvas/canvas_zoom_control.gd`、`pixel/ui/canvas/infinite_canvas.gd`、`pixel/ui/shell/main.gd`、`pixel/ui/shell/strings.gd`、`pixel/tests/smoke/test_infinite_canvas.gd` | 画布内置 HSlider 控制离散 zoom level，百分比标签同步显示；滚轮缩放会反向同步滑条；控件 z-index 高于画布内容层。 |
++| 左下角缩放滑条 | `pixel/ui/canvas/canvas_zoom_control.gd`、`pixel/ui/canvas/infinite_canvas.gd`、`pixel/ui/shell/canvas_zoom_overlay_controller.gd`、`pixel/ui/shell/main.gd`、`pixel/ui/shell/strings.gd`、`pixel/tests/smoke/test_infinite_canvas.gd`、`pixel/tests/smoke/test_main_window_ui.gd` | 主窗口级 HSlider 控制离散 zoom level，百分比标签同步显示；滚轮缩放、程序缩放和滑条显示保持双向同步；控件挂在 `PFMain/ZoomControl`，不再受画布裁剪影响。 |
 +| macOS 内屏直接启动 | `pixel/ui/shell/main.gd`、`pixel/tests/smoke/test_main_window_ui.gd` | `ui_scale=2.0` 会在点口径内屏上被夹取到可容纳最小窗口的比例，避免窗口 min size 超屏导致黑窗；5120×2982 物理像素口径仍保留 2x。 |
 +| 错误帮助 | `pixel/ui/dialogs/error_helper.gd`、`pixel/ui/shell/m2_action_controller.gd` | `non_flat_background` 抠图告警会弹出可操作建议。 |
 +| 批次卡 MVP | `pixel/ui/canvas/canvas_batch_card.gd`、`pixel/ui/canvas/infinite_canvas.gd`、`pixel/ui/shell/m2_action_controller.gd` | 批次卡保存 asset 队列，可右键整批 Cleanup/Matte/Outline/Split/Export。 |
@@ -3665,6 +3753,7 @@ index 0000000..14533d7
 +pixel/ui/dialogs/onboarding.gd
 +pixel/ui/canvas/canvas_batch_card.gd
 +pixel/ui/canvas/canvas_zoom_control.gd
++pixel/ui/shell/canvas_zoom_overlay_controller.gd
 +```
 +
 +新增测试/文档文件：
@@ -3692,6 +3781,7 @@ index 0000000..14533d7
 +pixel/ui/dialogs/onboarding.gd.uid
 +pixel/ui/canvas/canvas_batch_card.gd.uid
 +pixel/ui/canvas/canvas_zoom_control.gd.uid
++pixel/ui/shell/canvas_zoom_overlay_controller.gd.uid
 +pixel/tests/unit/test_m2_1_tools.gd.uid
 +pixel/tests/unit/test_m2_1_dialogs.gd.uid
 +pixel/tests/unit/test_canvas_batch_card.gd.uid
@@ -3706,6 +3796,7 @@ index 0000000..14533d7
 +pixel/ui/canvas/infinite_canvas.gd
 +pixel/tests/integration/test_cleanup_batch_performance.gd
 +pixel/tests/smoke/test_infinite_canvas.gd
++pixel/tests/smoke/test_main_window_ui.gd
 +pixel/CHANGELOG.md
 +pixel/docs/manual-test-m2.md
 +pixelforge-plan/02-contracts/PROJECT-FORMAT.md
@@ -3720,22 +3811,23 @@ index 0000000..14533d7
 +pixel/docs/manual-test-m2.md                       |  11 +
 +pixel/docs/ui-tools.md                             |  32 ++
 +pixel/tests/integration/test_cleanup_batch_performance.gd  |  11 +-
-+pixel/tests/smoke/test_infinite_canvas.gd          |  63 ++++
-+pixel/tests/smoke/test_main_window_ui.gd           |   5 +
++pixel/tests/smoke/test_infinite_canvas.gd          |  65 ++++
++pixel/tests/smoke/test_main_window_ui.gd           |  32 ++
 +pixel/tests/unit/test_canvas_batch_card.gd         |  35 ++
 +pixel/tests/unit/test_m2_1_dialogs.gd              |  56 +++
 +pixel/tests/unit/test_m2_1_tools.gd                |  67 ++++
 +pixel/ui/canvas/canvas_batch_card.gd               | 191 +++++++++++
 +pixel/ui/canvas/canvas_zoom_control.gd             | 128 +++++++
-+pixel/ui/canvas/infinite_canvas.gd                 | 285 ++++++++++++---
++pixel/ui/canvas/infinite_canvas.gd                 | 273 ++++++++++++---
 +pixel/ui/dialogs/error_helper.gd                   |  17 +
 +pixel/ui/dialogs/matte_dialog.gd                   | 152 ++++++++
 +pixel/ui/dialogs/onboarding.gd                     |  17 +
 +pixel/ui/dialogs/outline_dialog.gd                 | 143 ++++++++
 +pixel/ui/dialogs/slice_dialog.gd                   | 185 ++++++++++
++pixel/ui/shell/canvas_zoom_overlay_controller.gd   |  40 +++
 +pixel/ui/shell/m2_1_ui_controller.gd               | 381 +++++++++++++++++++++
 +pixel/ui/shell/m2_action_controller.gd             | 330 +++++++++++++++++-
-+pixel/ui/shell/main.gd                             |  99 +++---
++pixel/ui/shell/main.gd                             | 104 +++---
 +pixel/ui/shell/strings.gd                          |  58 ++++
 +pixel/ui/tools/base_tool.gd                        | 166 +++++++++
 +pixel/ui/tools/lasso_tool.gd                       |  78 +++++
@@ -3743,12 +3835,12 @@ index 0000000..14533d7
 +pixel/ui/tools/rectangle_tool.gd                   |  88 +++++
 +pixel/ui/tools/tool_manager.gd                     | 182 ++++++++++
 +pixelforge-plan/02-contracts/PROJECT-FORMAT.md     |  13 +-
-+pixelforge-plan/03-milestones/reports/M2.1_UI交互补完完成报告.md | 317 +++++++++++++++++
++pixelforge-plan/03-milestones/reports/M2.1_UI交互补完完成报告.md | 345 +++++++++++++++++++
 +
-+44 files changed, 3049 insertions(+), 115 deletions(-)
++46 files changed, 3140 insertions(+), 115 deletions(-)
 +```
 +
-+注：上方统计块为人工压缩展示，Godot `.gd.uid` 单行新增已计入总数；完整路径与完整代码差异见文件清单和 `M2.1_UI交互补完完整代码.diff`。
++注：上方统计块为人工压缩展示，Godot `.gd.uid` 单行新增已计入总数；完整路径与完整代码差异见文件清单和 `M2.1_UI交互补完完整代码.diff`。本统计基于 staged index，不包含接手前已存在且未 stage 的其他计划/研究文档改动。
 +
 +新增文件行数：
 +
@@ -3763,12 +3855,13 @@ index 0000000..14533d7
 +17  pixel/ui/dialogs/onboarding.gd
 +143 pixel/ui/dialogs/outline_dialog.gd
 +185 pixel/ui/dialogs/slice_dialog.gd
-+370 pixel/ui/shell/m2_1_ui_controller.gd
++381 pixel/ui/shell/m2_1_ui_controller.gd
++40  pixel/ui/shell/canvas_zoom_overlay_controller.gd
 +166 pixel/ui/tools/base_tool.gd
 +78  pixel/ui/tools/lasso_tool.gd
 +37  pixel/ui/tools/magic_wand_tool.gd
 +88  pixel/ui/tools/rectangle_tool.gd
-+173 pixel/ui/tools/tool_manager.gd
++182 pixel/ui/tools/tool_manager.gd
 +```
 +
 +## 6. 关键 Diff 摘要
@@ -3795,6 +3888,25 @@ index 0000000..14533d7
 ++_add_toolbar_button(top_bar, Strings.ACTION_MATTE, _m2_1_ui.open_matte_dialog)
 ++_add_toolbar_button(top_bar, Strings.ACTION_SLICE, _m2_1_ui.open_slice_dialog)
 ++_add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _m2_1_ui.open_outline_dialog)
++```
++
++缩放滑条最终改为主窗口级 overlay，避免被画布/分割容器裁剪：
++
++```diff
+++signal zoom_changed(zoom_index: int, camera_zoom: float)
+++
+++const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
+++var _zoom_overlay: RefCounted = null
+++
+++_zoom_overlay = ZoomOverlayControllerScript.new()
+++_zoom_overlay.setup(self, _canvas, _ui_scale, ZOOM_CONTROL_MARGIN)
+++
+++class_name PFCanvasZoomOverlayController
+++extends RefCounted
+++
+++zoom_control.name = "ZoomControl"
+++parent.add_child(zoom_control)
+++_canvas.zoom_changed.connect(_sync_from_canvas)
 +```
 +
 +画布新增工具 overlay 与批次卡暂存模型：

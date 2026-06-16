@@ -15,6 +15,7 @@ const Pipeline := preload("res://core/pixel/pipeline.gd")
 const Exporter := preload("res://services/exporter.gd")
 const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
 const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
+const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
 
 const DEFAULT_WINDOW_WIDTH := 1440
 const DEFAULT_WINDOW_HEIGHT := 900
@@ -39,6 +40,7 @@ const TOP_BAR_HEIGHT := 48
 const BOTTOM_BAR_HEIGHT := 32
 const TOOLBAR_BUTTON_WIDTH := 96
 const TOOLBAR_BUTTON_HEIGHT := 34
+const ZOOM_CONTROL_MARGIN := 12
 const CLEANUP_RESULT_GAP := 8
 const PREVIEW_OPACITY := 0.56
 
@@ -60,6 +62,7 @@ var _preview_task_id := ""
 var _preview_token := 0
 var _m2_actions: Variant = null
 var _m2_1_ui: Variant = null
+var _zoom_overlay: RefCounted = null
 
 
 func _ready() -> void:
@@ -398,6 +401,8 @@ func _build_ui() -> void:
 	_add_toolbar_button(top_bar, Strings.ACTION_MATTE, _m2_1_ui.open_matte_dialog)
 	_add_toolbar_button(top_bar, Strings.ACTION_SLICE, _m2_1_ui.open_slice_dialog)
 	_add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _m2_1_ui.open_outline_dialog)
+	_zoom_overlay = ZoomOverlayControllerScript.new()
+	_zoom_overlay.setup(self, _canvas, _ui_scale, ZOOM_CONTROL_MARGIN)
 
 
 func _add_toolbar_button(parent: Control, text: String, callback: Callable) -> void:

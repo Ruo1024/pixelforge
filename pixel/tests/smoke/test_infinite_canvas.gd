@@ -48,28 +48,30 @@ func test_zoom_uses_nearest_neighbor_color_set() -> void:
 	assert_eq(ImageMath.color_set(enlarged).size(), ImageMath.color_set(source).size())
 
 
-func test_zoom_slider_controls_canvas_zoom_and_syncs_with_wheel_steps() -> void:
+func test_canvas_emits_zoom_changed_for_direct_and_step_zoom() -> void:
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(256, 256)
 	add_child_autofree(canvas)
 	await wait_process_frames(2)
 
-	var slider: HSlider = canvas.get_node("ZoomControl/ZoomRow/ZoomSlider")
-	var label: Label = canvas.get_node("ZoomControl/ZoomRow/ZoomLabel")
-	var zoom_control: Control = canvas.get_node("ZoomControl")
-	assert_gt(zoom_control.z_index, canvas.item_layer.z_index)
-	assert_eq(int(slider.value), canvas.zoom_index)
-	assert_eq(label.text, "100%")
+	var events := []
+	canvas.zoom_changed.connect(
+		func(index: int, zoom: float) -> void: events.append({"index": index, "zoom": zoom})
+	)
 
-	slider.value = 5
+	canvas.set_camera_zoom(4.0, Vector2(128, 128))
 	await wait_process_frames(1)
+	assert_eq(events.size(), 1)
+	assert_eq(events[0]["index"], 5)
+	assert_almost_eq(events[0]["zoom"], 4.0, 0.001)
 	assert_almost_eq(canvas.camera_zoom, 4.0, 0.001)
-	assert_eq(label.text, "400%")
 
 	canvas.zoom_by_steps(-2, Vector2(128, 128))
 	await wait_process_frames(1)
-	assert_eq(int(slider.value), canvas.zoom_index)
-	assert_eq(label.text, "100%")
+	assert_eq(events.size(), 2)
+	assert_eq(events[1]["index"], 3)
+	assert_almost_eq(events[1]["zoom"], 1.0, 0.001)
+	assert_almost_eq(canvas.camera_zoom, 1.0, 0.001)
 
 
 func test_add_delete_move_are_undoable() -> void:
