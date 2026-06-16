@@ -7,6 +7,7 @@ extends Control
 signal canvas_changed
 signal selection_changed(selected_ids: Array)
 signal cleanup_grid_changed(scale: float, offset: Vector2)
+signal batch_context_requested(card_id: String, screen_position: Vector2i)
 
 const ZOOM_LEVELS := [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0]
 const DEFAULT_ZOOM_INDEX := 3
@@ -18,6 +19,7 @@ const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
 const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
 const CLEANUP_PREVIEW_Z_INDEX := 4095
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
+const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
 const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
@@ -29,6 +31,7 @@ var zoom_index := DEFAULT_ZOOM_INDEX
 var camera_zoom := float(ZOOM_LEVELS[DEFAULT_ZOOM_INDEX])
 
 var item_layer := Node2D.new()
+var tool_manager: Variant = null
 
 var _items_by_id := {}
 var _selection: Variant = CanvasSelectionScript.new()
@@ -39,7 +42,6 @@ var _cleanup_grid_offset := Vector2.ZERO
 var _cleanup_preview_sprite: Sprite2D = null
 var _cleanup_preview_source_item_id := ""
 var _is_panning := false
-var _last_mouse_position := Vector2.ZERO
 var _cull_elapsed := 0.0
 var _suppress_change_signal := false
 
@@ -72,6 +74,8 @@ func _process(delta: float) -> void:
 		_cull_elapsed = 0.0
 		_update_item_visibility()
 	_update_cleanup_preview_alt_state()
+	if tool_manager != null and tool_manager.needs_redraw():
+		queue_redraw()
 
 
 func _notification(what: int) -> void:
@@ -83,7 +87,10 @@ func _notification(what: int) -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
+	if _tool_manager_handles(event):
+		accept_event()
+		queue_redraw()
+	elif event is InputEventMouseButton:
 		_handle_mouse_button(event)
 	elif event is InputEventMouseMotion:
 		_handle_mouse_motion(event)
@@ -123,6 +130,9 @@ func _draw() -> void:
 		var box: Rect2 = _selection.get_box_rect()
 		draw_rect(box, BOX_COLOR, true)
 		draw_rect(box, Color(1.0, 0.85, 0.25, 1.0), false, 1.0)
+
+	if tool_manager != null:
+		tool_manager.draw_overlay(self, _get_active_tool_target())
 
 	var font := get_theme_default_font()
 	if font != null:
@@ -177,6 +187,42 @@ func add_sprite_item(
 	return _items_by_id.get(String(data["id"]), null)
 
 
+func _add_batch_card(
+	asset_ids: Array,
+	world_position: Vector2 = Vector2.ZERO,
+	label: String = "Batch",
+	item_id: String = "",
+	record_undo: bool = true
+) -> Node:
+	var data := {
+		"id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
+		"type": "batch_card",
+		"asset_ids": asset_ids.duplicate(),
+		"selected_asset_ids": [],
+		"label": label,
+		"position": [int(round(world_position.x)), int(round(world_position.y))],
+		"z_index": _items_by_id.size(),
+		"locked": false,
+	}
+
+	var do_add := func() -> void:
+		_add_batch_direct(data)
+		_select_only([String(data["id"])])
+		_emit_canvas_changed()
+
+	var undo_add := func() -> void:
+		_remove_item_direct(String(data["id"]))
+		_clear_selection()
+		_emit_canvas_changed()
+
+	if record_undo:
+		UndoService.perform_action("Add batch", do_add, undo_add)
+	else:
+		do_add.call()
+
+	return _items_by_id.get(String(data["id"]), null)
+
+
 func delete_selected(record_undo: bool = true) -> void:
 	if _selection.is_empty():
 		return
@@ -186,15 +232,10 @@ func delete_selected(record_undo: bool = true) -> void:
 		if not _items_by_id.has(item_id):
 			continue
 		var item: Node = _items_by_id[item_id]
-		(
-			snapshots
-			. append(
-				{
-					"data": item.to_canvas_data(),
-					"image": item.duplicate_image(),
-				}
-			)
-		)
+		var snapshot := {"data": item.to_canvas_data()}
+		if item.get_script() == CanvasItemSpriteScript:
+			snapshot["image"] = item.duplicate_image()
+		snapshots.append(snapshot)
 
 	if snapshots.is_empty():
 		return
@@ -207,13 +248,18 @@ func delete_selected(record_undo: bool = true) -> void:
 
 	var undo_delete := func() -> void:
 		for snapshot in snapshots:
-			_add_sprite_direct(snapshot["data"], snapshot["image"])
+			var data: Dictionary = snapshot["data"]
+			if String(data.get("type", "")) == "sprite":
+				_add_sprite_direct(data, snapshot["image"])
+			elif String(data.get("type", "")) == "batch_card":
+				_add_batch_direct(data)
 		_select_only(_ids_from_snapshots(snapshots))
 		_emit_canvas_changed()
 
 	var memory_cost := 0
 	for snapshot in snapshots:
-		memory_cost += ImageMath.estimate_rgba8_bytes(snapshot["image"])
+		if snapshot.has("image"):
+			memory_cost += ImageMath.estimate_rgba8_bytes(snapshot["image"])
 
 	if record_undo:
 		UndoService.perform_action("Delete sprite", do_delete, undo_delete, memory_cost)
@@ -243,14 +289,18 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 	_set_zoom_to_value(float(camera.get("zoom", 1.0)))
 
 	for item_data in canvas_data.get("items", []):
-		if String(item_data.get("type", "")) != "sprite":
-			continue
-		var asset_id := String(item_data.get("asset_id", ""))
-		var image := AssetLibrary.get_image(asset_id)
-		if image == null:
-			Log.warn("Canvas item skipped because asset image is missing", {"asset_id": asset_id})
-			continue
-		_add_sprite_direct(item_data, image)
+		var item_type := String(item_data.get("type", ""))
+		if item_type == "sprite":
+			var asset_id := String(item_data.get("asset_id", ""))
+			var image := AssetLibrary.get_image(asset_id)
+			if image == null:
+				Log.warn(
+					"Canvas item skipped because asset image is missing", {"asset_id": asset_id}
+				)
+				continue
+			_add_sprite_direct(item_data, image)
+		elif item_type == "batch_card":
+			_add_batch_direct(item_data)
 
 	_suppress_change_signal = false
 	_update_layer_transform()
@@ -265,6 +315,8 @@ func export_canvas_data() -> Dictionary:
 
 	for node in nodes:
 		if node.get_script() == CanvasItemSpriteScript:
+			items.append(node.to_canvas_data())
+		elif node.get_script() == CanvasBatchCardScript:
 			items.append(node.to_canvas_data())
 
 	return {
@@ -345,6 +397,79 @@ func get_selected_sprite_snapshots() -> Array:
 			)
 		)
 	return snapshots
+
+
+func _get_active_tool_target() -> Dictionary:
+	var selected_ids: Array = _selection.get_selected_ids()
+	if selected_ids.size() != 1 or not _items_by_id.has(selected_ids[0]):
+		return {}
+	var item: Node = _items_by_id[selected_ids[0]]
+	if item.get_script() != CanvasItemSpriteScript:
+		return {}
+	var image: Image = item.duplicate_image()
+	if image == null:
+		return {}
+	return {
+		"item_id": item.item_id,
+		"asset_id": item.asset_id,
+		"image": image,
+		"image_size": image.get_size(),
+		"world_position": item.position,
+		"scale_factor": item.scale_factor,
+	}
+
+
+func _get_batch_asset_ids(card_id: String, selected_only: bool = false) -> Array:
+	if not _items_by_id.has(card_id):
+		return []
+	var item: Node = _items_by_id[card_id]
+	if item.get_script() != CanvasBatchCardScript:
+		return []
+	if selected_only:
+		return item.get_selected_or_all_asset_ids()
+	return item.asset_ids.duplicate()
+
+
+func _replace_batch_asset_ids(
+	card_id: String, new_asset_ids: Array, record_undo: bool = true
+) -> void:
+	if not _items_by_id.has(card_id):
+		return
+	var item: Node = _items_by_id[card_id]
+	if item.get_script() != CanvasBatchCardScript:
+		return
+	var before: Array = item.asset_ids.duplicate()
+	var after := new_asset_ids.duplicate()
+	var do_replace := func() -> void:
+		item.set_asset_ids(after)
+		_select_only([card_id])
+		_emit_canvas_changed()
+	var undo_replace := func() -> void:
+		item.set_asset_ids(before)
+		_select_only([card_id])
+		_emit_canvas_changed()
+	if record_undo:
+		UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
+	else:
+		do_replace.call()
+
+
+func _split_batch_selection(card_id: String) -> Node:
+	if not _items_by_id.has(card_id):
+		return null
+	var item: Node = _items_by_id[card_id]
+	if item.get_script() != CanvasBatchCardScript:
+		return null
+	var subset: Array = item.get_selected_or_all_asset_ids()
+	if subset.is_empty() or subset.size() == item.asset_ids.size():
+		return null
+	return _add_batch_card(
+		subset,
+		item.position + Vector2(item.get_canvas_bounds().size.x + 24.0, 0.0),
+		"%s subset" % item.label,
+		"",
+		true
+	)
 
 
 func show_cleanup_preview(
@@ -434,13 +559,14 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		accept_event()
 	elif event.button_index == MOUSE_BUTTON_MIDDLE:
 		_is_panning = event.pressed
-		_last_mouse_position = event.position
+		accept_event()
+	elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		_emit_batch_context_if_hit(event.position)
 		accept_event()
 	elif event.button_index == MOUSE_BUTTON_LEFT:
 		grab_focus()
 		if Input.is_key_pressed(KEY_SPACE):
 			_is_panning = event.pressed
-			_last_mouse_position = event.position
 		elif event.pressed:
 			_begin_left_interaction(event.position, event.shift_pressed)
 		else:
@@ -451,7 +577,6 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if _is_panning:
 		pan_by_pixels(-event.relative)
-		_last_mouse_position = event.position
 		accept_event()
 	elif _selection.is_dragging_items:
 		_drag_selected_to(screen_to_world(event.position))
@@ -466,6 +591,13 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 	var world_position := screen_to_world(screen_position)
 	var hit_item := _item_at_world(world_position)
 	if hit_item != null:
+		if (
+			hit_item.get_script() == CanvasBatchCardScript
+			and hit_item.toggle_asset_at_world(world_position)
+		):
+			_select_only([hit_item.item_id])
+			_emit_canvas_changed()
+			return
 		if additive:
 			_selection.toggle(hit_item.item_id, _items_by_id.keys())
 		elif not _selection.has(hit_item.item_id):
@@ -552,13 +684,28 @@ func _add_sprite_direct(item_data: Dictionary, image: Image) -> Node:
 	return item
 
 
+func _add_batch_direct(item_data: Dictionary) -> Node:
+	var item: Node = CanvasBatchCardScript.new()
+	item.setup_from_data(item_data)
+	item_layer.add_child(item)
+	_items_by_id[item.item_id] = item
+	for asset_id in item.asset_ids:
+		AssetLibrary.add_ref(asset_id)
+	_update_item_visibility()
+	queue_redraw()
+	return item
+
+
 func _remove_item_direct(item_id: String) -> void:
 	if not _items_by_id.has(item_id):
 		return
 
 	var item: Node = _items_by_id[item_id]
-	if not item.asset_id.is_empty():
+	if item.get_script() == CanvasItemSpriteScript and not item.asset_id.is_empty():
 		AssetLibrary.release_ref(item.asset_id)
+	elif item.get_script() == CanvasBatchCardScript:
+		for asset_id in item.asset_ids:
+			AssetLibrary.release_ref(asset_id)
 	_items_by_id.erase(item_id)
 	if item_id == _cleanup_preview_source_item_id:
 		clear_cleanup_preview()
@@ -573,7 +720,10 @@ func _item_at_world(world_position: Vector2) -> Node:
 	for index in range(children.size() - 1, -1, -1):
 		var item := children[index]
 		if (
-			item.get_script() == CanvasItemSpriteScript
+			(
+				item.get_script() == CanvasItemSpriteScript
+				or item.get_script() == CanvasBatchCardScript
+			)
 			and item.visible
 			and item.contains_world_point(world_position)
 		):
@@ -721,3 +871,29 @@ func _update_cleanup_preview_alt_state() -> void:
 	if _cleanup_preview_sprite == null or not is_instance_valid(_cleanup_preview_sprite):
 		return
 	_cleanup_preview_sprite.visible = not Input.is_key_pressed(KEY_ALT)
+
+
+func _tool_manager_handles(event: InputEvent) -> bool:
+	if tool_manager == null:
+		return false
+	if event is InputEventMouseButton:
+		var mouse_event := event as InputEventMouseButton
+		if (
+			mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP
+			or mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN
+			or mouse_event.button_index == MOUSE_BUTTON_MIDDLE
+			or Input.is_key_pressed(KEY_SPACE)
+		):
+			return false
+		return tool_manager.handle_canvas_input(event, self, _get_active_tool_target())
+	return tool_manager.handle_canvas_input(event, self, _get_active_tool_target())
+
+
+func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
+	var hit_item := _item_at_world(screen_to_world(screen_position))
+	if hit_item == null or hit_item.get_script() != CanvasBatchCardScript:
+		return
+	_select_only([hit_item.item_id])
+	batch_context_requested.emit(
+		hit_item.item_id, Vector2i(get_screen_position()) + Vector2i(screen_position)
+	)

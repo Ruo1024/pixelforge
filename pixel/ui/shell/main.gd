@@ -7,7 +7,6 @@ extends Control
 const Strings := preload("res://ui/shell/strings.gd")
 const InfiniteCanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const CleanupInspectorScript := preload("res://ui/inspector/cleanup_inspector.gd")
-const FileIOScript := preload("res://infra/file_io.gd")
 const TaskScript := preload("res://services/pf_task.gd")
 const AppInfo := preload("res://core/util/app_info.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
@@ -15,6 +14,7 @@ const Log := preload("res://core/util/log_util.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
 const Exporter := preload("res://services/exporter.gd")
 const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
+const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
 
 const DEFAULT_WINDOW_WIDTH := 1440
 const DEFAULT_WINDOW_HEIGHT := 900
@@ -59,6 +59,7 @@ var _cleanup_task_id := ""
 var _preview_task_id := ""
 var _preview_token := 0
 var _m2_actions: Variant = null
+var _m2_1_ui: Variant = null
 
 
 func _ready() -> void:
@@ -69,6 +70,7 @@ func _ready() -> void:
 	_build_ui()
 	_connect_services()
 	_update_window_title()
+	_m2_1_ui.show_onboarding_if_needed()
 
 
 func _notification(what: int) -> void:
@@ -91,6 +93,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event.is_command_or_control_pressed() and event.keycode == KEY_N:
 		_create_new_project()
+		get_viewport().set_input_as_handled()
+	elif _m2_1_ui != null and _m2_1_ui.handle_shortcut(event):
 		get_viewport().set_input_as_handled()
 
 
@@ -313,9 +317,6 @@ func _build_ui() -> void:
 	_add_toolbar_button(
 		top_bar, Strings.ACTION_SAVE_AS, func() -> void: _save_dialog.popup_centered_ratio(0.7)
 	)
-	_add_toolbar_button(top_bar, Strings.ACTION_MATTE, _matte_selection)
-	_add_toolbar_button(top_bar, Strings.ACTION_SLICE, _slice_selection)
-	_add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _outline_selection)
 	_add_toolbar_button(top_bar, Strings.ACTION_EXPORT_PNG, _export_selected_png)
 
 	var content := HSplitContainer.new()
@@ -351,7 +352,27 @@ func _build_ui() -> void:
 
 	_create_file_dialogs()
 	_m2_actions = M2ActionController.new()
-	_m2_actions.setup(_canvas, _cleanup_inspector, _status_label)
+	_m2_actions.setup(_canvas, _cleanup_inspector, _status_label, self)
+	_m2_1_ui = M21UiControllerScript.new()
+	_m2_1_ui.name = "M21UiController"
+	_m2_1_ui.ui_scale = _ui_scale
+	add_child(_m2_1_ui)
+	_m2_1_ui.setup(
+		_canvas,
+		_cleanup_inspector,
+		_status_label,
+		_m2_actions,
+		_create_new_project,
+		func() -> void: _open_dialog.popup_centered_ratio(0.7),
+		_save_current_project
+	)
+	_m2_1_ui.export_snapshots_requested.connect(_on_export_snapshots_requested)
+	_m2_1_ui.add_file_menu(top_bar)
+	_m2_1_ui.add_tool_buttons(top_bar)
+	_add_toolbar_button(top_bar, Strings.ACTION_BATCH, _m2_1_ui.batch_selected_sprites)
+	_add_toolbar_button(top_bar, Strings.ACTION_MATTE, _m2_1_ui.open_matte_dialog)
+	_add_toolbar_button(top_bar, Strings.ACTION_SLICE, _m2_1_ui.open_slice_dialog)
+	_add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _m2_1_ui.open_outline_dialog)
 
 
 func _add_toolbar_button(parent: Control, text: String, callback: Callable) -> void:
@@ -615,18 +636,6 @@ func _on_cleanup_canceled() -> void:
 	_status_label.text = Strings.STATUS_CLEANUP_CANCELED
 
 
-func _matte_selection() -> void:
-	_m2_actions.matte_selection()
-
-
-func _slice_selection() -> void:
-	_m2_actions.slice_selection()
-
-
-func _outline_selection() -> void:
-	_m2_actions.outline_selection()
-
-
 func _cancel_cleanup_task() -> void:
 	if not _cleanup_task_id.is_empty():
 		TaskQueue.cancel(_cleanup_task_id)
@@ -792,32 +801,15 @@ func _export_png_path(path: String) -> void:
 
 
 func _on_files_dropped(files: PackedStringArray) -> void:
-	var drop_position: Vector2 = _canvas.get_mouse_world_position()
-	for file_path in files:
-		if not String(file_path).to_lower().ends_with(".png"):
-			continue
+	if _m2_1_ui == null:
+		return
+	_m2_1_ui.import_files_at_mouse(files)
 
-		var image: Image = FileIOScript.load_png(file_path)
-		if image == null:
-			Log.warn("Dropped PNG could not be loaded", {"path": file_path})
-			continue
 
-		if image.get_width() * image.get_height() > 1024 * 1024:
-			(
-				Log
-				. warn(
-					"Large PNG imported without M1 cleanup",
-					{
-						"path": file_path,
-						"size": [image.get_width(), image.get_height()],
-					}
-				)
-			)
-
-		var asset_name := String(file_path).get_file().get_basename()
-		var asset_id := AssetLibrary.register_image(image, asset_name, {"origin": "imported"})
-		_canvas.add_sprite_item(image, asset_id, drop_position)
-		drop_position += Vector2(image.get_width() + 8, 0)
+func _on_export_snapshots_requested(snapshots: Array, default_file: String) -> void:
+	_pending_export_snapshots = snapshots
+	_export_dialog.current_file = default_file
+	_export_dialog.popup_centered_ratio(0.7)
 
 
 func _on_recovery_available(autosaves: Array) -> void:

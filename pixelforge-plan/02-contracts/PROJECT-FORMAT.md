@@ -93,13 +93,23 @@ my_project.pxproj (ZIP)
   "items": [
     {
       "id": "uuid",
-      "type": "sprite",            // sprite | frame | note | graph_anchor
+      "type": "sprite",            // sprite | batch_card(M2.1 temp) | frame | note | graph_anchor
       "asset_id": "a1b2c3d4-...",  // type=sprite 时必填
       "position": [128, -64],      // 画布世界坐标，整数（像素对齐）
       "scale_factor": 1,           // 仅允许正整数倍预览缩放
       "z_index": 0,
       "locked": false,
       "frame_id": null             // 所属编组框
+    },
+    {
+      "id": "batch-temp-uuid",
+      "type": "batch_card",        // M2.1 临时批次卡；M3 后升级为正式 batch 节点
+      "asset_ids": ["uuid-a", "uuid-b"],
+      "selected_asset_ids": [],
+      "label": "Batch",
+      "position": [320, 64],
+      "z_index": 1,
+      "locked": false
     }
   ]
 }
@@ -108,6 +118,7 @@ my_project.pxproj (ZIP)
 规则：
 - 画布元素 position 强制整数（像素网格对齐，体验原则1）。
 - `graph_anchor` 类型把节点图锚定在画布某区域（节点图输出物默认铺在锚点附近）。
+- **M2.1 临时例外**：M3 前尚无正式 graph 持久化，alpha 清洗台先允许 `type:"batch_card"` 直接在 canvas.json 中保存 `asset_ids` 队列、卡片位置和卡内勾选状态；M3 实施正式 batch 节点时，应迁入 graph schema。
 
 ## 5. 读写规则
 
