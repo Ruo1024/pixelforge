@@ -15,6 +15,7 @@ const SLIDER_WIDTH := 156
 const PANEL_RADIUS := 6
 const PANEL_PADDING_X := 10
 const PANEL_PADDING_Y := 6
+const OVERLAY_Z_INDEX := 4095
 
 var ui_scale := 1.0
 
@@ -59,6 +60,8 @@ func set_zoom_state(index: int, zoom: float) -> void:
 
 func _build_ui() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	z_as_relative = false
+	z_index = OVERLAY_Z_INDEX
 	tooltip_text = Strings.ZOOM_CONTROL_TOOLTIP
 	custom_minimum_size = get_scaled_size()
 

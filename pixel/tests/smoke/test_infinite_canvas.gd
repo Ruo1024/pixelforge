@@ -56,6 +56,8 @@ func test_zoom_slider_controls_canvas_zoom_and_syncs_with_wheel_steps() -> void:
 
 	var slider: HSlider = canvas.get_node("ZoomControl/ZoomRow/ZoomSlider")
 	var label: Label = canvas.get_node("ZoomControl/ZoomRow/ZoomLabel")
+	var zoom_control: Control = canvas.get_node("ZoomControl")
+	assert_gt(zoom_control.z_index, canvas.item_layer.z_index)
 	assert_eq(int(slider.value), canvas.zoom_index)
 	assert_eq(label.text, "100%")
 
