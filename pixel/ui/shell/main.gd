@@ -42,6 +42,7 @@ const SCALE_RESOLVE_DEBOUNCE_SECONDS := 0.35
 var _project_filters := PackedStringArray(["*.pxproj ; PixelForge Project"])
 var _png_filters := PackedStringArray(["*.png ; PNG Image"])
 var _interface_scale := 1.0
+var _window_pixel_scale := 1.0
 var _canvas: Control = null
 var _cleanup_inspector: Control = null
 var _title_label: Label = null
@@ -68,14 +69,15 @@ var _pending_screen_snapshot := {}
 
 
 func _ready() -> void:
-	_interface_scale = _resolve_interface_scale()
+	var startup_snapshot := InterfaceScalePolicy.read_current_screen_snapshot()
+	_interface_scale = _resolve_interface_scale_from_snapshot(startup_snapshot, "startup")
 	_live_rescale_enabled = bool(SettingsService.get_setting("ui", "live_rescale", true))
 	_apply_viewport_scale_policy()
 	_apply_runtime_theme()
 	_apply_window_defaults()
 	_build_ui()
 	_connect_services()
-	_last_screen_snapshot = InterfaceScalePolicy.read_current_screen_snapshot()
+	_last_screen_snapshot = startup_snapshot
 	set_process(DisplayServer.get_name() != "headless")
 	_update_window_title()
 	_m2_1_ui.show_onboarding_if_needed()
@@ -112,24 +114,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-func _resolve_interface_scale() -> float:
-	if DisplayServer.get_name() == "headless":
-		return InterfaceScalePolicy.MIN_INTERFACE_SCALE
-
-	return _resolve_interface_scale_from_snapshot(
-		InterfaceScalePolicy.read_current_screen_snapshot(), "startup"
-	)
-
-
 func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String) -> float:
 	var configured_scale := float(SettingsService.get_setting("ui", "interface_scale", 0.0))
 	var resolution := InterfaceScalePolicy.resolve_from_snapshot(
 		snapshot, configured_scale, OS.get_name()
 	)
-	# M0 复发复盘：manual-test-m0.md 曾指导测试者把 interface_scale 写成 1.0，
-	# 该值残留在 user://settings.cfg 后会永久旁路自动检测，在 Retina 屏表现为
-	# 界面缩小一半。一次性迁移：检测到 macOS Retina（自动检测 > 残留值）时
-	# 把残留的 1.0 重置回 0.0（自动），其他显式覆盖值仍然尊重用户选择。
+	_window_pixel_scale = float(resolution["window_pixel_scale"])
+	# M0 复盘：残留 interface_scale=1.0 会永久旁路自动检测。
+	# 仅在 macOS 自动档明显更大时迁回 auto，其余显式覆盖仍尊重用户选择。
 	if (
 		OS.get_name() == "macOS"
 		and is_equal_approx(configured_scale, 1.0)
@@ -144,9 +136,11 @@ func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String
 		resolution = InterfaceScalePolicy.resolve_from_snapshot(
 			snapshot, configured_scale, OS.get_name()
 		)
+		_window_pixel_scale = float(resolution["window_pixel_scale"])
 
 	var resolved := float(resolution["resolved"])
 	var usable_size := Vector2i(resolution["usable_size"])
+	var screen_size := Vector2i(snapshot.get("screen_size", Vector2i.ZERO))
 	if bool(resolution["clamped"]):
 		(
 			Log
@@ -171,10 +165,12 @@ func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String
 				"resolved": resolved,
 				"detected_F": float(resolution["detected_F"]),
 				"applied_F": resolved,
+				"window_pixel_scale": _window_pixel_scale,
 				"configured": configured_scale,
 				"reported_screen_scale": float(resolution["reported_screen_scale"]),
 				"screen_dpi": int(resolution["screen_dpi"]),
 				"usable_rect": [usable_size.x, usable_size.y],
+				"screen_size": [screen_size.x, screen_size.y],
 				"mac_retina_fallback": bool(resolution["mac_retina_fallback"]),
 				"current_screen": int(snapshot.get("screen", -1)),
 				"os": OS.get_name(),
@@ -220,6 +216,7 @@ func _apply_live_rescale(screen_snapshot: Dictionary) -> void:
 
 	var old_snapshot := _last_screen_snapshot.duplicate()
 	var old_scale := _interface_scale
+	var old_window_pixel_scale := _window_pixel_scale
 	_interface_scale = _resolve_interface_scale_from_snapshot(screen_snapshot, "live_rescale")
 	_apply_viewport_scale_policy()
 	_apply_runtime_theme()
@@ -243,6 +240,8 @@ func _apply_live_rescale(screen_snapshot: Dictionary) -> void:
 				"to_screen": int(screen_snapshot.get("screen", -1)),
 				"from_F": old_scale,
 				"to_F": _interface_scale,
+				"from_window_pixel_scale": old_window_pixel_scale,
+				"to_window_pixel_scale": _window_pixel_scale,
 				"current_screen": int(screen_snapshot.get("screen", -1)),
 			}
 		)
@@ -257,7 +256,8 @@ func _log_scale_audit() -> void:
 		self,
 		_canvas,
 		_last_screen_snapshot,
-		root_window.content_scale_factor if root_window != null else 1.0
+		root_window.content_scale_factor if root_window != null else 1.0,
+		_window_pixel_scale
 	)
 
 
@@ -302,6 +302,7 @@ func _apply_window_defaults() -> void:
 		WindowScalePolicy.apply_startup_defaults(
 			window,
 			_interface_scale,
+			_window_pixel_scale,
 			Vector2i(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
 			Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
 			WINDOW_SCREEN_MARGIN,

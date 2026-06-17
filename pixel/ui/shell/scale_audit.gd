@@ -13,7 +13,11 @@ static func is_requested() -> bool:
 
 
 static func log_scale_audit(
-	owner: Node, canvas: Control, screen_snapshot: Dictionary, content_scale_factor: float
+	owner: Node,
+	canvas: Control,
+	screen_snapshot: Dictionary,
+	content_scale_factor: float,
+	window_pixel_scale: float
 ) -> void:
 	(
 		Log
@@ -21,6 +25,7 @@ static func log_scale_audit(
 			"Scale audit",
 			{
 				"content_scale_factor": content_scale_factor,
+				"window_pixel_scale": window_pixel_scale,
 				"current_screen": int(screen_snapshot.get("screen", -1)),
 				"controls": _collect_control_audit(owner),
 				"canvas": _collect_canvas_audit(canvas),

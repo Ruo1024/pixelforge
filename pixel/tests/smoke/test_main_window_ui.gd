@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
 const MainScript := preload("res://ui/shell/main.gd")
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
+const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
 
 
 func test_main_window_uses_readable_minimum_sizes() -> void:
@@ -52,21 +53,29 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
 
 
 func test_auto_interface_scale_detects_high_density_displays() -> void:
-	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(2560, 1440)), 1.0)
+	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(2560, 1440)), 1.25)
 	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(3840, 2160)), 1.5)
 	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(5120, 3140)), 2.0)
 	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(2.0, Vector2i(2560, 1600)), 2.0)
+	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.5, Vector2i(1920, 1080)), 1.5)
 
 
 func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
 	assert_eq(
-		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1244, 778), "macOS", 0), 2.0
+		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1244, 778), "macOS", 0),
+		1.25
 	)
 	assert_eq(
-		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1334, 834), "macOS", 0), 2.0
+		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1334, 834), "macOS", 0),
+		1.25
 	)
 	assert_eq(
-		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 0), 2.0
+		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 0),
+		1.25
+	)
+	assert_eq(
+		InterfaceScalePolicy.compute_auto_interface_scale(2.0, Vector2i(3024, 1964), "macOS", 220),
+		1.25
 	)
 	assert_eq(
 		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 96),
@@ -78,7 +87,36 @@ func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
 	)
 	assert_eq(
 		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 220),
-		2.0
+		1.25
+	)
+
+
+func test_window_pixel_scale_is_separate_from_readable_interface_scale() -> void:
+	var snapshot := {
+		"reported_scale": 2.0,
+		"screen_dpi": 220,
+		"usable_size": Vector2i(3024, 1964),
+	}
+
+	assert_eq(InterfaceScalePolicy.resolve_from_snapshot(snapshot, 0.0, "macOS")["resolved"], 1.25)
+	assert_eq(InterfaceScalePolicy.window_pixel_scale_from_snapshot(snapshot, "macOS"), 2.0)
+	assert_eq(WindowScalePolicy.effective_window_geometry_scale(1.25, 2.0), 2.0)
+
+
+func test_window_scale_converts_only_macos_point_sized_usable_rects() -> void:
+	assert_eq(
+		WindowScalePolicy.usable_size_to_window_pixels(Vector2i(1470, 956), 2.0, "macOS"),
+		Vector2i(2940, 1912)
+	)
+	assert_eq(
+		WindowScalePolicy.usable_size_to_window_pixels(Vector2i(3024, 1964), 2.0, "macOS"),
+		Vector2i(3024, 1964)
+	)
+	assert_eq(
+		WindowScalePolicy.window_pixels_to_screen_units(
+			Vector2i(2880, 1800), 2.0, "macOS", Vector2i(1470, 956)
+		),
+		Vector2i(1440, 900)
 	)
 
 

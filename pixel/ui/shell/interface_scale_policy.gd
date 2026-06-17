@@ -16,23 +16,36 @@ const RETINA_WIDTH_THRESHOLD := 4800
 const RETINA_HEIGHT_THRESHOLD := 2800
 const LARGE_DISPLAY_WIDTH_THRESHOLD := 3200
 const LARGE_DISPLAY_HEIGHT_THRESHOLD := 1800
+const READABLE_2K_WIDTH_THRESHOLD := 2560
+const READABLE_2K_HEIGHT_THRESHOLD := 1440
+const MAC_COMPACT_RETINA_WIDTH_LIMIT := 3200
+const MAC_COMPACT_RETINA_HEIGHT_LIMIT := 2200
+const MID_INTERFACE_SCALE := 1.25
+const MAC_RETINA_WINDOW_PIXEL_SCALE := 2.0
 
 
 static func compute_auto_interface_scale(
 	reported_scale: float, usable_size: Vector2i, os_name: String = "", screen_dpi: int = 0
 ) -> float:
-	var scale := maxf(reported_scale, MIN_INTERFACE_SCALE)
-	if scale < 1.25:
-		if should_use_macos_retina_fallback(reported_scale, usable_size, os_name, screen_dpi):
-			scale = 2.0
-		elif usable_size.x >= RETINA_WIDTH_THRESHOLD or usable_size.y >= RETINA_HEIGHT_THRESHOLD:
-			scale = 2.0
-		elif (
-			usable_size.x >= LARGE_DISPLAY_WIDTH_THRESHOLD
-			or usable_size.y >= LARGE_DISPLAY_HEIGHT_THRESHOLD
-		):
-			scale = 1.5
-	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+	if _looks_like_macos_scaled_display(reported_scale, usable_size, os_name, screen_dpi):
+		return _macos_readable_interface_scale(usable_size)
+
+	if reported_scale >= 1.25:
+		return clampf(reported_scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+
+	if usable_size.x >= RETINA_WIDTH_THRESHOLD or usable_size.y >= RETINA_HEIGHT_THRESHOLD:
+		return 2.0
+	if (
+		usable_size.x >= LARGE_DISPLAY_WIDTH_THRESHOLD
+		or usable_size.y >= LARGE_DISPLAY_HEIGHT_THRESHOLD
+	):
+		return 1.5
+	if (
+		usable_size.x >= READABLE_2K_WIDTH_THRESHOLD
+		or usable_size.y >= READABLE_2K_HEIGHT_THRESHOLD
+	):
+		return MID_INTERFACE_SCALE
+	return MIN_INTERFACE_SCALE
 
 
 static func should_use_macos_retina_fallback(
@@ -60,6 +73,21 @@ static func fit_interface_scale_to_startup_screen(scale: float, usable_size: Vec
 	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
 
 
+static func window_pixel_scale_from_snapshot(snapshot: Dictionary, os_name: String) -> float:
+	var reported_scale := float(snapshot.get("reported_scale", MIN_INTERFACE_SCALE))
+	var usable_size := Vector2i(snapshot.get("usable_size", Vector2i.ZERO))
+	var screen_dpi := int(snapshot.get("screen_dpi", 0))
+	if (
+		os_name == "macOS"
+		and (
+			screen_dpi >= MAC_RETINA_DPI_THRESHOLD
+			or should_use_macos_retina_fallback(reported_scale, usable_size, os_name, screen_dpi)
+		)
+	):
+		return MAC_RETINA_WINDOW_PIXEL_SCALE
+	return maxf(reported_scale, MIN_INTERFACE_SCALE)
+
+
 static func resolve_from_snapshot(
 	snapshot: Dictionary, configured_scale: float, os_name: String
 ) -> Dictionary:
@@ -69,6 +97,7 @@ static func resolve_from_snapshot(
 	var mac_retina_fallback := should_use_macos_retina_fallback(
 		reported_scale, usable_size, os_name, screen_dpi
 	)
+	var window_pixel_scale := window_pixel_scale_from_snapshot(snapshot, os_name)
 	var auto_scale := compute_auto_interface_scale(reported_scale, usable_size, os_name, screen_dpi)
 	var resolved := auto_scale
 	var source := "auto"
@@ -83,6 +112,7 @@ static func resolve_from_snapshot(
 		"detected_F": auto_scale,
 		"configured": configured_scale,
 		"reported_screen_scale": reported_scale,
+		"window_pixel_scale": window_pixel_scale,
 		"screen_dpi": screen_dpi,
 		"usable_size": usable_size,
 		"mac_retina_fallback": mac_retina_fallback,
@@ -110,6 +140,7 @@ static func read_current_screen_snapshot() -> Dictionary:
 		"screen": screen,
 		"reported_scale": DisplayServer.screen_get_scale(screen),
 		"screen_dpi": DisplayServer.screen_get_dpi(screen),
+		"screen_size": DisplayServer.screen_get_size(screen),
 		"usable_size": usable_rect.size,
 	}
 
@@ -129,3 +160,32 @@ static func screen_scale_snapshot_changed(left: Dictionary, right: Dictionary) -
 		Vector2i(left.get("usable_size", Vector2i.ZERO))
 		!= Vector2i(right.get("usable_size", Vector2i.ZERO))
 	)
+
+
+static func _looks_like_macos_scaled_display(
+	reported_scale: float, usable_size: Vector2i, os_name: String, screen_dpi: int
+) -> bool:
+	return (
+		os_name == "macOS"
+		and (
+			reported_scale >= 1.25
+			or screen_dpi >= MAC_RETINA_DPI_THRESHOLD
+			or should_use_macos_retina_fallback(reported_scale, usable_size, os_name, screen_dpi)
+		)
+	)
+
+
+static func _macos_readable_interface_scale(usable_size: Vector2i) -> float:
+	if (
+		usable_size.x <= MAC_COMPACT_RETINA_WIDTH_LIMIT
+		and usable_size.y <= MAC_COMPACT_RETINA_HEIGHT_LIMIT
+	):
+		return MID_INTERFACE_SCALE
+	if usable_size.x >= RETINA_WIDTH_THRESHOLD or usable_size.y >= RETINA_HEIGHT_THRESHOLD:
+		return 2.0
+	if (
+		usable_size.x >= LARGE_DISPLAY_WIDTH_THRESHOLD
+		or usable_size.y >= LARGE_DISPLAY_HEIGHT_THRESHOLD
+	):
+		return 1.5
+	return MID_INTERFACE_SCALE
