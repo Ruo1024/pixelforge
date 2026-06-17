@@ -233,7 +233,12 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 
 	assert_eq(canvas.get_item_count(), 1)
 	assert_eq(ProjectService.current_project.graphs.size(), 1)
-	var graph_data: Dictionary = ProjectService.current_project.graphs.values()[0]
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
 	var batch_node: Dictionary = graph_data["nodes"][3]
 	assert_eq(batch_node["type"], "batch")
 	assert_eq(batch_node["params"]["asset_ids"].size(), 10)
+	var canvas_item: Dictionary = canvas.export_canvas_data()["items"][0]
+	assert_eq(canvas_item["type"], "node")
+	assert_eq(canvas_item["graph_id"], graph_id)
+	assert_eq(canvas_item["node_id"], "batch_1")

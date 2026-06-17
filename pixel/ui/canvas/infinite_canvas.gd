@@ -189,14 +189,18 @@ func _add_batch_card(
 	world_position: Vector2 = Vector2.ZERO,
 	label: String = "Batch",
 	item_id: String = "",
-	record_undo: bool = true
+	record_undo: bool = true,
+	graph_id: String = "",
+	node_id: String = ""
 ) -> Node:
 	var data := {
 		"id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
-		"type": "batch_card",
+		"type": "node" if not node_id.is_empty() else "batch_card",
 		"asset_ids": asset_ids.duplicate(),
 		"selected_asset_ids": [],
 		"label": label,
+		"graph_id": graph_id,
+		"node_id": node_id,
 		"position": [int(round(world_position.x)), int(round(world_position.y))],
 		"z_index": _items_by_id.size(),
 		"locked": false,
@@ -248,7 +252,7 @@ func delete_selected(record_undo: bool = true) -> void:
 			var data: Dictionary = snapshot["data"]
 			if String(data.get("type", "")) == "sprite":
 				_add_sprite_direct(data, snapshot["image"])
-			elif String(data.get("type", "")) == "batch_card":
+			elif _is_batch_card_data(data):
 				_add_batch_direct(data)
 		_select_only(_ids_from_snapshots(snapshots))
 		_emit_canvas_changed()
@@ -297,6 +301,8 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 				continue
 			_add_sprite_direct(item_data, image)
 		elif item_type == "batch_card":
+			_add_batch_direct(item_data)
+		elif item_type == "node" and _is_graph_batch_node_data(item_data):
 			_add_batch_direct(item_data)
 
 	_suppress_change_signal = false
@@ -448,17 +454,57 @@ func _replace_batch_asset_ids(
 	var before: Array = item.asset_ids.duplicate()
 	var after := new_asset_ids.duplicate()
 	var do_replace := func() -> void:
-		item.set_asset_ids(after)
+		_apply_batch_asset_ids(item, after)
+		_sync_batch_node_asset_ids(item, after)
 		_select_only([card_id])
 		_emit_canvas_changed()
 	var undo_replace := func() -> void:
-		item.set_asset_ids(before)
+		_apply_batch_asset_ids(item, before)
+		_sync_batch_node_asset_ids(item, before)
 		_select_only([card_id])
 		_emit_canvas_changed()
 	if record_undo:
 		UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
 	else:
 		do_replace.call()
+
+
+func _apply_batch_asset_ids(item: Node, asset_ids: Array) -> void:
+	for asset_id in item.asset_ids:
+		AssetLibrary.release_ref(asset_id)
+	item.set_asset_ids(asset_ids)
+	for asset_id in item.asset_ids:
+		AssetLibrary.add_ref(asset_id)
+
+
+func _sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
+	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
+		return
+
+	var graph_data := ProjectService.get_graph_data(item.graph_id)
+	if graph_data.is_empty():
+		return
+
+	var nodes := []
+	var changed := false
+	for raw_node in graph_data.get("nodes", []):
+		if not (raw_node is Dictionary):
+			nodes.append(raw_node)
+			continue
+		var node_data: Dictionary = raw_node
+		if (
+			String(node_data.get("id", "")) == item.node_id
+			and String(node_data.get("type", "")) == "batch"
+		):
+			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+			params["asset_ids"] = _string_array(asset_ids)
+			node_data["params"] = params
+			changed = true
+		nodes.append(node_data)
+
+	if changed:
+		graph_data["nodes"] = nodes
+		ProjectService.set_graph_data(item.graph_id, graph_data, true)
 
 
 func _split_batch_selection(card_id: String) -> Node:
@@ -685,6 +731,31 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 	return item
 
 
+func _is_batch_card_data(item_data: Dictionary) -> bool:
+	var item_type := String(item_data.get("type", ""))
+	return (
+		item_type == "batch_card" or (item_type == "node" and _is_graph_batch_node_data(item_data))
+	)
+
+
+func _is_graph_batch_node_data(item_data: Dictionary) -> bool:
+	if String(item_data.get("type", "")) != "node":
+		return false
+	var graph_id := String(item_data.get("graph_id", ""))
+	var node_id := String(item_data.get("node_id", ""))
+	if graph_id.is_empty() or node_id.is_empty():
+		return false
+
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	for raw_node in graph_data.get("nodes", []):
+		if not (raw_node is Dictionary):
+			continue
+		var node_data: Dictionary = raw_node
+		if String(node_data.get("id", "")) == node_id:
+			return String(node_data.get("type", "")) == "batch"
+	return false
+
+
 func _remove_item_direct(item_id: String) -> void:
 	if not _items_by_id.has(item_id):
 		return
@@ -760,6 +831,16 @@ func _ids_from_snapshots(snapshots: Array) -> Array:
 	for snapshot in snapshots:
 		ids.append(String(snapshot["data"]["id"]))
 	return ids
+
+
+func _string_array(value: Variant) -> Array[String]:
+	var result: Array[String] = []
+	if value is Array:
+		for item in Array(value):
+			var id := String(item)
+			if not id.is_empty():
+				result.append(id)
+	return result
 
 
 func _set_zoom_to_value(value: float) -> void:

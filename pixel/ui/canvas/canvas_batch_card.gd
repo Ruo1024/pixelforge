@@ -2,7 +2,7 @@ class_name PFCanvasBatchCard
 extends Node2D
 
 ## M2.1 批次内容卡（无连线 MVP）。
-## 只持有 asset_id 队列和卡内勾选状态；节点图双身份与正式 graph 持久化留到 M3。
+## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
 
 const IdUtil := preload("res://core/util/id_util.gd")
 
@@ -19,6 +19,8 @@ const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
 const THUMB_BACKGROUND := Color(0.08, 0.085, 0.09, 1.0)
 
 var item_id := ""
+var graph_id := ""
+var node_id := ""
 var asset_ids: Array[String] = []
 var selected_asset_ids: Array[String] = []
 var label := ""
@@ -30,8 +32,12 @@ var _font: Font = null
 
 func setup_from_data(data: Dictionary) -> void:
 	item_id = String(data.get("id", IdUtil.uuid_v4()))
-	label = String(data.get("label", "Batch"))
-	asset_ids = _string_array(data.get("asset_ids", []))
+	graph_id = String(data.get("graph_id", ""))
+	node_id = String(data.get("node_id", ""))
+	var graph_node_data := _resolve_graph_batch_node_data()
+	var graph_params: Dictionary = graph_node_data.get("params", {})
+	label = String(graph_params.get("label", data.get("label", "Batch")))
+	asset_ids = _string_array(graph_params.get("asset_ids", data.get("asset_ids", [])))
 	selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
 	locked = bool(data.get("locked", false))
 	z_index = int(data.get("z_index", 0))
@@ -43,6 +49,17 @@ func setup_from_data(data: Dictionary) -> void:
 
 
 func to_canvas_data() -> Dictionary:
+	if has_graph_binding():
+		return {
+			"id": item_id,
+			"type": "node",
+			"graph_id": graph_id,
+			"node_id": node_id,
+			"position": [int(round(position.x)), int(round(position.y))],
+			"z_index": z_index,
+			"collapsed": false,
+			"locked": locked,
+		}
 	return {
 		"id": item_id,
 		"type": "batch_card",
@@ -53,6 +70,10 @@ func to_canvas_data() -> Dictionary:
 		"z_index": z_index,
 		"locked": locked,
 	}
+
+
+func has_graph_binding() -> bool:
+	return not graph_id.is_empty() and not node_id.is_empty()
 
 
 func get_canvas_bounds() -> Rect2:
@@ -182,6 +203,22 @@ func _rebuild_thumbnails() -> void:
 				Image.INTERPOLATE_NEAREST
 			)
 		_thumbnail_textures[asset_id] = ImageTexture.create_from_image(thumb)
+
+
+func _resolve_graph_batch_node_data() -> Dictionary:
+	if not has_graph_binding():
+		return {}
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	for raw_node in graph_data.get("nodes", []):
+		if not (raw_node is Dictionary):
+			continue
+		var node_data: Dictionary = raw_node
+		if (
+			String(node_data.get("id", "")) == node_id
+			and String(node_data.get("type", "")) == "batch"
+		):
+			return node_data
+	return {}
 
 
 func _string_array(value: Variant) -> Array[String]:

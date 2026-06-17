@@ -210,7 +210,13 @@ func generate_mock_batch() -> void:
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	var asset_ids: Array = result["asset_ids"]
 	var card: Node = _canvas._add_batch_card(
-		asset_ids, _canvas.get_mouse_world_position(), Strings.MOCK_BATCH_LABEL, "", true
+		asset_ids,
+		_canvas.get_mouse_world_position(),
+		Strings.MOCK_BATCH_LABEL,
+		"",
+		true,
+		graph.id,
+		"batch_1"
 	)
 	if card != null:
 		_focus_canvas_on_card(card)
