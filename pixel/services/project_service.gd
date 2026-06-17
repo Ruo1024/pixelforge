@@ -49,12 +49,34 @@ func set_canvas_data(canvas_data: Dictionary, mark_dirty: bool = true) -> void:
 		EventBus.canvas_changed.emit()
 
 
+func set_graphs_data(graphs_data: Dictionary, mark_dirty: bool = true) -> void:
+	current_project.graphs = graphs_data.duplicate(true)
+	if mark_dirty:
+		_emit_dirty(true)
+
+
+func set_graph_data(graph_id: String, graph_data: Dictionary, mark_dirty: bool = true) -> void:
+	if graph_id.is_empty():
+		return
+	current_project.graphs[graph_id] = graph_data.duplicate(true)
+	if mark_dirty:
+		_emit_dirty(true)
+
+
 func mark_dirty() -> void:
 	_emit_dirty(true)
 
 
 func get_canvas_data() -> Dictionary:
 	return current_project.canvas.duplicate(true)
+
+
+func get_graphs_data() -> Dictionary:
+	return current_project.graphs.duplicate(true)
+
+
+func get_graph_data(graph_id: String) -> Dictionary:
+	return Dictionary(current_project.graphs.get(graph_id, {})).duplicate(true)
 
 
 func save_project(path: String = "") -> Error:
@@ -93,8 +115,10 @@ func open_project(path: String) -> Error:
 		return migration_error
 
 	_normalize_loaded_project(manifest, canvas)
-
-	var load_error := PaletteRegistry.load_custom_palettes_from_project(files, manifest)
+	var loaded_graphs := _load_graphs_from_files(files, manifest)
+	var load_error := int(loaded_graphs.get("error", OK))
+	if load_error == OK:
+		load_error = PaletteRegistry.load_custom_palettes_from_project(files, manifest)
 	if load_error == OK:
 		load_error = AssetLibrary.load_from_zip_files(files)
 	if load_error != OK:
@@ -103,6 +127,7 @@ func open_project(path: String) -> Error:
 	current_project = ProjectModel.new()
 	current_project.manifest = manifest
 	current_project.canvas = canvas
+	current_project.graphs = loaded_graphs["graphs"]
 	current_project.project_path = path
 	current_project.dirty = false
 
@@ -164,6 +189,8 @@ func _save_to_path(path: String) -> Error:
 		"manifest.json": current_project.manifest,
 		"canvas/canvas.json": current_project.canvas,
 	}
+	for graph_id in _sorted_graph_ids():
+		entries["graphs/%s.json" % graph_id] = current_project.graphs[graph_id]
 	var asset_entries := AssetLibrary.export_zip_entries()
 	for asset_path in asset_entries.keys():
 		entries[asset_path] = asset_entries[asset_path]
@@ -179,6 +206,7 @@ func _update_manifest_before_save() -> void:
 	current_project.manifest["format_version"] = AppInfo.PROJECT_FORMAT_VERSION
 	var entries: Dictionary = current_project.manifest.get("entries", {})
 	entries["canvases"] = ["canvas"]
+	entries["graphs"] = _sorted_graph_ids()
 	entries["asset_count"] = AssetLibrary.get_all_meta().size()
 	current_project.manifest["entries"] = entries
 	var custom_palettes := PaletteRegistry.get_custom_manifest_entries()
@@ -210,6 +238,8 @@ func _normalize_loaded_project(manifest: Dictionary, canvas: Dictionary) -> void
 	manifest["format_version"] = int(manifest.get("format_version", AppInfo.PROJECT_FORMAT_VERSION))
 	var entries: Dictionary = manifest.get("entries", {})
 	entries["asset_count"] = int(entries.get("asset_count", 0))
+	if not entries.has("graphs"):
+		entries["graphs"] = []
 	manifest["entries"] = entries
 
 	var camera: Dictionary = canvas.get("camera", {})
@@ -228,8 +258,50 @@ func _normalize_loaded_project(manifest: Dictionary, canvas: Dictionary) -> void
 		item_data["scale_factor"] = int(item_data.get("scale_factor", 1))
 		item_data["z_index"] = int(item_data.get("z_index", 0))
 		item_data["locked"] = bool(item_data.get("locked", false))
+		if String(item_data.get("type", "")) == "node":
+			item_data["node_id"] = String(item_data.get("node_id", ""))
+			item_data["graph_id"] = String(item_data.get("graph_id", ""))
+			item_data["collapsed"] = bool(item_data.get("collapsed", false))
 		normalized_items.append(item_data)
 	canvas["items"] = normalized_items
+
+
+func _load_graphs_from_files(files: Dictionary, manifest: Dictionary) -> Dictionary:
+	var graphs := {}
+	var graph_ids := _manifest_graph_ids(manifest, files)
+	for graph_id in graph_ids:
+		var path := "graphs/%s.json" % graph_id
+		if not files.has(path):
+			return {"ok": false, "error": ERR_FILE_CORRUPT, "graphs": {}}
+		var graph_data: Variant = FileIOScript.bytes_to_json(files[path])
+		if not (graph_data is Dictionary):
+			return {"ok": false, "error": ERR_PARSE_ERROR, "graphs": {}}
+		graphs[graph_id] = graph_data
+	return {"ok": true, "error": OK, "graphs": graphs}
+
+
+func _manifest_graph_ids(manifest: Dictionary, files: Dictionary) -> Array:
+	var entries: Dictionary = manifest.get("entries", {})
+	var graph_ids := []
+	for raw_id in entries.get("graphs", []):
+		var graph_id := String(raw_id)
+		if not graph_id.is_empty():
+			graph_ids.append(graph_id)
+	if not graph_ids.is_empty():
+		return graph_ids
+
+	for path in files.keys():
+		var file_path := String(path)
+		if file_path.begins_with("graphs/") and file_path.ends_with(".json"):
+			graph_ids.append(file_path.get_file().get_basename())
+	graph_ids.sort()
+	return graph_ids
+
+
+func _sorted_graph_ids() -> Array:
+	var graph_ids: Array = current_project.graphs.keys()
+	graph_ids.sort()
+	return graph_ids
 
 
 func _emit_dirty(value: bool) -> void:
