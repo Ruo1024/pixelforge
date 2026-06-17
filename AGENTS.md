@@ -30,8 +30,8 @@
 |---|---|
 | 任何写代码任务 | `01-architecture/ARCHITECTURE.md`（分层依赖规则、目录结构、编码规范、性能预算） |
 | 涉及 UI/交互决策 | `00-vision/PRODUCT.md`（UX 原则：像素清晰度优先、不打断创作流、批量优先） |
-| 改 .pxproj 读写 / 项目数据结构 | `02-contracts/PROJECT-FORMAT.md`（改动须新增迁移函数并升 format_version） |
-| 改节点图模型/执行器 | `02-contracts/GRAPH-SCHEMA.md` |
+| 改 .pxproj 读写 / 项目数据结构 / 画布元素布局 | `02-contracts/PROJECT-FORMAT.md`（含 §4 canvas.json `node` 引用；改格式须升版+迁移，预发布期见 §6 例外） |
+| 改节点图模型/执行器 | `02-contracts/GRAPH-SCHEMA.md`（含批次内容节点 §5a、菜单/节点 both-and） |
 | 改 AI provider / 任务队列 | `02-contracts/PROVIDER-API.md` |
 | 改插件加载 / 新内置模块 | `02-contracts/PLUGIN-API.md`（内置 provider 也按插件形态实现） |
 | 改风格预设 / 调色板 schema | `02-contracts/STYLE-PRESETS.md` |

@@ -6,7 +6,7 @@
 
 - **当前稳定版**：Godot 4.6.3（2026-05-20）。4.6 起默认现代主题；LibGodot 可嵌入；多窗口稳定。曾有 `low_processor_usage_mode` 多窗口 CPU 回归（Issue #101058/#102914），4.6 已修复——工具应用必须开启此模式，CI 加空载 CPU 检查。
 - **Pixelorama 先例**：纯 GDScript、运行于 Godot 4.6.3、8.5k+ stars，功能含时间线/洋葱皮/平铺/调色板/混合模式——证明 GDScript 性能上限足够本产品全部 2D 需求。
-- **Material Maker 1.4 先例**（2025-10，Godot 4.4.1）：GraphEdit 承载 200+ 节点的程序化纹理工具，节点工作流形态与本产品功能3高度同构。GraphEdit 注意点：类型端口/缩放平移/minimap 原生支持；端口类型校验逻辑需自写；深度自定义连线样式成本高（v1 不做）。
+- **Material Maker 1.4 先例**（2025-10，Godot 4.4.1）：GraphEdit 承载 200+ 节点的程序化纹理工具，节点工作流形态与本产品功能3高度同构。GraphEdit 注意点：类型端口/缩放平移/minimap 原生支持；端口类型校验逻辑需自写；深度自定义连线样式成本高（v1 不做）。**（2026-06-16 更新：本产品最终选择画布原生自绘节点，不复用 GraphEdit——统一画布决策，节点与参考卡/批次同坐标互连；GraphEdit 仅作交互手感参考。见 ARCHITECTURE §1、M3、无限画布架构审阅 顶部。）**
 - **TileMapLayer**：4.2 起替代 TileMap。内置 Terrain（autotile）运行时 API 难用且有 bug（peering bits 异常案例多）；Better Terrain 插件是编辑器态方案，**运行时自实现 blob 匹配表更可控**（M5-2 采用）。
 - **网络**：HTTPRequest（单节点禁并发，需池化）、WebSocketPeer 需逐帧 poll——满足 ComfyUI ws 进度协议。
 - **性能逃生舱**：GDScript 数值运算慢是定论；PackedByteArray/PackedFloat32Array 批操作可缓解；Rust GDExtension（godot-rust/gdext）成熟；Compute Shader 在 Compatibility 渲染器不可用（**Forward+ 默认的依据之一**）。
