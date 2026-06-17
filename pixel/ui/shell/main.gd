@@ -19,6 +19,7 @@ const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
 const ScaleAudit := preload("res://ui/shell/scale_audit.gd")
+const ViewportFillPolicy := preload("res://ui/shell/viewport_fill_policy.gd")
 const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
 
 const DEFAULT_WINDOW_WIDTH := 1440
@@ -76,6 +77,7 @@ func _ready() -> void:
 	_apply_viewport_scale_policy()
 	_apply_runtime_theme()
 	_build_ui()
+	ViewportFillPolicy.apply(self, get_viewport_rect())
 	_connect_services()
 	_last_screen_snapshot = startup_snapshot
 	set_process(DisplayServer.get_name() != "headless")
@@ -92,6 +94,7 @@ func _notification(what: int) -> void:
 
 
 func _process(delta: float) -> void:
+	ViewportFillPolicy.apply(self, get_viewport_rect())
 	_poll_live_rescale(delta)
 
 
@@ -99,8 +102,6 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 
-	# macOS 习惯 Cmd+S/O/N；is_command_or_control_pressed() 在 mac 映射 Cmd、
-	# 其余平台映射 Ctrl，Windows 行为不变。
 	if event.is_command_or_control_pressed() and event.keycode == KEY_S:
 		_save_current_project()
 		get_viewport().set_input_as_handled()
@@ -120,8 +121,7 @@ func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String
 		snapshot, configured_scale, OS.get_name()
 	)
 	_window_pixel_scale = float(resolution["window_pixel_scale"])
-	# M0 复盘：残留 interface_scale=1.0 会永久旁路自动检测。
-	# 仅在 macOS 自动档明显更大时迁回 auto，其余显式覆盖仍尊重用户选择。
+	# M0 复盘：残留 interface_scale=1.0 会旁路自动检测；仅在 macOS 自动档明显更大时迁回 auto。
 	if (
 		OS.get_name() == "macOS"
 		and is_equal_approx(configured_scale, 1.0)

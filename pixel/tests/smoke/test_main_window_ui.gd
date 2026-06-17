@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
 const MainScript := preload("res://ui/shell/main.gd")
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
+const ViewportFillPolicy := preload("res://ui/shell/viewport_fill_policy.gd")
 const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
 
 
@@ -50,6 +51,19 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
 	await wait_process_frames(1)
 	assert_eq(int(slider.value), canvas.zoom_index)
 	assert_eq(label.text, "100%")
+
+
+func test_viewport_fill_policy_covers_expanded_visible_rect() -> void:
+	var control := Control.new()
+	ViewportFillPolicy.apply(control, Rect2(Vector2(-220, -120), Vector2(1880, 1200)))
+
+	assert_eq(control.anchor_left, 0.0)
+	assert_eq(control.anchor_right, 0.0)
+	assert_eq(control.offset_left, -220.0)
+	assert_eq(control.offset_top, -120.0)
+	assert_eq(control.offset_right, 1660.0)
+	assert_eq(control.offset_bottom, 1080.0)
+	control.free()
 
 
 func test_auto_interface_scale_detects_high_density_displays() -> void:
