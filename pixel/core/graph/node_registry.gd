@@ -5,13 +5,19 @@ extends RefCounted
 ## contract: 02-contracts/GRAPH-SCHEMA.md §7；插件与内置节点共用此入口，后注册不得覆盖已注册类型。
 
 const Log := preload("res://core/util/log_util.gd")
+const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 
 var _scripts := {}
 
 
 func _init(register_builtins: bool = true) -> void:
 	if register_builtins:
+		register("object_list", ObjectListNodeScript)
+		register("size_spec", SizeSpecNodeScript)
+		register("ai_generate", AiGenerateNodeScript)
 		register("batch", BatchNodeScript)
 
 

@@ -1,0 +1,224 @@
+class_name PFGraphMockRunner
+extends RefCounted
+
+## M3 最小 mock 节点链运行器。
+## contract: 03-milestones/M3-开发规划.md G-2；只跑本地 mock 链并把 image_list 物化进 batch。
+
+const IdUtil := preload("res://core/util/id_util.gd")
+
+
+func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "") -> Dictionary:
+	if graph == null:
+		return _error("missing_graph", "Graph is required")
+	if asset_library == null or not asset_library.has_method("register_image"):
+		return _error("missing_asset_library", "AssetLibrary-compatible object is required")
+
+	var order_result := _topological_order(graph)
+	if not bool(order_result["ok"]):
+		return order_result
+
+	var inputs_by_node := {}
+	var outputs_by_node := {}
+	var materialized_asset_ids := []
+	for node_id in order_result["order"]:
+		var run_result := _run_node(
+			graph, String(node_id), inputs_by_node, outputs_by_node, asset_library, batch_node_id
+		)
+		if not bool(run_result["ok"]):
+			return run_result
+		for asset_id in run_result.get("asset_ids", []):
+			materialized_asset_ids.append(asset_id)
+
+	if materialized_asset_ids.is_empty():
+		return _error("empty_batch", "No generated images reached a batch node")
+	return {"ok": true, "asset_ids": materialized_asset_ids, "graph": graph.to_json()}
+
+
+func _run_node(
+	graph: PFGraph,
+	node_id: String,
+	inputs_by_node: Dictionary,
+	outputs_by_node: Dictionary,
+	asset_library: Node,
+	batch_node_id: String
+) -> Dictionary:
+	var node := graph.get_node(node_id)
+	if node == null:
+		return _error("missing_node", "Graph node is missing")
+	if node.is_ghost():
+		return _error("ghost_node", "Cannot run graph with missing node type: %s" % node.get_type())
+
+	var inputs: Dictionary = inputs_by_node.get(node_id, {})
+	var outputs := {}
+	var asset_ids := []
+	if node.get_type() == "batch":
+		if batch_node_id.is_empty() or batch_node_id == node_id:
+			var materialized := _materialize_batch(
+				graph, node_id, inputs.get("in", []), inputs.get("__metadata", []), asset_library
+			)
+			if not bool(materialized["ok"]):
+				return materialized
+			asset_ids = materialized["asset_ids"]
+			outputs = {"images": _image_array(inputs.get("in", [])), "assets": asset_ids}
+	else:
+		outputs = node.execute(inputs, graph.get_node_params(node_id), {})
+		if outputs.has("__error"):
+			return _error_from_node(outputs["__error"])
+
+	outputs_by_node[node_id] = outputs
+	_propagate_outputs(graph, node_id, inputs_by_node, outputs_by_node)
+	return {"ok": true, "asset_ids": asset_ids}
+
+
+func _materialize_batch(
+	graph: PFGraph, node_id: String, value: Variant, metadata: Variant, asset_library: Node
+) -> Dictionary:
+	var images := _image_array(value)
+	if images.is_empty():
+		return _error("empty_images", "Batch node received no images")
+
+	var metas := _metadata_array(metadata)
+	var asset_ids := []
+	for index in range(images.size()):
+		var meta: Dictionary = metas[index] if index < metas.size() else {}
+		var asset_id: String = asset_library.register_image(
+			images[index],
+			String(meta.get("name", "mock_%03d" % index)),
+			_asset_meta(graph.id, meta)
+		)
+		asset_ids.append(asset_id)
+
+	var params := graph.get_node_params(node_id)
+	var existing: Array = params.get("asset_ids", [])
+	for asset_id in asset_ids:
+		existing.append(asset_id)
+	params["asset_ids"] = existing
+	graph.set_node_params(node_id, params)
+	return {"ok": true, "asset_ids": asset_ids}
+
+
+func _propagate_outputs(
+	graph: PFGraph, node_id: String, inputs_by_node: Dictionary, outputs_by_node: Dictionary
+) -> void:
+	var node := graph.get_node(node_id)
+	var outputs: Dictionary = outputs_by_node.get(node_id, {})
+	for edge in graph.edges:
+		var from_data: Array = edge.get("from", ["", ""])
+		if String(from_data[0]) != node_id:
+			continue
+		var to_data: Array = edge.get("to", ["", ""])
+		var to_node_id := String(to_data[0])
+		var from_port := String(from_data[1])
+		var to_port := String(to_data[1])
+		var target_inputs: Dictionary = inputs_by_node.get(to_node_id, {})
+		target_inputs[to_port] = _coerce_edge_value(
+			outputs.get(from_port, null),
+			node.get_output_port(from_port),
+			graph,
+			to_node_id,
+			to_port
+		)
+		if from_port == "images" and outputs.has("metadata"):
+			target_inputs["__metadata"] = outputs["metadata"]
+		inputs_by_node[to_node_id] = target_inputs
+
+
+func _coerce_edge_value(
+	value: Variant, source_port: Dictionary, graph: PFGraph, to_node_id: String, to_port: String
+) -> Variant:
+	var target := graph.get_node(to_node_id)
+	if target == null:
+		return value
+	var target_port := target.get_input_port(to_port)
+	if (
+		String(source_port.get("type", "")) == "image"
+		and String(target_port.get("type", "")) == "image_list"
+	):
+		return [value]
+	return value
+
+
+func _topological_order(graph: PFGraph) -> Dictionary:
+	var indegree := {}
+	var outgoing := {}
+	for node_id in graph.nodes.keys():
+		indegree[node_id] = 0
+		outgoing[node_id] = []
+	for edge in graph.edges:
+		var from_id := _edge_node(edge, "from")
+		var to_id := _edge_node(edge, "to")
+		if indegree.has(from_id) and indegree.has(to_id):
+			indegree[to_id] = int(indegree[to_id]) + 1
+			outgoing[from_id].append(to_id)
+
+	var ready := []
+	for node_id in indegree.keys():
+		if int(indegree[node_id]) == 0:
+			ready.append(node_id)
+	ready.sort()
+
+	var order := []
+	while not ready.is_empty():
+		var current := String(ready.pop_front())
+		order.append(current)
+		for target_id in outgoing[current]:
+			indegree[target_id] = int(indegree[target_id]) - 1
+			if int(indegree[target_id]) == 0:
+				ready.append(target_id)
+		ready.sort()
+
+	if order.size() != graph.nodes.size():
+		return _error("cycle", "Graph contains a cycle")
+	return {"ok": true, "order": order}
+
+
+func _asset_meta(graph_id: String, meta: Dictionary) -> Dictionary:
+	return {
+		"origin": "generated",
+		"tags": ["mock", "graph"],
+		"provenance":
+		{
+			"provider": meta.get("provider", "mock"),
+			"model": meta.get("model", "pixel_mock_v1"),
+			"prompt": meta.get("prompt", ""),
+			"seed": meta.get("seed", null),
+			"parent_asset": null,
+			"graph_id": graph_id,
+			"created_at": IdUtil.utc_now_iso(),
+		},
+	}
+
+
+func _image_array(value: Variant) -> Array:
+	var result := []
+	if value is Image:
+		result.append(value)
+	elif value is Array:
+		for item in value:
+			if item is Image:
+				result.append(item)
+	return result
+
+
+func _metadata_array(value: Variant) -> Array:
+	var result := []
+	if value is Array:
+		for item in value:
+			if item is Dictionary:
+				result.append(item)
+	return result
+
+
+func _edge_node(edge: Dictionary, key: String) -> String:
+	var data: Array = edge.get(key, ["", ""])
+	return String(data[0])
+
+
+func _error(code: String, message: String) -> Dictionary:
+	return {"ok": false, "error": {"code": code, "message": message}}
+
+
+func _error_from_node(error: Dictionary) -> Dictionary:
+	return _error(
+		String(error.get("code", "node_error")), String(error.get("message", "Node failed"))
+	)
