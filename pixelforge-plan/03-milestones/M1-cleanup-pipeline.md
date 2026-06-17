@@ -4,6 +4,15 @@
 > 依赖：M0。
 > 算法依据：04-research/RESEARCH-NOTES.md §3（unfake.js / proper-pixel-art 等先例已验证全部算法路线）。
 
+## M1 开始前置项
+
+M1 会首次引入真正的 `core/pixel` 算法，因此以下事项需要作为 M1 开发前置工作，不再留到 M1 结束：
+
+1. 建立 `tests/fixtures/generators/`：黄金样本必须由 GDScript 生成器产生，禁止手工 PNG 作为算法真值。真实 AI 样本只能用于人工评审。
+2. 建立 core 覆盖率输出：目标对齐 `QUALITY.md`，`core/` 行覆盖 ≥80%。如果 GUT 覆盖率工具在 Godot 4.6 下有局限，至少要在完成报告中解释替代统计方法。
+3. 对齐项目格式契约：M1 如果新增清洗 provenance、pipeline report 或样本字段，需要先更新 `02-contracts/PROJECT-FORMAT.md`，再修改实现。
+4. 继续使用本地 agent 验证：M0 当前出口口径为 `pixel/scripts/verify_m0.sh`，M1 可新增 `verify_m1.sh`，但不能降低 lint/test/headless 三项底线。
+
 ---
 
 ## M1-1 调色板模块与内置调色板数据
@@ -90,7 +99,7 @@
 
 **验收标准**：
 1. 端到端集成测试：fixtures 伪像素图 → 默认参数 apply → 输出尺寸/色数/网格对齐全达标。
-2. 50 张批量清洗 UI 不冻结（帧时间监控断言），总耗时 < 60s（CI 放宽 2 倍）。
+2. 50 张批量清洗 UI 不冻结（帧时间监控断言），总耗时 < 60s（自动化环境放宽 2 倍）。
 3. 手动模式拖网格后 Apply 结果与指定网格一致。
 4. 实测 3 张真实 AI 生成图（fixtures/real/ 目录，从公开模型生成存档）效果人工评审通过——评审标准：无肉眼可见网格错位、色数达标、关键轮廓未损。
 

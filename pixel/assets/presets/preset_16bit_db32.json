@@ -1,0 +1,25 @@
+{
+	"style_version": 1,
+	"id": "preset_16bit_db32",
+	"name": "16-bit / DB32",
+	"based_on": null,
+	"resolution_tier": "16bit",
+	"base_size": 32,
+	"tile_size": 16,
+	"palette": {
+		"ref": "db32",
+		"colors": []
+	},
+	"max_colors_per_sprite": 16,
+	"outline": "none",
+	"dither": "none",
+	"dither_strength": 0.0,
+	"perspective": "side",
+	"anti_alias": false,
+	"prompt_template": {
+		"positive": "{subject}, pixel art, 16-bit style, {size_hint}, limited palette, clean pixel grid",
+		"negative": "blurry, anti-aliasing, gradient, photorealistic, 3d render",
+		"style_tags": "retro game asset, DawnBringer palette"
+	},
+	"provider_hints": {}
+}

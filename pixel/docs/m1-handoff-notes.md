@@ -78,12 +78,19 @@ Logger 写 `user://logs/app_YYYY-MM-DD.log`，启动时按文件名日期清理 
 
 - 像素网格仍是 GDScript `draw_line` 循环。M0 性能测试通过，但 M1 末尾或 M3 前建议改成 shader/ColorRect 方案。
 - Windows 11 + Godot 4.6.3 实测仍未在当前机器完成。`docs/manual-test-m0.md` 已列出手动验证项。
-- 当前测试为 29 tests / 224 asserts。M1 开始前建议按 M0/M1 任务卡逐条做验收覆盖盘点，尤其是批量图像处理和错误恢复。
+- 当前测试为 30 tests / 225 asserts。M1 开始前建议按 M0/M1 任务卡逐条做验收覆盖盘点，尤其是批量图像处理和错误恢复。
 
 ## 常用验证命令
 
 ```bash
+./scripts/verify_m0.sh
 ./scripts/lint.sh
 ./scripts/run_tests.sh
 ./scripts/check_export_templates.sh
 ```
+
+## M1 前置补齐项
+
+- 建立 `tests/fixtures/generators/`，所有 M1 黄金样本由脚本生成，禁止手工 PNG 作为算法真值。
+- 为 `core/pixel` 算法建立覆盖率输出，目标按 QUALITY：core 层行覆盖不低于 80%。
+- M1 若扩展 `.pxproj` 内容，先同步 `pixelforge-plan/02-contracts/PROJECT-FORMAT.md`，再升 `PROJECT_FORMAT_VERSION` 和迁移测试。

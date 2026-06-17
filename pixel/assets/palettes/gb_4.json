@@ -1,0 +1,12 @@
+{
+	"id": "gb_4",
+	"name": "Nintendo Gameboy (bgb)",
+	"colors": [
+		"#081820",
+		"#346856",
+		"#88C070",
+		"#E0F8D0"
+	],
+	"source": "lospec:nintendo-gameboy-bgb",
+	"license": "CC0"
+}

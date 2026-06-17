@@ -1,0 +1,25 @@
+{
+	"style_version": 1,
+	"id": "preset_1bit",
+	"name": "1-bit",
+	"based_on": null,
+	"resolution_tier": "1bit",
+	"base_size": 32,
+	"tile_size": 16,
+	"palette": {
+		"ref": "bw_2",
+		"colors": []
+	},
+	"max_colors_per_sprite": 2,
+	"outline": "none",
+	"dither": "bayer4",
+	"dither_strength": 0.5,
+	"perspective": "side",
+	"anti_alias": false,
+	"prompt_template": {
+		"positive": "{subject}, 1-bit pixel art, black and white, {size_hint}",
+		"negative": "gray, blurry, anti-aliasing, gradients",
+		"style_tags": "binary monochrome sprite"
+	},
+	"provider_hints": {}
+}

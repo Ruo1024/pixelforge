@@ -1,0 +1,1330 @@
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 2d06b9b..6b94a35 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -17,3 +17,4 @@
+ - M2.1: 新增 File > Import Images、Matte/Slice/Outline 参数预览对话框、W/M/L 像素选区工具、左下角缩放滑条、非纯色底错误引导、无连线批次卡与整批菜单。
+ - M2.2: 修复高分屏缩放钳制、清洗台矮窗可达性、批次卡可读尺寸与导入取景、滚轮缩放过冲、导出空选区提示、描边低 alpha 噪点和首启引导标记时机；暂隐藏未接入算法的 W/M/L 工具入口。
+ - M2.3: UI 缩放迁移到 `content_scale_factor`；删除组件级 `ui_scale` / `_scaled_int` 约定，画布按设备整数倍率反向补偿，并新增 M2.3 缩放守护脚本与回归测试。
++- M2.4: 加固缩放体验，画布层平移吸附到物理像素网格，FileDialog 统一 Godot 自绘以跟随界面缩放，新增跨屏 live re-scale 防抖、`--scale-audit` 日志与 M2.4 出口门控。
+diff --git a/pixel/scripts/check_ui_scaling.sh b/pixel/scripts/check_ui_scaling.sh
+index ef94e56..584f9a4 100755
+--- a/pixel/scripts/check_ui_scaling.sh
++++ b/pixel/scripts/check_ui_scaling.sh
+@@ -21,6 +21,10 @@ if rg -n "add_theme_font_size_override\\([^,]+,\\s*[0-9]" ui --glob '*.gd'; then
+   fail=1
+ fi
+ 
++if rg -n "item_layer\\.position\\s*=" ui/canvas/infinite_canvas.gd | rg -v "snap_position_to_physical_pixel"; then
++  fail=1
++fi
++
+ if [[ "${fail}" == "0" ]]; then
+   echo "check_ui_scaling: ok"
+ else
+diff --git a/pixel/scripts/verify_m2_4.sh b/pixel/scripts/verify_m2_4.sh
+new file mode 100755
+index 0000000..d7af30b
+--- /dev/null
++++ b/pixel/scripts/verify_m2_4.sh
+@@ -0,0 +1,18 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/.."
++
++./scripts/lint.sh
++./scripts/run_tests.sh
++./scripts/check_ui_scaling.sh
++./scripts/check_export_templates.sh
++
++if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
++  if git diff --cached --name-only | grep -iE '\.png$|\.jpe?g$' >/dev/null; then
++    echo "Staged image files are not allowed for M2.4 commits." >&2
++    exit 1
++  fi
++fi
++
++echo "verify_m2_4: ok"
+diff --git a/pixel/services/settings_service.gd b/pixel/services/settings_service.gd
+index 8094d08..3cece0e 100644
+--- a/pixel/services/settings_service.gd
++++ b/pixel/services/settings_service.gd
+@@ -67,6 +67,7 @@ func _ensure_defaults() -> void:
+ 	var changed := false
+ 	changed = _set_default("ui", "language", "en") or changed
+ 	changed = _set_default("ui", "interface_scale", 0.0) or changed
++	changed = _set_default("ui", "live_rescale", true) or changed
+ 	changed = _set_default("project", "recent_projects", []) or changed
+ 	changed = _set_default("tasks", "max_concurrency", 2) or changed
+ 	if changed:
+diff --git a/pixel/tests/smoke/test_infinite_canvas.gd b/pixel/tests/smoke/test_infinite_canvas.gd
+index 9674055..31fda91 100644
+--- a/pixel/tests/smoke/test_infinite_canvas.gd
++++ b/pixel/tests/smoke/test_infinite_canvas.gd
+@@ -84,6 +84,32 @@ func test_canvas_device_scale_rounds_fractional_content_scale() -> void:
+ 	assert_eq(CanvasScalePolicy.effective_art_pixel_px(1.0, 1.5), 2)
+ 
+ 
++func test_canvas_layer_position_snaps_to_physical_pixel_grid() -> void:
++	var raw_position := Vector2(150.125, 99.75)
++	var snapped_position := CanvasScalePolicy.snap_position_to_physical_pixel(raw_position, 1.5)
++
++	assert_true(CanvasScalePolicy.is_position_on_physical_pixel(snapped_position, 1.5))
++	assert_lte(absf(snapped_position.x - raw_position.x), 0.5 / 1.5 + 0.001)
++	assert_lte(absf(snapped_position.y - raw_position.y), 0.5 / 1.5 + 0.001)
++
++
++func test_canvas_transform_uses_snapped_layer_position() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(301, 201)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	canvas.camera_center = Vector2(0.25, 0.5)
++	canvas._set_viewport_scale_factor_for_test(1.5)
++	var world_position := Vector2(12.25, -3.5)
++	var screen_position: Vector2 = canvas.world_to_screen(world_position)
++	var roundtrip: Vector2 = canvas.screen_to_world(screen_position)
++
++	assert_true(CanvasScalePolicy.is_position_on_physical_pixel(canvas.item_layer.position, 1.5))
++	assert_almost_eq(roundtrip.x, world_position.x, 0.001)
++	assert_almost_eq(roundtrip.y, world_position.y, 0.001)
++
++
+ func test_canvas_coordinates_use_compensated_logical_scale() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(300, 200)
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 9fb0592..6d16937 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -1,6 +1,8 @@
+ extends "res://addons/gut/test.gd"
+ 
+ const MainScript := preload("res://ui/shell/main.gd")
++const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
++const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
+ 
+ 
+ func test_main_window_uses_readable_minimum_sizes() -> void:
+@@ -50,30 +52,51 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
+ 
+ 
+ func test_auto_interface_scale_detects_high_density_displays() -> void:
+-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(2560, 1440)), 1.0)
+-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(3840, 2160)), 1.5)
+-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(5120, 3140)), 2.0)
+-	assert_eq(MainScript.compute_auto_interface_scale(2.0, Vector2i(2560, 1600)), 2.0)
++	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(2560, 1440)), 1.0)
++	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(3840, 2160)), 1.5)
++	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(5120, 3140)), 2.0)
++	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(2.0, Vector2i(2560, 1600)), 2.0)
+ 
+ 
+ func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
+-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1244, 778), "macOS", 0), 2.0)
+-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1334, 834), "macOS", 0), 2.0)
+-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 0), 2.0)
+-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 96), 1.0)
+-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 110), 1.0)
+-	assert_eq(MainScript.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 220), 2.0)
++	assert_eq(
++		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1244, 778), "macOS", 0), 2.0
++	)
++	assert_eq(
++		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1334, 834), "macOS", 0), 2.0
++	)
++	assert_eq(
++		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 0), 2.0
++	)
++	assert_eq(
++		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 96),
++		1.0
++	)
++	assert_eq(
++		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 110),
++		1.0
++	)
++	assert_eq(
++		InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 220),
++		2.0
++	)
+ 
+ 
+ func test_interface_scale_preserves_readability_on_scaled_screens() -> void:
+-	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(1334, 834)), 2.0)
+-	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(1470, 956)), 2.0)
+-	assert_eq(MainScript.fit_interface_scale_to_startup_screen(2.0, Vector2i(5120, 2982)), 2.0)
++	assert_eq(
++		InterfaceScalePolicy.fit_interface_scale_to_startup_screen(2.0, Vector2i(1334, 834)), 2.0
++	)
++	assert_eq(
++		InterfaceScalePolicy.fit_interface_scale_to_startup_screen(2.0, Vector2i(1470, 956)), 2.0
++	)
++	assert_eq(
++		InterfaceScalePolicy.fit_interface_scale_to_startup_screen(2.0, Vector2i(5120, 2982)), 2.0
++	)
+ 
+ 
+ func test_content_scale_policy_uses_native_factor_without_reference_size() -> void:
+ 	var window := Window.new()
+-	MainScript.apply_content_scale_policy(window, 1.5)
++	InterfaceScalePolicy.apply_content_scale_policy(window, 1.5)
+ 
+ 	assert_eq(window.content_scale_mode, Window.CONTENT_SCALE_MODE_DISABLED)
+ 	assert_eq(window.content_scale_aspect, Window.CONTENT_SCALE_ASPECT_IGNORE)
+@@ -84,6 +107,36 @@ func test_content_scale_policy_uses_native_factor_without_reference_size() -> vo
+ 	window.free()
+ 
+ 
++func test_live_rescale_detects_screen_signature_changes() -> void:
++	var base := {
++		"screen": 0,
++		"reported_scale": 1.0,
++		"screen_dpi": 96,
++		"usable_size": Vector2i(1920, 1080),
++	}
++	var same := base.duplicate()
++	var screen_changed := base.duplicate()
++	screen_changed["screen"] = 1
++	var scale_changed := base.duplicate()
++	scale_changed["reported_scale"] = 1.5
++	var dpi_changed := base.duplicate()
++	dpi_changed["screen_dpi"] = 144
++
++	assert_false(InterfaceScalePolicy.screen_scale_snapshot_changed(base, same))
++	assert_true(InterfaceScalePolicy.screen_scale_snapshot_changed(base, screen_changed))
++	assert_true(InterfaceScalePolicy.screen_scale_snapshot_changed(base, scale_changed))
++	assert_true(InterfaceScalePolicy.screen_scale_snapshot_changed(base, dpi_changed))
++
++
++func test_file_dialog_policy_uses_godot_drawn_dialogs() -> void:
++	var dialog := FileDialog.new()
++	dialog.use_native_dialog = true
++	DialogScalePolicy.configure_file_dialog(dialog)
++
++	assert_false(dialog.use_native_dialog)
++	dialog.free()
++
++
+ func test_cleanup_inspector_keeps_apply_actions_reachable_below_scroll() -> void:
+ 	var main: Control = MainScript.new()
+ 	add_child_autofree(main)
+diff --git a/pixel/ui/canvas/canvas_pixel_grid_renderer.gd b/pixel/ui/canvas/canvas_pixel_grid_renderer.gd
+new file mode 100644
+index 0000000..4c9f78f
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_pixel_grid_renderer.gd
+@@ -0,0 +1,22 @@
++class_name PFCanvasPixelGridRenderer
++extends RefCounted
++
++## 画布像素网格绘制 helper。
++## 输入：PFInfiniteCanvas 的坐标转换方法；输出：当前可视区域内的像素边界线。
++
++
++static func draw(canvas: Control, color: Color) -> void:
++	var top_left: Vector2 = canvas.screen_to_world(Vector2.ZERO)
++	var bottom_right: Vector2 = canvas.screen_to_world(canvas.size)
++	var start_x := floori(top_left.x)
++	var end_x := ceili(bottom_right.x)
++	var start_y := floori(top_left.y)
++	var end_y := ceili(bottom_right.y)
++
++	for x in range(start_x, end_x + 1):
++		var screen_x: float = canvas.world_to_screen(Vector2(float(x), 0.0)).x
++		canvas.draw_line(Vector2(screen_x, 0.0), Vector2(screen_x, canvas.size.y), color, 1.0)
++
++	for y in range(start_y, end_y + 1):
++		var screen_y: float = canvas.world_to_screen(Vector2(0.0, float(y))).y
++		canvas.draw_line(Vector2(0.0, screen_y), Vector2(canvas.size.x, screen_y), color, 1.0)
+diff --git a/pixel/ui/canvas/canvas_pixel_grid_renderer.gd.uid b/pixel/ui/canvas/canvas_pixel_grid_renderer.gd.uid
+new file mode 100644
+index 0000000..5f33278
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_pixel_grid_renderer.gd.uid
+@@ -0,0 +1 @@
++uid://wfy0gjnbrim1
+diff --git a/pixel/ui/canvas/canvas_scale_policy.gd b/pixel/ui/canvas/canvas_scale_policy.gd
+index bb9ed6a..37edc3a 100644
+--- a/pixel/ui/canvas/canvas_scale_policy.gd
++++ b/pixel/ui/canvas/canvas_scale_policy.gd
+@@ -4,6 +4,8 @@ extends RefCounted
+ ## 画布美术缩放策略。
+ ## 输入：viewport content scale factor 与相机缩放；输出：设备整数倍率和逻辑坐标倍率。
+ 
++const POSITION_EPSILON := 0.0001
++
+ 
+ static func compute_canvas_device_scale(viewport_scale_factor: float) -> int:
+ 	return maxi(1, int(round(maxf(viewport_scale_factor, 1.0))))
+@@ -28,3 +30,46 @@ static func compute_art_physical_scale(
+ 
+ static func effective_art_pixel_px(camera_zoom_value: float, viewport_scale_factor: float) -> int:
+ 	return maxi(1, int(round(compute_art_physical_scale(camera_zoom_value, viewport_scale_factor))))
++
++
++## 把 Control 逻辑坐标吸附到物理像素网格，避免 NEAREST 放大后的像素块宽度抖动。
++static func snap_position_to_physical_pixel(
++	logical_position: Vector2, viewport_scale_factor: float
++) -> Vector2:
++	var safe_factor := maxf(viewport_scale_factor, 1.0)
++	return Vector2(
++		round(logical_position.x * safe_factor) / safe_factor,
++		round(logical_position.y * safe_factor) / safe_factor
++	)
++
++
++## Headless 测试用的不变量：逻辑坐标乘 content factor 后必须接近整数物理像素。
++static func is_position_on_physical_pixel(
++	logical_position: Vector2, viewport_scale_factor: float
++) -> bool:
++	var safe_factor := maxf(viewport_scale_factor, 1.0)
++	var physical_position := logical_position * safe_factor
++	return (
++		absf(physical_position.x - round(physical_position.x)) <= POSITION_EPSILON
++		and absf(physical_position.y - round(physical_position.y)) <= POSITION_EPSILON
++	)
++
++
++## 已知吸附后的 item layer 位置时，反推相机中心，保持相机状态与实际渲染一致。
++static func camera_center_from_layer_position(
++	viewport_size: Vector2, layer_position: Vector2, art_logical_scale: float
++) -> Vector2:
++	return (viewport_size * 0.5 - layer_position) / maxf(art_logical_scale, POSITION_EPSILON)
++
++
++## 缩放到光标时，先取最近物理像素网格，再反推相机中心，限制锚点漂移。
++static func camera_center_for_snapped_anchor(
++	viewport_size: Vector2,
++	anchor_world: Vector2,
++	screen_anchor: Vector2,
++	art_logical_scale: float,
++	viewport_scale_factor: float
++) -> Vector2:
++	var target_position := screen_anchor - anchor_world * art_logical_scale
++	var snapped_position := snap_position_to_physical_pixel(target_position, viewport_scale_factor)
++	return camera_center_from_layer_position(viewport_size, snapped_position, art_logical_scale)
+diff --git a/pixel/ui/canvas/canvas_tool_input_policy.gd b/pixel/ui/canvas/canvas_tool_input_policy.gd
+new file mode 100644
+index 0000000..f2764f2
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_tool_input_policy.gd
+@@ -0,0 +1,23 @@
++class_name PFCanvasToolInputPolicy
++extends RefCounted
++
++## 画布工具输入分流。
++## 高频导航（滚轮、中键、空格平移）优先保留给画布，其余事件交给激活工具。
++
++
++static func tool_manager_handles(
++	tool_manager: Variant, event: InputEvent, canvas: Control, active_target: Dictionary
++) -> bool:
++	if tool_manager == null:
++		return false
++	if event is InputEventMouseButton:
++		var mouse_event := event as InputEventMouseButton
++		if (
++			mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP
++			or mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN
++			or mouse_event.button_index == MOUSE_BUTTON_MIDDLE
++			or Input.is_key_pressed(KEY_SPACE)
++		):
++			return false
++		return tool_manager.handle_canvas_input(event, canvas, active_target)
++	return tool_manager.handle_canvas_input(event, canvas, active_target)
+diff --git a/pixel/ui/canvas/canvas_tool_input_policy.gd.uid b/pixel/ui/canvas/canvas_tool_input_policy.gd.uid
+new file mode 100644
+index 0000000..abea241
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_tool_input_policy.gd.uid
+@@ -0,0 +1 @@
++uid://ub58liu3bwcx
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 1b4c2b4..964a12e 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -25,6 +25,8 @@ const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_prev
+ const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
+ const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
+ const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
++const PixelGridRenderer := preload("res://ui/canvas/canvas_pixel_grid_renderer.gd")
++const ToolInputPolicy := preload("res://ui/canvas/canvas_tool_input_policy.gd")
+ const IdUtil := preload("res://core/util/id_util.gd")
+ const ImageMath := preload("res://core/util/image_math.gd")
+ const Log := preload("res://core/util/log_util.gd")
+@@ -326,11 +328,11 @@ func export_canvas_data() -> Dictionary:
+ 
+ 
+ func screen_to_world(screen_position: Vector2) -> Vector2:
+-	return camera_center + (screen_position - size * 0.5) / _get_art_logical_scale()
++	return (screen_position - item_layer.position) / _get_art_logical_scale()
+ 
+ 
+ func world_to_screen(world_position: Vector2) -> Vector2:
+-	return size * 0.5 + (world_position - camera_center) * _get_art_logical_scale()
++	return item_layer.position + world_position * _get_art_logical_scale()
+ 
+ 
+ func _world_rect_to_screen(world_rect: Rect2) -> Rect2:
+@@ -342,7 +344,13 @@ func get_mouse_world_position() -> Vector2:
+ 
+ 
+ func pan_by_pixels(pixel_delta: Vector2) -> void:
+-	camera_center += pixel_delta / _get_art_logical_scale()
++	var target_position := item_layer.position - pixel_delta
++	var snapped_position := ScalePolicy.snap_position_to_physical_pixel(
++		target_position, _resolve_viewport_scale_factor()
++	)
++	camera_center = ScalePolicy.camera_center_from_layer_position(
++		size, snapped_position, _get_art_logical_scale()
++	)
+ 	_update_layer_transform()
+ 	_emit_canvas_changed()
+ 
+@@ -354,7 +362,7 @@ func set_camera_zoom(value: float, screen_anchor: Vector2 = size * 0.5) -> void:
+ 	if is_equal_approx(old_zoom, camera_zoom):
+ 		_emit_zoom_changed()
+ 		return
+-	camera_center = anchor_world - (screen_anchor - size * 0.5) / _get_art_logical_scale()
++	camera_center = _camera_center_for_snapped_anchor(anchor_world, screen_anchor)
+ 	_update_layer_transform()
+ 	_emit_canvas_changed()
+ 	_emit_zoom_changed()
+@@ -368,7 +376,7 @@ func zoom_by_steps(step_delta: int, screen_anchor: Vector2) -> void:
+ 	if is_equal_approx(old_zoom, camera_zoom):
+ 		_emit_zoom_changed()
+ 		return
+-	camera_center = anchor_world - (screen_anchor - size * 0.5) / _get_art_logical_scale()
++	camera_center = _camera_center_for_snapped_anchor(anchor_world, screen_anchor)
+ 	_update_layer_transform()
+ 	_emit_canvas_changed()
+ 	_emit_zoom_changed()
+@@ -772,8 +780,13 @@ func _set_viewport_scale_factor_for_test(viewport_scale_factor: float) -> void:
+ 
+ 
+ func _update_layer_transform() -> void:
+-	item_layer.position = size * 0.5 - camera_center * _get_art_logical_scale()
+-	item_layer.scale = Vector2.ONE * _get_art_logical_scale()
++	var viewport_scale_factor := _resolve_viewport_scale_factor()
++	var art_logical_scale := _get_art_logical_scale()
++	var raw_position := size * 0.5 - camera_center * art_logical_scale
++	item_layer.position = ScalePolicy.snap_position_to_physical_pixel(
++		raw_position, viewport_scale_factor
++	)
++	item_layer.scale = Vector2.ONE * art_logical_scale
+ 	_sync_cleanup_grid_overlay()
+ 	queue_redraw()
+ 
+@@ -808,22 +821,18 @@ func _get_art_logical_scale() -> float:
+ 	)
+ 
+ 
+-func _draw_pixel_grid() -> void:
+-	var top_left := screen_to_world(Vector2.ZERO)
+-	var bottom_right := screen_to_world(size)
+-	var start_x := floori(top_left.x)
+-	var end_x := ceili(bottom_right.x)
+-	var start_y := floori(top_left.y)
+-	var end_y := ceili(bottom_right.y)
+-	var color := Color(1.0, 1.0, 1.0, 0.08)
++func _camera_center_for_snapped_anchor(anchor_world: Vector2, screen_anchor: Vector2) -> Vector2:
++	return ScalePolicy.camera_center_for_snapped_anchor(
++		size,
++		anchor_world,
++		screen_anchor,
++		_get_art_logical_scale(),
++		_resolve_viewport_scale_factor()
++	)
+ 
+-	for x in range(start_x, end_x + 1):
+-		var screen_x := world_to_screen(Vector2(float(x), 0.0)).x
+-		draw_line(Vector2(screen_x, 0.0), Vector2(screen_x, size.y), color, 1.0)
+ 
+-	for y in range(start_y, end_y + 1):
+-		var screen_y := world_to_screen(Vector2(0.0, float(y))).y
+-		draw_line(Vector2(0.0, screen_y), Vector2(size.x, screen_y), color, 1.0)
++func _draw_pixel_grid() -> void:
++	PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+ 
+ 
+ func _emit_canvas_changed() -> void:
+@@ -875,19 +884,9 @@ func _update_cleanup_preview_alt_state() -> void:
+ 
+ 
+ func _tool_manager_handles(event: InputEvent) -> bool:
+-	if tool_manager == null:
+-		return false
+-	if event is InputEventMouseButton:
+-		var mouse_event := event as InputEventMouseButton
+-		if (
+-			mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP
+-			or mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN
+-			or mouse_event.button_index == MOUSE_BUTTON_MIDDLE
+-			or Input.is_key_pressed(KEY_SPACE)
+-		):
+-			return false
+-		return tool_manager.handle_canvas_input(event, self, _get_active_tool_target())
+-	return tool_manager.handle_canvas_input(event, self, _get_active_tool_target())
++	return ToolInputPolicy.tool_manager_handles(
++		tool_manager, event, self, _get_active_tool_target()
++	)
+ 
+ 
+ func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
+diff --git a/pixel/ui/inspector/cleanup_inspector.gd b/pixel/ui/inspector/cleanup_inspector.gd
+index 47a1fd1..88b7841 100644
+--- a/pixel/ui/inspector/cleanup_inspector.gd
++++ b/pixel/ui/inspector/cleanup_inspector.gd
+@@ -16,6 +16,7 @@ const Quantizer := preload("res://core/pixel/quantizer.gd")
+ const Ditherer := preload("res://core/pixel/ditherer.gd")
+ const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
+ const Strings := preload("res://ui/shell/strings.gd")
++const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+ 
+ const PANEL_WIDTH := 420
+ const CONTROL_HEIGHT := 30
+@@ -409,6 +410,7 @@ func _make_options(labels: Array) -> OptionButton:
+ 
+ func _create_palette_dialogs() -> void:
+ 	_palette_import_dialog = FileDialog.new()
++	DialogScalePolicy.configure_file_dialog(_palette_import_dialog)
+ 	_palette_import_dialog.title = Strings.DIALOG_IMPORT_PALETTE
+ 	_palette_import_dialog.access = FileDialog.ACCESS_FILESYSTEM
+ 	_palette_import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+diff --git a/pixel/ui/shell/dialog_scale_policy.gd b/pixel/ui/shell/dialog_scale_policy.gd
+new file mode 100644
+index 0000000..e65713d
+--- /dev/null
++++ b/pixel/ui/shell/dialog_scale_policy.gd
+@@ -0,0 +1,11 @@
++class_name PFDialogScalePolicy
++extends RefCounted
++
++## 弹窗缩放策略。
++## FileDialog 默认使用 Godot 自绘窗口，以便跟随 Window.content_scale_factor 做真机验收。
++
++
++static func configure_file_dialog(dialog: FileDialog) -> void:
++	if dialog == null:
++		return
++	dialog.use_native_dialog = false
+diff --git a/pixel/ui/shell/dialog_scale_policy.gd.uid b/pixel/ui/shell/dialog_scale_policy.gd.uid
+new file mode 100644
+index 0000000..dd98a50
+--- /dev/null
++++ b/pixel/ui/shell/dialog_scale_policy.gd.uid
+@@ -0,0 +1 @@
++uid://df7mpcgh6tbsq
+diff --git a/pixel/ui/shell/interface_scale_policy.gd b/pixel/ui/shell/interface_scale_policy.gd
+new file mode 100644
+index 0000000..1a2d9bb
+--- /dev/null
++++ b/pixel/ui/shell/interface_scale_policy.gd
+@@ -0,0 +1,131 @@
++class_name PFInterfaceScalePolicy
++extends RefCounted
++
++## 界面缩放策略。
++## 输入：当前屏幕快照与用户配置；输出：检测缩放、实际应用缩放和日志证据字段。
++
++const MIN_INTERFACE_SCALE := 1.0
++const MAX_INTERFACE_SCALE := 2.0
++const MAC_RETINA_DPI_THRESHOLD := 160
++const MAC_RETINA_LOGICAL_DPI_THRESHOLD := 120
++const MAC_RETINA_LOGICAL_MIN_WIDTH := 1100
++const MAC_RETINA_LOGICAL_MIN_HEIGHT := 700
++const MAC_RETINA_LOGICAL_MAX_WIDTH := 1800
++const MAC_RETINA_LOGICAL_MAX_HEIGHT := 1200
++const RETINA_WIDTH_THRESHOLD := 4800
++const RETINA_HEIGHT_THRESHOLD := 2800
++const LARGE_DISPLAY_WIDTH_THRESHOLD := 3200
++const LARGE_DISPLAY_HEIGHT_THRESHOLD := 1800
++
++
++static func compute_auto_interface_scale(
++	reported_scale: float, usable_size: Vector2i, os_name: String = "", screen_dpi: int = 0
++) -> float:
++	var scale := maxf(reported_scale, MIN_INTERFACE_SCALE)
++	if scale < 1.25:
++		if should_use_macos_retina_fallback(reported_scale, usable_size, os_name, screen_dpi):
++			scale = 2.0
++		elif usable_size.x >= RETINA_WIDTH_THRESHOLD or usable_size.y >= RETINA_HEIGHT_THRESHOLD:
++			scale = 2.0
++		elif (
++			usable_size.x >= LARGE_DISPLAY_WIDTH_THRESHOLD
++			or usable_size.y >= LARGE_DISPLAY_HEIGHT_THRESHOLD
++		):
++			scale = 1.5
++	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
++
++
++static func should_use_macos_retina_fallback(
++	reported_scale: float, usable_size: Vector2i, os_name: String = "", screen_dpi: int = 0
++) -> bool:
++	if os_name != "macOS" or reported_scale >= 1.25:
++		return false
++	if screen_dpi >= MAC_RETINA_DPI_THRESHOLD:
++		return true
++	var looks_like_retina_points := (
++		usable_size.x >= MAC_RETINA_LOGICAL_MIN_WIDTH
++		and usable_size.y >= MAC_RETINA_LOGICAL_MIN_HEIGHT
++		and usable_size.x <= MAC_RETINA_LOGICAL_MAX_WIDTH
++		and usable_size.y <= MAC_RETINA_LOGICAL_MAX_HEIGHT
++	)
++	return (
++		looks_like_retina_points
++		and (screen_dpi <= 0 or screen_dpi >= MAC_RETINA_LOGICAL_DPI_THRESHOLD)
++	)
++
++
++static func fit_interface_scale_to_startup_screen(scale: float, usable_size: Vector2i) -> float:
++	if usable_size.x <= 0 or usable_size.y <= 0:
++		return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
++	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
++
++
++static func resolve_from_snapshot(
++	snapshot: Dictionary, configured_scale: float, os_name: String
++) -> Dictionary:
++	var reported_scale := float(snapshot.get("reported_scale", MIN_INTERFACE_SCALE))
++	var usable_size := Vector2i(snapshot.get("usable_size", Vector2i.ZERO))
++	var screen_dpi := int(snapshot.get("screen_dpi", 0))
++	var mac_retina_fallback := should_use_macos_retina_fallback(
++		reported_scale, usable_size, os_name, screen_dpi
++	)
++	var auto_scale := compute_auto_interface_scale(reported_scale, usable_size, os_name, screen_dpi)
++	var resolved := auto_scale
++	var source := "auto"
++	if configured_scale >= MIN_INTERFACE_SCALE:
++		resolved = clampf(configured_scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
++		source = "settings"
++	var unclamped_resolved := resolved
++	resolved = fit_interface_scale_to_startup_screen(resolved, usable_size)
++	return {
++		"source": source,
++		"resolved": resolved,
++		"detected_F": auto_scale,
++		"configured": configured_scale,
++		"reported_screen_scale": reported_scale,
++		"screen_dpi": screen_dpi,
++		"usable_size": usable_size,
++		"mac_retina_fallback": mac_retina_fallback,
++		"clamped": resolved < unclamped_resolved,
++		"before_clamp": unclamped_resolved,
++	}
++
++
++static func apply_content_scale_policy(root: Window, scale: float) -> void:
++	if root == null:
++		return
++	root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
++	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
++	root.content_scale_size = Vector2i.ZERO
++	root.content_scale_factor = clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
++	root.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_FRACTIONAL
++
++
++static func read_current_screen_snapshot() -> Dictionary:
++	if DisplayServer.get_name() == "headless":
++		return {}
++	var screen := DisplayServer.window_get_current_screen()
++	var usable_rect := DisplayServer.screen_get_usable_rect(screen)
++	return {
++		"screen": screen,
++		"reported_scale": DisplayServer.screen_get_scale(screen),
++		"screen_dpi": DisplayServer.screen_get_dpi(screen),
++		"usable_size": usable_rect.size,
++	}
++
++
++static func screen_scale_snapshot_changed(left: Dictionary, right: Dictionary) -> bool:
++	if left.is_empty() or right.is_empty():
++		return left.is_empty() != right.is_empty()
++	if int(left.get("screen", -1)) != int(right.get("screen", -1)):
++		return true
++	if not is_equal_approx(
++		float(left.get("reported_scale", 1.0)), float(right.get("reported_scale", 1.0))
++	):
++		return true
++	if int(left.get("screen_dpi", 0)) != int(right.get("screen_dpi", 0)):
++		return true
++	return (
++		Vector2i(left.get("usable_size", Vector2i.ZERO))
++		!= Vector2i(right.get("usable_size", Vector2i.ZERO))
++	)
+diff --git a/pixel/ui/shell/interface_scale_policy.gd.uid b/pixel/ui/shell/interface_scale_policy.gd.uid
+new file mode 100644
+index 0000000..1ccc0ea
+--- /dev/null
++++ b/pixel/ui/shell/interface_scale_policy.gd.uid
+@@ -0,0 +1 @@
++uid://d02e6knkvsid4
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index a4cbdc9..8aaa0f0 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -16,6 +16,7 @@ const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
+ const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
+ const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
+ const OnboardingScript := preload("res://ui/dialogs/onboarding.gd")
++const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+ const Pipeline := preload("res://core/pixel/pipeline.gd")
+ const Log := preload("res://core/util/log_util.gd")
+ 
+@@ -193,6 +194,7 @@ func show_onboarding_if_needed() -> void:
+ 
+ func _create_import_dialog() -> void:
+ 	_import_dialog = FileDialog.new()
++	DialogScalePolicy.configure_file_dialog(_import_dialog)
+ 	_import_dialog.title = Strings.DIALOG_IMPORT_IMAGES
+ 	_import_dialog.access = FileDialog.ACCESS_FILESYSTEM
+ 	_import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
+diff --git a/pixel/ui/shell/main.gd b/pixel/ui/shell/main.gd
+index cd94ed6..6cba227 100644
+--- a/pixel/ui/shell/main.gd
++++ b/pixel/ui/shell/main.gd
+@@ -16,6 +16,10 @@ const Exporter := preload("res://services/exporter.gd")
+ const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
+ const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
+ const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
++const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
++const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
++const ScaleAudit := preload("res://ui/shell/scale_audit.gd")
++const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
+ 
+ const DEFAULT_WINDOW_WIDTH := 1440
+ const DEFAULT_WINDOW_HEIGHT := 900
+@@ -24,18 +28,6 @@ const MIN_WINDOW_HEIGHT := 560
+ const WINDOW_SCREEN_MARGIN := 80
+ const UI_FONT_SIZE := 16
+ const UI_SMALL_FONT_SIZE := 14
+-const MIN_INTERFACE_SCALE := 1.0
+-const MAX_INTERFACE_SCALE := 2.0
+-const MAC_RETINA_DPI_THRESHOLD := 160
+-const MAC_RETINA_LOGICAL_DPI_THRESHOLD := 120
+-const MAC_RETINA_LOGICAL_MIN_WIDTH := 1100
+-const MAC_RETINA_LOGICAL_MIN_HEIGHT := 700
+-const MAC_RETINA_LOGICAL_MAX_WIDTH := 1800
+-const MAC_RETINA_LOGICAL_MAX_HEIGHT := 1200
+-const RETINA_WIDTH_THRESHOLD := 4800
+-const RETINA_HEIGHT_THRESHOLD := 2800
+-const LARGE_DISPLAY_WIDTH_THRESHOLD := 3200
+-const LARGE_DISPLAY_HEIGHT_THRESHOLD := 1800
+ const TOP_BAR_HEIGHT := 48
+ const BOTTOM_BAR_HEIGHT := 32
+ const TOOLBAR_BUTTON_WIDTH := 96
+@@ -44,6 +36,8 @@ const ZOOM_CONTROL_MARGIN := 12
+ const FLEXIBLE_WIDTH := 0
+ const CLEANUP_RESULT_GAP := 8
+ const PREVIEW_OPACITY := 0.56
++const SCALE_MONITOR_INTERVAL_SECONDS := 0.25
++const SCALE_RESOLVE_DEBOUNCE_SECONDS := 0.35
+ 
+ var _project_filters := PackedStringArray(["*.pxproj ; PixelForge Project"])
+ var _png_filters := PackedStringArray(["*.png ; PNG Image"])
+@@ -64,17 +58,29 @@ var _preview_token := 0
+ var _m2_actions: Variant = null
+ var _m2_1_ui: Variant = null
+ var _zoom_overlay: RefCounted = null
++var _live_rescale_enabled := true
++var _scale_monitor_elapsed := 0.0
++var _rescale_debounce_elapsed := 0.0
++var _rescale_pending := false
++var _rescale_in_progress := false
++var _last_screen_snapshot := {}
++var _pending_screen_snapshot := {}
+ 
+ 
+ func _ready() -> void:
+ 	_interface_scale = _resolve_interface_scale()
++	_live_rescale_enabled = bool(SettingsService.get_setting("ui", "live_rescale", true))
+ 	_apply_viewport_scale_policy()
+ 	_apply_runtime_theme()
+ 	_apply_window_defaults()
+ 	_build_ui()
+ 	_connect_services()
++	_last_screen_snapshot = InterfaceScalePolicy.read_current_screen_snapshot()
++	set_process(DisplayServer.get_name() != "headless")
+ 	_update_window_title()
+ 	_m2_1_ui.show_onboarding_if_needed()
++	if ScaleAudit.is_requested():
++		call_deferred("_log_scale_audit")
+ 
+ 
+ func _notification(what: int) -> void:
+@@ -83,6 +89,10 @@ func _notification(what: int) -> void:
+ 		get_tree().quit()
+ 
+ 
++func _process(delta: float) -> void:
++	_poll_live_rescale(delta)
++
++
+ func _unhandled_key_input(event: InputEvent) -> void:
+ 	if not (event is InputEventKey) or not event.pressed or event.echo:
+ 		return
+@@ -102,76 +112,20 @@ func _unhandled_key_input(event: InputEvent) -> void:
+ 		get_viewport().set_input_as_handled()
+ 
+ 
+-static func compute_auto_interface_scale(
+-	reported_scale: float, usable_size: Vector2i, os_name: String = "", screen_dpi: int = 0
+-) -> float:
+-	var scale := maxf(reported_scale, MIN_INTERFACE_SCALE)
+-	if scale < 1.25:
+-		if should_use_macos_retina_fallback(reported_scale, usable_size, os_name, screen_dpi):
+-			scale = 2.0
+-		elif usable_size.x >= RETINA_WIDTH_THRESHOLD or usable_size.y >= RETINA_HEIGHT_THRESHOLD:
+-			scale = 2.0
+-		elif (
+-			usable_size.x >= LARGE_DISPLAY_WIDTH_THRESHOLD
+-			or usable_size.y >= LARGE_DISPLAY_HEIGHT_THRESHOLD
+-		):
+-			scale = 1.5
+-	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+-
+-
+-static func should_use_macos_retina_fallback(
+-	reported_scale: float, usable_size: Vector2i, os_name: String = "", screen_dpi: int = 0
+-) -> bool:
+-	if os_name != "macOS" or reported_scale >= 1.25:
+-		return false
+-	if screen_dpi >= MAC_RETINA_DPI_THRESHOLD:
+-		return true
+-	var looks_like_retina_points := (
+-		usable_size.x >= MAC_RETINA_LOGICAL_MIN_WIDTH
+-		and usable_size.y >= MAC_RETINA_LOGICAL_MIN_HEIGHT
+-		and usable_size.x <= MAC_RETINA_LOGICAL_MAX_WIDTH
+-		and usable_size.y <= MAC_RETINA_LOGICAL_MAX_HEIGHT
+-	)
+-	return (
+-		looks_like_retina_points
+-		and (screen_dpi <= 0 or screen_dpi >= MAC_RETINA_LOGICAL_DPI_THRESHOLD)
+-	)
+-
+-
+-static func fit_interface_scale_to_startup_screen(scale: float, usable_size: Vector2i) -> float:
+-	if usable_size.x <= 0 or usable_size.y <= 0:
+-		return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+-	# 高分屏上 UI scale 是物理可读性的来源，不再为了启动窗口尺寸反向缩小。
+-	# 窗口默认尺寸会独立夹取到屏幕内，面板溢出交给滚动容器处理。
+-	return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+-
+-
+-static func apply_content_scale_policy(root: Window, scale: float) -> void:
+-	if root == null:
+-		return
+-	root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
+-	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
+-	root.content_scale_size = Vector2i.ZERO
+-	root.content_scale_factor = clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+-	root.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_FRACTIONAL
+-
+-
+ func _resolve_interface_scale() -> float:
+ 	if DisplayServer.get_name() == "headless":
+-		return MIN_INTERFACE_SCALE
+-
+-	var screen := DisplayServer.window_get_current_screen()
+-	var reported_scale := DisplayServer.screen_get_scale(screen)
+-	var usable_rect := DisplayServer.screen_get_usable_rect(screen)
+-	var screen_dpi := DisplayServer.screen_get_dpi(screen)
+-	var mac_retina_fallback := should_use_macos_retina_fallback(
+-		reported_scale, usable_rect.size, OS.get_name(), screen_dpi
+-	)
+-	var auto_scale := compute_auto_interface_scale(
+-		reported_scale, usable_rect.size, OS.get_name(), screen_dpi
++		return InterfaceScalePolicy.MIN_INTERFACE_SCALE
++
++	return _resolve_interface_scale_from_snapshot(
++		InterfaceScalePolicy.read_current_screen_snapshot(), "startup"
+ 	)
+ 
++
++func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String) -> float:
+ 	var configured_scale := float(SettingsService.get_setting("ui", "interface_scale", 0.0))
++	var resolution := InterfaceScalePolicy.resolve_from_snapshot(
++		snapshot, configured_scale, OS.get_name()
++	)
+ 	# M0 复发复盘：manual-test-m0.md 曾指导测试者把 interface_scale 写成 1.0，
+ 	# 该值残留在 user://settings.cfg 后会永久旁路自动检测，在 Retina 屏表现为
+ 	# 界面缩小一半。一次性迁移：检测到 macOS Retina（自动检测 > 残留值）时
+@@ -179,32 +133,29 @@ func _resolve_interface_scale() -> float:
+ 	if (
+ 		OS.get_name() == "macOS"
+ 		and is_equal_approx(configured_scale, 1.0)
+-		and auto_scale > configured_scale
++		and float(resolution["detected_F"]) > configured_scale
+ 	):
+ 		Log.warn(
+ 			"Stale interface_scale=1.0 override on a scaled display; resetting to auto.",
+-			{"auto_scale": auto_scale}
++			{"auto_scale": float(resolution["detected_F"])}
+ 		)
+ 		SettingsService.set_setting("ui", "interface_scale", 0.0)
+ 		configured_scale = 0.0
++		resolution = InterfaceScalePolicy.resolve_from_snapshot(
++			snapshot, configured_scale, OS.get_name()
++		)
+ 
+-	var resolved := auto_scale
+-	var source := "auto"
+-	if configured_scale >= MIN_INTERFACE_SCALE:
+-		resolved = clampf(configured_scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+-		source = "settings"
+-
+-	var unclamped_resolved := resolved
+-	resolved = fit_interface_scale_to_startup_screen(resolved, usable_rect.size)
+-	if resolved < unclamped_resolved:
++	var resolved := float(resolution["resolved"])
++	var usable_size := Vector2i(resolution["usable_size"])
++	if bool(resolution["clamped"]):
+ 		(
+ 			Log
+ 			. warn(
+ 				"Interface scale clamped to fit startup screen.",
+ 				{
+-					"before": unclamped_resolved,
++					"before": float(resolution["before_clamp"]),
+ 					"after": resolved,
+-					"usable_rect": [usable_rect.size.x, usable_rect.size.y],
++					"usable_rect": [usable_size.x, usable_size.y],
+ 				}
+ 			)
+ 		)
+@@ -215,13 +166,17 @@ func _resolve_interface_scale() -> float:
+ 		. info(
+ 			"Interface scale resolved",
+ 			{
+-				"source": source,
++				"reason": reason,
++				"source": String(resolution["source"]),
+ 				"resolved": resolved,
++				"detected_F": float(resolution["detected_F"]),
++				"applied_F": resolved,
+ 				"configured": configured_scale,
+-				"reported_screen_scale": reported_scale,
+-				"screen_dpi": screen_dpi,
+-				"usable_rect": [usable_rect.size.x, usable_rect.size.y],
+-				"mac_retina_fallback": mac_retina_fallback,
++				"reported_screen_scale": float(resolution["reported_screen_scale"]),
++				"screen_dpi": int(resolution["screen_dpi"]),
++				"usable_rect": [usable_size.x, usable_size.y],
++				"mac_retina_fallback": bool(resolution["mac_retina_fallback"]),
++				"current_screen": int(snapshot.get("screen", -1)),
+ 				"os": OS.get_name(),
+ 			}
+ 		)
+@@ -230,7 +185,80 @@ func _resolve_interface_scale() -> float:
+ 
+ 
+ func _apply_viewport_scale_policy() -> void:
+-	apply_content_scale_policy(get_tree().root, _interface_scale)
++	InterfaceScalePolicy.apply_content_scale_policy(get_tree().root, _interface_scale)
++
++
++func _poll_live_rescale(delta: float) -> void:
++	if DisplayServer.get_name() == "headless" or not _live_rescale_enabled:
++		return
++
++	_scale_monitor_elapsed += delta
++	if _scale_monitor_elapsed >= SCALE_MONITOR_INTERVAL_SECONDS:
++		_scale_monitor_elapsed = 0.0
++		var current_snapshot := InterfaceScalePolicy.read_current_screen_snapshot()
++		if InterfaceScalePolicy.screen_scale_snapshot_changed(
++			_last_screen_snapshot, current_snapshot
++		):
++			if InterfaceScalePolicy.screen_scale_snapshot_changed(
++				_pending_screen_snapshot, current_snapshot
++			):
++				_pending_screen_snapshot = current_snapshot
++				_rescale_debounce_elapsed = 0.0
++			_rescale_pending = true
++
++	if not _rescale_pending:
++		return
++	_rescale_debounce_elapsed += delta
++	if _rescale_debounce_elapsed >= SCALE_RESOLVE_DEBOUNCE_SECONDS:
++		_apply_live_rescale(_pending_screen_snapshot)
++
++
++func _apply_live_rescale(screen_snapshot: Dictionary) -> void:
++	if _rescale_in_progress or screen_snapshot.is_empty():
++		return
++	_rescale_in_progress = true
++
++	var old_snapshot := _last_screen_snapshot.duplicate()
++	var old_scale := _interface_scale
++	_interface_scale = _resolve_interface_scale_from_snapshot(screen_snapshot, "live_rescale")
++	_apply_viewport_scale_policy()
++	_apply_runtime_theme()
++	_apply_window_minimum_size()
++	if _canvas != null:
++		_canvas.call("_update_layer_transform")
++		_canvas.call("_update_item_visibility")
++
++	_last_screen_snapshot = screen_snapshot
++	_pending_screen_snapshot = {}
++	_rescale_pending = false
++	_rescale_debounce_elapsed = 0.0
++	_rescale_in_progress = false
++
++	(
++		Log
++		. info(
++			"Interface scale reapplied",
++			{
++				"from_screen": int(old_snapshot.get("screen", -1)),
++				"to_screen": int(screen_snapshot.get("screen", -1)),
++				"from_F": old_scale,
++				"to_F": _interface_scale,
++				"current_screen": int(screen_snapshot.get("screen", -1)),
++			}
++		)
++	)
++	if ScaleAudit.is_requested():
++		_log_scale_audit()
++
++
++func _log_scale_audit() -> void:
++	var root_window := get_tree().root
++	ScaleAudit.log_scale_audit(
++		self,
++		_canvas,
++		_last_screen_snapshot,
++		root_window.content_scale_factor if root_window != null else 1.0
++	)
+ 
+ 
+ func _apply_runtime_theme() -> void:
+@@ -269,71 +297,28 @@ func _apply_window_defaults() -> void:
+ 	var window := get_window()
+ 	if window == null or DisplayServer.get_name() == "headless":
+ 		return
+-
+-	window.min_size = _logical_size_to_window_pixels(Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT))
+-	var target_size := _logical_size_to_window_pixels(
+-		Vector2i(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+-	)
+-	var usable_rect := DisplayServer.screen_get_usable_rect(window.current_screen)
+-	if usable_rect.size.x > 0 and usable_rect.size.y > 0:
+-		var margin := _logical_size_to_window_pixels(Vector2i(WINDOW_SCREEN_MARGIN, 0)).x
+-		var usable_size_for_window := _usable_size_to_window_pixels(usable_rect.size)
+-		var minimum_fit := _logical_size_to_window_pixels(Vector2i(960, 640))
+-		var max_width := maxi(minimum_fit.x, usable_size_for_window.x - margin)
+-		var max_height := maxi(minimum_fit.y, usable_size_for_window.y - margin)
+-		target_size.x = mini(target_size.x, max_width)
+-		target_size.y = mini(target_size.y, max_height)
+-		target_size.x = maxi(target_size.x, mini(window.min_size.x, max_width))
+-		target_size.y = maxi(target_size.y, mini(window.min_size.y, max_height))
+-
+-		window.size = target_size
+-		var position_size := _window_pixels_to_screen_units(target_size)
+-		window.position = usable_rect.position + (usable_rect.size - position_size) / 2
+-	else:
+-		window.size = target_size
+-
+-	(
+-		Log
+-		. info(
+-			"Window defaults applied",
+-			{
+-				"content_scale_factor": _interface_scale,
+-				"min_size": [window.min_size.x, window.min_size.y],
+-				"target_size": [target_size.x, target_size.y],
+-				"actual_size": [window.size.x, window.size.y],
+-				"position": [window.position.x, window.position.y],
+-				"usable_rect": [usable_rect.size.x, usable_rect.size.y],
+-				"os": OS.get_name(),
+-			}
++	Log.info(
++		"Window defaults applied",
++		WindowScalePolicy.apply_startup_defaults(
++			window,
++			_interface_scale,
++			Vector2i(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
++			Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
++			WINDOW_SCREEN_MARGIN,
++			OS.get_name()
+ 		)
+ 	)
+ 
+ 
+-func _logical_size_to_window_pixels(size: Vector2i) -> Vector2i:
+-	var factor := maxf(_interface_scale, MIN_INTERFACE_SCALE)
+-	return Vector2i(
+-		maxi(1, int(round(float(size.x) * factor))), maxi(1, int(round(float(size.y) * factor)))
++func _apply_window_minimum_size() -> void:
++	var window := get_window()
++	if window == null or DisplayServer.get_name() == "headless":
++		return
++	WindowScalePolicy.apply_minimum_size(
++		window, Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT), _interface_scale
+ 	)
+ 
+ 
+-func _usable_size_to_window_pixels(size: Vector2i) -> Vector2i:
+-	if OS.get_name() == "macOS" and _interface_scale > 1.0:
+-		return Vector2i(
+-			maxi(1, int(round(float(size.x) * _interface_scale))),
+-			maxi(1, int(round(float(size.y) * _interface_scale)))
+-		)
+-	return size
+-
+-
+-func _window_pixels_to_screen_units(size: Vector2i) -> Vector2i:
+-	if OS.get_name() == "macOS" and _interface_scale > 1.0:
+-		return Vector2i(
+-			maxi(1, int(round(float(size.x) / _interface_scale))),
+-			maxi(1, int(round(float(size.y) / _interface_scale)))
+-		)
+-	return size
+-
+-
+ func _build_ui() -> void:
+ 	custom_minimum_size = Vector2(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+ 
+@@ -431,6 +416,7 @@ func _add_toolbar_button(parent: Control, text: String, callback: Callable) -> v
+ 
+ func _create_file_dialogs() -> void:
+ 	_open_dialog = FileDialog.new()
++	DialogScalePolicy.configure_file_dialog(_open_dialog)
+ 	_open_dialog.title = Strings.DIALOG_OPEN_PROJECT
+ 	_open_dialog.access = FileDialog.ACCESS_FILESYSTEM
+ 	_open_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+@@ -439,6 +425,7 @@ func _create_file_dialogs() -> void:
+ 	add_child(_open_dialog)
+ 
+ 	_save_dialog = FileDialog.new()
++	DialogScalePolicy.configure_file_dialog(_save_dialog)
+ 	_save_dialog.title = Strings.DIALOG_SAVE_PROJECT
+ 	_save_dialog.access = FileDialog.ACCESS_FILESYSTEM
+ 	_save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+@@ -447,6 +434,7 @@ func _create_file_dialogs() -> void:
+ 	add_child(_save_dialog)
+ 
+ 	_export_dialog = FileDialog.new()
++	DialogScalePolicy.configure_file_dialog(_export_dialog)
+ 	_export_dialog.title = Strings.DIALOG_EXPORT_PNG
+ 	_export_dialog.access = FileDialog.ACCESS_FILESYSTEM
+ 	_export_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+@@ -473,6 +461,7 @@ func _connect_services() -> void:
+ 	ProjectService.project_saved.connect(_on_project_saved)
+ 	ProjectService.dirty_changed.connect(_on_dirty_changed)
+ 	ProjectService.recovery_available.connect(_on_recovery_available)
++	SettingsService.setting_changed.connect(_on_setting_changed)
+ 
+ 	var window := get_window()
+ 	if window != null:
+@@ -538,6 +527,16 @@ func _on_custom_palettes_changed() -> void:
+ 	_update_window_title()
+ 
+ 
++func _on_setting_changed(section: String, key: String, value: Variant) -> void:
++	if section != "ui" or key != "live_rescale":
++		return
++	_live_rescale_enabled = bool(value)
++	if not _live_rescale_enabled:
++		_rescale_pending = false
++		_pending_screen_snapshot = {}
++		_rescale_debounce_elapsed = 0.0
++
++
+ func _sync_cleanup_inspector_with_project(project: Variant) -> void:
+ 	if _cleanup_inspector == null:
+ 		return
+diff --git a/pixel/ui/shell/scale_audit.gd b/pixel/ui/shell/scale_audit.gd
+new file mode 100644
+index 0000000..23c4fe9
+--- /dev/null
++++ b/pixel/ui/shell/scale_audit.gd
+@@ -0,0 +1,83 @@
++class_name PFScaleAudit
++extends RefCounted
++
++## 缩放审计日志。
++## 用途：`--scale-audit` 真机验收时输出顶层 Control 尺寸与画布物理像素吸附证据。
++
++const CanvasScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
++const Log := preload("res://core/util/log_util.gd")
++
++
++static func is_requested() -> bool:
++	return OS.get_cmdline_args().has("--scale-audit")
++
++
++static func log_scale_audit(
++	owner: Node, canvas: Control, screen_snapshot: Dictionary, content_scale_factor: float
++) -> void:
++	(
++		Log
++		. info(
++			"Scale audit",
++			{
++				"content_scale_factor": content_scale_factor,
++				"current_screen": int(screen_snapshot.get("screen", -1)),
++				"controls": _collect_control_audit(owner),
++				"canvas": _collect_canvas_audit(canvas),
++			}
++		)
++	)
++
++
++static func _collect_control_audit(owner: Node) -> Array:
++	var output := []
++	if owner == null:
++		return output
++	for path in [
++		"Root",
++		"Root/TopBar",
++		"Root/Content",
++		"Root/Content/InfiniteCanvas",
++		"Root/Content/CleanupInspector",
++		"Root/BottomBar",
++		"ZoomControl",
++	]:
++		var control := owner.get_node_or_null(path) as Control
++		if control == null:
++			continue
++		var rect := control.get_global_rect()
++		(
++			output
++			. append(
++				{
++					"path": path,
++					"position": [rect.position.x, rect.position.y],
++					"size": [rect.size.x, rect.size.y],
++				}
++			)
++		)
++	return output
++
++
++static func _collect_canvas_audit(canvas: Control) -> Dictionary:
++	if canvas == null:
++		return {}
++	var viewport_scale_factor := float(canvas.call("_resolve_viewport_scale_factor"))
++	var camera_zoom := float(canvas.get("camera_zoom"))
++	var item_layer: Node2D = canvas.get("item_layer")
++	return {
++		"viewport_scale_factor": viewport_scale_factor,
++		"canvas_device_scale": CanvasScalePolicy.compute_canvas_device_scale(viewport_scale_factor),
++		"camera_zoom": camera_zoom,
++		"art_physical_scale":
++		CanvasScalePolicy.compute_art_physical_scale(camera_zoom, viewport_scale_factor),
++		"item_layer_scale": [item_layer.scale.x, item_layer.scale.y],
++		"item_layer_position": [item_layer.position.x, item_layer.position.y],
++		"item_layer_pos_physical":
++		[
++			item_layer.position.x * viewport_scale_factor,
++			item_layer.position.y * viewport_scale_factor,
++		],
++		"item_layer_position_aligned":
++		CanvasScalePolicy.is_position_on_physical_pixel(item_layer.position, viewport_scale_factor),
++	}
+diff --git a/pixel/ui/shell/scale_audit.gd.uid b/pixel/ui/shell/scale_audit.gd.uid
+new file mode 100644
+index 0000000..d6c85cc
+--- /dev/null
++++ b/pixel/ui/shell/scale_audit.gd.uid
+@@ -0,0 +1 @@
++uid://1m1d4nfrai58
+diff --git a/pixel/ui/shell/window_scale_policy.gd b/pixel/ui/shell/window_scale_policy.gd
+new file mode 100644
+index 0000000..26921eb
+--- /dev/null
++++ b/pixel/ui/shell/window_scale_policy.gd
+@@ -0,0 +1,83 @@
++class_name PFWindowScalePolicy
++extends RefCounted
++
++## 窗口尺寸缩放策略。
++## 输入：逻辑尺寸、界面缩放与屏幕可用区域；输出：Godot Window 的像素尺寸。
++
++const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
++
++
++static func apply_minimum_size(
++	window: Window, min_logical_size: Vector2i, interface_scale: float
++) -> void:
++	if window == null:
++		return
++	window.min_size = logical_size_to_window_pixels(min_logical_size, interface_scale)
++
++
++static func apply_startup_defaults(
++	window: Window,
++	interface_scale: float,
++	default_logical_size: Vector2i,
++	min_logical_size: Vector2i,
++	screen_margin: int,
++	os_name: String
++) -> Dictionary:
++	apply_minimum_size(window, min_logical_size, interface_scale)
++	var target_size := logical_size_to_window_pixels(default_logical_size, interface_scale)
++	var usable_rect := DisplayServer.screen_get_usable_rect(window.current_screen)
++	if usable_rect.size.x > 0 and usable_rect.size.y > 0:
++		var margin := logical_size_to_window_pixels(Vector2i(screen_margin, 0), interface_scale).x
++		var usable_size_for_window := usable_size_to_window_pixels(
++			usable_rect.size, interface_scale, os_name
++		)
++		var minimum_fit := logical_size_to_window_pixels(Vector2i(960, 640), interface_scale)
++		var max_width := maxi(minimum_fit.x, usable_size_for_window.x - margin)
++		var max_height := maxi(minimum_fit.y, usable_size_for_window.y - margin)
++		target_size.x = mini(target_size.x, max_width)
++		target_size.y = mini(target_size.y, max_height)
++		target_size.x = maxi(target_size.x, mini(window.min_size.x, max_width))
++		target_size.y = maxi(target_size.y, mini(window.min_size.y, max_height))
++		window.size = target_size
++		var position_size := window_pixels_to_screen_units(target_size, interface_scale, os_name)
++		window.position = usable_rect.position + (usable_rect.size - position_size) / 2
++	else:
++		window.size = target_size
++	return {
++		"content_scale_factor": interface_scale,
++		"min_size": [window.min_size.x, window.min_size.y],
++		"target_size": [target_size.x, target_size.y],
++		"actual_size": [window.size.x, window.size.y],
++		"position": [window.position.x, window.position.y],
++		"usable_rect": [usable_rect.size.x, usable_rect.size.y],
++		"os": os_name,
++	}
++
++
++static func logical_size_to_window_pixels(size: Vector2i, interface_scale: float) -> Vector2i:
++	var factor := maxf(interface_scale, InterfaceScalePolicy.MIN_INTERFACE_SCALE)
++	return Vector2i(
++		maxi(1, int(round(float(size.x) * factor))), maxi(1, int(round(float(size.y) * factor)))
++	)
++
++
++static func usable_size_to_window_pixels(
++	size: Vector2i, interface_scale: float, os_name: String
++) -> Vector2i:
++	if os_name == "macOS" and interface_scale > 1.0:
++		return Vector2i(
++			maxi(1, int(round(float(size.x) * interface_scale))),
++			maxi(1, int(round(float(size.y) * interface_scale)))
++		)
++	return size
++
++
++static func window_pixels_to_screen_units(
++	size: Vector2i, interface_scale: float, os_name: String
++) -> Vector2i:
++	if os_name == "macOS" and interface_scale > 1.0:
++		return Vector2i(
++			maxi(1, int(round(float(size.x) / interface_scale))),
++			maxi(1, int(round(float(size.y) / interface_scale)))
++		)
++	return size
+diff --git a/pixel/ui/shell/window_scale_policy.gd.uid b/pixel/ui/shell/window_scale_policy.gd.uid
+new file mode 100644
+index 0000000..a7d1535
+--- /dev/null
++++ b/pixel/ui/shell/window_scale_policy.gd.uid
+@@ -0,0 +1 @@
++uid://bedwfmb87tjof

@@ -23,8 +23,9 @@ pixelforge-plan/
 ├── 03-milestones/                 ← 按里程碑拆分的任务卡（执行主线）
 │   ├── M0-foundation.md           ← 工程骨架 + 无限画布底座
 │   ├── M1-cleanup-pipeline.md     ← 功能1：像素清洗管线
+│   ├── M1.1-cleanup-enhancements.md ← 功能1增强：量化质量/调色板产品化/质量加固
 │   ├── M2-matting-slicing.md      ← 功能2：抠图与切分
-│   ├── M3-node-graph.md           ← 功能3a：节点工作流（纯本地）
+│   ├── M3-node-graph.md           ← 功能3a：画布原生轻节点+批次内容节点（纯本地）
 │   ├── M4-ai-providers.md         ← 功能3b：云端 AI 生成接入
 │   ├── M5-map-composer.md         ← 功能4：地图拼接与多层动效合成
 │   ├── M6-pixel-editor.md         ← 功能5a：像素编辑器（Aseprite-lite）

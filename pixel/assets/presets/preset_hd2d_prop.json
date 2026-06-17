@@ -1,0 +1,25 @@
+{
+	"style_version": 1,
+	"id": "preset_hd2d_prop",
+	"name": "HD-2D Prop",
+	"based_on": null,
+	"resolution_tier": "hd2d",
+	"base_size": 64,
+	"tile_size": 16,
+	"palette": {
+		"ref": "custom",
+		"colors": []
+	},
+	"max_colors_per_sprite": 64,
+	"outline": "none",
+	"dither": "none",
+	"dither_strength": 0.0,
+	"perspective": "three_quarter",
+	"anti_alias": true,
+	"prompt_template": {
+		"positive": "{subject}, HD-2D pixel prop, {size_hint}, crisp sprite",
+		"negative": "photorealistic, blurry, noisy background",
+		"style_tags": "high resolution pixel prop"
+	},
+	"provider_hints": {}
+}

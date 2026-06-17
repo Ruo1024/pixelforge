@@ -52,10 +52,29 @@ func test_atomic_write_tmp_does_not_damage_original() -> void:
 
 	var original := FileAccess.open(path, FileAccess.READ)
 	assert_eq(original.get_as_text(), "old")
+	original.close()
 
 	assert_eq(FileIOScript.atomic_write(path, "new".to_utf8_buffer()), OK)
 	var updated := FileAccess.open(path, FileAccess.READ)
 	assert_eq(updated.get_as_text(), "new")
+
+
+func test_atomic_write_locked_target_keeps_original_content_on_windows() -> void:
+	if OS.get_name() != "Windows":
+		assert_true(true)
+		return
+
+	var path := "user://tests/atomic_write_locked.txt"
+	assert_eq(FileIOScript.atomic_write(path, "old".to_utf8_buffer()), OK)
+
+	var locked_reader := FileAccess.open(path, FileAccess.READ)
+	assert_eq(locked_reader.get_as_text(), "old")
+	var error := FileIOScript.atomic_write(path, "new".to_utf8_buffer())
+	locked_reader.close()
+
+	assert_ne(error, OK)
+	var original := FileAccess.open(path, FileAccess.READ)
+	assert_eq(original.get_as_text(), "old")
 
 
 func test_logger_creates_date_file() -> void:

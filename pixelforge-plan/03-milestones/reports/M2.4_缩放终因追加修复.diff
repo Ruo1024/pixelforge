@@ -1,0 +1,497 @@
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 6b94a35..607cb99 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -18,3 +18,4 @@
+ - M2.2: 修复高分屏缩放钳制、清洗台矮窗可达性、批次卡可读尺寸与导入取景、滚轮缩放过冲、导出空选区提示、描边低 alpha 噪点和首启引导标记时机；暂隐藏未接入算法的 W/M/L 工具入口。
+ - M2.3: UI 缩放迁移到 `content_scale_factor`；删除组件级 `ui_scale` / `_scaled_int` 约定，画布按设备整数倍率反向补偿，并新增 M2.3 缩放守护脚本与回归测试。
+ - M2.4: 加固缩放体验，画布层平移吸附到物理像素网格，FileDialog 统一 Godot 自绘以跟随界面缩放，新增跨屏 live re-scale 防抖、`--scale-audit` 日志与 M2.4 出口门控。
++- M2.4 追加修复: 拆分 UI 可读缩放与窗口像素几何缩放，修正无缩放 2K 偏小和 macOS Retina 内屏 UI 过大裁切的自动档位。
+diff --git a/pixel/project.godot b/pixel/project.godot
+index 25eacc4..94c15cc 100644
+--- a/pixel/project.godot
++++ b/pixel/project.godot
+@@ -33,6 +33,7 @@ window/size/viewport_height=900
+ window/size/window_width_override=1440
+ window/size/window_height_override=900
+ window/stretch/aspect="ignore"
++window/dpi/allow_hidpi=true
+ window/size/min_width=1280
+ window/size/min_height=800
+
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 6d16937..1a8fd96 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
+ const MainScript := preload("res://ui/shell/main.gd")
+ const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+ const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
++const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
+
+
+ func test_main_window_uses_readable_minimum_sizes() -> void:
+@@ -52,21 +53,29 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
+
+
+ func test_auto_interface_scale_detects_high_density_displays() -> void:
+-    assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(2560, 1440)), 1.0)
++    assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(2560, 1440)), 1.25)
+     assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(3840, 2160)), 1.5)
+     assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(5120, 3140)), 2.0)
+     assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(2.0, Vector2i(2560, 1600)), 2.0)
++    assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.5, Vector2i(1920, 1080)), 1.5)
+
+
+ func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
+     assert_eq(
+-        InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1244, 778), "macOS", 0), 2.0
++        InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1244, 778), "macOS", 0),
++        1.25
+     )
+     assert_eq(
+-        InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1334, 834), "macOS", 0), 2.0
++        InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1334, 834), "macOS", 0),
++        1.25
+     )
+     assert_eq(
+-        InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 0), 2.0
++        InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 0),
++        1.25
++    )
++    assert_eq(
++        InterfaceScalePolicy.compute_auto_interface_scale(2.0, Vector2i(3024, 1964), "macOS", 220),
++        1.25
+     )
+     assert_eq(
+         InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1440, 900), "macOS", 96),
+@@ -78,7 +87,36 @@ func test_auto_interface_scale_detects_macos_retina_point_rects() -> void:
+     )
+     assert_eq(
+         InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(1920, 1080), "macOS", 220),
+-        2.0
++        1.25
++    )
++
++
++func test_window_pixel_scale_is_separate_from_readable_interface_scale() -> void:
++    var snapshot := {
++        "reported_scale": 2.0,
++        "screen_dpi": 220,
++        "usable_size": Vector2i(3024, 1964),
++    }
++
++    assert_eq(InterfaceScalePolicy.resolve_from_snapshot(snapshot, 0.0, "macOS")["resolved"], 1.25)
++    assert_eq(InterfaceScalePolicy.window_pixel_scale_from_snapshot(snapshot, "macOS"), 2.0)
++    assert_eq(WindowScalePolicy.effective_window_geometry_scale(1.25, 2.0), 2.0)
++
++
++func test_window_scale_converts_only_macos_point_sized_usable_rects() -> void:
++    assert_eq(
++        WindowScalePolicy.usable_size_to_window_pixels(Vector2i(1470, 956), 2.0, "macOS"),
++        Vector2i(2940, 1912)
++    )
++    assert_eq(
++        WindowScalePolicy.usable_size_to_window_pixels(Vector2i(3024, 1964), 2.0, "macOS"),
++        Vector2i(3024, 1964)
++    )
++    assert_eq(
++        WindowScalePolicy.window_pixels_to_screen_units(
++            Vector2i(2880, 1800), 2.0, "macOS", Vector2i(1470, 956)
++        ),
++        Vector2i(1440, 900)
+     )
+
+
+diff --git a/pixel/ui/shell/interface_scale_policy.gd b/pixel/ui/shell/interface_scale_policy.gd
+index 1a2d9bb..373efdb 100644
+--- a/pixel/ui/shell/interface_scale_policy.gd
++++ b/pixel/ui/shell/interface_scale_policy.gd
+@@ -16,23 +16,36 @@ const RETINA_WIDTH_THRESHOLD := 4800
+ const RETINA_HEIGHT_THRESHOLD := 2800
+ const LARGE_DISPLAY_WIDTH_THRESHOLD := 3200
+ const LARGE_DISPLAY_HEIGHT_THRESHOLD := 1800
++const READABLE_2K_WIDTH_THRESHOLD := 2560
++const READABLE_2K_HEIGHT_THRESHOLD := 1440
++const MAC_COMPACT_RETINA_WIDTH_LIMIT := 3200
++const MAC_COMPACT_RETINA_HEIGHT_LIMIT := 2200
++const MID_INTERFACE_SCALE := 1.25
++const MAC_RETINA_WINDOW_PIXEL_SCALE := 2.0
+
+
+ static func compute_auto_interface_scale(
+     reported_scale: float, usable_size: Vector2i, os_name: String = "", screen_dpi: int = 0
+ ) -> float:
+-    var scale := maxf(reported_scale, MIN_INTERFACE_SCALE)
+-    if scale < 1.25:
+-        if should_use_macos_retina_fallback(reported_scale, usable_size, os_name, screen_dpi):
+-            scale = 2.0
+-        elif usable_size.x >= RETINA_WIDTH_THRESHOLD or usable_size.y >= RETINA_HEIGHT_THRESHOLD:
+-            scale = 2.0
+-        elif (
+-            usable_size.x >= LARGE_DISPLAY_WIDTH_THRESHOLD
+-            or usable_size.y >= LARGE_DISPLAY_HEIGHT_THRESHOLD
+-        ):
+-            scale = 1.5
+-    return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
++    if _looks_like_macos_scaled_display(reported_scale, usable_size, os_name, screen_dpi):
++        return _macos_readable_interface_scale(usable_size)
++
++    if reported_scale >= 1.25:
++        return clampf(reported_scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
++
++    if usable_size.x >= RETINA_WIDTH_THRESHOLD or usable_size.y >= RETINA_HEIGHT_THRESHOLD:
++        return 2.0
++    if (
++        usable_size.x >= LARGE_DISPLAY_WIDTH_THRESHOLD
++        or usable_size.y >= LARGE_DISPLAY_HEIGHT_THRESHOLD
++    ):
++        return 1.5
++    if (
++        usable_size.x >= READABLE_2K_WIDTH_THRESHOLD
++        or usable_size.y >= READABLE_2K_HEIGHT_THRESHOLD
++    ):
++        return MID_INTERFACE_SCALE
++    return MIN_INTERFACE_SCALE
+
+
+ static func should_use_macos_retina_fallback(
+@@ -60,6 +73,21 @@ static func fit_interface_scale_to_startup_screen(scale: float, usable_size: Vec
+     return clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+
+
++static func window_pixel_scale_from_snapshot(snapshot: Dictionary, os_name: String) -> float:
++    var reported_scale := float(snapshot.get("reported_scale", MIN_INTERFACE_SCALE))
++    var usable_size := Vector2i(snapshot.get("usable_size", Vector2i.ZERO))
++    var screen_dpi := int(snapshot.get("screen_dpi", 0))
++    if (
++        os_name == "macOS"
++        and (
++            screen_dpi >= MAC_RETINA_DPI_THRESHOLD
++            or should_use_macos_retina_fallback(reported_scale, usable_size, os_name, screen_dpi)
++        )
++    ):
++        return MAC_RETINA_WINDOW_PIXEL_SCALE
++    return maxf(reported_scale, MIN_INTERFACE_SCALE)
++
++
+ static func resolve_from_snapshot(
+     snapshot: Dictionary, configured_scale: float, os_name: String
+ ) -> Dictionary:
+@@ -69,6 +97,7 @@ static func resolve_from_snapshot(
+     var mac_retina_fallback := should_use_macos_retina_fallback(
+         reported_scale, usable_size, os_name, screen_dpi
+     )
++    var window_pixel_scale := window_pixel_scale_from_snapshot(snapshot, os_name)
+     var auto_scale := compute_auto_interface_scale(reported_scale, usable_size, os_name, screen_dpi)
+     var resolved := auto_scale
+     var source := "auto"
+@@ -83,6 +112,7 @@ static func resolve_from_snapshot(
+         "detected_F": auto_scale,
+         "configured": configured_scale,
+         "reported_screen_scale": reported_scale,
++        "window_pixel_scale": window_pixel_scale,
+         "screen_dpi": screen_dpi,
+         "usable_size": usable_size,
+         "mac_retina_fallback": mac_retina_fallback,
+@@ -110,6 +140,7 @@ static func read_current_screen_snapshot() -> Dictionary:
+         "screen": screen,
+         "reported_scale": DisplayServer.screen_get_scale(screen),
+         "screen_dpi": DisplayServer.screen_get_dpi(screen),
++        "screen_size": DisplayServer.screen_get_size(screen),
+         "usable_size": usable_rect.size,
+     }
+
+@@ -129,3 +160,32 @@ static func screen_scale_snapshot_changed(left: Dictionary, right: Dictionary) -
+         Vector2i(left.get("usable_size", Vector2i.ZERO))
+         != Vector2i(right.get("usable_size", Vector2i.ZERO))
+     )
++
++
++static func _looks_like_macos_scaled_display(
++    reported_scale: float, usable_size: Vector2i, os_name: String, screen_dpi: int
++) -> bool:
++    return (
++        os_name == "macOS"
++        and (
++            reported_scale >= 1.25
++            or screen_dpi >= MAC_RETINA_DPI_THRESHOLD
++            or should_use_macos_retina_fallback(reported_scale, usable_size, os_name, screen_dpi)
++        )
++    )
++
++
++static func _macos_readable_interface_scale(usable_size: Vector2i) -> float:
++    if (
++        usable_size.x <= MAC_COMPACT_RETINA_WIDTH_LIMIT
++        and usable_size.y <= MAC_COMPACT_RETINA_HEIGHT_LIMIT
++    ):
++        return MID_INTERFACE_SCALE
++    if usable_size.x >= RETINA_WIDTH_THRESHOLD or usable_size.y >= RETINA_HEIGHT_THRESHOLD:
++        return 2.0
++    if (
++        usable_size.x >= LARGE_DISPLAY_WIDTH_THRESHOLD
++        or usable_size.y >= LARGE_DISPLAY_HEIGHT_THRESHOLD
++    ):
++        return 1.5
++    return MID_INTERFACE_SCALE
+diff --git a/pixel/ui/shell/main.gd b/pixel/ui/shell/main.gd
+index 6cba227..6604688 100644
+--- a/pixel/ui/shell/main.gd
++++ b/pixel/ui/shell/main.gd
+@@ -42,6 +42,7 @@ const SCALE_RESOLVE_DEBOUNCE_SECONDS := 0.35
+ var _project_filters := PackedStringArray(["*.pxproj ; PixelForge Project"])
+ var _png_filters := PackedStringArray(["*.png ; PNG Image"])
+ var _interface_scale := 1.0
++var _window_pixel_scale := 1.0
+ var _canvas: Control = null
+ var _cleanup_inspector: Control = null
+ var _title_label: Label = null
+@@ -68,14 +69,15 @@ var _pending_screen_snapshot := {}
+
+
+ func _ready() -> void:
+-    _interface_scale = _resolve_interface_scale()
++    var startup_snapshot := InterfaceScalePolicy.read_current_screen_snapshot()
++    _interface_scale = _resolve_interface_scale_from_snapshot(startup_snapshot, "startup")
+     _live_rescale_enabled = bool(SettingsService.get_setting("ui", "live_rescale", true))
+     _apply_viewport_scale_policy()
+     _apply_runtime_theme()
+     _apply_window_defaults()
+     _build_ui()
+     _connect_services()
+-    _last_screen_snapshot = InterfaceScalePolicy.read_current_screen_snapshot()
++    _last_screen_snapshot = startup_snapshot
+     set_process(DisplayServer.get_name() != "headless")
+     _update_window_title()
+     _m2_1_ui.show_onboarding_if_needed()
+@@ -112,24 +114,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
+         get_viewport().set_input_as_handled()
+
+
+-func _resolve_interface_scale() -> float:
+-    if DisplayServer.get_name() == "headless":
+-        return InterfaceScalePolicy.MIN_INTERFACE_SCALE
+-
+-    return _resolve_interface_scale_from_snapshot(
+-        InterfaceScalePolicy.read_current_screen_snapshot(), "startup"
+-    )
+-
+-
+ func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String) -> float:
+     var configured_scale := float(SettingsService.get_setting("ui", "interface_scale", 0.0))
+     var resolution := InterfaceScalePolicy.resolve_from_snapshot(
+         snapshot, configured_scale, OS.get_name()
+     )
+-    # M0 复发复盘：manual-test-m0.md 曾指导测试者把 interface_scale 写成 1.0，
+-    # 该值残留在 user://settings.cfg 后会永久旁路自动检测，在 Retina 屏表现为
+-    # 界面缩小一半。一次性迁移：检测到 macOS Retina（自动检测 > 残留值）时
+-    # 把残留的 1.0 重置回 0.0（自动），其他显式覆盖值仍然尊重用户选择。
++    _window_pixel_scale = float(resolution["window_pixel_scale"])
++    # M0 复盘：残留 interface_scale=1.0 会永久旁路自动检测。
++    # 仅在 macOS 自动档明显更大时迁回 auto，其余显式覆盖仍尊重用户选择。
+     if (
+         OS.get_name() == "macOS"
+         and is_equal_approx(configured_scale, 1.0)
+@@ -144,9 +136,11 @@ func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String
+         resolution = InterfaceScalePolicy.resolve_from_snapshot(
+             snapshot, configured_scale, OS.get_name()
+         )
++        _window_pixel_scale = float(resolution["window_pixel_scale"])
+
+     var resolved := float(resolution["resolved"])
+     var usable_size := Vector2i(resolution["usable_size"])
++    var screen_size := Vector2i(snapshot.get("screen_size", Vector2i.ZERO))
+     if bool(resolution["clamped"]):
+         (
+             Log
+@@ -171,10 +165,12 @@ func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String
+                 "resolved": resolved,
+                 "detected_F": float(resolution["detected_F"]),
+                 "applied_F": resolved,
++                "window_pixel_scale": _window_pixel_scale,
+                 "configured": configured_scale,
+                 "reported_screen_scale": float(resolution["reported_screen_scale"]),
+                 "screen_dpi": int(resolution["screen_dpi"]),
+                 "usable_rect": [usable_size.x, usable_size.y],
++                "screen_size": [screen_size.x, screen_size.y],
+                 "mac_retina_fallback": bool(resolution["mac_retina_fallback"]),
+                 "current_screen": int(snapshot.get("screen", -1)),
+                 "os": OS.get_name(),
+@@ -220,6 +216,7 @@ func _apply_live_rescale(screen_snapshot: Dictionary) -> void:
+
+     var old_snapshot := _last_screen_snapshot.duplicate()
+     var old_scale := _interface_scale
++    var old_window_pixel_scale := _window_pixel_scale
+     _interface_scale = _resolve_interface_scale_from_snapshot(screen_snapshot, "live_rescale")
+     _apply_viewport_scale_policy()
+     _apply_runtime_theme()
+@@ -243,6 +240,8 @@ func _apply_live_rescale(screen_snapshot: Dictionary) -> void:
+                 "to_screen": int(screen_snapshot.get("screen", -1)),
+                 "from_F": old_scale,
+                 "to_F": _interface_scale,
++                "from_window_pixel_scale": old_window_pixel_scale,
++                "to_window_pixel_scale": _window_pixel_scale,
+                 "current_screen": int(screen_snapshot.get("screen", -1)),
+             }
+         )
+@@ -257,7 +256,8 @@ func _log_scale_audit() -> void:
+         self,
+         _canvas,
+         _last_screen_snapshot,
+-        root_window.content_scale_factor if root_window != null else 1.0
++        root_window.content_scale_factor if root_window != null else 1.0,
++        _window_pixel_scale
+     )
+
+
+@@ -302,6 +302,7 @@ func _apply_window_defaults() -> void:
+         WindowScalePolicy.apply_startup_defaults(
+             window,
+             _interface_scale,
++            _window_pixel_scale,
+             Vector2i(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
+             Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
+             WINDOW_SCREEN_MARGIN,
+diff --git a/pixel/ui/shell/scale_audit.gd b/pixel/ui/shell/scale_audit.gd
+index 23c4fe9..c436795 100644
+--- a/pixel/ui/shell/scale_audit.gd
++++ b/pixel/ui/shell/scale_audit.gd
+@@ -13,7 +13,11 @@ static func is_requested() -> bool:
+
+
+ static func log_scale_audit(
+-    owner: Node, canvas: Control, screen_snapshot: Dictionary, content_scale_factor: float
++    owner: Node,
++    canvas: Control,
++    screen_snapshot: Dictionary,
++    content_scale_factor: float,
++    window_pixel_scale: float
+ ) -> void:
+     (
+         Log
+@@ -21,6 +25,7 @@ static func log_scale_audit(
+             "Scale audit",
+             {
+                 "content_scale_factor": content_scale_factor,
++                "window_pixel_scale": window_pixel_scale,
+                 "current_screen": int(screen_snapshot.get("screen", -1)),
+                 "controls": _collect_control_audit(owner),
+                 "canvas": _collect_canvas_audit(canvas),
+diff --git a/pixel/ui/shell/window_scale_policy.gd b/pixel/ui/shell/window_scale_policy.gd
+index 26921eb..aeb6d7f 100644
+--- a/pixel/ui/shell/window_scale_policy.gd
++++ b/pixel/ui/shell/window_scale_policy.gd
+@@ -2,10 +2,13 @@ class_name PFWindowScalePolicy
+ extends RefCounted
+
+ ## 窗口尺寸缩放策略。
+-## 输入：逻辑尺寸、界面缩放与屏幕可用区域；输出：Godot Window 的像素尺寸。
++## 输入：逻辑尺寸、界面缩放、屏幕像素倍率；输出：Godot Window 的像素尺寸。
+
+ const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
+
++const MAC_SCREEN_POINT_MAX_WIDTH := 2200
++const MAC_SCREEN_POINT_MAX_HEIGHT := 1400
++
+
+ static func apply_minimum_size(
+     window: Window, min_logical_size: Vector2i, interface_scale: float
+@@ -18,18 +21,20 @@ static func apply_minimum_size(
+ static func apply_startup_defaults(
+     window: Window,
+     interface_scale: float,
++    window_pixel_scale: float,
+     default_logical_size: Vector2i,
+     min_logical_size: Vector2i,
+     screen_margin: int,
+     os_name: String
+ ) -> Dictionary:
+     apply_minimum_size(window, min_logical_size, interface_scale)
+-    var target_size := logical_size_to_window_pixels(default_logical_size, interface_scale)
++    var geometry_scale := effective_window_geometry_scale(interface_scale, window_pixel_scale)
++    var target_size := logical_size_to_window_pixels(default_logical_size, geometry_scale)
+     var usable_rect := DisplayServer.screen_get_usable_rect(window.current_screen)
+     if usable_rect.size.x > 0 and usable_rect.size.y > 0:
+-        var margin := logical_size_to_window_pixels(Vector2i(screen_margin, 0), interface_scale).x
++        var margin := logical_size_to_window_pixels(Vector2i(screen_margin, 0), geometry_scale).x
+         var usable_size_for_window := usable_size_to_window_pixels(
+-            usable_rect.size, interface_scale, os_name
++            usable_rect.size, window_pixel_scale, os_name
+         )
+         var minimum_fit := logical_size_to_window_pixels(Vector2i(960, 640), interface_scale)
+         var max_width := maxi(minimum_fit.x, usable_size_for_window.x - margin)
+@@ -39,12 +44,16 @@ static func apply_startup_defaults(
+         target_size.x = maxi(target_size.x, mini(window.min_size.x, max_width))
+         target_size.y = maxi(target_size.y, mini(window.min_size.y, max_height))
+         window.size = target_size
+-        var position_size := window_pixels_to_screen_units(target_size, interface_scale, os_name)
++        var position_size := window_pixels_to_screen_units(
++            target_size, window_pixel_scale, os_name, usable_rect.size
++        )
+         window.position = usable_rect.position + (usable_rect.size - position_size) / 2
+     else:
+         window.size = target_size
+     return {
+         "content_scale_factor": interface_scale,
++        "window_pixel_scale": window_pixel_scale,
++        "window_geometry_scale": geometry_scale,
+         "min_size": [window.min_size.x, window.min_size.y],
+         "target_size": [target_size.x, target_size.y],
+         "actual_size": [window.size.x, window.size.y],
+@@ -61,23 +70,47 @@ static func logical_size_to_window_pixels(size: Vector2i, interface_scale: float
+     )
+
+
++static func effective_window_geometry_scale(
++    interface_scale: float, window_pixel_scale: float
++) -> float:
++    return maxf(
++        maxf(interface_scale, InterfaceScalePolicy.MIN_INTERFACE_SCALE),
++        maxf(window_pixel_scale, InterfaceScalePolicy.MIN_INTERFACE_SCALE)
++    )
++
++
+ static func usable_size_to_window_pixels(
+-    size: Vector2i, interface_scale: float, os_name: String
++    size: Vector2i, window_pixel_scale: float, os_name: String
+ ) -> Vector2i:
+-    if os_name == "macOS" and interface_scale > 1.0:
++    if should_convert_macos_screen_units(size, window_pixel_scale, os_name):
+         return Vector2i(
+-            maxi(1, int(round(float(size.x) * interface_scale))),
+-            maxi(1, int(round(float(size.y) * interface_scale)))
++            maxi(1, int(round(float(size.x) * window_pixel_scale))),
++            maxi(1, int(round(float(size.y) * window_pixel_scale)))
+         )
+     return size
+
+
+ static func window_pixels_to_screen_units(
+-    size: Vector2i, interface_scale: float, os_name: String
++    size: Vector2i,
++    window_pixel_scale: float,
++    os_name: String,
++    usable_screen_units: Vector2i = Vector2i.ZERO
+ ) -> Vector2i:
+-    if os_name == "macOS" and interface_scale > 1.0:
++    if should_convert_macos_screen_units(usable_screen_units, window_pixel_scale, os_name):
+         return Vector2i(
+-            maxi(1, int(round(float(size.x) / interface_scale))),
+-            maxi(1, int(round(float(size.y) / interface_scale)))
++            maxi(1, int(round(float(size.x) / window_pixel_scale))),
++            maxi(1, int(round(float(size.y) / window_pixel_scale)))
+         )
+     return size
++
++
++static func should_convert_macos_screen_units(
++    usable_size: Vector2i, window_pixel_scale: float, os_name: String
++) -> bool:
++    if os_name != "macOS" or window_pixel_scale <= 1.0:
++        return false
++    if usable_size == Vector2i.ZERO:
++        return false
++    return (
++        usable_size.x <= MAC_SCREEN_POINT_MAX_WIDTH and usable_size.y <= MAC_SCREEN_POINT_MAX_HEIGHT
++    )

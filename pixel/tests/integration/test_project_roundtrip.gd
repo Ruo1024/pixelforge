@@ -2,6 +2,7 @@ extends "res://addons/gut/test.gd"
 
 const FileIOScript := preload("res://infra/file_io.gd")
 const AppInfo := preload("res://core/util/app_info.gd")
+const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
 
 
 func before_all() -> void:
@@ -74,6 +75,77 @@ func test_project_open_rejects_future_format_version() -> void:
 		FileIOScript.zip_pack({"manifest.json": manifest, "canvas/canvas.json": canvas}, path), OK
 	)
 	assert_eq(project_service.open_project(path), ERR_FILE_UNRECOGNIZED)
+
+
+func test_cleanup_provenance_survives_project_roundtrip() -> void:
+	var project_service := get_tree().root.get_node("ProjectService")
+	var asset_library := get_tree().root.get_node("AssetLibrary")
+	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	image.fill(Color.CYAN)
+	var asset_id: String = (
+		asset_library
+		. register_image(
+			image,
+			"cleaned",
+			{
+				"origin": "edited",
+				"provenance":
+				{
+					"provider": null,
+					"model": null,
+					"prompt": "",
+					"seed": null,
+					"parent_asset": "source-asset",
+					"graph_id": null,
+					"created_at": "2026-06-13T00:00:00Z",
+					"cleanup":
+					{
+						"source_asset": "source-asset",
+						"params": {"steps": ["detect_grid", "resample", "quantize"]},
+						"report": {"output_size": [4, 4]},
+					},
+				},
+			}
+		)
+	)
+
+	var path := "user://tests/cleanup_provenance.pxproj"
+	assert_eq(project_service.save_project(path), OK)
+	assert_eq(project_service.open_project(path), OK)
+
+	var meta: Dictionary = asset_library.get_asset_meta(asset_id)
+	var provenance: Dictionary = meta["provenance"]
+	var cleanup: Dictionary = provenance["cleanup"]
+	assert_eq(cleanup["source_asset"], "source-asset")
+	assert_eq(
+		Vector2(cleanup["report"]["output_size"][0], cleanup["report"]["output_size"][1]),
+		Vector2(4, 4)
+	)
+
+
+func test_custom_palette_survives_project_roundtrip() -> void:
+	var project_service := get_tree().root.get_node("ProjectService")
+	var palette := PFPalette.new(
+		"harvest", "Harvest", PackedColorArray([Color8(32, 24, 16), Color8(224, 192, 96)])
+	)
+	var registered := PaletteRegistry.register_custom_palette(palette)
+	var path := "user://tests/custom_palette_roundtrip.pxproj"
+
+	assert_eq(project_service.save_project(path), OK)
+
+	var unpacked: Dictionary = FileIOScript.zip_unpack(path)
+	assert_true(unpacked["ok"])
+	assert_true(unpacked["files"].has("palettes/%s.json" % registered.id))
+	var manifest: Dictionary = FileIOScript.bytes_to_json(unpacked["files"]["manifest.json"])
+	assert_eq(String(manifest["custom_palettes"][0]["id"]), registered.id)
+
+	PaletteRegistry.clear_custom_palettes()
+	assert_eq(project_service.open_project(path), OK)
+
+	var resolved := PaletteRegistry.resolve({"palette_id": registered.id})
+	assert_not_null(resolved)
+	assert_eq(resolved.name, "Harvest")
+	assert_eq(resolved.colors[1].to_html(false), "e0c060")
 
 
 func _make_item(item_id: String, asset_id: String, position: Vector2, z_index: int) -> Dictionary:

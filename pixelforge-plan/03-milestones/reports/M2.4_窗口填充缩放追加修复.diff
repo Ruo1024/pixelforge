@@ -1,0 +1,182 @@
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 607cb99..d87093d 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -19,3 +19,4 @@
+ - M2.3: UI 缩放迁移到 `content_scale_factor`；删除组件级 `ui_scale` / `_scaled_int` 约定，画布按设备整数倍率反向补偿，并新增 M2.3 缩放守护脚本与回归测试。
+ - M2.4: 加固缩放体验，画布层平移吸附到物理像素网格，FileDialog 统一 Godot 自绘以跟随界面缩放，新增跨屏 live re-scale 防抖、`--scale-audit` 日志与 M2.4 出口门控。
+ - M2.4 追加修复: 拆分 UI 可读缩放与窗口像素几何缩放，修正无缩放 2K 偏小和 macOS Retina 内屏 UI 过大裁切的自动档位。
++- M2.4 窗口填充修复: 根视口改为 `canvas_items + expand` 记录启动窗口为拉伸基准，窗口拉大时 PixelForge 工作区和画布随窗口缩放填满 Debug 盲区。
+diff --git a/pixel/project.godot b/pixel/project.godot
+index 94c15cc..e06d698 100644
+--- a/pixel/project.godot
++++ b/pixel/project.godot
+@@ -32,7 +32,9 @@ window/size/viewport_width=1440
+ window/size/viewport_height=900
+ window/size/window_width_override=1440
+ window/size/window_height_override=900
+-window/stretch/aspect="ignore"
++window/stretch/mode="canvas_items"
++window/stretch/aspect="expand"
++window/stretch/scale_mode="fractional"
+ window/dpi/allow_hidpi=true
+ window/size/min_width=1280
+ window/size/min_height=800
+diff --git a/pixel/tests/smoke/test_infinite_canvas.gd b/pixel/tests/smoke/test_infinite_canvas.gd
+index 31fda91..bc63e51 100644
+--- a/pixel/tests/smoke/test_infinite_canvas.gd
++++ b/pixel/tests/smoke/test_infinite_canvas.gd
+@@ -84,6 +84,26 @@ func test_canvas_device_scale_rounds_fractional_content_scale() -> void:
+ 	assert_eq(CanvasScalePolicy.effective_art_pixel_px(1.0, 1.5), 2)
+ 
+ 
++func test_canvas_viewport_scale_includes_window_stretch() -> void:
++	assert_almost_eq(
++		CanvasScalePolicy.compute_window_stretch_scale(
++			Vector2i(2160, 1350), Vector2i(1440, 900), Window.CONTENT_SCALE_ASPECT_EXPAND
++		),
++		1.5,
++		0.001
++	)
++
++	var window := Window.new()
++	window.size = Vector2i(2160, 1350)
++	window.content_scale_size = Vector2i(1440, 900)
++	window.content_scale_factor = 1.25
++	window.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
++	window.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
++
++	assert_almost_eq(CanvasScalePolicy.resolve_viewport_scale_factor(window), 1.875, 0.001)
++	window.free()
++
++
+ func test_canvas_layer_position_snaps_to_physical_pixel_grid() -> void:
+ 	var raw_position := Vector2(150.125, 99.75)
+ 	var snapped_position := CanvasScalePolicy.snap_position_to_physical_pixel(raw_position, 1.5)
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 1a8fd96..35426af 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -132,13 +132,14 @@ func test_interface_scale_preserves_readability_on_scaled_screens() -> void:
+ 	)
+ 
+ 
+-func test_content_scale_policy_uses_native_factor_without_reference_size() -> void:
++func test_content_scale_policy_captures_window_size_for_resize_fill() -> void:
+ 	var window := Window.new()
++	window.size = Vector2i(1440, 900)
+ 	InterfaceScalePolicy.apply_content_scale_policy(window, 1.5)
+ 
+-	assert_eq(window.content_scale_mode, Window.CONTENT_SCALE_MODE_DISABLED)
+-	assert_eq(window.content_scale_aspect, Window.CONTENT_SCALE_ASPECT_IGNORE)
+-	assert_eq(window.content_scale_size, Vector2i.ZERO)
++	assert_eq(window.content_scale_mode, Window.CONTENT_SCALE_MODE_CANVAS_ITEMS)
++	assert_eq(window.content_scale_aspect, Window.CONTENT_SCALE_ASPECT_EXPAND)
++	assert_eq(window.content_scale_size, Vector2i(1440, 900))
+ 	assert_almost_eq(window.content_scale_factor, 1.5, 0.001)
+ 	assert_eq(window.content_scale_stretch, Window.CONTENT_SCALE_STRETCH_FRACTIONAL)
+ 
+diff --git a/pixel/ui/canvas/canvas_scale_policy.gd b/pixel/ui/canvas/canvas_scale_policy.gd
+index 37edc3a..598253a 100644
+--- a/pixel/ui/canvas/canvas_scale_policy.gd
++++ b/pixel/ui/canvas/canvas_scale_policy.gd
+@@ -11,6 +11,40 @@ static func compute_canvas_device_scale(viewport_scale_factor: float) -> int:
+ 	return maxi(1, int(round(maxf(viewport_scale_factor, 1.0))))
+ 
+ 
++static func compute_window_stretch_scale(
++	window_size: Vector2i, content_scale_size: Vector2i, content_scale_aspect: int
++) -> float:
++	if window_size.x <= 0 or window_size.y <= 0:
++		return 1.0
++	if content_scale_size.x <= 0 or content_scale_size.y <= 0:
++		return 1.0
++	var scale_x := float(window_size.x) / float(content_scale_size.x)
++	var scale_y := float(window_size.y) / float(content_scale_size.y)
++	match content_scale_aspect:
++		Window.CONTENT_SCALE_ASPECT_IGNORE:
++			return minf(scale_x, scale_y)
++		Window.CONTENT_SCALE_ASPECT_KEEP_WIDTH:
++			return scale_x
++		Window.CONTENT_SCALE_ASPECT_KEEP_HEIGHT:
++			return scale_y
++		_:
++			return minf(scale_x, scale_y)
++
++
++static func resolve_viewport_scale_factor(root: Window) -> float:
++	if root == null:
++		return 1.0
++	var user_scale := maxf(root.content_scale_factor, 1.0)
++	if root.content_scale_mode == Window.CONTENT_SCALE_MODE_DISABLED:
++		return user_scale
++	return (
++		user_scale
++		* compute_window_stretch_scale(
++			root.size, root.content_scale_size, root.content_scale_aspect
++		)
++	)
++
++
+ static func compute_canvas_compensation_scale(viewport_scale_factor: float) -> float:
+ 	var safe_factor := maxf(viewport_scale_factor, 1.0)
+ 	return float(compute_canvas_device_scale(safe_factor)) / safe_factor
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 964a12e..c87f1bb 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -812,7 +812,7 @@ func _resolve_viewport_scale_factor() -> float:
+ 	var root := get_tree().root
+ 	if root == null:
+ 		return 1.0
+-	return maxf(root.content_scale_factor, 1.0)
++	return ScalePolicy.resolve_viewport_scale_factor(root)
+ 
+ 
+ func _get_art_logical_scale() -> float:
+diff --git a/pixel/ui/shell/interface_scale_policy.gd b/pixel/ui/shell/interface_scale_policy.gd
+index 373efdb..9124ea8 100644
+--- a/pixel/ui/shell/interface_scale_policy.gd
++++ b/pixel/ui/shell/interface_scale_policy.gd
+@@ -124,9 +124,9 @@ static func resolve_from_snapshot(
+ static func apply_content_scale_policy(root: Window, scale: float) -> void:
+ 	if root == null:
+ 		return
+-	root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
+-	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
+-	root.content_scale_size = Vector2i.ZERO
++	root.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
++	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
++	root.content_scale_size = _content_scale_base_size(root)
+ 	root.content_scale_factor = clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
+ 	root.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_FRACTIONAL
+ 
+@@ -189,3 +189,13 @@ static func _macos_readable_interface_scale(usable_size: Vector2i) -> float:
+ 	):
+ 		return 1.5
+ 	return MID_INTERFACE_SCALE
++
++
++static func _content_scale_base_size(root: Window) -> Vector2i:
++	var current_size := root.size
++	if current_size.x > 0 and current_size.y > 0:
++		return current_size
++	return Vector2i(
++		ProjectSettings.get_setting("display/window/size/viewport_width", 1440),
++		ProjectSettings.get_setting("display/window/size/viewport_height", 900)
++	)
+diff --git a/pixel/ui/shell/main.gd b/pixel/ui/shell/main.gd
+index 6604688..f8a3a01 100644
+--- a/pixel/ui/shell/main.gd
++++ b/pixel/ui/shell/main.gd
+@@ -72,9 +72,9 @@ func _ready() -> void:
+ 	var startup_snapshot := InterfaceScalePolicy.read_current_screen_snapshot()
+ 	_interface_scale = _resolve_interface_scale_from_snapshot(startup_snapshot, "startup")
+ 	_live_rescale_enabled = bool(SettingsService.get_setting("ui", "live_rescale", true))
++	_apply_window_defaults()
+ 	_apply_viewport_scale_policy()
+ 	_apply_runtime_theme()
+-	_apply_window_defaults()
+ 	_build_ui()
+ 	_connect_services()
+ 	_last_screen_snapshot = startup_snapshot

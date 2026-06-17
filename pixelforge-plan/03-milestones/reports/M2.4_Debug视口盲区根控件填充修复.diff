@@ -1,0 +1,119 @@
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index d87093d..7457e6c 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -20,3 +20,4 @@
+ - M2.4: 加固缩放体验，画布层平移吸附到物理像素网格，FileDialog 统一 Godot 自绘以跟随界面缩放，新增跨屏 live re-scale 防抖、`--scale-audit` 日志与 M2.4 出口门控。
+ - M2.4 追加修复: 拆分 UI 可读缩放与窗口像素几何缩放，修正无缩放 2K 偏小和 macOS Retina 内屏 UI 过大裁切的自动档位。
+ - M2.4 窗口填充修复: 根视口改为 `canvas_items + expand` 记录启动窗口为拉伸基准，窗口拉大时 PixelForge 工作区和画布随窗口缩放填满 Debug 盲区。
++- M2.4 Debug 视口盲区修复: 根 Control 覆盖 `expand` 模式暴露的完整可见矩形，避免拉大 Debug/Test Window 后只显示背景。
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 35426af..5322a4e 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
+ const MainScript := preload("res://ui/shell/main.gd")
+ const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+ const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
++const ViewportFillPolicy := preload("res://ui/shell/viewport_fill_policy.gd")
+ const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
+ 
+ 
+@@ -52,6 +53,19 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
+ 	assert_eq(label.text, "100%")
+ 
+ 
++func test_viewport_fill_policy_covers_expanded_visible_rect() -> void:
++	var control := Control.new()
++	ViewportFillPolicy.apply(control, Rect2(Vector2(-220, -120), Vector2(1880, 1200)))
++
++	assert_eq(control.anchor_left, 0.0)
++	assert_eq(control.anchor_right, 0.0)
++	assert_eq(control.offset_left, -220.0)
++	assert_eq(control.offset_top, -120.0)
++	assert_eq(control.offset_right, 1660.0)
++	assert_eq(control.offset_bottom, 1080.0)
++	control.free()
++
++
+ func test_auto_interface_scale_detects_high_density_displays() -> void:
+ 	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(2560, 1440)), 1.25)
+ 	assert_eq(InterfaceScalePolicy.compute_auto_interface_scale(1.0, Vector2i(3840, 2160)), 1.5)
+diff --git a/pixel/ui/shell/main.gd b/pixel/ui/shell/main.gd
+index f8a3a01..35b1a12 100644
+--- a/pixel/ui/shell/main.gd
++++ b/pixel/ui/shell/main.gd
+@@ -19,6 +19,7 @@ const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay
+ const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+ const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
+ const ScaleAudit := preload("res://ui/shell/scale_audit.gd")
++const ViewportFillPolicy := preload("res://ui/shell/viewport_fill_policy.gd")
+ const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
+ 
+ const DEFAULT_WINDOW_WIDTH := 1440
+@@ -76,6 +77,7 @@ func _ready() -> void:
+ 	_apply_viewport_scale_policy()
+ 	_apply_runtime_theme()
+ 	_build_ui()
++	ViewportFillPolicy.apply(self, get_viewport_rect())
+ 	_connect_services()
+ 	_last_screen_snapshot = startup_snapshot
+ 	set_process(DisplayServer.get_name() != "headless")
+@@ -92,6 +94,7 @@ func _notification(what: int) -> void:
+ 
+ 
+ func _process(delta: float) -> void:
++	ViewportFillPolicy.apply(self, get_viewport_rect())
+ 	_poll_live_rescale(delta)
+ 
+ 
+@@ -99,8 +102,6 @@ func _unhandled_key_input(event: InputEvent) -> void:
+ 	if not (event is InputEventKey) or not event.pressed or event.echo:
+ 		return
+ 
+-	# macOS 习惯 Cmd+S/O/N；is_command_or_control_pressed() 在 mac 映射 Cmd、
+-	# 其余平台映射 Ctrl，Windows 行为不变。
+ 	if event.is_command_or_control_pressed() and event.keycode == KEY_S:
+ 		_save_current_project()
+ 		get_viewport().set_input_as_handled()
+@@ -120,8 +121,7 @@ func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String
+ 		snapshot, configured_scale, OS.get_name()
+ 	)
+ 	_window_pixel_scale = float(resolution["window_pixel_scale"])
+-	# M0 复盘：残留 interface_scale=1.0 会永久旁路自动检测。
+-	# 仅在 macOS 自动档明显更大时迁回 auto，其余显式覆盖仍尊重用户选择。
++	# M0 复盘：残留 interface_scale=1.0 会旁路自动检测；仅在 macOS 自动档明显更大时迁回 auto。
+ 	if (
+ 		OS.get_name() == "macOS"
+ 		and is_equal_approx(configured_scale, 1.0)
+diff --git a/pixel/ui/shell/viewport_fill_policy.gd b/pixel/ui/shell/viewport_fill_policy.gd
+new file mode 100644
+index 0000000..d4fd99e
+--- /dev/null
++++ b/pixel/ui/shell/viewport_fill_policy.gd
+@@ -0,0 +1,18 @@
++class_name PFViewportFillPolicy
++extends RefCounted
++
++## 根 Control 填充策略。
++## 输入：Viewport 可见矩形；输出：Control offset 覆盖 expand 模式暴露的完整区域。
++
++
++static func apply(control: Control, viewport_rect: Rect2) -> void:
++	if control == null:
++		return
++	control.anchor_left = 0.0
++	control.anchor_top = 0.0
++	control.anchor_right = 0.0
++	control.anchor_bottom = 0.0
++	control.offset_left = viewport_rect.position.x
++	control.offset_top = viewport_rect.position.y
++	control.offset_right = viewport_rect.position.x + viewport_rect.size.x
++	control.offset_bottom = viewport_rect.position.y + viewport_rect.size.y
+diff --git a/pixel/ui/shell/viewport_fill_policy.gd.uid b/pixel/ui/shell/viewport_fill_policy.gd.uid
+new file mode 100644
+index 0000000..a774013
+--- /dev/null
++++ b/pixel/ui/shell/viewport_fill_policy.gd.uid
+@@ -0,0 +1 @@
++uid://bikqsbqr04r2g

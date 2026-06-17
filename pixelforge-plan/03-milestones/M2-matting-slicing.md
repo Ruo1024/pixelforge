@@ -93,6 +93,26 @@
 
 ---
 
+## 决策卡：界面缩放体系迁移到 content_scale_factor（M1.1 改进期立卡）
+
+**背景**：M0 为解决 macOS Retina 下窗口/界面缩小一半的问题，建立了自研缩放体系：启动时读 `DisplayServer.screen_get_scale()` 得出 `_ui_scale`，由各 UI 组件自觉调用 `_scaled_int()` 放大字号与尺寸。M1.x 新增的 `cleanup_inspector.gd` 未遵守该约定（硬编码像素值），导致 mac 缩放问题复发——这暴露了"约定式缩放"的结构性弱点：每个新 UI 组件都可能忘记接线，且无法被 lint/测试自动发现。
+
+**提议**：迁移到 Godot 官方推荐路线（godot-proposals#7968 口径）：`Window.content_scale_factor = screen_scale` + 窗口尺寸同乘，让全部 UI（含未来 M2+ 新面板）自动继承缩放，删除 `_scaled_int()` 约定体系。
+
+**决策点（M2 开工前评估，timebox 半天）**：
+1. `content_scale_factor` 对 `FileDialog`/`Popup` 等原生窗口部件的缩放是否一致（M0 时未验证，是当时选择自研体系的原因之一，需复测 4.6.3 行为）。
+2. 无限画布的像素网格渲染在 fractional scale（1.5x）下是否出现接缝/模糊；`CONTENT_SCALE_STRETCH_FRACTIONAL` 与画布 `scale_factor` 的叠加语义。
+3. 多显示器跨屏拖动：`content_scale_factor` 路线需监听 `window_changed` 类信号重算，评估改造点数量。
+4. 迁移成本：`main.gd` 主题字号体系、`cleanup_inspector.gd` 刚接入的 `ui_scale` 注入、测试影响面。
+
+**验收口径**：决策卡输出"迁移 / 维持自研体系并补 lint 守护"二选一结论与理由，写入本文件；若选迁移，M2 期间完成并在 mac Retina + Windows 100%/150% 三种环境人工走查。
+
+**临时缓解（M1.1 改进期已落地）**：`cleanup_inspector.gd` 已接入 `ui_scale` 注入；`_resolve_interface_scale()` 已加决策链日志与 mac 残留覆盖值迁移。
+
+**M2 实施结论（2026-06-13）**：维持自研 `ui_scale` 体系，本轮不迁移到 `content_scale_factor`。理由：M2 新增的可见 UI 入口仅为顶栏按钮，已复用 `main.gd::_add_toolbar_button()` 的 `_scaled_int()` 尺寸与主题字号；现有 smoke 覆盖继续保护 Retina/高密度显示的窗口与字号口径。`content_scale_factor` 迁移仍需真实 mac Retina、Windows 100%/150%、原生 `FileDialog` 与无限画布 fractional scale 联合走查，风险和改造面超出 M2 抠图/切分主线，建议后续单独立卡处理。
+
+**M2.3 决策翻转（2026-06-16）**：经路线评审，结论翻为**迁移到 `content_scale_factor`**（chrome 继承 + 画布反向补偿 / 设备像素整数对齐），时序 M2.2 之后、M3 之前。完整开发策划卡见同目录 `M2.3-缩放体系迁移.md`（含分阶段任务、调试测试参考、规范改动草案）。上文“维持自研”为 M2 期历史结论，保留备查。
+
 ## M2 整体验收
 
 - v0.1 对外 alpha 完整故事：AI 图拖入 → 清洗 → 抠图 → 切分 → 描边统一 → 导出 spritesheet。手动测试脚本 docs/manual-test-m2.md 在双平台过。

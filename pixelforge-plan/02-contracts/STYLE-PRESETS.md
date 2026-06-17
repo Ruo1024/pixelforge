@@ -18,6 +18,7 @@
     "colors": ["#000000", "..."]         // ref=custom 时的色表（hex 列表）
   },
   "max_colors_per_sprite": 16,           // 单素材色数上限（量化目标）
+  "auto_k_strategy": "median_cut",       // median_cut | kmeans；仅 quantize=auto_k 时生效
   "outline": "none",                     // none | black_1px | colored_1px | selective
   "dither": "none",                      // none | bayer2 | bayer4 | bayer8 | error_diffusion
   "dither_strength": 0.0,                // 0–1
@@ -39,7 +40,7 @@
 | 消费方 | 读取字段 | 行为 |
 |---|---|---|
 | ai_generate 节点 | prompt_template, base_size, provider_hints | 组装提示词；选择 provider 参数 |
-| pixel_cleanup 管线 | palette, max_colors, outline, dither*, base_size | 量化目标=palette；网格检测先验 scale≈源图边长/base_size；按 outline 配置后处理 |
+| pixel_cleanup 管线 | palette, max_colors, auto_k_strategy, outline, dither*, base_size | 量化目标=palette；auto_k 默认 median_cut，可选 kmeans 提高较大 k 的颜色分布质量；网格检测先验 scale≈源图边长/base_size；按 outline 配置后处理 |
 | 像素编辑器 (M6) | palette, base_size, tile_size | 新建画布默认尺寸；调色板面板预载 |
 | 地图拼接 (M5) | tile_size, palette | 网格吸附尺寸；新素材校验色板一致性（警告不阻断）|
 
@@ -59,5 +60,6 @@
 ## 4. 不变量
 
 - `palette.colors` 长度 ≥ 2 且 ≤ 256；hex 大写无 alpha（透明用 RGBA 图层处理，不进色板）。
+- `auto_k_strategy` 缺省或非法值必须回退 `"median_cut"`，确保旧项目和旧 golden 输出逐像素不变；`"kmeans"` 为质量优先选项，只在 `quantize=auto_k` 时生效。
 - `base_size ∈ {8,16,24,32,48,64,96,128}`；`tile_size` 整除或等于 base_size 不强制，但 UI 提示。
 - 预设对象不可变（修改=创建新 id 的副本），素材 provenance 引用预设 id 才有意义。

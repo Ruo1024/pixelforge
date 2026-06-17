@@ -6,7 +6,7 @@
 
 - **当前稳定版**：Godot 4.6.3（2026-05-20）。4.6 起默认现代主题；LibGodot 可嵌入；多窗口稳定。曾有 `low_processor_usage_mode` 多窗口 CPU 回归（Issue #101058/#102914），4.6 已修复——工具应用必须开启此模式，CI 加空载 CPU 检查。
 - **Pixelorama 先例**：纯 GDScript、运行于 Godot 4.6.3、8.5k+ stars，功能含时间线/洋葱皮/平铺/调色板/混合模式——证明 GDScript 性能上限足够本产品全部 2D 需求。
-- **Material Maker 1.4 先例**（2025-10，Godot 4.4.1）：GraphEdit 承载 200+ 节点的程序化纹理工具，节点工作流形态与本产品功能3高度同构。GraphEdit 注意点：类型端口/缩放平移/minimap 原生支持；端口类型校验逻辑需自写；深度自定义连线样式成本高（v1 不做）。
+- **Material Maker 1.4 先例**（2025-10，Godot 4.4.1）：GraphEdit 承载 200+ 节点的程序化纹理工具，节点工作流形态与本产品功能3高度同构。GraphEdit 注意点：类型端口/缩放平移/minimap 原生支持；端口类型校验逻辑需自写；深度自定义连线样式成本高（v1 不做）。**（2026-06-16 更新：本产品最终选择画布原生自绘节点，不复用 GraphEdit——统一画布决策，节点与参考卡/批次同坐标互连；GraphEdit 仅作交互手感参考。见 ARCHITECTURE §1、M3、无限画布架构审阅 顶部。）**
 - **TileMapLayer**：4.2 起替代 TileMap。内置 Terrain（autotile）运行时 API 难用且有 bug（peering bits 异常案例多）；Better Terrain 插件是编辑器态方案，**运行时自实现 blob 匹配表更可控**（M5-2 采用）。
 - **网络**：HTTPRequest（单节点禁并发，需池化）、WebSocketPeer 需逐帧 poll——满足 ComfyUI ws 进度协议。
 - **性能逃生舱**：GDScript 数值运算慢是定论；PackedByteArray/PackedFloat32Array 批操作可缓解；Rust GDExtension（godot-rust/gdext）成熟；Compute Shader 在 Compatibility 渲染器不可用（**Forward+ 默认的依据之一**）。
@@ -66,3 +66,17 @@ RetroDiffusion 可商用｜OpenAI 可商用（输出不训练）｜Stability 年
 - ⚠ gpt-image 系列型号更替快（gpt-image-1 是否退役）。
 - ⚠ Godot 4.7 的 GraphEdit/TileMapLayer API 变化（升级评估卡触发）。
 - ⚠ FLUX/SD 像素 LoRA 生态月度演进（出厂 ComfyUI 模板的模型选择在 M7 时点重选最优）。
+
+## 附录 A. M1.1 GUT coverage 调研结论
+
+- 调研时间：2026-06-13。
+- 当前仓库 vendored GUT 未包含可搜索到的 `coverage` 命令、报告器或 headless 参数；`addons/gut/gut_cmdln.gd` 的现有出口参数只覆盖收集/运行/退出等流程。
+- 结论：M1.1 不把“代码行数比”包装成覆盖率数字，采用 `05-quality/COVERAGE-MATRIX-M1.md` 的 public API / 分支矩阵替代，并用 `pixel/scripts/check_m1_1_coverage_matrix.sh` 在出口脚本中校验矩阵引用的测试名真实存在。
+
+## 附录 B. Godot 4.6.3 headless 下 Image 线程安全调研（M1.1 批量压测）
+
+- 调研时间：2026-06-13（M1.1 批量帧时间测试实现期间），M1.1 改进期从完成报告风险区升格至此，供 M2+ 架构决策引用。
+- 现象：用 `WorkerThreadPool` 在 headless 模式下并行执行 `Image` 清洗（resample/quantize 全管线）不稳定——存在偶发崩溃/挂起，无可复现的最小用例但复现率足以阻断 CI。
+- 当前结论：M1.1 批量压测改为主线程分帧 Apply 口径（每帧处理一张 + `await` 一帧）；产品现有 TaskQueue 路径暂未改分帧。
+- 对 M2+ 的影响：若做大批量生产任务（批量抠图/切分/导出），必须先专项验证 `Image` 在线程内的安全边界（候选方案：每线程独立 `Image` 副本、仅在线程内做纯字节数组运算后主线程回写、或 Godot 官方 `Image` 线程安全声明确认后放开）。
+- 关联：`pixel/tests/integration/test_cleanup_batch_performance.gd` 头部注释、M1.1 完成报告 §5。

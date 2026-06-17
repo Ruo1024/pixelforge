@@ -10,7 +10,7 @@
 | 主语言 | GDScript | 开发迭代最快；Pixelorama 全 GDScript 证明可承载同体量工具；性能热点后置优化 |
 | 性能逃生舱 | GDExtension (Rust) + Compute Shader | 仅当 GDScript 实测不达标才启用；接口已按可替换设计（见 §7） |
 | 测试框架 | GUT 9.x | Godot 社区事实标准，支持 headless CI |
-| 节点图 UI | GraphEdit | Material Maker 200+ 节点的成熟先例；不重造轮子 |
+| 节点图 UI | 画布原生自绘（canvas-native） | 统一画布决策（2026-06-16）：节点与参考卡/批次同坐标互连；GraphEdit 仅作交互手感参考，不复用其 GraphNode 容器 |
 | 项目文件 | ZIP 容器 + JSON 清单 + PNG 资产 | 人类可检查、git 友好、向前兼容（见 PROJECT-FORMAT.md） |
 | AI 接入 | Provider 抽象层 | 云 API / ComfyUI / 本地模型统一接口，先云后本地（见 PROVIDER-API.md） |
 | 插件机制 | 运行时加载 PCK/GDScript | EditorPlugin 在导出后不可用，PCK 动态加载是唯一正路（见 PLUGIN-API.md） |
@@ -74,11 +74,14 @@ pixelforge/
 │   └── settings_service.gd        #   用户设置持久化
 ├── ui/
 │   ├── shell/                     # 主窗口、菜单、停靠布局、主题
-│   ├── canvas/                    # 无限画布（功能3 载体）
+│   ├── canvas/                    # 无限画布（统一宿主：参考卡 + 轻节点 + 批次容器）
 │   │   ├── infinite_canvas.gd     #   Camera2D 平移缩放 + 元素管理
 │   │   ├── canvas_item_sprite.gd  #   画布上的图像元素
-│   │   └── canvas_item_frame.gd   #   编组/画板框
-│   ├── graph_editor/              # GraphEdit 封装（功能3 UI）
+│   │   ├── canvas_item_frame.gd   #   编组/画板框
+│   │   ├── canvas_node_view.gd    #   画布原生节点渲染（自绘端口，功能3）
+│   │   ├── canvas_edge_layer.gd   #   连线层（从 graphs 渲染 + 连线交互）
+│   │   └── canvas_batch_card.gd   #   批次内容节点卡（队列网格 + 边框菜单）
+│   ├── editor_transition/         # 画布↔编辑器 共享元素过渡（替代旧 graph_editor/）
 │   ├── inspector/                 # 右侧参数检查器（清洗参数、节点参数）
 │   ├── map_composer/              # 地图拼接画板（功能4）
 │   ├── pixel_editor/              # 像素编辑器（功能5a）
@@ -136,6 +139,10 @@ class_name PFTask
 
 `StylePreset` 资源在三处被消费：生成端（PROVIDER-API 请求中的 style 字段 → 拼接提示词模板）、清洗端（pipeline 的默认参数来源）、编辑端（编辑器默认调色板与网格）。这是产品的核心一致性机制，改动 StylePreset schema 必须三处同步检查。
 
+### 4.6 画布-图绑定
+
+图逻辑（graphs/）与画布布局（canvas.json）分离：UI 层 `canvas_node_view` / `canvas_edge_layer` 按 node_id 对账渲染节点与连线，连线只从 graphs 渲染、不写进 canvas.json（PROJECT-FORMAT §4）。core 层 `pf_graph` / `executor` 不感知画布，保持 headless 可测（依赖铁律不变）。批次内容节点（GRAPH-SCHEMA §5a）的菜单处理走 services 层调 core 算法（与 process 节点同函数），记 undo + provenance，不改图结构。
+
 ## 5. 编码规范（gdlint 默认 + 以下补充）
 
 - 类名 `PF` 前缀 PascalCase（PFGraph, PFTask）；文件 snake_case。
@@ -143,6 +150,7 @@ class_name PFTask
 - 信号命名过去式（`task_finished`），方法命令式（`run_task`）。
 - 每个 core 类文件头部注释块：职责一句话 + 输入输出契约 + 引用的契约文档（如 `# contract: 02-contracts/GRAPH-SCHEMA.md §3`）。
 - 魔法数字一律提常量；用户可见字符串集中到 `ui/shell/strings.gd`（为未来 i18n 留口，v1.0 前 UI 英文、注释与文档中文——与 HexDungeon 项目同样的 CJK 字体考量，待打包自带 CJK 字体后再上中文 UI）。
+- **UI 缩放**：界面缩放由 `Window.content_scale_factor`（启动按 `_resolve_interface_scale()` 检测）统一驱动，所有 Control 尺寸/字号写逻辑常量、由 factor 等比放大，禁止 `_scaled_int()` 与组件级 `ui_scale` 注入。画布美术不随 chrome 二次放大：设备倍率 `F_canvas = max(1, round(F))`，净美术放大 = `camera_zoom × F_canvas`（整数对齐、NEAREST 硬边）。新增 UI 不需要任何缩放接线；`scripts/check_ui_scaling.sh` 做静态守护，合法例外用 `# scale-exempt:` 放行。
 
 ## 6. 测试策略摘要（详见 05-quality/QUALITY.md）
 

@@ -9,7 +9,7 @@
 3. 使用 Godot 编辑器或可执行程序打开项目，确认窗口标题为 `Untitled - PixelForge`。
 4. 在 macOS Retina / 5K 物理分辨率屏幕上确认窗口按自动 UI scale 放大：视觉上约为 1440x900 逻辑尺寸，字体边缘清晰，不再被 1440px viewport 压缩成小窗口。
 5. 确认顶部工具栏、按钮和状态栏文字可正常阅读；在 5K/Retina 环境下工具栏应使用 2x scale，在 4K 环境下应使用 1.5x scale。
-6. 如需手动覆盖界面缩放，可在 `user://settings.cfg` 中将 `ui/interface_scale` 设置为 `1.0`、`1.5` 或 `2.0`；`0.0` 表示自动检测。
+6. 如需手动覆盖界面缩放，可在 `user://settings.cfg` 中将 `ui/interface_scale` 设置为 `1.0`、`1.5` 或 `2.0`；`0.0` 表示自动检测。**测试结束后必须把该值还原为 `0.0`**——残留的显式覆盖会永久旁路自动检测，曾导致 macOS Retina 下界面缩小一半复发（M1.1 改进期已加入针对 mac 残留 `1.0` 的一次性自动迁移，但其他值仍会被尊重）。
 
 ## 2. 新建、拖入、画布交互
 
@@ -69,6 +69,6 @@
 
 当前本机已验证：
 
-- GUT：29 tests / 224 asserts 全部通过。
-- headless 启动：通过；本机缺少 Godot 4.6.3 export templates，CI 会安装模板后执行检查。
+- GUT：30 tests / 225 asserts 全部通过。
+- headless 启动：通过；本机缺少 Godot 4.6.3 export templates，M0 本地 agent 门控只验证 headless 启动。
 - lint：严格模式通过；使用项目内临时 venv 安装 gdtoolkit 后，`gdformat --check` 与 `gdlint` 均已实际执行。

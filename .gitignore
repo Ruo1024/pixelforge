@@ -22,3 +22,13 @@ pixel/build/*
 !pixel/build/.gitkeep
 pixel/user/
 
+
+# Test images: AI-generated from other artists' work without publication permission — never commit
+test picture/
+pixel/tests/fixtures/real/*.png
+pixel/tests/fixtures/real/*.png.import
+pixel/tests/fixtures/real/*.jpg
+pixel/tests/fixtures/real/*.webp
+
+# Agent scratch area
+scratch/
