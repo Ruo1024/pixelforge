@@ -11,6 +11,40 @@ static func compute_canvas_device_scale(viewport_scale_factor: float) -> int:
 	return maxi(1, int(round(maxf(viewport_scale_factor, 1.0))))
 
 
+static func compute_window_stretch_scale(
+	window_size: Vector2i, content_scale_size: Vector2i, content_scale_aspect: int
+) -> float:
+	if window_size.x <= 0 or window_size.y <= 0:
+		return 1.0
+	if content_scale_size.x <= 0 or content_scale_size.y <= 0:
+		return 1.0
+	var scale_x := float(window_size.x) / float(content_scale_size.x)
+	var scale_y := float(window_size.y) / float(content_scale_size.y)
+	match content_scale_aspect:
+		Window.CONTENT_SCALE_ASPECT_IGNORE:
+			return minf(scale_x, scale_y)
+		Window.CONTENT_SCALE_ASPECT_KEEP_WIDTH:
+			return scale_x
+		Window.CONTENT_SCALE_ASPECT_KEEP_HEIGHT:
+			return scale_y
+		_:
+			return minf(scale_x, scale_y)
+
+
+static func resolve_viewport_scale_factor(root: Window) -> float:
+	if root == null:
+		return 1.0
+	var user_scale := maxf(root.content_scale_factor, 1.0)
+	if root.content_scale_mode == Window.CONTENT_SCALE_MODE_DISABLED:
+		return user_scale
+	return (
+		user_scale
+		* compute_window_stretch_scale(
+			root.size, root.content_scale_size, root.content_scale_aspect
+		)
+	)
+
+
 static func compute_canvas_compensation_scale(viewport_scale_factor: float) -> float:
 	var safe_factor := maxf(viewport_scale_factor, 1.0)
 	return float(compute_canvas_device_scale(safe_factor)) / safe_factor

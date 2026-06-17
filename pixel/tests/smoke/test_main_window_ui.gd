@@ -132,13 +132,14 @@ func test_interface_scale_preserves_readability_on_scaled_screens() -> void:
 	)
 
 
-func test_content_scale_policy_uses_native_factor_without_reference_size() -> void:
+func test_content_scale_policy_captures_window_size_for_resize_fill() -> void:
 	var window := Window.new()
+	window.size = Vector2i(1440, 900)
 	InterfaceScalePolicy.apply_content_scale_policy(window, 1.5)
 
-	assert_eq(window.content_scale_mode, Window.CONTENT_SCALE_MODE_DISABLED)
-	assert_eq(window.content_scale_aspect, Window.CONTENT_SCALE_ASPECT_IGNORE)
-	assert_eq(window.content_scale_size, Vector2i.ZERO)
+	assert_eq(window.content_scale_mode, Window.CONTENT_SCALE_MODE_CANVAS_ITEMS)
+	assert_eq(window.content_scale_aspect, Window.CONTENT_SCALE_ASPECT_EXPAND)
+	assert_eq(window.content_scale_size, Vector2i(1440, 900))
 	assert_almost_eq(window.content_scale_factor, 1.5, 0.001)
 	assert_eq(window.content_scale_stretch, Window.CONTENT_SCALE_STRETCH_FRACTIONAL)
 

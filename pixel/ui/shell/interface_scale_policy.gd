@@ -124,9 +124,9 @@ static func resolve_from_snapshot(
 static func apply_content_scale_policy(root: Window, scale: float) -> void:
 	if root == null:
 		return
-	root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
-	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
-	root.content_scale_size = Vector2i.ZERO
+	root.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+	root.content_scale_size = _content_scale_base_size(root)
 	root.content_scale_factor = clampf(scale, MIN_INTERFACE_SCALE, MAX_INTERFACE_SCALE)
 	root.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_FRACTIONAL
 
@@ -189,3 +189,13 @@ static func _macos_readable_interface_scale(usable_size: Vector2i) -> float:
 	):
 		return 1.5
 	return MID_INTERFACE_SCALE
+
+
+static func _content_scale_base_size(root: Window) -> Vector2i:
+	var current_size := root.size
+	if current_size.x > 0 and current_size.y > 0:
+		return current_size
+	return Vector2i(
+		ProjectSettings.get_setting("display/window/size/viewport_width", 1440),
+		ProjectSettings.get_setting("display/window/size/viewport_height", 900)
+	)

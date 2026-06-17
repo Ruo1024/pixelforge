@@ -72,9 +72,9 @@ func _ready() -> void:
 	var startup_snapshot := InterfaceScalePolicy.read_current_screen_snapshot()
 	_interface_scale = _resolve_interface_scale_from_snapshot(startup_snapshot, "startup")
 	_live_rescale_enabled = bool(SettingsService.get_setting("ui", "live_rescale", true))
+	_apply_window_defaults()
 	_apply_viewport_scale_policy()
 	_apply_runtime_theme()
-	_apply_window_defaults()
 	_build_ui()
 	_connect_services()
 	_last_screen_snapshot = startup_snapshot

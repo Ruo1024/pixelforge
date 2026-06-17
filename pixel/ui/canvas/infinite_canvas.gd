@@ -812,7 +812,7 @@ func _resolve_viewport_scale_factor() -> float:
 	var root := get_tree().root
 	if root == null:
 		return 1.0
-	return maxf(root.content_scale_factor, 1.0)
+	return ScalePolicy.resolve_viewport_scale_factor(root)
 
 
 func _get_art_logical_scale() -> float:

@@ -84,6 +84,26 @@ func test_canvas_device_scale_rounds_fractional_content_scale() -> void:
 	assert_eq(CanvasScalePolicy.effective_art_pixel_px(1.0, 1.5), 2)
 
 
+func test_canvas_viewport_scale_includes_window_stretch() -> void:
+	assert_almost_eq(
+		CanvasScalePolicy.compute_window_stretch_scale(
+			Vector2i(2160, 1350), Vector2i(1440, 900), Window.CONTENT_SCALE_ASPECT_EXPAND
+		),
+		1.5,
+		0.001
+	)
+
+	var window := Window.new()
+	window.size = Vector2i(2160, 1350)
+	window.content_scale_size = Vector2i(1440, 900)
+	window.content_scale_factor = 1.25
+	window.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	window.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+
+	assert_almost_eq(CanvasScalePolicy.resolve_viewport_scale_factor(window), 1.875, 0.001)
+	window.free()
+
+
 func test_canvas_layer_position_snaps_to_physical_pixel_grid() -> void:
 	var raw_position := Vector2(150.125, 99.75)
 	var snapped_position := CanvasScalePolicy.snap_position_to_physical_pixel(raw_position, 1.5)

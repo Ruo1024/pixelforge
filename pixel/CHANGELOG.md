@@ -19,3 +19,4 @@
 - M2.3: UI 缩放迁移到 `content_scale_factor`；删除组件级 `ui_scale` / `_scaled_int` 约定，画布按设备整数倍率反向补偿，并新增 M2.3 缩放守护脚本与回归测试。
 - M2.4: 加固缩放体验，画布层平移吸附到物理像素网格，FileDialog 统一 Godot 自绘以跟随界面缩放，新增跨屏 live re-scale 防抖、`--scale-audit` 日志与 M2.4 出口门控。
 - M2.4 追加修复: 拆分 UI 可读缩放与窗口像素几何缩放，修正无缩放 2K 偏小和 macOS Retina 内屏 UI 过大裁切的自动档位。
+- M2.4 窗口填充修复: 根视口改为 `canvas_items + expand` 记录启动窗口为拉伸基准，窗口拉大时 PixelForge 工作区和画布随窗口缩放填满 Debug 盲区。
