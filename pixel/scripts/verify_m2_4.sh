@@ -3,6 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+./scripts/configure_editor_game_view.sh
 ./scripts/lint.sh
 ./scripts/run_tests.sh
 ./scripts/check_ui_scaling.sh

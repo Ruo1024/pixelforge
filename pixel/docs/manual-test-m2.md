@@ -28,6 +28,7 @@
 
 ## 4. 跨平台/显示检查
 
+0. Godot 编辑器调试前先关闭编辑器并运行 `./scripts/configure_editor_game_view.sh`，再重新打开项目；该脚本默认禁用 Game embedding，Play 时应出现无 Game bar 的独立窗口。若手动重新启用 Game bar（顶部有 `输入 / 2D / 3D` 等按钮），右侧下拉菜单的 Embedded Window Sizing 必须设为 `Stretch to Fit`；`Fixed Size` 会按项目基准分辨率居中显示，属于编辑器调试设置，不是 PixelForge 工作区布局。
 1. macOS Retina：顶栏 `Matte/Slice/Outline/Export PNG` 按钮高度、字号与现有按钮一致。
 2. Windows 100%/150% 缩放：按钮可读，不重叠，文件对话框可正常保存 PNG/JSON。
 3. 运行 M2 动作时，画布仍可平移缩放；任务结束后状态栏显示完成状态。
