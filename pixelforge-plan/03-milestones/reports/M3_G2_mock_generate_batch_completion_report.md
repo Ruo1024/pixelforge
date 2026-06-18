@@ -7509,3 +7509,87 @@ index 0000000..fb28f61
 @@ -0,0 +1 @@
 +uid://ddcv8dnq8wesh
 ```
+
+## 2026-06-19 M3 UX-4 follow-up 缩放后 LOD 未重绘修复
+
+### 本轮实现说明
+
+- 修复用户实测反馈：缩小到 25% 后批次卡仍显示旧缩略图网格，没有切到 overview 摘要。
+- 根因：UX-4 初版的 LOD 档位依赖父级画布 art layer 缩放，但 Godot 会缓存 `Node2D._draw()` 结果；父层 transform 改变时，批次卡本身没有自动 `queue_redraw()`，因此视觉仍是缩放前的绘制内容。
+- 修复方式：
+  - `PFCanvasBatchCard._ready()` 启用 `set_notify_transform(true)`。
+  - `PFCanvasBatchCard._notification()` 在 `NOTIFICATION_TRANSFORM_CHANGED` 时调用 `queue_redraw()`。
+  - 补单元测试确认批次卡启用了 transform notification，并且父级 scale 改变时 LOD 档位可从 review 进入 overview。
+- 本轮没有改 LOD 阈值、菜单、字符串或项目契约。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh`：通过，`106 files would be left unchanged`，`Success: no problems found`。
+- `./pixel/scripts/run_tests.sh`：通过，`150/150 tests`，`1232 asserts`。仍有既有 `1 Orphans` 与 Godot 退出资源 warning。
+- `./pixel/scripts/verify_m3_ux4.sh`：通过，包含 lint、全量测试、`check_ui_scaling`、导出模板检查和 staged 图片检查。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 用左下角缩放控件或滚轮缩小到 `25%`，确认 Mock Batch 不再继续显示完整缩略图网格，而是切换到 overview 摘要。
+3. 继续缩放回 `50% / 100%`，确认 review 缩略图恢复。
+4. 在缩放来回切换后，点击缩略图、`K/R/F` 标记、左右切换仍正常。
+5. 可选：切到 `Focus View` 后重复 25% 和 100% 缩放，确认也会随父层缩放重绘。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+index db7ed0b..4d759e8 100644
+--- a/pixel/tests/unit/test_canvas_batch_card.gd
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -219,6 +219,28 @@ func test_canvas_batch_card_overview_lod_keeps_bounds_and_thumbnail_geometry() -
+ 	assert_eq(card.asset_index_at_world(card.position + Vector2(20, 60)), 0)
+ 
+ 
++func test_canvas_batch_card_tracks_parent_transform_for_lod_redraw() -> void:
++	var parent := Node2D.new()
++	add_child_autofree(parent)
++	var ids := [_register_asset(Color.RED, "red")]
++	var card: Node = CanvasBatchCardScript.new()
++	var data := {
++		"id": "batch_lod_redraw",
++		"type": "batch_card",
++		"asset_ids": ids,
++		"position": [0, 0],
++		"label": "Batch",
++	}
++	card.setup_from_data(data)
++	parent.add_child(card)
++	await wait_process_frames(2)
++
++	assert_true(card.is_transform_notification_enabled())
++	assert_eq(card._get_lod_profile(), CanvasLODProfile.PROFILE_REVIEW)
++	parent.scale = Vector2(0.125, 0.125)
++	assert_eq(card._get_lod_profile(), CanvasLODProfile.PROFILE_OVERVIEW)
++
++
+ func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
+index d6bfc7c..ba7fbbc 100644
+--- a/pixel/ui/canvas/canvas_batch_card.gd
++++ b/pixel/ui/canvas/canvas_batch_card.gd
+@@ -68,6 +68,15 @@ var _font: Font = null
+ var _lod_profile_override := ""
+ 
+ 
++func _ready() -> void:
++	set_notify_transform(true)
++
++
++func _notification(what: int) -> void:
++	if what == NOTIFICATION_TRANSFORM_CHANGED:
++		queue_redraw()
++
++
+ func setup_from_data(data: Dictionary) -> void:
+ 	item_id = String(data.get("id", IdUtil.uuid_v4()))
+ 	graph_id = String(data.get("graph_id", ""))
+```

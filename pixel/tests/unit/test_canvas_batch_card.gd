@@ -219,6 +219,28 @@ func test_canvas_batch_card_overview_lod_keeps_bounds_and_thumbnail_geometry() -
 	assert_eq(card.asset_index_at_world(card.position + Vector2(20, 60)), 0)
 
 
+func test_canvas_batch_card_tracks_parent_transform_for_lod_redraw() -> void:
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var ids := [_register_asset(Color.RED, "red")]
+	var card: Node = CanvasBatchCardScript.new()
+	var data := {
+		"id": "batch_lod_redraw",
+		"type": "batch_card",
+		"asset_ids": ids,
+		"position": [0, 0],
+		"label": "Batch",
+	}
+	card.setup_from_data(data)
+	parent.add_child(card)
+	await wait_process_frames(2)
+
+	assert_true(card.is_transform_notification_enabled())
+	assert_eq(card._get_lod_profile(), CanvasLODProfile.PROFILE_REVIEW)
+	parent.scale = Vector2(0.125, 0.125)
+	assert_eq(card._get_lod_profile(), CanvasLODProfile.PROFILE_OVERVIEW)
+
+
 func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(512, 512)

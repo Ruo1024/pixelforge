@@ -68,6 +68,15 @@ var _font: Font = null
 var _lod_profile_override := ""
 
 
+func _ready() -> void:
+	set_notify_transform(true)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_TRANSFORM_CHANGED:
+		queue_redraw()
+
+
 func setup_from_data(data: Dictionary) -> void:
 	item_id = String(data.get("id", IdUtil.uuid_v4()))
 	graph_id = String(data.get("graph_id", ""))
