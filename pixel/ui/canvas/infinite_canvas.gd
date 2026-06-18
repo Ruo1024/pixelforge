@@ -25,6 +25,7 @@ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
 const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
 const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
+const LODCoordinator := preload("res://ui/canvas/canvas_lod_coordinator.gd")
 const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
 const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
@@ -294,7 +295,10 @@ func delete_selected(record_undo: bool = true) -> void:
 			var data: Dictionary = snapshot["data"]
 			if String(data.get("type", "")) == "sprite":
 				_add_sprite_direct(data, snapshot["image"])
-			elif _is_batch_card_data(data):
+			elif (
+				String(data.get("type", "")) == "batch_card"
+				or GraphItemBridge.is_graph_batch_node_data(data)
+			):
 				_add_batch_direct(data)
 			elif String(data.get("type", "")) == "node":
 				_add_node_direct(data)
@@ -759,6 +763,7 @@ func _add_sprite_direct(item_data: Dictionary, image: Image) -> Node:
 func _add_batch_direct(item_data: Dictionary) -> Node:
 	var item: Node = CanvasBatchCardScript.new()
 	item.setup_from_data(item_data)
+	item.set_lod_camera_zoom(camera_zoom)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
 	for asset_id in item.asset_ids:
@@ -776,14 +781,6 @@ func _add_node_direct(item_data: Dictionary) -> Node:
 	_update_item_visibility()
 	queue_redraw()
 	return item
-
-
-func _is_batch_card_data(item_data: Dictionary) -> bool:
-	var item_type := String(item_data.get("type", ""))
-	return (
-		item_type == "batch_card"
-		or (item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data))
-	)
 
 
 func _remove_item_direct(item_id: String) -> void:
@@ -889,6 +886,7 @@ func _update_layer_transform() -> void:
 		raw_position, viewport_scale_factor
 	)
 	item_layer.scale = Vector2.ONE * art_logical_scale
+	LODCoordinator.sync_batch_camera_zoom(_items_by_id, CanvasBatchCardScript, camera_zoom)
 	_sync_cleanup_grid_overlay()
 	queue_redraw()
 

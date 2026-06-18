@@ -270,6 +270,8 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
 	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
+	canvas.set_camera_zoom(1.0, canvas.size * 0.5)
+	await wait_process_frames(1)
 
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]

@@ -7068,3 +7068,665 @@ index 0000000..334b309
 +
 +echo "verify_m3_ux3: ok"
 ```
+
+---
+
+## 2026-06-19 追加：M3 UX-4 语义 LOD 重做（camera zoom 下发）
+
+### 本轮实现说明
+
+- 恢复 UX-4 语义 LOD 原型，但按撤销回执的复核结论改为由 `camera_zoom` 驱动，不再让 batch 卡反查父级 `item_layer.scale` / `art_logical_scale`。
+- 新增 `PFCanvasLODProfile` 集中维护 `overview / review / inspect` 阈值，当前阈值为 `<= 0.25` overview、`>= 4.0` inspect，中间为 review。
+- 新增 `PFCanvasLODCoordinator`，在 `PFInfiniteCanvas._update_layer_transform()` 中统一把 `camera_zoom` 下发给 batch 卡；新建 batch 时也同步当前 zoom，避免在 25% 下生成后短暂显示 review。
+- `PFCanvasBatchCard` 新增三档绘制：overview 显示摘要数量和状态色条；review 保留现有 contact sheet / focus view、选择、过滤、对比；inspect 显示透明棋盘、像素网格和尺寸/颜色数提示。
+- overview 档不再命中单张缩略图，避免缩小时误点单图；这属于 UX-7 输入仲裁的后续可调策略，本轮先保持保守。
+- 补充 headless 回归：真实 `PFInfiniteCanvas` + 分数 viewport scale `1.5` + `camera_zoom = 0.25` 时，batch 必须进入 overview，覆盖上次撤销回执指出的真实漏测路径。
+- 更新 `pixel/CHANGELOG.md`，新增 `verify_m3_ux4.sh` 门禁脚本。
+
+### 验证结果
+
+| 命令 | 结果 | 备注 |
+|---|---|---|
+| `./pixel/scripts/lint.sh` | 通过 | `gdformat --check` / `gdlint` 通过；无裸 `print`。 |
+| `./pixel/scripts/run_tests.sh` | 通过 | 149/149 tests passed；仍有既有 GUT orphan / 退出资源提示，但退出码为 0。 |
+| `./pixel/scripts/verify_m3_ux4.sh` | 通过 | 串行通过 lint、run_tests、`check_ui_scaling.sh`、`check_export_templates.sh`；导出模板缺失时脚本按既有口径只做 headless startup。 |
+| staged 图片检查 | 通过 | `git diff --cached --name-only | grep -iE '\.(png|jpe?g)$'` 无输出。 |
+| staged 保留目录检查 | 通过 | `test picture/`、`pixel/tests/fixtures/real/`、`垃圾桶/`、`godot-interactive-guide/` 均未暂存。 |
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 缩放到 25%：batch 卡应切到 overview，只显示摘要数量和状态色条，不再显示完整缩略图网格。
+3. 缩放回 50% 或 100%：batch 卡应回到 review，可继续点选缩略图、使用 K/R/F 标记、切换 Contact Sheet / Focus View。
+4. 缩放到 400%：batch 卡进入 inspect，小图缩略图应出现棋盘底、像素网格和尺寸/颜色数提示。
+5. 在 macOS 分数缩放/外接屏或 Windows 125%/150% 缩放环境重点复核：25% 必须仍进入 overview；若未进入，请记录实际显示器缩放和窗口尺寸。
+
+### DoD 核查
+
+| 项 | 核查内容 | 状态 | 证据/路径 |
+|---|---|---|---|
+| 代码规范 | gdlint/gdformat 零告警 | 通过 | `./pixel/scripts/lint.sh` |
+| 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | `test_batch_lod_uses_camera_zoom_not_compensated_art_scale`、149/149 tests |
+| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按上方步骤做实机视觉/手感验收 |
+| 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 本轮只改 UI LOD 渲染与测试，不改项目/graph schema |
+| TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 本轮未新增 TODO/FIXME/HACK |
+| 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 本轮无新性能预算；inspect 色数统计有 256 色上限 |
+| 跨平台 | 目标平台验证结果已记录 | 延期登记 | headless 已过；mac/Windows 分数缩放需人工复核 |
+| 出口门控 | CI 绿灯或本地 agent 验证绿灯 | 通过 | `./pixel/scripts/verify_m3_ux4.sh` |
+
+### 本轮完整 diff（报告自身除外）
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index bce660e..1e94c3e 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -29,3 +29,4 @@
+ - M3 G-4 follow-up: graph 连线改用命名端口锚点，修正轻节点端口点、batch 输入点与连线端点错位。
+ - M3 G-4 follow-up: AI Generate 画布卡将多个逻辑输入折叠为单个视觉输入点，降低基础节点链噪声。
+ - M3 G-5: 新增 File > Run Selected Graph 最小重跑入口，选中 mock 节点链任一节点后可替换刷新正式 batch 队列。
++- M3 UX-4: 恢复 batch 语义 LOD 原型，改由 camera zoom 下发 overview/review/inspect，覆盖分数缩放下 25% 进入 overview 的回归路径。
+diff --git a/pixel/scripts/verify_m3_ux4.sh b/pixel/scripts/verify_m3_ux4.sh
+new file mode 100755
+index 0000000..3d2513d
+--- /dev/null
++++ b/pixel/scripts/verify_m3_ux4.sh
+@@ -0,0 +1,17 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/../.."
++
++./pixel/scripts/configure_editor_game_view.sh
++./pixel/scripts/lint.sh
++./pixel/scripts/run_tests.sh
++./pixel/scripts/check_ui_scaling.sh
++./pixel/scripts/check_export_templates.sh
++
++if git diff --cached --name-only | grep -iE '\.(png|jpe?g)$' >/dev/null; then
++  echo "Staged image files are not allowed for M3 UX-4 commits." >&2
++  exit 1
++fi
++
++echo "verify_m3_ux4: ok"
+diff --git a/pixel/tests/smoke/test_infinite_canvas.gd b/pixel/tests/smoke/test_infinite_canvas.gd
+index bc63e51..69675b0 100644
+--- a/pixel/tests/smoke/test_infinite_canvas.gd
++++ b/pixel/tests/smoke/test_infinite_canvas.gd
+@@ -1,6 +1,7 @@
+ extends "res://addons/gut/test.gd"
+ 
+ const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
++const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
+ const CanvasScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
+ const ImageMath := preload("res://core/util/image_math.gd")
+ const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
+@@ -149,6 +150,30 @@ func test_canvas_coordinates_use_compensated_logical_scale() -> void:
+ 	assert_almost_eq(roundtrip.y, world_position.y, 0.001)
+ 
+ 
++func test_batch_lod_uses_camera_zoom_not_compensated_art_scale() -> void:
++	get_tree().root.get_node("ProjectService").new_project("LOD Test")
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(320, 240)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids := [_register_asset(Color.RED, "red")]
++	var card: Node = canvas._add_batch_card(ids, Vector2.ZERO, "Batch", "batch_1", false)
++
++	canvas._set_viewport_scale_factor_for_test(1.5)
++	canvas.set_camera_zoom(0.25, Vector2(160, 120))
++	await wait_process_frames(1)
++
++	assert_almost_eq(canvas._get_art_logical_scale(), 0.333, 0.001)
++	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_OVERVIEW)
++
++	canvas.set_camera_zoom(4.0, Vector2(160, 120))
++	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
++
++	canvas.set_camera_zoom(1.0, Vector2(160, 120))
++	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
++
++
+ func test_zoom_anchor_stays_fixed_with_fractional_content_scale() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(320, 240)
+@@ -321,6 +346,12 @@ func _make_checker_image(size: int) -> Image:
+ 	return image
+ 
+ 
++func _register_asset(color: Color, name: String) -> String:
++	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
++	image.fill(color)
++	return AssetLibrary.register_image(image, name, {"origin": "imported"})
++
++
+ func _mouse_button(button: MouseButton, pressed: bool, position: Vector2) -> InputEventMouseButton:
+ 	var event := InputEventMouseButton.new()
+ 	event.button_index = button
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 9c70e83..f5a019c 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -270,6 +270,8 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
+ 	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+ 	controller.generate_mock_batch()
+ 	await wait_process_frames(2)
++	canvas.set_camera_zoom(1.0, canvas.size * 0.5)
++	await wait_process_frames(1)
+ 
+ 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+ 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+index debfee6..2af1e30 100644
+--- a/pixel/tests/unit/test_canvas_batch_card.gd
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -2,6 +2,7 @@ extends "res://addons/gut/test.gd"
+ 
+ const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
+ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
++const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
+ const GraphScript := preload("res://core/graph/pf_graph.gd")
+ const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
+ const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
+@@ -176,6 +177,33 @@ func test_canvas_batch_card_switches_review_layout_for_focus_view() -> void:
+ 	assert_eq(item["review_layout"], CanvasBatchCardScript.LAYOUT_FOCUS)
+ 
+ 
++func test_canvas_batch_card_switches_semantic_lod_profiles() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++
++	assert_eq(LODProfile.profile_for_camera_zoom(0.25), LODProfile.PROFILE_OVERVIEW)
++	assert_eq(LODProfile.profile_for_camera_zoom(1.0), LODProfile.PROFILE_REVIEW)
++	assert_eq(LODProfile.profile_for_camera_zoom(4.0), LODProfile.PROFILE_INSPECT)
++	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
++
++	card.set_lod_camera_zoom(0.25)
++	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_OVERVIEW)
++	assert_almost_eq(
++		card.get_canvas_bounds().size.y, float(CanvasBatchCardScript.OVERVIEW_HEIGHT), 0.001
++	)
++	assert_eq(card.asset_index_at_world(card.position + Vector2(24, 64)), -1)
++
++	card.set_lod_camera_zoom(4.0)
++	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
++	assert_gt(card.get_canvas_bounds().size.y, float(CanvasBatchCardScript.OVERVIEW_HEIGHT))
++	assert_false(card._asset_hint_for(ids[0]).is_empty())
++
++
+ func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
+index e54db12..cd7ae7d 100644
+--- a/pixel/ui/canvas/canvas_batch_card.gd
++++ b/pixel/ui/canvas/canvas_batch_card.gd
+@@ -5,6 +5,7 @@ extends Node2D
+ ## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
+ 
+ const IdUtil := preload("res://core/util/id_util.gd")
++const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
+ const Strings := preload("res://ui/shell/strings.gd")
+ 
+ const CARD_WIDTH := 600
+@@ -41,6 +42,14 @@ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
+ const FOCUS_IMAGE_HEIGHT := 320
+ const FOCUS_FILMSTRIP_THUMB_SIZE := 72
+ const FOCUS_FILMSTRIP_VISIBLE := 7
++const OVERVIEW_HEIGHT := 124
++const OVERVIEW_BAR_HEIGHT := 12
++const CHECKER_SIZE := 8
++const MAX_INSPECT_COLOR_HINTS := 256
++const CHECKER_LIGHT := Color(0.18, 0.19, 0.2, 1.0)
++const CHECKER_DARK := Color(0.1, 0.105, 0.11, 1.0)
++const INSPECT_GRID := Color(1.0, 1.0, 1.0, 0.16)
++const HINT_BACKGROUND := Color(0.02, 0.025, 0.03, 0.78)
+ 
+ var item_id := ""
+ var graph_id := ""
+@@ -57,7 +66,9 @@ var label := ""
+ var locked := false
+ 
+ var _thumbnail_textures := {}
++var _asset_hints := {}
+ var _font: Font = null
++var _lod_camera_zoom := 1.0
+ 
+ 
+ func setup_from_data(data: Dictionary) -> void:
+@@ -135,6 +146,14 @@ func get_canvas_bounds() -> Rect2:
+ 	return Rect2(position, Vector2(CARD_WIDTH, _card_height()))
+ 
+ 
++func set_lod_camera_zoom(camera_zoom_value: float) -> void:
++	var normalized_zoom := maxf(camera_zoom_value, 0.0)
++	if is_equal_approx(_lod_camera_zoom, normalized_zoom):
++		return
++	_lod_camera_zoom = normalized_zoom
++	queue_redraw()
++
++
+ func contains_world_point(world_position: Vector2) -> bool:
+ 	return get_canvas_bounds().has_point(world_position)
+ 
+@@ -312,6 +331,8 @@ func toggle_asset_at_world(world_position: Vector2) -> bool:
+ 
+ 
+ func asset_index_at_world(world_position: Vector2) -> int:
++	if _get_lod_profile() == LODProfile.PROFILE_OVERVIEW:
++		return -1
+ 	var local := world_position - position
+ 	if local.y < HEADER_HEIGHT:
+ 		return -1
+@@ -326,6 +347,10 @@ func asset_index_at_world(world_position: Vector2) -> int:
+ 	return -1
+ 
+ 
++func _get_lod_profile() -> String:
++	return LODProfile.profile_for_camera_zoom(_lod_camera_zoom)
++
++
+ func _draw() -> void:
+ 	_font = ThemeDB.fallback_font if _font == null else _font
+ 	var card_rect := Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, _card_height()))
+@@ -334,8 +359,9 @@ func _draw() -> void:
+ 	draw_rect(
+ 		Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
+ 	)
++	var visible_ids := get_visible_asset_ids()
+ 	if _font != null:
+-		var visible_count := get_visible_asset_ids().size()
++		var visible_count := visible_ids.size()
+ 		var title := "%s (%d)" % [label, asset_ids.size()]
+ 		if visible_count != asset_ids.size():
+ 			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
+@@ -353,11 +379,13 @@ func _draw() -> void:
+ 			Color(0.9, 0.92, 0.92, 1.0)
+ 		)
+ 
+-	var columns := _columns()
+-	var visible_ids := get_visible_asset_ids()
+-	if review_layout == LAYOUT_FOCUS:
++	var lod_profile := _get_lod_profile()
++	if lod_profile == LODProfile.PROFILE_OVERVIEW:
++		_draw_overview(visible_ids)
++	elif review_layout == LAYOUT_FOCUS:
+ 		_draw_focus_layout(visible_ids)
+ 	else:
++		var columns := _columns()
+ 		for index in range(visible_ids.size()):
+ 			_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
+ 	if has_graph_binding():
+@@ -377,12 +405,58 @@ func _draw_focus_layout(visible_ids: Array[String]) -> void:
+ 		_draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
+ 
+ 
++func _draw_overview(visible_ids: Array[String]) -> void:
++	var content_rect := Rect2(
++		Vector2(PADDING, HEADER_HEIGHT + PADDING), Vector2(CARD_WIDTH - PADDING * 2, 42.0)
++	)
++	draw_rect(content_rect, Color(0.08, 0.085, 0.09, 1.0), true)
++	if _font != null:
++		draw_string(
++			_font,
++			content_rect.position + Vector2(0.0, 31.0),
++			str(visible_ids.size()),
++			HORIZONTAL_ALIGNMENT_CENTER,
++			content_rect.size.x,
++			28,
++			Color(0.92, 0.94, 0.92, 1.0)
++		)
++	var bar_rect := Rect2(
++		Vector2(PADDING, content_rect.end.y + THUMB_GAP),
++		Vector2(CARD_WIDTH - PADDING * 2, OVERVIEW_BAR_HEIGHT)
++	)
++	_draw_overview_status_bar(bar_rect, visible_ids)
++
++
++func _draw_overview_status_bar(bar_rect: Rect2, visible_ids: Array[String]) -> void:
++	draw_rect(bar_rect, Color(0.08, 0.085, 0.09, 1.0), true)
++	if visible_ids.is_empty():
++		return
++	var counts := _review_counts(visible_ids)
++	var cursor_x := bar_rect.position.x
++	for review_state in [FILTER_PENDING, REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG]:
++		var count := int(counts.get(review_state, 0))
++		if count <= 0:
++			continue
++		var width := bar_rect.size.x * float(count) / float(visible_ids.size())
++		var segment := Rect2(
++			Vector2(cursor_x, bar_rect.position.y), Vector2(width, bar_rect.size.y)
++		)
++		draw_rect(segment, _overview_color_for_state(review_state), true)
++		cursor_x += width
++
++
+ func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
+-	draw_rect(rect, THUMB_BACKGROUND, true)
++	var inspect_mode := _get_lod_profile() == LODProfile.PROFILE_INSPECT
++	if inspect_mode:
++		_draw_checkerboard(rect)
++	else:
++		draw_rect(rect, THUMB_BACKGROUND, true)
+ 	if compare_mode == COMPARE_SPLIT:
+ 		_draw_split_compare_thumbnail(asset_id, rect)
+ 	else:
+ 		_draw_thumbnail_texture(_texture_asset_id_for(asset_id), rect)
++	if inspect_mode:
++		_draw_inspect_overlay(asset_id, rect)
+ 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
+ 	draw_rect(rect, border_color, false, 1.5)
+ 	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
+@@ -409,13 +483,81 @@ func _draw_split_compare_thumbnail(asset_id: String, rect: Rect2) -> void:
+ 
+ 
+ func _draw_thumbnail_texture(asset_id: String, rect: Rect2) -> void:
++	var texture_rect := _thumbnail_texture_rect(asset_id, rect)
++	if texture_rect.size == Vector2.ZERO:
++		return
++	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
++	draw_texture_rect(texture, texture_rect, false)
++
++
++func _thumbnail_texture_rect(asset_id: String, rect: Rect2) -> Rect2:
+ 	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
+ 	if texture != null:
+ 		var image_size := texture.get_size()
+ 		var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
+ 		var draw_size := image_size * scale
+ 		var draw_pos := rect.position + (rect.size - draw_size) * 0.5
+-		draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
++		return Rect2(draw_pos, draw_size)
++	return Rect2()
++
++
++func _draw_checkerboard(rect: Rect2) -> void:
++	var columns := int(ceil(rect.size.x / float(CHECKER_SIZE)))
++	var rows := int(ceil(rect.size.y / float(CHECKER_SIZE)))
++	for row in range(rows):
++		for column in range(columns):
++			var cell := Rect2(
++				rect.position + Vector2(column * CHECKER_SIZE, row * CHECKER_SIZE),
++				Vector2(CHECKER_SIZE, CHECKER_SIZE)
++			)
++			draw_rect(cell, CHECKER_LIGHT if (row + column) % 2 == 0 else CHECKER_DARK, true)
++
++
++func _draw_inspect_overlay(asset_id: String, rect: Rect2) -> void:
++	var texture_asset_id := _texture_asset_id_for(asset_id)
++	var texture_rect := _thumbnail_texture_rect(texture_asset_id, rect)
++	if texture_rect.size != Vector2.ZERO:
++		_draw_texture_pixel_grid(texture_asset_id, texture_rect)
++	var hint := _asset_hint_for(asset_id)
++	if hint.is_empty() or _font == null:
++		return
++	var hint_rect := Rect2(
++		rect.position + Vector2(6.0, rect.size.y - 24.0), Vector2(rect.size.x - 12.0, 18.0)
++	)
++	draw_rect(hint_rect, HINT_BACKGROUND, true)
++	draw_string(
++		_font,
++		hint_rect.position + Vector2(5.0, 14.0),
++		hint,
++		HORIZONTAL_ALIGNMENT_LEFT,
++		hint_rect.size.x - 10.0,
++		12,
++		Color(0.94, 0.95, 0.94, 1.0)
++	)
++
++
++func _draw_texture_pixel_grid(asset_id: String, texture_rect: Rect2) -> void:
++	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
++	if texture == null:
++		return
++	var image_size := texture.get_size()
++	var cell_size := minf(texture_rect.size.x / image_size.x, texture_rect.size.y / image_size.y)
++	if not LODProfile.should_draw_pixel_grid(_lod_camera_zoom, cell_size):
++		return
++	for x in range(1, int(image_size.x)):
++		var line_x := texture_rect.position.x + float(x) * cell_size
++		draw_line(
++			Vector2(line_x, texture_rect.position.y),
++			Vector2(line_x, texture_rect.end.y),
++			INSPECT_GRID
++		)
++	for y in range(1, int(image_size.y)):
++		var line_y := texture_rect.position.y + float(y) * cell_size
++		draw_line(
++			Vector2(texture_rect.position.x, line_y),
++			Vector2(texture_rect.end.x, line_y),
++			INSPECT_GRID
++		)
+ 
+ 
+ func _draw_review_marker(rect: Rect2, review_state: String) -> void:
+@@ -443,6 +585,29 @@ func _draw_review_marker(rect: Rect2, review_state: String) -> void:
+ 			)
+ 
+ 
++func _review_counts(visible_ids: Array[String]) -> Dictionary:
++	var counts := {FILTER_PENDING: 0, REVIEW_KEEP: 0, REVIEW_REJECT: 0, REVIEW_FLAG: 0}
++	for asset_id in visible_ids:
++		var review_state := String(review_states.get(asset_id, REVIEW_NONE))
++		if review_state.is_empty():
++			counts[FILTER_PENDING] += 1
++		else:
++			counts[review_state] = int(counts.get(review_state, 0)) + 1
++	return counts
++
++
++func _overview_color_for_state(review_state: String) -> Color:
++	match review_state:
++		REVIEW_KEEP:
++			return KEEP_MARK
++		REVIEW_REJECT:
++			return REJECT_MARK
++		REVIEW_FLAG:
++			return FLAG_MARK
++		_:
++			return BORDER
++
++
+ func _thumb_rect(index: int, columns: int) -> Rect2:
+ 	var col := index % columns
+ 	var row := int(index / columns)
+@@ -471,6 +636,8 @@ func _filmstrip_rect(slot_index: int) -> Rect2:
+ 
+ 
+ func _card_height() -> int:
++	if _get_lod_profile() == LODProfile.PROFILE_OVERVIEW:
++		return OVERVIEW_HEIGHT
+ 	var visible_count := get_visible_asset_ids().size()
+ 	if visible_count <= 0:
+ 		return MIN_CARD_HEIGHT
+@@ -512,6 +679,7 @@ func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
+ 
+ func _rebuild_thumbnails() -> void:
+ 	_thumbnail_textures.clear()
++	_asset_hints.clear()
+ 	var texture_asset_ids := asset_ids.duplicate()
+ 	for compare_asset_id in compare_asset_ids:
+ 		if not texture_asset_ids.has(compare_asset_id):
+@@ -520,6 +688,10 @@ func _rebuild_thumbnails() -> void:
+ 		var image := AssetLibrary.get_image(asset_id)
+ 		if image == null:
+ 			continue
++		_asset_hints[asset_id] = {
++			"size": image.get_size(),
++			"color_count": _count_limited_colors(image, MAX_INSPECT_COLOR_HINTS),
++		}
+ 		var thumb := image.duplicate()
+ 		var longest := maxi(thumb.get_width(), thumb.get_height())
+ 		if longest > THUMB_TEXTURE_SIZE:
+@@ -532,6 +704,30 @@ func _rebuild_thumbnails() -> void:
+ 		_thumbnail_textures[asset_id] = ImageTexture.create_from_image(thumb)
+ 
+ 
++func _asset_hint_for(asset_id: String) -> String:
++	var hint: Dictionary = _asset_hints.get(asset_id, {})
++	if hint.is_empty():
++		return ""
++	var image_size: Vector2i = hint.get("size", Vector2i.ZERO)
++	var color_count := int(hint.get("color_count", 0))
++	if color_count > MAX_INSPECT_COLOR_HINTS:
++		return (
++			Strings.BATCH_INSPECT_HINT_CAPPED_FORMAT
++			% [image_size.x, image_size.y, MAX_INSPECT_COLOR_HINTS]
++		)
++	return Strings.BATCH_INSPECT_HINT_FORMAT % [image_size.x, image_size.y, color_count]
++
++
++func _count_limited_colors(image: Image, max_colors: int) -> int:
++	var colors := {}
++	for y in range(image.get_height()):
++		for x in range(image.get_width()):
++			colors[image.get_pixel(x, y).to_html(true)] = true
++			if colors.size() > max_colors:
++				return colors.size()
++	return colors.size()
++
++
+ func _resolve_graph_batch_node_data() -> Dictionary:
+ 	if not has_graph_binding():
+ 		return {}
+diff --git a/pixel/ui/canvas/canvas_lod_coordinator.gd b/pixel/ui/canvas/canvas_lod_coordinator.gd
+new file mode 100644
+index 0000000..295c020
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_lod_coordinator.gd
+@@ -0,0 +1,15 @@
++class_name PFCanvasLODCoordinator
++extends RefCounted
++
++## Pushes canvas camera zoom to canvas-resident items that render semantic LOD.
++
++
++static func sync_batch_camera_zoom(
++	items_by_id: Dictionary, batch_card_script: Script, camera_zoom: float
++) -> void:
++	for raw_item in items_by_id.values():
++		if not (raw_item is Node):
++			continue
++		var item: Node = raw_item
++		if item.get_script() == batch_card_script:
++			item.set_lod_camera_zoom(camera_zoom)
+diff --git a/pixel/ui/canvas/canvas_lod_coordinator.gd.uid b/pixel/ui/canvas/canvas_lod_coordinator.gd.uid
+new file mode 100644
+index 0000000..060fc9b
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_lod_coordinator.gd.uid
+@@ -0,0 +1 @@
++uid://daiq0vv2kxan7
+diff --git a/pixel/ui/canvas/canvas_lod_profile.gd b/pixel/ui/canvas/canvas_lod_profile.gd
+new file mode 100644
+index 0000000..2006b01
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_lod_profile.gd
+@@ -0,0 +1,24 @@
++class_name PFCanvasLODProfile
++extends RefCounted
++
++## Semantic canvas LOD thresholds shared by canvas-resident items.
++
++const PROFILE_OVERVIEW := "overview"
++const PROFILE_REVIEW := "review"
++const PROFILE_INSPECT := "inspect"
++const OVERVIEW_MAX_CAMERA_ZOOM := 0.25
++const INSPECT_MIN_CAMERA_ZOOM := 4.0
++const PIXEL_GRID_MIN_PHYSICAL_CELL := 4.0
++
++
++static func profile_for_camera_zoom(camera_zoom: float) -> String:
++	var safe_zoom := maxf(camera_zoom, 0.0)
++	if safe_zoom <= OVERVIEW_MAX_CAMERA_ZOOM:
++		return PROFILE_OVERVIEW
++	if safe_zoom >= INSPECT_MIN_CAMERA_ZOOM:
++		return PROFILE_INSPECT
++	return PROFILE_REVIEW
++
++
++static func should_draw_pixel_grid(camera_zoom: float, local_cell_size: float) -> bool:
++	return maxf(camera_zoom, 0.0) * maxf(local_cell_size, 0.0) >= PIXEL_GRID_MIN_PHYSICAL_CELL
+diff --git a/pixel/ui/canvas/canvas_lod_profile.gd.uid b/pixel/ui/canvas/canvas_lod_profile.gd.uid
+new file mode 100644
+index 0000000..a43ab38
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_lod_profile.gd.uid
+@@ -0,0 +1 @@
++uid://bt1d4qhvqrs8m
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 9c54730..74821ee 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -25,6 +25,7 @@ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+ const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
+ const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
+ const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
++const LODCoordinator := preload("res://ui/canvas/canvas_lod_coordinator.gd")
+ const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
+ const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
+ const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
+@@ -294,7 +295,10 @@ func delete_selected(record_undo: bool = true) -> void:
+ 			var data: Dictionary = snapshot["data"]
+ 			if String(data.get("type", "")) == "sprite":
+ 				_add_sprite_direct(data, snapshot["image"])
+-			elif _is_batch_card_data(data):
++			elif (
++				String(data.get("type", "")) == "batch_card"
++				or GraphItemBridge.is_graph_batch_node_data(data)
++			):
+ 				_add_batch_direct(data)
+ 			elif String(data.get("type", "")) == "node":
+ 				_add_node_direct(data)
+@@ -759,6 +763,7 @@ func _add_sprite_direct(item_data: Dictionary, image: Image) -> Node:
+ func _add_batch_direct(item_data: Dictionary) -> Node:
+ 	var item: Node = CanvasBatchCardScript.new()
+ 	item.setup_from_data(item_data)
++	item.set_lod_camera_zoom(camera_zoom)
+ 	item_layer.add_child(item)
+ 	_items_by_id[item.item_id] = item
+ 	for asset_id in item.asset_ids:
+@@ -778,14 +783,6 @@ func _add_node_direct(item_data: Dictionary) -> Node:
+ 	return item
+ 
+ 
+-func _is_batch_card_data(item_data: Dictionary) -> bool:
+-	var item_type := String(item_data.get("type", ""))
+-	return (
+-		item_type == "batch_card"
+-		or (item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data))
+-	)
+-
+-
+ func _remove_item_direct(item_id: String) -> void:
+ 	if not _items_by_id.has(item_id):
+ 		return
+@@ -889,6 +886,7 @@ func _update_layer_transform() -> void:
+ 		raw_position, viewport_scale_factor
+ 	)
+ 	item_layer.scale = Vector2.ONE * art_logical_scale
++	LODCoordinator.sync_batch_camera_zoom(_items_by_id, CanvasBatchCardScript, camera_zoom)
+ 	_sync_cleanup_grid_overlay()
+ 	queue_redraw()
+ 
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index 4954bff..8e3a28a 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -168,6 +168,8 @@ const BATCH_ACTION_COMPARE_PREVIOUS := "Show Previous"
+ const BATCH_ACTION_COMPARE_SPLIT := "Show Compare"
+ const BATCH_COMPARE_PREVIOUS_SUFFIX := "previous"
+ const BATCH_COMPARE_SPLIT_SUFFIX := "compare"
++const BATCH_INSPECT_HINT_FORMAT := "%dx%d, %d colors"
++const BATCH_INSPECT_HINT_CAPPED_FORMAT := "%dx%d, %d+ colors"
+ const BATCH_ACTION_SPLIT_KEEP := "Split Kept"
+ const BATCH_ACTION_SPLIT := "Split Selected"
+ const BATCH_ACTION_EXPORT := "Export Batch"
+```

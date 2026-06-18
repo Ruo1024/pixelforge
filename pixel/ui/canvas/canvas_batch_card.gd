@@ -5,6 +5,7 @@ extends Node2D
 ## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
 
 const IdUtil := preload("res://core/util/id_util.gd")
+const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 
 const CARD_WIDTH := 600
@@ -41,6 +42,14 @@ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
 const FOCUS_IMAGE_HEIGHT := 320
 const FOCUS_FILMSTRIP_THUMB_SIZE := 72
 const FOCUS_FILMSTRIP_VISIBLE := 7
+const OVERVIEW_HEIGHT := 124
+const OVERVIEW_BAR_HEIGHT := 12
+const CHECKER_SIZE := 8
+const MAX_INSPECT_COLOR_HINTS := 256
+const CHECKER_LIGHT := Color(0.18, 0.19, 0.2, 1.0)
+const CHECKER_DARK := Color(0.1, 0.105, 0.11, 1.0)
+const INSPECT_GRID := Color(1.0, 1.0, 1.0, 0.16)
+const HINT_BACKGROUND := Color(0.02, 0.025, 0.03, 0.78)
 
 var item_id := ""
 var graph_id := ""
@@ -57,7 +66,9 @@ var label := ""
 var locked := false
 
 var _thumbnail_textures := {}
+var _asset_hints := {}
 var _font: Font = null
+var _lod_camera_zoom := 1.0
 
 
 func setup_from_data(data: Dictionary) -> void:
@@ -133,6 +144,14 @@ func has_graph_binding() -> bool:
 
 func get_canvas_bounds() -> Rect2:
 	return Rect2(position, Vector2(CARD_WIDTH, _card_height()))
+
+
+func set_lod_camera_zoom(camera_zoom_value: float) -> void:
+	var normalized_zoom := maxf(camera_zoom_value, 0.0)
+	if is_equal_approx(_lod_camera_zoom, normalized_zoom):
+		return
+	_lod_camera_zoom = normalized_zoom
+	queue_redraw()
 
 
 func contains_world_point(world_position: Vector2) -> bool:
@@ -312,6 +331,8 @@ func toggle_asset_at_world(world_position: Vector2) -> bool:
 
 
 func asset_index_at_world(world_position: Vector2) -> int:
+	if _get_lod_profile() == LODProfile.PROFILE_OVERVIEW:
+		return -1
 	var local := world_position - position
 	if local.y < HEADER_HEIGHT:
 		return -1
@@ -326,6 +347,10 @@ func asset_index_at_world(world_position: Vector2) -> int:
 	return -1
 
 
+func _get_lod_profile() -> String:
+	return LODProfile.profile_for_camera_zoom(_lod_camera_zoom)
+
+
 func _draw() -> void:
 	_font = ThemeDB.fallback_font if _font == null else _font
 	var card_rect := Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, _card_height()))
@@ -334,8 +359,9 @@ func _draw() -> void:
 	draw_rect(
 		Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
 	)
+	var visible_ids := get_visible_asset_ids()
 	if _font != null:
-		var visible_count := get_visible_asset_ids().size()
+		var visible_count := visible_ids.size()
 		var title := "%s (%d)" % [label, asset_ids.size()]
 		if visible_count != asset_ids.size():
 			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
@@ -353,11 +379,13 @@ func _draw() -> void:
 			Color(0.9, 0.92, 0.92, 1.0)
 		)
 
-	var columns := _columns()
-	var visible_ids := get_visible_asset_ids()
-	if review_layout == LAYOUT_FOCUS:
+	var lod_profile := _get_lod_profile()
+	if lod_profile == LODProfile.PROFILE_OVERVIEW:
+		_draw_overview(visible_ids)
+	elif review_layout == LAYOUT_FOCUS:
 		_draw_focus_layout(visible_ids)
 	else:
+		var columns := _columns()
 		for index in range(visible_ids.size()):
 			_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
 	if has_graph_binding():
@@ -377,12 +405,58 @@ func _draw_focus_layout(visible_ids: Array[String]) -> void:
 		_draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
 
 
+func _draw_overview(visible_ids: Array[String]) -> void:
+	var content_rect := Rect2(
+		Vector2(PADDING, HEADER_HEIGHT + PADDING), Vector2(CARD_WIDTH - PADDING * 2, 42.0)
+	)
+	draw_rect(content_rect, Color(0.08, 0.085, 0.09, 1.0), true)
+	if _font != null:
+		draw_string(
+			_font,
+			content_rect.position + Vector2(0.0, 31.0),
+			str(visible_ids.size()),
+			HORIZONTAL_ALIGNMENT_CENTER,
+			content_rect.size.x,
+			28,
+			Color(0.92, 0.94, 0.92, 1.0)
+		)
+	var bar_rect := Rect2(
+		Vector2(PADDING, content_rect.end.y + THUMB_GAP),
+		Vector2(CARD_WIDTH - PADDING * 2, OVERVIEW_BAR_HEIGHT)
+	)
+	_draw_overview_status_bar(bar_rect, visible_ids)
+
+
+func _draw_overview_status_bar(bar_rect: Rect2, visible_ids: Array[String]) -> void:
+	draw_rect(bar_rect, Color(0.08, 0.085, 0.09, 1.0), true)
+	if visible_ids.is_empty():
+		return
+	var counts := _review_counts(visible_ids)
+	var cursor_x := bar_rect.position.x
+	for review_state in [FILTER_PENDING, REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG]:
+		var count := int(counts.get(review_state, 0))
+		if count <= 0:
+			continue
+		var width := bar_rect.size.x * float(count) / float(visible_ids.size())
+		var segment := Rect2(
+			Vector2(cursor_x, bar_rect.position.y), Vector2(width, bar_rect.size.y)
+		)
+		draw_rect(segment, _overview_color_for_state(review_state), true)
+		cursor_x += width
+
+
 func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
-	draw_rect(rect, THUMB_BACKGROUND, true)
+	var inspect_mode := _get_lod_profile() == LODProfile.PROFILE_INSPECT
+	if inspect_mode:
+		_draw_checkerboard(rect)
+	else:
+		draw_rect(rect, THUMB_BACKGROUND, true)
 	if compare_mode == COMPARE_SPLIT:
 		_draw_split_compare_thumbnail(asset_id, rect)
 	else:
 		_draw_thumbnail_texture(_texture_asset_id_for(asset_id), rect)
+	if inspect_mode:
+		_draw_inspect_overlay(asset_id, rect)
 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
 	draw_rect(rect, border_color, false, 1.5)
 	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
@@ -409,13 +483,81 @@ func _draw_split_compare_thumbnail(asset_id: String, rect: Rect2) -> void:
 
 
 func _draw_thumbnail_texture(asset_id: String, rect: Rect2) -> void:
+	var texture_rect := _thumbnail_texture_rect(asset_id, rect)
+	if texture_rect.size == Vector2.ZERO:
+		return
+	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
+	draw_texture_rect(texture, texture_rect, false)
+
+
+func _thumbnail_texture_rect(asset_id: String, rect: Rect2) -> Rect2:
 	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
 	if texture != null:
 		var image_size := texture.get_size()
 		var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
 		var draw_size := image_size * scale
 		var draw_pos := rect.position + (rect.size - draw_size) * 0.5
-		draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
+		return Rect2(draw_pos, draw_size)
+	return Rect2()
+
+
+func _draw_checkerboard(rect: Rect2) -> void:
+	var columns := int(ceil(rect.size.x / float(CHECKER_SIZE)))
+	var rows := int(ceil(rect.size.y / float(CHECKER_SIZE)))
+	for row in range(rows):
+		for column in range(columns):
+			var cell := Rect2(
+				rect.position + Vector2(column * CHECKER_SIZE, row * CHECKER_SIZE),
+				Vector2(CHECKER_SIZE, CHECKER_SIZE)
+			)
+			draw_rect(cell, CHECKER_LIGHT if (row + column) % 2 == 0 else CHECKER_DARK, true)
+
+
+func _draw_inspect_overlay(asset_id: String, rect: Rect2) -> void:
+	var texture_asset_id := _texture_asset_id_for(asset_id)
+	var texture_rect := _thumbnail_texture_rect(texture_asset_id, rect)
+	if texture_rect.size != Vector2.ZERO:
+		_draw_texture_pixel_grid(texture_asset_id, texture_rect)
+	var hint := _asset_hint_for(asset_id)
+	if hint.is_empty() or _font == null:
+		return
+	var hint_rect := Rect2(
+		rect.position + Vector2(6.0, rect.size.y - 24.0), Vector2(rect.size.x - 12.0, 18.0)
+	)
+	draw_rect(hint_rect, HINT_BACKGROUND, true)
+	draw_string(
+		_font,
+		hint_rect.position + Vector2(5.0, 14.0),
+		hint,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		hint_rect.size.x - 10.0,
+		12,
+		Color(0.94, 0.95, 0.94, 1.0)
+	)
+
+
+func _draw_texture_pixel_grid(asset_id: String, texture_rect: Rect2) -> void:
+	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
+	if texture == null:
+		return
+	var image_size := texture.get_size()
+	var cell_size := minf(texture_rect.size.x / image_size.x, texture_rect.size.y / image_size.y)
+	if not LODProfile.should_draw_pixel_grid(_lod_camera_zoom, cell_size):
+		return
+	for x in range(1, int(image_size.x)):
+		var line_x := texture_rect.position.x + float(x) * cell_size
+		draw_line(
+			Vector2(line_x, texture_rect.position.y),
+			Vector2(line_x, texture_rect.end.y),
+			INSPECT_GRID
+		)
+	for y in range(1, int(image_size.y)):
+		var line_y := texture_rect.position.y + float(y) * cell_size
+		draw_line(
+			Vector2(texture_rect.position.x, line_y),
+			Vector2(texture_rect.end.x, line_y),
+			INSPECT_GRID
+		)
 
 
 func _draw_review_marker(rect: Rect2, review_state: String) -> void:
@@ -441,6 +583,29 @@ func _draw_review_marker(rect: Rect2, review_state: String) -> void:
 				),
 				FLAG_MARK
 			)
+
+
+func _review_counts(visible_ids: Array[String]) -> Dictionary:
+	var counts := {FILTER_PENDING: 0, REVIEW_KEEP: 0, REVIEW_REJECT: 0, REVIEW_FLAG: 0}
+	for asset_id in visible_ids:
+		var review_state := String(review_states.get(asset_id, REVIEW_NONE))
+		if review_state.is_empty():
+			counts[FILTER_PENDING] += 1
+		else:
+			counts[review_state] = int(counts.get(review_state, 0)) + 1
+	return counts
+
+
+func _overview_color_for_state(review_state: String) -> Color:
+	match review_state:
+		REVIEW_KEEP:
+			return KEEP_MARK
+		REVIEW_REJECT:
+			return REJECT_MARK
+		REVIEW_FLAG:
+			return FLAG_MARK
+		_:
+			return BORDER
 
 
 func _thumb_rect(index: int, columns: int) -> Rect2:
@@ -471,6 +636,8 @@ func _filmstrip_rect(slot_index: int) -> Rect2:
 
 
 func _card_height() -> int:
+	if _get_lod_profile() == LODProfile.PROFILE_OVERVIEW:
+		return OVERVIEW_HEIGHT
 	var visible_count := get_visible_asset_ids().size()
 	if visible_count <= 0:
 		return MIN_CARD_HEIGHT
@@ -512,6 +679,7 @@ func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
 
 func _rebuild_thumbnails() -> void:
 	_thumbnail_textures.clear()
+	_asset_hints.clear()
 	var texture_asset_ids := asset_ids.duplicate()
 	for compare_asset_id in compare_asset_ids:
 		if not texture_asset_ids.has(compare_asset_id):
@@ -520,6 +688,10 @@ func _rebuild_thumbnails() -> void:
 		var image := AssetLibrary.get_image(asset_id)
 		if image == null:
 			continue
+		_asset_hints[asset_id] = {
+			"size": image.get_size(),
+			"color_count": _count_limited_colors(image, MAX_INSPECT_COLOR_HINTS),
+		}
 		var thumb := image.duplicate()
 		var longest := maxi(thumb.get_width(), thumb.get_height())
 		if longest > THUMB_TEXTURE_SIZE:
@@ -530,6 +702,30 @@ func _rebuild_thumbnails() -> void:
 				Image.INTERPOLATE_NEAREST
 			)
 		_thumbnail_textures[asset_id] = ImageTexture.create_from_image(thumb)
+
+
+func _asset_hint_for(asset_id: String) -> String:
+	var hint: Dictionary = _asset_hints.get(asset_id, {})
+	if hint.is_empty():
+		return ""
+	var image_size: Vector2i = hint.get("size", Vector2i.ZERO)
+	var color_count := int(hint.get("color_count", 0))
+	if color_count > MAX_INSPECT_COLOR_HINTS:
+		return (
+			Strings.BATCH_INSPECT_HINT_CAPPED_FORMAT
+			% [image_size.x, image_size.y, MAX_INSPECT_COLOR_HINTS]
+		)
+	return Strings.BATCH_INSPECT_HINT_FORMAT % [image_size.x, image_size.y, color_count]
+
+
+func _count_limited_colors(image: Image, max_colors: int) -> int:
+	var colors := {}
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			colors[image.get_pixel(x, y).to_html(true)] = true
+			if colors.size() > max_colors:
+				return colors.size()
+	return colors.size()
 
 
 func _resolve_graph_batch_node_data() -> Dictionary:
