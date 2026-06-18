@@ -255,6 +255,8 @@ static func _compare_asset_ids(value: Variant, current_asset_ids: Variant) -> Ar
 
 
 static func _compare_mode(value: Variant, compare_asset_ids: Array) -> String:
-	if String(value) == CanvasBatchCardScript.COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
-		return CanvasBatchCardScript.COMPARE_PREVIOUS
+	if not compare_asset_ids.is_empty():
+		match String(value):
+			CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
+				return String(value)
 	return CanvasBatchCardScript.COMPARE_CURRENT

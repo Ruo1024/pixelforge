@@ -362,11 +362,10 @@ static func _normalize_review_filter(review_filter: String) -> String:
 
 
 static func _normalize_compare_mode(item: Node, compare_mode: String) -> String:
-	if (
-		compare_mode == CanvasBatchCardScript.COMPARE_PREVIOUS
-		and not item._get_compare_asset_ids().is_empty()
-	):
-		return CanvasBatchCardScript.COMPARE_PREVIOUS
+	if not item._get_compare_asset_ids().is_empty():
+		match compare_mode:
+			CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
+				return compare_mode
 	return CanvasBatchCardScript.COMPARE_CURRENT
 
 

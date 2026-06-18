@@ -55,6 +55,7 @@ const BATCH_MENU_FILTER_REJECT := 13
 const BATCH_MENU_FILTER_FLAG := 14
 const BATCH_MENU_COMPARE_CURRENT := 15
 const BATCH_MENU_COMPARE_PREVIOUS := 16
+const BATCH_MENU_COMPARE_SPLIT := 17
 const SELECTION_TOOLS_VISIBLE := false
 
 var _canvas: Control = null
@@ -320,6 +321,7 @@ func _create_batch_menu() -> void:
 	_batch_menu.add_separator()
 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
+	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_SPLIT, BATCH_MENU_COMPARE_SPLIT)
 	_batch_menu.add_separator()
 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
@@ -469,6 +471,10 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 		BATCH_MENU_COMPARE_PREVIOUS:
 			_set_batch_compare_mode(
 				CanvasBatchCardScript.COMPARE_PREVIOUS, Strings.STATUS_BATCH_COMPARE_PREVIOUS
+			)
+		BATCH_MENU_COMPARE_SPLIT:
+			_set_batch_compare_mode(
+				CanvasBatchCardScript.COMPARE_SPLIT, Strings.STATUS_BATCH_COMPARE_SPLIT
 			)
 		BATCH_MENU_SPLIT_KEEP:
 			var new_keep_card: Variant = _canvas._split_batch_marked(

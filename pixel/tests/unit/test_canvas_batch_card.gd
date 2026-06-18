@@ -175,10 +175,17 @@ func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
 	assert_eq(card._texture_asset_id_for(after_ids[0]), before_ids[0])
 	assert_eq(card._texture_asset_id_for(after_ids[1]), before_ids[1])
 
+	assert_true(
+		canvas._set_batch_compare_mode("batch_1", CanvasBatchCardScript.COMPARE_SPLIT, false)
+	)
+	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
+	assert_eq(card._texture_asset_id_for(after_ids[0]), after_ids[0])
+	assert_eq(card._compare_asset_id_for(after_ids[0]), before_ids[0])
+
 	var data: Dictionary = canvas.export_canvas_data()
 	var item: Dictionary = data["items"][0]
 	assert_eq(item["compare_asset_ids"], before_ids)
-	assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
+	assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_SPLIT)
 
 
 func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
@@ -374,15 +381,15 @@ func test_graph_batch_card_persists_compare_state_in_graph_params() -> void:
 	)
 	canvas._replace_batch_asset_ids("node_item_1", after_ids, false, before_ids)
 	assert_true(
-		canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_PREVIOUS, false)
+		canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_SPLIT, false)
 	)
-	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
+	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
 
 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
 	var batch_node: Dictionary = graph_data["nodes"][0]
 	assert_eq(batch_node["params"]["asset_ids"], after_ids)
 	assert_eq(batch_node["params"]["compare_asset_ids"], before_ids)
-	assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
+	assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_SPLIT)
 
 	var canvas_data: Dictionary = canvas.export_canvas_data()
 	assert_false(Dictionary(canvas_data["items"][0]).has("compare_asset_ids"))
@@ -397,7 +404,7 @@ func test_graph_batch_card_persists_compare_state_in_graph_params() -> void:
 
 	assert_eq(reloaded_card.asset_ids, after_ids)
 	assert_eq(reloaded_card._get_compare_asset_ids(), before_ids)
-	assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
+	assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
 
 
 func test_graph_node_card_exports_node_reference_and_survives_load() -> void:

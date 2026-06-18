@@ -6158,3 +6158,327 @@ index 0000000..4bcd93a
 +
 +echo "verify_m3_ux6: ok"
 ```
+
+## 2026-06-18 M3 UX-6b 批次前后并排对比
+
+### 本轮实现说明
+
+- 在 UX-6 已有 `current` / `previous` A/B 切换基础上，新增 `split` compare mode。
+- 批次右键菜单新增 `Show Compare`：每个缩略图左半显示上一版，右半显示当前版，中间用细分隔线区分。
+- `Show Compare` 仍只改变视觉来源；当前 `asset_ids`、审阅状态、过滤、选中、Split/Export 和后续处理语义保持指向当前批次。
+- Graph batch 的 `compare_mode` 现在允许 `current|previous|split`，旧 `batch_card` 兼容字段同步支持该值。
+- 新增 `verify_m3_ux6b.sh`，用于本轮最小专项验收。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh`：通过，105 files unchanged，no problems found。
+- `./pixel/scripts/run_tests.sh`：通过，145/145 tests，1204 asserts。
+- `./pixel/scripts/verify_m3_ux6b.sh`：通过，包含 editor game view 配置、lint、全量测试、UI scaling 检查、export templates 本地 gate、staged 图片检查。
+- 已知既有输出：GUT 仍报告 1 orphan、Godot 退出时仍有 ObjectDB/resource warning；本轮未新增相关失败。
+
+### 人工测试步骤
+
+1. 打开 PixelForge，执行 `File > Generate Mock Batch`。
+2. 右键 Mock Batch，执行 `Clean Batch` 或 `Matte Batch` / `Outline Batch`，等待批次替换为处理后结果。
+3. 右键 Mock Batch，点击 `Show Compare`，确认每个缩略图左半是处理前版本、右半是当前版本，标题出现 `compare` 后缀。
+4. 右键切到 `Show Previous`，确认仍可只看上一版；再切回 `Show Current`，确认只看当前版。
+5. 在 `Show Compare` 状态下试 Left/Right、K/R/F、过滤、Split/Export，确认这些操作仍作用于当前批次资产。
+6. 对未处理过的 Mock Batch 点击 `Show Compare`，应提示 `No previous batch version`，画面保持当前版本。
+
+### 本轮完整 diff（报告追加前）
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+index e5ca2fe..fc97059 100644
+--- a/pixel/tests/unit/test_canvas_batch_card.gd
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -175,10 +175,17 @@ func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
+ 	assert_eq(card._texture_asset_id_for(after_ids[0]), before_ids[0])
+ 	assert_eq(card._texture_asset_id_for(after_ids[1]), before_ids[1])
+ 
++	assert_true(
++		canvas._set_batch_compare_mode("batch_1", CanvasBatchCardScript.COMPARE_SPLIT, false)
++	)
++	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
++	assert_eq(card._texture_asset_id_for(after_ids[0]), after_ids[0])
++	assert_eq(card._compare_asset_id_for(after_ids[0]), before_ids[0])
++
+ 	var data: Dictionary = canvas.export_canvas_data()
+ 	var item: Dictionary = data["items"][0]
+ 	assert_eq(item["compare_asset_ids"], before_ids)
+-	assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
++	assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_SPLIT)
+ 
+ 
+ func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
+@@ -374,15 +381,15 @@ func test_graph_batch_card_persists_compare_state_in_graph_params() -> void:
+ 	)
+ 	canvas._replace_batch_asset_ids("node_item_1", after_ids, false, before_ids)
+ 	assert_true(
+-		canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_PREVIOUS, false)
++		canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_SPLIT, false)
+ 	)
+-	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
++	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
+ 
+ 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
+ 	var batch_node: Dictionary = graph_data["nodes"][0]
+ 	assert_eq(batch_node["params"]["asset_ids"], after_ids)
+ 	assert_eq(batch_node["params"]["compare_asset_ids"], before_ids)
+-	assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
++	assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_SPLIT)
+ 
+ 	var canvas_data: Dictionary = canvas.export_canvas_data()
+ 	assert_false(Dictionary(canvas_data["items"][0]).has("compare_asset_ids"))
+@@ -397,7 +404,7 @@ func test_graph_batch_card_persists_compare_state_in_graph_params() -> void:
+ 
+ 	assert_eq(reloaded_card.asset_ids, after_ids)
+ 	assert_eq(reloaded_card._get_compare_asset_ids(), before_ids)
+-	assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
++	assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
+ 
+ 
+ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
+index f121750..78a6e5a 100644
+--- a/pixel/ui/canvas/canvas_batch_card.gd
++++ b/pixel/ui/canvas/canvas_batch_card.gd
+@@ -28,10 +28,12 @@ const FILTER_ALL := "all"
+ const FILTER_PENDING := "pending"
+ const COMPARE_CURRENT := "current"
+ const COMPARE_PREVIOUS := "previous"
++const COMPARE_SPLIT := "split"
+ const KEEP_MARK := Color(0.2, 0.88, 0.46, 1.0)
+ const REJECT_MARK := Color(0.95, 0.22, 0.24, 0.95)
+ const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
+ const FOCUS_BORDER := Color(0.96, 0.96, 0.9, 1.0)
++const COMPARE_DIVIDER := Color(0.96, 0.96, 0.9, 0.85)
+ const INPUT_PORTS: Array[String] = ["in"]
+ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
+ 
+@@ -317,6 +319,8 @@ func _draw() -> void:
+ 			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
+ 		if compare_mode == COMPARE_PREVIOUS:
+ 			title = "%s - %s" % [title, Strings.BATCH_COMPARE_PREVIOUS_SUFFIX]
++		elif compare_mode == COMPARE_SPLIT:
++			title = "%s - %s" % [title, Strings.BATCH_COMPARE_SPLIT_SUFFIX]
+ 		draw_string(
+ 			_font,
+ 			Vector2(PADDING, 28),
+@@ -337,18 +341,43 @@ func _draw() -> void:
+ 
+ func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
+ 	draw_rect(rect, THUMB_BACKGROUND, true)
+-	var texture: Texture2D = _thumbnail_textures.get(_texture_asset_id_for(asset_id), null)
++	if compare_mode == COMPARE_SPLIT:
++		_draw_split_compare_thumbnail(asset_id, rect)
++	else:
++		_draw_thumbnail_texture(_texture_asset_id_for(asset_id), rect)
++	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
++	draw_rect(rect, border_color, false, 1.5)
++	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
++	if focus_asset_id == asset_id:
++		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
++
++
++func _draw_split_compare_thumbnail(asset_id: String, rect: Rect2) -> void:
++	var compare_asset_id := _compare_asset_id_for(asset_id)
++	if compare_asset_id.is_empty():
++		_draw_thumbnail_texture(asset_id, rect)
++		return
++	var left_rect := Rect2(rect.position, Vector2(floor(rect.size.x * 0.5), rect.size.y))
++	var right_rect := Rect2(
++		Vector2(rect.position.x + left_rect.size.x, rect.position.y),
++		Vector2(rect.size.x - left_rect.size.x, rect.size.y)
++	)
++	_draw_thumbnail_texture(compare_asset_id, left_rect)
++	_draw_thumbnail_texture(asset_id, right_rect)
++	var divider_x := rect.position.x + left_rect.size.x
++	draw_line(
++		Vector2(divider_x, rect.position.y), Vector2(divider_x, rect.end.y), COMPARE_DIVIDER, 2.0
++	)
++
++
++func _draw_thumbnail_texture(asset_id: String, rect: Rect2) -> void:
++	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
+ 	if texture != null:
+ 		var image_size := texture.get_size()
+ 		var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
+ 		var draw_size := image_size * scale
+ 		var draw_pos := rect.position + (rect.size - draw_size) * 0.5
+ 		draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
+-	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
+-	draw_rect(rect, border_color, false, 1.5)
+-	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
+-	if focus_asset_id == asset_id:
+-		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
+ 
+ 
+ func _draw_review_marker(rect: Rect2, review_state: String) -> void:
+@@ -502,8 +531,10 @@ func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
+ 
+ 
+ func _normalize_compare_mode(new_compare_mode: String) -> String:
+-	if new_compare_mode == COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
+-		return COMPARE_PREVIOUS
++	if not compare_asset_ids.is_empty():
++		match new_compare_mode:
++			COMPARE_PREVIOUS, COMPARE_SPLIT:
++				return new_compare_mode
+ 	return COMPARE_CURRENT
+ 
+ 
+@@ -552,9 +583,14 @@ func _visible_selected_array(value: Array) -> Array[String]:
+ func _texture_asset_id_for(asset_id: String) -> String:
+ 	if compare_mode != COMPARE_PREVIOUS:
+ 		return asset_id
++	var compare_asset_id := _compare_asset_id_for(asset_id)
++	return asset_id if compare_asset_id.is_empty() else compare_asset_id
++
++
++func _compare_asset_id_for(asset_id: String) -> String:
+ 	var index := asset_ids.find(asset_id)
+ 	if index < 0 or index >= compare_asset_ids.size():
+-		return asset_id
++		return ""
+ 	return compare_asset_ids[index]
+ 
+ 
+diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
+index 7bbb76a..8f56bf7 100644
+--- a/pixel/ui/canvas/canvas_batch_ops.gd
++++ b/pixel/ui/canvas/canvas_batch_ops.gd
+@@ -362,11 +362,10 @@ static func _normalize_review_filter(review_filter: String) -> String:
+ 
+ 
+ static func _normalize_compare_mode(item: Node, compare_mode: String) -> String:
+-	if (
+-		compare_mode == CanvasBatchCardScript.COMPARE_PREVIOUS
+-		and not item._get_compare_asset_ids().is_empty()
+-	):
+-		return CanvasBatchCardScript.COMPARE_PREVIOUS
++	if not item._get_compare_asset_ids().is_empty():
++		match compare_mode:
++			CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
++				return compare_mode
+ 	return CanvasBatchCardScript.COMPARE_CURRENT
+ 
+ 
+diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+index cebc357..cca71d2 100644
+--- a/pixel/ui/canvas/canvas_graph_item_bridge.gd
++++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+@@ -255,6 +255,8 @@ static func _compare_asset_ids(value: Variant, current_asset_ids: Variant) -> Ar
+ 
+ 
+ static func _compare_mode(value: Variant, compare_asset_ids: Array) -> String:
+-	if String(value) == CanvasBatchCardScript.COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
+-		return CanvasBatchCardScript.COMPARE_PREVIOUS
++	if not compare_asset_ids.is_empty():
++		match String(value):
++			CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
++				return String(value)
+ 	return CanvasBatchCardScript.COMPARE_CURRENT
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index cdffc92..9ac3fa7 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -55,6 +55,7 @@ const BATCH_MENU_FILTER_REJECT := 13
+ const BATCH_MENU_FILTER_FLAG := 14
+ const BATCH_MENU_COMPARE_CURRENT := 15
+ const BATCH_MENU_COMPARE_PREVIOUS := 16
++const BATCH_MENU_COMPARE_SPLIT := 17
+ const SELECTION_TOOLS_VISIBLE := false
+ 
+ var _canvas: Control = null
+@@ -320,6 +321,7 @@ func _create_batch_menu() -> void:
+ 	_batch_menu.add_separator()
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
++	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_SPLIT, BATCH_MENU_COMPARE_SPLIT)
+ 	_batch_menu.add_separator()
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
+@@ -470,6 +472,10 @@ func _on_batch_menu_id_pressed(id: int) -> void:
+ 			_set_batch_compare_mode(
+ 				CanvasBatchCardScript.COMPARE_PREVIOUS, Strings.STATUS_BATCH_COMPARE_PREVIOUS
+ 			)
++		BATCH_MENU_COMPARE_SPLIT:
++			_set_batch_compare_mode(
++				CanvasBatchCardScript.COMPARE_SPLIT, Strings.STATUS_BATCH_COMPARE_SPLIT
++			)
+ 		BATCH_MENU_SPLIT_KEEP:
+ 			var new_keep_card: Variant = _canvas._split_batch_marked(
+ 				_batch_menu_card_id,
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index 0e822f3..f5b88fe 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -60,6 +60,7 @@ const STATUS_BATCH_FOCUS_EMPTY := "No visible thumbnails in batch"
+ const STATUS_BATCH_FOCUS_FORMAT := "Focused thumbnail %d of %d"
+ const STATUS_BATCH_COMPARE_CURRENT := "Showing current batch"
+ const STATUS_BATCH_COMPARE_PREVIOUS := "Showing previous batch"
++const STATUS_BATCH_COMPARE_SPLIT := "Showing before/after compare"
+ const STATUS_BATCH_COMPARE_EMPTY := "No previous batch version"
+ const STATUS_MOCK_GENERATE_DONE := "Mock batch generated: %d sprites"
+ const STATUS_MOCK_GENERATE_FAILED := "Mock batch generation failed"
+@@ -159,7 +160,9 @@ const BATCH_ACTION_SHOW_REJECT := "Show Reject"
+ const BATCH_ACTION_SHOW_FLAG := "Show Flagged"
+ const BATCH_ACTION_COMPARE_CURRENT := "Show Current"
+ const BATCH_ACTION_COMPARE_PREVIOUS := "Show Previous"
++const BATCH_ACTION_COMPARE_SPLIT := "Show Compare"
+ const BATCH_COMPARE_PREVIOUS_SUFFIX := "previous"
++const BATCH_COMPARE_SPLIT_SUFFIX := "compare"
+ const BATCH_ACTION_SPLIT_KEEP := "Split Kept"
+ const BATCH_ACTION_SPLIT := "Split Selected"
+ const BATCH_ACTION_EXPORT := "Export Batch"
+diff --git a/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
+index a1f385f..ab049a7 100644
+--- a/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
++++ b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
+@@ -127,7 +127,7 @@ func get_canvas_actions() -> Array[Dictionary]
+ 新概念，本模型的核心。装一个批次的图片队列，是「AI 输出自由」与「批量加工」的落脚点。
+ 
+ - **双身份**：① 图节点（`type=batch`，`category=container`，`is_canvas_resident()=true`）；② 画布卡（PROJECT-FORMAT canvas.json 的 `node` 引用，特化渲染为容器卡）。
+-- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），可选 `focus_asset_id` 记录当前键盘审阅焦点，可选 `compare_asset_ids` / `compare_mode` 记录上一版 A/B 对比入口，均随 `asset_ids` 对齐或过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
++- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），可选 `focus_asset_id` 记录当前键盘审阅焦点，可选 `compare_asset_ids` / `compare_mode`（`current|previous|split`）记录上一版 A/B 对比入口，均随 `asset_ids` 对齐或过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
+ - **整批菜单**（`get_canvas_actions()` 声明，边框弹出）：整批清洗 / 整批抠图 / 整批描边 / 整批量化 / 导出整批 / 拆小批次 / 逐张发送到编辑器。均调 core，记 undo + provenance（§4.7）。
+ - **拆小批次**：勾选子集 → 生成子 `batch`（新卡，引用子集 asset_id），可独立处理；复用 `select` 语义。
+ - **分离单图**：把某张拖出批次卡 → 成为独立 sprite 卡（仍在同一画布，见 PROJECT-FORMAT §4 `sprite`）。
+diff --git a/pixelforge-plan/02-contracts/PROJECT-FORMAT.md b/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
+index 02dc8ef..d0f4337 100644
+--- a/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
++++ b/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
+@@ -112,7 +112,7 @@ my_project.pxproj (ZIP)
+       "review_filter": "all",
+       "focus_asset_id": "uuid-a",
+       "compare_asset_ids": ["uuid-a-before", "uuid-b-before"],
+-      "compare_mode": "current",
++      "compare_mode": "current",     // current | previous | split
+       "label": "Batch",
+       "position": [320, 64],
+       "z_index": 1,
+diff --git a/pixel/scripts/verify_m3_ux6b.sh b/pixel/scripts/verify_m3_ux6b.sh
+new file mode 100755
+index 0000000..12f8b15
+--- /dev/null
++++ b/pixel/scripts/verify_m3_ux6b.sh
+@@ -0,0 +1,17 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/../.."
++
++./pixel/scripts/configure_editor_game_view.sh
++./pixel/scripts/lint.sh
++./pixel/scripts/run_tests.sh
++./pixel/scripts/check_ui_scaling.sh
++./pixel/scripts/check_export_templates.sh
++
++if git diff --cached --name-only | grep -iE '\.(png|jpe?g)$' >/dev/null; then
++  echo "Staged image files are not allowed for M3 UX-6b commits." >&2
++  exit 1
++fi
++
++echo "verify_m3_ux6b: ok"
+```

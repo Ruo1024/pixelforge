@@ -28,10 +28,12 @@ const FILTER_ALL := "all"
 const FILTER_PENDING := "pending"
 const COMPARE_CURRENT := "current"
 const COMPARE_PREVIOUS := "previous"
+const COMPARE_SPLIT := "split"
 const KEEP_MARK := Color(0.2, 0.88, 0.46, 1.0)
 const REJECT_MARK := Color(0.95, 0.22, 0.24, 0.95)
 const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
 const FOCUS_BORDER := Color(0.96, 0.96, 0.9, 1.0)
+const COMPARE_DIVIDER := Color(0.96, 0.96, 0.9, 0.85)
 const INPUT_PORTS: Array[String] = ["in"]
 const OUTPUT_PORTS: Array[String] = ["images", "assets"]
 
@@ -317,6 +319,8 @@ func _draw() -> void:
 			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
 		if compare_mode == COMPARE_PREVIOUS:
 			title = "%s - %s" % [title, Strings.BATCH_COMPARE_PREVIOUS_SUFFIX]
+		elif compare_mode == COMPARE_SPLIT:
+			title = "%s - %s" % [title, Strings.BATCH_COMPARE_SPLIT_SUFFIX]
 		draw_string(
 			_font,
 			Vector2(PADDING, 28),
@@ -337,18 +341,43 @@ func _draw() -> void:
 
 func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
 	draw_rect(rect, THUMB_BACKGROUND, true)
-	var texture: Texture2D = _thumbnail_textures.get(_texture_asset_id_for(asset_id), null)
+	if compare_mode == COMPARE_SPLIT:
+		_draw_split_compare_thumbnail(asset_id, rect)
+	else:
+		_draw_thumbnail_texture(_texture_asset_id_for(asset_id), rect)
+	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
+	draw_rect(rect, border_color, false, 1.5)
+	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
+	if focus_asset_id == asset_id:
+		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
+
+
+func _draw_split_compare_thumbnail(asset_id: String, rect: Rect2) -> void:
+	var compare_asset_id := _compare_asset_id_for(asset_id)
+	if compare_asset_id.is_empty():
+		_draw_thumbnail_texture(asset_id, rect)
+		return
+	var left_rect := Rect2(rect.position, Vector2(floor(rect.size.x * 0.5), rect.size.y))
+	var right_rect := Rect2(
+		Vector2(rect.position.x + left_rect.size.x, rect.position.y),
+		Vector2(rect.size.x - left_rect.size.x, rect.size.y)
+	)
+	_draw_thumbnail_texture(compare_asset_id, left_rect)
+	_draw_thumbnail_texture(asset_id, right_rect)
+	var divider_x := rect.position.x + left_rect.size.x
+	draw_line(
+		Vector2(divider_x, rect.position.y), Vector2(divider_x, rect.end.y), COMPARE_DIVIDER, 2.0
+	)
+
+
+func _draw_thumbnail_texture(asset_id: String, rect: Rect2) -> void:
+	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
 	if texture != null:
 		var image_size := texture.get_size()
 		var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
 		var draw_size := image_size * scale
 		var draw_pos := rect.position + (rect.size - draw_size) * 0.5
 		draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
-	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
-	draw_rect(rect, border_color, false, 1.5)
-	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
-	if focus_asset_id == asset_id:
-		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
 
 
 func _draw_review_marker(rect: Rect2, review_state: String) -> void:
@@ -502,8 +531,10 @@ func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
 
 
 func _normalize_compare_mode(new_compare_mode: String) -> String:
-	if new_compare_mode == COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
-		return COMPARE_PREVIOUS
+	if not compare_asset_ids.is_empty():
+		match new_compare_mode:
+			COMPARE_PREVIOUS, COMPARE_SPLIT:
+				return new_compare_mode
 	return COMPARE_CURRENT
 
 
@@ -552,9 +583,14 @@ func _visible_selected_array(value: Array) -> Array[String]:
 func _texture_asset_id_for(asset_id: String) -> String:
 	if compare_mode != COMPARE_PREVIOUS:
 		return asset_id
+	var compare_asset_id := _compare_asset_id_for(asset_id)
+	return asset_id if compare_asset_id.is_empty() else compare_asset_id
+
+
+func _compare_asset_id_for(asset_id: String) -> String:
 	var index := asset_ids.find(asset_id)
 	if index < 0 or index >= compare_asset_ids.size():
-		return asset_id
+		return ""
 	return compare_asset_ids[index]
 
 
