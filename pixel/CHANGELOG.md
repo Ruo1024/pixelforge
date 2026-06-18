@@ -29,3 +29,4 @@
 - M3 G-4 follow-up: graph 连线改用命名端口锚点，修正轻节点端口点、batch 输入点与连线端点错位。
 - M3 G-4 follow-up: AI Generate 画布卡将多个逻辑输入折叠为单个视觉输入点，降低基础节点链噪声。
 - M3 G-5: 新增 File > Run Selected Graph 最小重跑入口，选中 mock 节点链任一节点后可替换刷新正式 batch 队列。
+- M3 UX-4: 新增批次卡语义 LOD 骨架，缩小时显示 overview 状态摘要，正常审阅保留缩略图，放大 inspect 时显示像素网格。
