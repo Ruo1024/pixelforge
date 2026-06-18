@@ -2,6 +2,8 @@ extends "res://addons/gut/test.gd"
 
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
+const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
+const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 
@@ -112,6 +114,55 @@ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
 
 	assert_eq(reloaded_canvas.get_item_count(), 1)
 	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
+
+
+func test_graph_edge_anchors_follow_named_ports() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var ids := [_register_asset(Color.RED, "red")]
+	var graph := GraphScript.new()
+	graph.id = "graph_anchor_test"
+	graph.add_node(
+		AiGenerateNodeScript.new(),
+		"generate",
+		{"provider_id": "mock", "batch_size": 1, "seed": 3},
+		Vector2(10, 20)
+	)
+	graph.add_node(
+		BatchNodeScript.new(),
+		"batch_1",
+		{"label": "Candidates", "asset_ids": ids},
+		Vector2(300, 69)
+	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+
+	var generate_card: Node = canvas._add_graph_node_card(
+		graph.id, "generate", Vector2(10, 20), "node_item_generate", false
+	)
+	var batch_card: Node = canvas._add_batch_card(
+		ids, Vector2(300, 69), "Candidates", "node_item_batch", false, graph.id, "batch_1"
+	)
+
+	var items_anchor: Vector2 = generate_card.get_graph_port_anchor("items", true)
+	var spec_anchor: Vector2 = generate_card.get_graph_port_anchor("spec", true)
+	var output_anchor: Vector2 = generate_card.get_graph_port_anchor("images", false)
+	var right_center: Vector2 = (
+		generate_card.get_canvas_bounds().position
+		+ Vector2(
+			generate_card.get_canvas_bounds().size.x, generate_card.get_canvas_bounds().size.y * 0.5
+		)
+	)
+
+	assert_ne(items_anchor, spec_anchor)
+	assert_ne(output_anchor, right_center)
+	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "images", false), output_anchor)
+	assert_eq(
+		GraphEdgeRenderer._edge_anchor_world(batch_card, "in", true),
+		batch_card.get_graph_port_anchor("in", true)
+	)
 
 
 func _register_asset(color: Color, name: String) -> String:

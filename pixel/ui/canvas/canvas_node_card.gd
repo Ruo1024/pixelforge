@@ -27,6 +27,8 @@ var _display_name := "Missing Node"
 var _summary := ""
 var _input_count := 0
 var _output_count := 0
+var _input_ports: Array[String] = []
+var _output_ports: Array[String] = []
 var _is_ghost := false
 var _font: Font = null
 
@@ -67,6 +69,16 @@ func contains_world_point(world_position: Vector2) -> bool:
 
 func is_graph_node() -> bool:
 	return not graph_id.is_empty() and not node_id.is_empty()
+
+
+func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
+	var count := _input_count if is_input else _output_count
+	if count <= 0:
+		return position + Vector2(0.0 if is_input else CARD_SIZE.x, CARD_SIZE.y * 0.5)
+	var index := _port_index(port_name, is_input)
+	if index < 0:
+		index = 0
+	return position + _port_position(index, count, is_input)
 
 
 func _draw() -> void:
@@ -120,6 +132,11 @@ func _port_position(index: int, count: int, is_input: bool) -> Vector2:
 	return Vector2(0.0 if is_input else CARD_SIZE.x, y)
 
 
+func _port_index(port_name: String, is_input: bool) -> int:
+	var ports := _input_ports if is_input else _output_ports
+	return ports.find(port_name)
+
+
 func _resolve_graph_node() -> void:
 	var node_data := _find_node_data()
 	_node_type = String(node_data.get("type", "missing"))
@@ -132,12 +149,23 @@ func _resolve_graph_node() -> void:
 		_display_name = "Missing: %s" % _node_type
 		_input_count = 0
 		_output_count = 0
+		_input_ports = []
+		_output_ports = []
 		return
 
 	_display_name = node.get_display_name()
-	_input_count = node.get_input_ports().size()
-	_output_count = node.get_output_ports().size()
+	_input_ports = _port_names(node.get_input_ports())
+	_output_ports = _port_names(node.get_output_ports())
+	_input_count = _input_ports.size()
+	_output_count = _output_ports.size()
 	_is_ghost = false
+
+
+func _port_names(port_specs: Array[Dictionary]) -> Array[String]:
+	var result: Array[String] = []
+	for port_spec in port_specs:
+		result.append(String(port_spec.get("name", "")))
+	return result
 
 
 func _find_node_data() -> Dictionary:

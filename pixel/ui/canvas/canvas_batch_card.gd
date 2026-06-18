@@ -17,6 +17,10 @@ const BACKGROUND := Color(0.16, 0.17, 0.18, 0.96)
 const BORDER := Color(0.52, 0.62, 0.72, 1.0)
 const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
 const THUMB_BACKGROUND := Color(0.08, 0.085, 0.09, 1.0)
+const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
+const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
+const INPUT_PORTS: Array[String] = ["in"]
+const OUTPUT_PORTS: Array[String] = ["images", "assets"]
 
 var item_id := ""
 var graph_id := ""
@@ -84,6 +88,17 @@ func contains_world_point(world_position: Vector2) -> bool:
 	return get_canvas_bounds().has_point(world_position)
 
 
+func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
+	var ports := INPUT_PORTS if is_input else OUTPUT_PORTS
+	var count := ports.size()
+	if count <= 0:
+		return position + Vector2(0.0 if is_input else CARD_WIDTH, _card_height() * 0.5)
+	var index := ports.find(port_name)
+	if index < 0:
+		index = 0
+	return position + _graph_port_position(index, count, is_input)
+
+
 func set_asset_ids(new_asset_ids: Array) -> void:
 	asset_ids = _string_array(new_asset_ids)
 	for selected_id in selected_asset_ids.duplicate():
@@ -146,6 +161,8 @@ func _draw() -> void:
 	var columns := _columns()
 	for index in range(asset_ids.size()):
 		_draw_thumbnail(index, _thumb_rect(index, columns))
+	if has_graph_binding():
+		_draw_graph_ports()
 
 
 func _draw_thumbnail(index: int, rect: Rect2) -> void:
@@ -185,6 +202,21 @@ func _card_height() -> int:
 
 func _columns() -> int:
 	return maxi(1, int((CARD_WIDTH - PADDING * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP)))
+
+
+func _draw_graph_ports() -> void:
+	for index in range(INPUT_PORTS.size()):
+		draw_circle(_graph_port_position(index, INPUT_PORTS.size(), true), 5.0, PORT_IN)
+	for index in range(OUTPUT_PORTS.size()):
+		draw_circle(_graph_port_position(index, OUTPUT_PORTS.size(), false), 5.0, PORT_OUT)
+
+
+func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
+	var lane_height := minf(
+		THUMB_SIZE, maxf(0.0, float(_card_height()) - HEADER_HEIGHT - PADDING * 2)
+	)
+	var y := HEADER_HEIGHT + PADDING + lane_height * float(index + 1) / float(count + 1)
+	return Vector2(0.0 if is_input else CARD_WIDTH, y)
 
 
 func _rebuild_thumbnails() -> void:

@@ -459,7 +459,7 @@ func _make_mock_generate_graph() -> PFGraph:
 		Vector2(280, 75)
 	)
 	graph.add_node(
-		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, -20)
+		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, 29)
 	)
 	graph.add_edge("objects", "items", "generate", "items")
 	graph.add_edge("size", "spec", "generate", "spec")

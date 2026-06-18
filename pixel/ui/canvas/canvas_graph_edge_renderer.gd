@@ -30,18 +30,30 @@ static func _draw_edge_if_visible(
 	var to_node := String(to_data[0])
 	if not items_by_node.has(from_node) or not items_by_node.has(to_node):
 		return
-	_draw_graph_edge(canvas, items_by_node[from_node], items_by_node[to_node], color)
+	_draw_graph_edge(
+		canvas,
+		items_by_node[from_node],
+		String(from_data[1]),
+		items_by_node[to_node],
+		String(to_data[1]),
+		color
+	)
 
 
-static func _draw_graph_edge(canvas: Control, from_item: Node, to_item: Node, color: Color) -> void:
-	var from_bounds: Rect2 = from_item.get_canvas_bounds()
-	var to_bounds: Rect2 = to_item.get_canvas_bounds()
-	var start: Vector2 = canvas.world_to_screen(
-		from_bounds.position + Vector2(from_bounds.size.x, from_bounds.size.y * 0.5)
-	)
-	var end: Vector2 = canvas.world_to_screen(
-		to_bounds.position + Vector2(0.0, to_bounds.size.y * 0.5)
-	)
+static func _draw_graph_edge(
+	canvas: Control,
+	from_item: Node,
+	from_port: String,
+	to_item: Node,
+	to_port: String,
+	color: Color
+) -> void:
+	var start_world: Variant = _edge_anchor_world(from_item, from_port, false)
+	var end_world: Variant = _edge_anchor_world(to_item, to_port, true)
+	if not (start_world is Vector2) or not (end_world is Vector2):
+		return
+	var start: Vector2 = canvas.world_to_screen(start_world)
+	var end: Vector2 = canvas.world_to_screen(end_world)
 	var bend := maxf(48.0, absf(end.x - start.x) * 0.35)
 	var control_a := start + Vector2(bend, 0.0)
 	var control_b := end - Vector2(bend, 0.0)
@@ -50,6 +62,13 @@ static func _draw_graph_edge(canvas: Control, from_item: Node, to_item: Node, co
 		var t := float(index) / 16.0
 		points.append(_cubic_bezier(start, control_a, control_b, end, t))
 	canvas.draw_polyline(points, color, 2.0, true)
+
+
+static func _edge_anchor_world(item: Node, port_name: String, is_input: bool) -> Variant:
+	if item.has_method("get_graph_port_anchor"):
+		return item.get_graph_port_anchor(port_name, is_input)
+	var bounds: Rect2 = item.get_canvas_bounds()
+	return bounds.position + Vector2(0.0 if is_input else bounds.size.x, bounds.size.y * 0.5)
 
 
 static func _graph_items_by_node(

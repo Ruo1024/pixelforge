@@ -2222,3 +2222,324 @@ index a6a1e75..c42ea1e 100644
 -		_:
 -			return value
 ```
+
+## 追加修复：G-4 端口与连线对齐
+
+问题来源：人工验证截图中，轻节点端口点与 graph 连线端点未对齐；根因是 `PFCanvasGraphEdgeRenderer` 按卡片边缘中心连线，而 `PFCanvasNodeCard` 按端口列表位置绘制端口点。
+
+### 修复内容
+
+- `pixel/ui/canvas/canvas_node_card.gd`
+  - 保存输入/输出端口名列表。
+  - 新增 `get_graph_port_anchor(port_name, is_input)`，让连线可按 edge 中的命名端口定位到同一个点。
+- `pixel/ui/canvas/canvas_batch_card.gd`
+  - graph 绑定的 batch 卡新增输入/输出端口点绘制。
+  - 新增 `get_graph_port_anchor(port_name, is_input)`，让 batch 输入点和连线端点一致。
+- `pixel/ui/canvas/canvas_graph_edge_renderer.gd`
+  - 连线从 `edge.from[1]` / `edge.to[1]` 读取端口名，优先使用卡片暴露的端口锚点。
+- `pixel/ui/shell/m2_1_ui_controller.gd`
+  - 微调 mock batch 默认 y 坐标，使 AI Generate 输出到 Mock Batch 输入更接近水平。
+- `pixel/tests/unit/test_canvas_batch_card.gd`
+  - 新增端口锚点回归测试，避免再次退回“卡片中心连线”。
+
+### 验证
+
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：通过，`134/134` tests，`1107` asserts。
+
+### 人工测试步骤
+
+1. 打开 `/Users/ruo/Desktop/pixelforge/pixel/project.godot` 并运行主场景。
+2. 点击 `File > Generate Mock Batch`。
+3. 确认 `Object List` / `Size Spec` 到 `AI Generate` 的两条线分别接到对应蓝色输入点。
+4. 确认 `AI Generate` 到 `Mock Batch` 的线接到绿色输出点和 batch 左侧蓝色输入点。
+5. 拖动任一节点卡，确认线端点持续贴合端口点。
+
+G-4 端口对齐修复 diff：
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index dbecd0d..4604944 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -26,3 +26,4 @@
+ - M3 G-2: 新增 object_list / size_spec / ai_generate(mock) 节点和最小 mock runner，可将确定性生成图物化进正式 batch 节点。
+ - M3 G-3: 新增 PixelOperations 共用服务，批次菜单 Clean/Matte/Outline 复用同一 core 操作，并让 Mock 批次卡以 graph batch 节点引用保存和同步资产队列。
+ - M3 G-4: 新增画布轻节点卡与 graph edge 渲染，File > Generate Mock Batch 现在生成可见最小 mock 节点链并落入正式 batch 卡。
++- M3 G-4 follow-up: graph 连线改用命名端口锚点，修正轻节点端口点、batch 输入点与连线端点错位。
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+index e5e6e96..732c28c 100644
+--- a/pixel/tests/unit/test_canvas_batch_card.gd
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -2,6 +2,8 @@ extends "res://addons/gut/test.gd"
+ 
+ const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
+ const GraphScript := preload("res://core/graph/pf_graph.gd")
++const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
++const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
+ const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+ const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+ 
+@@ -114,6 +116,55 @@ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
+ 	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
+ 
+ 
++func test_graph_edge_anchors_follow_named_ports() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids := [_register_asset(Color.RED, "red")]
++	var graph := GraphScript.new()
++	graph.id = "graph_anchor_test"
++	graph.add_node(
++		AiGenerateNodeScript.new(),
++		"generate",
++		{"provider_id": "mock", "batch_size": 1, "seed": 3},
++		Vector2(10, 20)
++	)
++	graph.add_node(
++		BatchNodeScript.new(),
++		"batch_1",
++		{"label": "Candidates", "asset_ids": ids},
++		Vector2(300, 69)
++	)
++	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++
++	var generate_card: Node = canvas._add_graph_node_card(
++		graph.id, "generate", Vector2(10, 20), "node_item_generate", false
++	)
++	var batch_card: Node = canvas._add_batch_card(
++		ids, Vector2(300, 69), "Candidates", "node_item_batch", false, graph.id, "batch_1"
++	)
++
++	var items_anchor: Vector2 = generate_card.get_graph_port_anchor("items", true)
++	var spec_anchor: Vector2 = generate_card.get_graph_port_anchor("spec", true)
++	var output_anchor: Vector2 = generate_card.get_graph_port_anchor("images", false)
++	var right_center: Vector2 = (
++		generate_card.get_canvas_bounds().position
++		+ Vector2(
++			generate_card.get_canvas_bounds().size.x, generate_card.get_canvas_bounds().size.y * 0.5
++		)
++	)
++
++	assert_ne(items_anchor, spec_anchor)
++	assert_ne(output_anchor, right_center)
++	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "images", false), output_anchor)
++	assert_eq(
++		GraphEdgeRenderer._edge_anchor_world(batch_card, "in", true),
++		batch_card.get_graph_port_anchor("in", true)
++	)
++
++
+ func _register_asset(color: Color, name: String) -> String:
+ 	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+ 	image.fill(color)
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
+index 3a73278..426b25d 100644
+--- a/pixel/ui/canvas/canvas_batch_card.gd
++++ b/pixel/ui/canvas/canvas_batch_card.gd
+@@ -17,6 +17,10 @@ const BACKGROUND := Color(0.16, 0.17, 0.18, 0.96)
+ const BORDER := Color(0.52, 0.62, 0.72, 1.0)
+ const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
+ const THUMB_BACKGROUND := Color(0.08, 0.085, 0.09, 1.0)
++const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
++const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
++const INPUT_PORTS: Array[String] = ["in"]
++const OUTPUT_PORTS: Array[String] = ["images", "assets"]
+ 
+ var item_id := ""
+ var graph_id := ""
+@@ -84,6 +88,17 @@ func contains_world_point(world_position: Vector2) -> bool:
+ 	return get_canvas_bounds().has_point(world_position)
+ 
+ 
++func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
++	var ports := INPUT_PORTS if is_input else OUTPUT_PORTS
++	var count := ports.size()
++	if count <= 0:
++		return position + Vector2(0.0 if is_input else CARD_WIDTH, _card_height() * 0.5)
++	var index := ports.find(port_name)
++	if index < 0:
++		index = 0
++	return position + _graph_port_position(index, count, is_input)
++
++
+ func set_asset_ids(new_asset_ids: Array) -> void:
+ 	asset_ids = _string_array(new_asset_ids)
+ 	for selected_id in selected_asset_ids.duplicate():
+@@ -146,6 +161,8 @@ func _draw() -> void:
+ 	var columns := _columns()
+ 	for index in range(asset_ids.size()):
+ 		_draw_thumbnail(index, _thumb_rect(index, columns))
++	if has_graph_binding():
++		_draw_graph_ports()
+ 
+ 
+ func _draw_thumbnail(index: int, rect: Rect2) -> void:
+@@ -187,6 +204,21 @@ func _columns() -> int:
+ 	return maxi(1, int((CARD_WIDTH - PADDING * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP)))
+ 
+ 
++func _draw_graph_ports() -> void:
++	for index in range(INPUT_PORTS.size()):
++		draw_circle(_graph_port_position(index, INPUT_PORTS.size(), true), 5.0, PORT_IN)
++	for index in range(OUTPUT_PORTS.size()):
++		draw_circle(_graph_port_position(index, OUTPUT_PORTS.size(), false), 5.0, PORT_OUT)
++
++
++func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
++	var lane_height := minf(
++		THUMB_SIZE, maxf(0.0, float(_card_height()) - HEADER_HEIGHT - PADDING * 2)
++	)
++	var y := HEADER_HEIGHT + PADDING + lane_height * float(index + 1) / float(count + 1)
++	return Vector2(0.0 if is_input else CARD_WIDTH, y)
++
++
+ func _rebuild_thumbnails() -> void:
+ 	_thumbnail_textures.clear()
+ 	for asset_id in asset_ids:
+diff --git a/pixel/ui/canvas/canvas_graph_edge_renderer.gd b/pixel/ui/canvas/canvas_graph_edge_renderer.gd
+index 3ee0fb5..e24bbf2 100644
+--- a/pixel/ui/canvas/canvas_graph_edge_renderer.gd
++++ b/pixel/ui/canvas/canvas_graph_edge_renderer.gd
+@@ -30,18 +30,30 @@ static func _draw_edge_if_visible(
+ 	var to_node := String(to_data[0])
+ 	if not items_by_node.has(from_node) or not items_by_node.has(to_node):
+ 		return
+-	_draw_graph_edge(canvas, items_by_node[from_node], items_by_node[to_node], color)
++	_draw_graph_edge(
++		canvas,
++		items_by_node[from_node],
++		String(from_data[1]),
++		items_by_node[to_node],
++		String(to_data[1]),
++		color
++	)
+ 
+ 
+-static func _draw_graph_edge(canvas: Control, from_item: Node, to_item: Node, color: Color) -> void:
+-	var from_bounds: Rect2 = from_item.get_canvas_bounds()
+-	var to_bounds: Rect2 = to_item.get_canvas_bounds()
+-	var start: Vector2 = canvas.world_to_screen(
+-		from_bounds.position + Vector2(from_bounds.size.x, from_bounds.size.y * 0.5)
+-	)
+-	var end: Vector2 = canvas.world_to_screen(
+-		to_bounds.position + Vector2(0.0, to_bounds.size.y * 0.5)
+-	)
++static func _draw_graph_edge(
++	canvas: Control,
++	from_item: Node,
++	from_port: String,
++	to_item: Node,
++	to_port: String,
++	color: Color
++) -> void:
++	var start_world: Variant = _edge_anchor_world(from_item, from_port, false)
++	var end_world: Variant = _edge_anchor_world(to_item, to_port, true)
++	if not (start_world is Vector2) or not (end_world is Vector2):
++		return
++	var start: Vector2 = canvas.world_to_screen(start_world)
++	var end: Vector2 = canvas.world_to_screen(end_world)
+ 	var bend := maxf(48.0, absf(end.x - start.x) * 0.35)
+ 	var control_a := start + Vector2(bend, 0.0)
+ 	var control_b := end - Vector2(bend, 0.0)
+@@ -52,6 +64,13 @@ static func _draw_graph_edge(canvas: Control, from_item: Node, to_item: Node, co
+ 	canvas.draw_polyline(points, color, 2.0, true)
+ 
+ 
++static func _edge_anchor_world(item: Node, port_name: String, is_input: bool) -> Variant:
++	if item.has_method("get_graph_port_anchor"):
++		return item.get_graph_port_anchor(port_name, is_input)
++	var bounds: Rect2 = item.get_canvas_bounds()
++	return bounds.position + Vector2(0.0 if is_input else bounds.size.x, bounds.size.y * 0.5)
++
++
+ static func _graph_items_by_node(
+ 	items_by_id: Dictionary, batch_script: Script, node_script: Script
+ ) -> Dictionary:
+diff --git a/pixel/ui/canvas/canvas_node_card.gd b/pixel/ui/canvas/canvas_node_card.gd
+index 1377b36..382cf04 100644
+--- a/pixel/ui/canvas/canvas_node_card.gd
++++ b/pixel/ui/canvas/canvas_node_card.gd
+@@ -27,6 +27,8 @@ var _display_name := "Missing Node"
+ var _summary := ""
+ var _input_count := 0
+ var _output_count := 0
++var _input_ports: Array[String] = []
++var _output_ports: Array[String] = []
+ var _is_ghost := false
+ var _font: Font = null
+ 
+@@ -69,6 +71,16 @@ func is_graph_node() -> bool:
+ 	return not graph_id.is_empty() and not node_id.is_empty()
+ 
+ 
++func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
++	var count := _input_count if is_input else _output_count
++	if count <= 0:
++		return position + Vector2(0.0 if is_input else CARD_SIZE.x, CARD_SIZE.y * 0.5)
++	var index := _port_index(port_name, is_input)
++	if index < 0:
++		index = 0
++	return position + _port_position(index, count, is_input)
++
++
+ func _draw() -> void:
+ 	_font = ThemeDB.fallback_font if _font == null else _font
+ 	var rect := Rect2(Vector2.ZERO, CARD_SIZE)
+@@ -120,6 +132,11 @@ func _port_position(index: int, count: int, is_input: bool) -> Vector2:
+ 	return Vector2(0.0 if is_input else CARD_SIZE.x, y)
+ 
+ 
++func _port_index(port_name: String, is_input: bool) -> int:
++	var ports := _input_ports if is_input else _output_ports
++	return ports.find(port_name)
++
++
+ func _resolve_graph_node() -> void:
+ 	var node_data := _find_node_data()
+ 	_node_type = String(node_data.get("type", "missing"))
+@@ -132,14 +149,25 @@ func _resolve_graph_node() -> void:
+ 		_display_name = "Missing: %s" % _node_type
+ 		_input_count = 0
+ 		_output_count = 0
++		_input_ports = []
++		_output_ports = []
+ 		return
+ 
+ 	_display_name = node.get_display_name()
+-	_input_count = node.get_input_ports().size()
+-	_output_count = node.get_output_ports().size()
++	_input_ports = _port_names(node.get_input_ports())
++	_output_ports = _port_names(node.get_output_ports())
++	_input_count = _input_ports.size()
++	_output_count = _output_ports.size()
+ 	_is_ghost = false
+ 
+ 
++func _port_names(port_specs: Array[Dictionary]) -> Array[String]:
++	var result: Array[String] = []
++	for port_spec in port_specs:
++		result.append(String(port_spec.get("name", "")))
++	return result
++
++
+ func _find_node_data() -> Dictionary:
+ 	var graph_data := ProjectService.get_graph_data(graph_id)
+ 	for raw_node in graph_data.get("nodes", []):
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index 851efd4..58e6b2d 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -459,7 +459,7 @@ func _make_mock_generate_graph() -> PFGraph:
+ 		Vector2(280, 75)
+ 	)
+ 	graph.add_node(
+-		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, -20)
++		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, 29)
+ 	)
+ 	graph.add_edge("objects", "items", "generate", "items")
+ 	graph.add_edge("size", "spec", "generate", "spec")
+```
