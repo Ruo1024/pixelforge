@@ -184,6 +184,38 @@ static func set_review_filter(
 	return true
 
 
+static func set_review_layout(
+	items_by_id: Dictionary,
+	card_id: String,
+	review_layout: String,
+	record_undo: bool,
+	select_only: Callable,
+	emit_changed: Callable
+) -> bool:
+	var item := _batch_item(items_by_id, card_id)
+	if item == null:
+		return false
+	var before: String = item.get_review_layout()
+	var after := _normalize_review_layout(review_layout)
+	if before == after:
+		return true
+
+	var do_layout := func() -> void:
+		_apply_review_layout(item, after)
+		select_only.call([card_id])
+		emit_changed.call()
+	var undo_layout := func() -> void:
+		_apply_review_layout(item, before)
+		select_only.call([card_id])
+		emit_changed.call()
+
+	if record_undo:
+		UndoService.perform_action("Set batch review layout", do_layout, undo_layout)
+	else:
+		do_layout.call()
+	return true
+
+
 static func set_compare_mode(
 	items_by_id: Dictionary,
 	card_id: String,
@@ -319,6 +351,10 @@ static func _apply_focus_asset_id(item: Node, focus_asset_id: String) -> void:
 	item._set_focus_asset_id(focus_asset_id, false)
 
 
+static func _apply_review_layout(item: Node, review_layout: String) -> void:
+	item.set_review_layout(review_layout)
+
+
 static func _apply_selected_asset_ids(item: Node, selected_asset_ids: Array) -> void:
 	item._set_selected_asset_ids(selected_asset_ids)
 
@@ -359,6 +395,12 @@ static func _normalize_review_filter(review_filter: String) -> String:
 	):
 		return review_filter
 	return CanvasBatchCardScript.FILTER_ALL
+
+
+static func _normalize_review_layout(review_layout: String) -> String:
+	if review_layout in [CanvasBatchCardScript.LAYOUT_CONTACT, CanvasBatchCardScript.LAYOUT_FOCUS]:
+		return review_layout
+	return CanvasBatchCardScript.LAYOUT_CONTACT
 
 
 static func _normalize_compare_mode(item: Node, compare_mode: String) -> String:

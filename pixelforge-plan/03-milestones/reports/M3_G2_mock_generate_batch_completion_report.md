@@ -6482,3 +6482,589 @@ index 0000000..12f8b15
 +
 +echo "verify_m3_ux6b: ok"
 ```
+
+## 2026-06-18 M3 UX-3 批次 Focus View 最小布局
+
+### 本轮实现说明
+
+- 为批次卡新增 `review_layout` 视图状态，支持 `Contact Sheet` 与 `Focus View` 两种模式。
+- `Contact Sheet` 保持原有网格；`Focus View` 显示一张大焦点图和底部 7 格 filmstrip，适合逐张细看。
+- `Focus View` 复用已有 `focus_asset_id`、Left/Right 焦点切换、K/R/F 标记、过滤和 compare current/previous/split 绘制逻辑。
+- `review_layout` 是画布视图状态：旧 `batch_card` 直接写入 canvas item；正式 graph batch 写入 canvas 的 `node` 引用，不写入 graph params，保持逻辑/视图分离。
+- 右键批次菜单新增 `Contact Sheet` / `Focus View`，走 `UndoService`，可撤销布局切换。
+- 为守住 `infinite_canvas.gd` 软行数上限，内联了两个一行转发 helper；文件最终 999 行。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh`：通过，105 files unchanged，no problems found。
+- `./pixel/scripts/run_tests.sh`：通过，147/147 tests，1217 asserts。
+- `./pixel/scripts/verify_m3_ux3.sh`：通过，包含 editor game view 配置、lint、全量测试、UI scaling 检查、export templates 本地 gate、staged 图片检查。
+- 已知既有输出：GUT 仍报告 1 orphan、Godot 退出时仍有 ObjectDB/resource warning；本轮未新增相关失败。
+
+### 人工测试步骤
+
+1. 打开 PixelForge，执行 `File > Generate Mock Batch`。
+2. 右键 Mock Batch，点击 `Focus View`，确认批次卡切成一张大图 + 底部 filmstrip。
+3. 用 Left/Right 切换焦点，确认大图随焦点更新，底部 filmstrip 的焦点框同步移动。
+4. 在 `Focus View` 下使用 K/R/F 标记，再用 `Show Keep` / `Show Pending` / `Show Reject` 过滤，确认焦点图和 filmstrip 跟随过滤结果。
+5. 在 `Focus View` 下切换 `Show Current` / `Show Previous` / `Show Compare`，确认大图与 filmstrip 都沿用对比模式。
+6. 右键点击 `Contact Sheet`，确认回到原网格审阅布局。
+7. 可选：保存并重新打开项目，确认 graph batch 仍保持 `Focus View` 或 `Contact Sheet`。
+
+### 本轮完整 diff（报告追加前）
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+index fc97059..debfee6 100644
+--- a/pixel/tests/unit/test_canvas_batch_card.gd
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -149,6 +149,33 @@ func test_canvas_batch_card_focuses_visible_review_thumbnails() -> void:
+ 	assert_eq(item["focus_asset_id"], ids[1])
+ 
+ 
++func test_canvas_batch_card_switches_review_layout_for_focus_view() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids: Array[String] = []
++	for index in range(20):
++		ids.append(_register_asset(Color(float(index % 5) / 4.0, 0.25, 0.75), "asset_%d" % index))
++	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++	var contact_height: float = card.get_canvas_bounds().size.y
++
++	assert_eq(card.get_review_layout(), CanvasBatchCardScript.LAYOUT_CONTACT)
++	assert_true(
++		canvas._set_batch_review_layout("batch_1", CanvasBatchCardScript.LAYOUT_FOCUS, false)
++	)
++	assert_eq(card.get_review_layout(), CanvasBatchCardScript.LAYOUT_FOCUS)
++	assert_true(card.get_canvas_bounds().size.y < contact_height)
++	assert_eq(card._focused_visible_asset_id(), ids[0])
++	assert_eq(card.asset_index_at_world(card.position + card._focus_rect().get_center()), 0)
++	assert_eq(card.asset_index_at_world(card.position + card._filmstrip_rect(3).get_center()), 3)
++
++	var data: Dictionary = canvas.export_canvas_data()
++	var item: Dictionary = data["items"][0]
++	assert_eq(item["review_layout"], CanvasBatchCardScript.LAYOUT_FOCUS)
++
++
+ func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+@@ -355,6 +382,45 @@ func test_graph_batch_card_persists_focus_asset_id_in_graph_params() -> void:
+ 	assert_eq(reloaded_card._get_focus_asset_id(), ids[0])
+ 
+ 
++func test_graph_batch_card_persists_review_layout_in_canvas_data() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++	var graph := GraphScript.new()
++	graph.id = "graph_batch_layout_test"
++	graph.add_node(
++		BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
++	)
++	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++
++	var card: Node = canvas._add_batch_card(
++		ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
++	)
++	assert_true(
++		canvas._set_batch_review_layout("node_item_1", CanvasBatchCardScript.LAYOUT_FOCUS, false)
++	)
++	assert_eq(card.get_review_layout(), CanvasBatchCardScript.LAYOUT_FOCUS)
++
++	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
++	var batch_node: Dictionary = graph_data["nodes"][0]
++	assert_false(batch_node["params"].has("review_layout"))
++
++	var canvas_data: Dictionary = canvas.export_canvas_data()
++	assert_eq(canvas_data["items"][0]["review_layout"], CanvasBatchCardScript.LAYOUT_FOCUS)
++
++	var reloaded_canvas: Control = CanvasScript.new()
++	reloaded_canvas.size = Vector2(512, 512)
++	add_child_autofree(reloaded_canvas)
++	await wait_process_frames(2)
++	reloaded_canvas.load_canvas_data(canvas_data)
++	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
++
++	assert_eq(reloaded_card.get_review_layout(), CanvasBatchCardScript.LAYOUT_FOCUS)
++
++
+ func test_graph_batch_card_persists_compare_state_in_graph_params() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
+index 78a6e5a..e54db12 100644
+--- a/pixel/ui/canvas/canvas_batch_card.gd
++++ b/pixel/ui/canvas/canvas_batch_card.gd
+@@ -26,6 +26,8 @@ const REVIEW_REJECT := "reject"
+ const REVIEW_FLAG := "flag"
+ const FILTER_ALL := "all"
+ const FILTER_PENDING := "pending"
++const LAYOUT_CONTACT := "contact"
++const LAYOUT_FOCUS := "focus"
+ const COMPARE_CURRENT := "current"
+ const COMPARE_PREVIOUS := "previous"
+ const COMPARE_SPLIT := "split"
+@@ -36,6 +38,9 @@ const FOCUS_BORDER := Color(0.96, 0.96, 0.9, 1.0)
+ const COMPARE_DIVIDER := Color(0.96, 0.96, 0.9, 0.85)
+ const INPUT_PORTS: Array[String] = ["in"]
+ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
++const FOCUS_IMAGE_HEIGHT := 320
++const FOCUS_FILMSTRIP_THUMB_SIZE := 72
++const FOCUS_FILMSTRIP_VISIBLE := 7
+ 
+ var item_id := ""
+ var graph_id := ""
+@@ -47,6 +52,7 @@ var review_filter := FILTER_ALL
+ var focus_asset_id := ""
+ var compare_asset_ids: Array[String] = []
+ var compare_mode := COMPARE_CURRENT
++var review_layout := LAYOUT_CONTACT
+ var label := ""
+ var locked := false
+ 
+@@ -78,6 +84,7 @@ func setup_from_data(data: Dictionary) -> void:
+ 	compare_mode = _normalize_compare_mode(
+ 		String(graph_params.get("compare_mode", data.get("compare_mode", COMPARE_CURRENT)))
+ 	)
++	review_layout = _normalize_review_layout(String(data.get("review_layout", LAYOUT_CONTACT)))
+ 	_prune_selected_to_visible()
+ 	_prune_focus_to_visible()
+ 	locked = bool(data.get("locked", false))
+@@ -99,6 +106,7 @@ func to_canvas_data() -> Dictionary:
+ 			"position": [int(round(position.x)), int(round(position.y))],
+ 			"z_index": z_index,
+ 			"collapsed": false,
++			"review_layout": review_layout,
+ 			"locked": locked,
+ 		}
+ 	return {
+@@ -111,6 +119,7 @@ func to_canvas_data() -> Dictionary:
+ 		"focus_asset_id": focus_asset_id,
+ 		"compare_asset_ids": compare_asset_ids.duplicate(),
+ 		"compare_mode": compare_mode,
++		"review_layout": review_layout,
+ 		"label": label,
+ 		"position": [int(round(position.x)), int(round(position.y))],
+ 		"z_index": z_index,
+@@ -223,6 +232,17 @@ func set_review_filter(new_review_filter: String) -> void:
+ 	queue_redraw()
+ 
+ 
++func get_review_layout() -> String:
++	return review_layout
++
++
++func set_review_layout(new_review_layout: String) -> void:
++	review_layout = _normalize_review_layout(new_review_layout)
++	if review_layout == LAYOUT_FOCUS and focus_asset_id.is_empty():
++		focus_asset_id = _initial_focus_asset_id()
++	queue_redraw()
++
++
+ func _get_focus_asset_id() -> String:
+ 	return focus_asset_id
+ 
+@@ -295,6 +315,8 @@ func asset_index_at_world(world_position: Vector2) -> int:
+ 	var local := world_position - position
+ 	if local.y < HEADER_HEIGHT:
+ 		return -1
++	if review_layout == LAYOUT_FOCUS:
++		return _focus_layout_asset_index_at_local(local)
+ 	var columns := _columns()
+ 	var visible_ids := get_visible_asset_ids()
+ 	for index in range(visible_ids.size()):
+@@ -333,12 +355,28 @@ func _draw() -> void:
+ 
+ 	var columns := _columns()
+ 	var visible_ids := get_visible_asset_ids()
+-	for index in range(visible_ids.size()):
+-		_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
++	if review_layout == LAYOUT_FOCUS:
++		_draw_focus_layout(visible_ids)
++	else:
++		for index in range(visible_ids.size()):
++			_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
+ 	if has_graph_binding():
+ 		_draw_graph_ports()
+ 
+ 
++func _draw_focus_layout(visible_ids: Array[String]) -> void:
++	if visible_ids.is_empty():
++		return
++	var focused_asset_id := _focused_visible_asset_id()
++	if focused_asset_id.is_empty():
++		return
++	_draw_thumbnail(focused_asset_id, _focus_rect())
++	var start_index := _filmstrip_start_index(visible_ids)
++	var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
++	for index in range(start_index, end_index):
++		_draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
++
++
+ func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
+ 	draw_rect(rect, THUMB_BACKGROUND, true)
+ 	if compare_mode == COMPARE_SPLIT:
+@@ -417,10 +455,36 @@ func _thumb_rect(index: int, columns: int) -> Rect2:
+ 	)
+ 
+ 
++func _focus_rect() -> Rect2:
++	return Rect2(
++		Vector2(PADDING, HEADER_HEIGHT + PADDING),
++		Vector2(CARD_WIDTH - PADDING * 2, FOCUS_IMAGE_HEIGHT)
++	)
++
++
++func _filmstrip_rect(slot_index: int) -> Rect2:
++	var y := HEADER_HEIGHT + PADDING + FOCUS_IMAGE_HEIGHT + THUMB_GAP
++	return Rect2(
++		Vector2(PADDING + slot_index * (FOCUS_FILMSTRIP_THUMB_SIZE + THUMB_GAP), y),
++		Vector2(FOCUS_FILMSTRIP_THUMB_SIZE, FOCUS_FILMSTRIP_THUMB_SIZE)
++	)
++
++
+ func _card_height() -> int:
+ 	var visible_count := get_visible_asset_ids().size()
+ 	if visible_count <= 0:
+ 		return MIN_CARD_HEIGHT
++	if review_layout == LAYOUT_FOCUS:
++		return maxi(
++			MIN_CARD_HEIGHT,
++			(
++				HEADER_HEIGHT
++				+ PADDING * 2
++				+ FOCUS_IMAGE_HEIGHT
++				+ THUMB_GAP
++				+ FOCUS_FILMSTRIP_THUMB_SIZE
++			)
++		)
+ 	var rows := int(ceil(float(visible_count) / float(_columns())))
+ 	return maxi(
+ 		MIN_CARD_HEIGHT, HEADER_HEIGHT + PADDING * 2 + rows * THUMB_SIZE + (rows - 1) * THUMB_GAP
+@@ -526,6 +590,14 @@ func _normalize_review_filter(value: String) -> String:
+ 			return FILTER_ALL
+ 
+ 
++func _normalize_review_layout(value: String) -> String:
++	match value:
++		LAYOUT_CONTACT, LAYOUT_FOCUS:
++			return value
++		_:
++			return LAYOUT_CONTACT
++
++
+ func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
+ 	return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
+ 
+@@ -570,6 +642,44 @@ func _focus_anchor_index(visible_ids: Array[String]) -> int:
+ 	return -1
+ 
+ 
++func _focused_visible_asset_id() -> String:
++	var visible_ids := get_visible_asset_ids()
++	if visible_ids.is_empty():
++		return ""
++	var anchor_index := _focus_anchor_index(visible_ids)
++	if anchor_index >= 0:
++		return visible_ids[anchor_index]
++	return visible_ids[0]
++
++
++func _initial_focus_asset_id() -> String:
++	return _focused_visible_asset_id()
++
++
++func _focus_layout_asset_index_at_local(local: Vector2) -> int:
++	var visible_ids := get_visible_asset_ids()
++	if visible_ids.is_empty():
++		return -1
++	if _focus_rect().has_point(local):
++		return visible_ids.find(_focused_visible_asset_id())
++	var start_index := _filmstrip_start_index(visible_ids)
++	var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
++	for index in range(start_index, end_index):
++		if _filmstrip_rect(index - start_index).has_point(local):
++			return index
++	return -1
++
++
++func _filmstrip_start_index(visible_ids: Array[String]) -> int:
++	if visible_ids.size() <= FOCUS_FILMSTRIP_VISIBLE:
++		return 0
++	var anchor_index := _focus_anchor_index(visible_ids)
++	if anchor_index < 0:
++		anchor_index = 0
++	var half_window := int(floor(float(FOCUS_FILMSTRIP_VISIBLE) * 0.5))
++	return clampi(anchor_index - half_window, 0, visible_ids.size() - FOCUS_FILMSTRIP_VISIBLE)
++
++
+ func _visible_selected_array(value: Array) -> Array[String]:
+ 	var visible_lookup := _visible_lookup()
+ 	var result: Array[String] = []
+diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
+index 8f56bf7..09b4272 100644
+--- a/pixel/ui/canvas/canvas_batch_ops.gd
++++ b/pixel/ui/canvas/canvas_batch_ops.gd
+@@ -184,6 +184,38 @@ static func set_review_filter(
+ 	return true
+ 
+ 
++static func set_review_layout(
++	items_by_id: Dictionary,
++	card_id: String,
++	review_layout: String,
++	record_undo: bool,
++	select_only: Callable,
++	emit_changed: Callable
++) -> bool:
++	var item := _batch_item(items_by_id, card_id)
++	if item == null:
++		return false
++	var before: String = item.get_review_layout()
++	var after := _normalize_review_layout(review_layout)
++	if before == after:
++		return true
++
++	var do_layout := func() -> void:
++		_apply_review_layout(item, after)
++		select_only.call([card_id])
++		emit_changed.call()
++	var undo_layout := func() -> void:
++		_apply_review_layout(item, before)
++		select_only.call([card_id])
++		emit_changed.call()
++
++	if record_undo:
++		UndoService.perform_action("Set batch review layout", do_layout, undo_layout)
++	else:
++		do_layout.call()
++	return true
++
++
+ static func set_compare_mode(
+ 	items_by_id: Dictionary,
+ 	card_id: String,
+@@ -319,6 +351,10 @@ static func _apply_focus_asset_id(item: Node, focus_asset_id: String) -> void:
+ 	item._set_focus_asset_id(focus_asset_id, false)
+ 
+ 
++static func _apply_review_layout(item: Node, review_layout: String) -> void:
++	item.set_review_layout(review_layout)
++
++
+ static func _apply_selected_asset_ids(item: Node, selected_asset_ids: Array) -> void:
+ 	item._set_selected_asset_ids(selected_asset_ids)
+ 
+@@ -361,6 +397,12 @@ static func _normalize_review_filter(review_filter: String) -> String:
+ 	return CanvasBatchCardScript.FILTER_ALL
+ 
+ 
++static func _normalize_review_layout(review_layout: String) -> String:
++	if review_layout in [CanvasBatchCardScript.LAYOUT_CONTACT, CanvasBatchCardScript.LAYOUT_FOCUS]:
++		return review_layout
++	return CanvasBatchCardScript.LAYOUT_CONTACT
++
++
+ static func _normalize_compare_mode(item: Node, compare_mode: String) -> String:
+ 	if not item._get_compare_asset_ids().is_empty():
+ 		match compare_mode:
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 343a106..9c54730 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -131,7 +131,7 @@ func _draw() -> void:
+ 		ScalePolicy.compute_art_physical_scale(camera_zoom, _resolve_viewport_scale_factor())
+ 		>= GRID_MIN_ZOOM
+ 	):
+-		_draw_pixel_grid()
++		PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+ 	_draw_graph_edges()
+ 
+ 	for item_id in _selection.selected_ids:
+@@ -346,7 +346,7 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
+ 			_add_sprite_direct(item_data, image)
+ 		elif item_type == "batch_card":
+ 			_add_batch_direct(item_data)
+-		elif item_type == "node" and _is_graph_batch_node_data(item_data):
++		elif item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data):
+ 			_add_batch_direct(item_data)
+ 		elif item_type == "node":
+ 			_add_node_direct(item_data)
+@@ -496,6 +496,14 @@ func _set_batch_review_filter(
+ 	)
+ 
+ 
++func _set_batch_review_layout(
++	card_id: String, review_layout: String, record_undo: bool = true
++) -> bool:
++	return BatchOps.set_review_layout(
++		_items_by_id, card_id, review_layout, record_undo, _select_only, _emit_canvas_changed
++	)
++
++
+ func _replace_batch_asset_ids(
+ 	card_id: String, new_asset_ids: Array, record_undo: bool = true, compare_asset_ids: Array = []
+ ) -> void:
+@@ -773,14 +781,11 @@ func _add_node_direct(item_data: Dictionary) -> Node:
+ func _is_batch_card_data(item_data: Dictionary) -> bool:
+ 	var item_type := String(item_data.get("type", ""))
+ 	return (
+-		item_type == "batch_card" or (item_type == "node" and _is_graph_batch_node_data(item_data))
++		item_type == "batch_card"
++		or (item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data))
+ 	)
+ 
+ 
+-func _is_graph_batch_node_data(item_data: Dictionary) -> bool:
+-	return GraphItemBridge.is_graph_batch_node_data(item_data)
+-
+-
+ func _remove_item_direct(item_id: String) -> void:
+ 	if not _items_by_id.has(item_id):
+ 		return
+@@ -928,10 +933,6 @@ func _camera_center_for_snapped_anchor(anchor_world: Vector2, screen_anchor: Vec
+ 	)
+ 
+ 
+-func _draw_pixel_grid() -> void:
+-	PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+-
+-
+ func _draw_graph_edges() -> void:
+ 	GraphEdgeRenderer.draw(
+ 		self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index 9ac3fa7..73fa686 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -56,6 +56,8 @@ const BATCH_MENU_FILTER_FLAG := 14
+ const BATCH_MENU_COMPARE_CURRENT := 15
+ const BATCH_MENU_COMPARE_PREVIOUS := 16
+ const BATCH_MENU_COMPARE_SPLIT := 17
++const BATCH_MENU_LAYOUT_CONTACT := 18
++const BATCH_MENU_LAYOUT_FOCUS := 19
+ const SELECTION_TOOLS_VISIBLE := false
+ 
+ var _canvas: Control = null
+@@ -319,6 +321,9 @@ func _create_batch_menu() -> void:
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
+ 	_batch_menu.add_separator()
++	_batch_menu.add_item(Strings.BATCH_ACTION_LAYOUT_CONTACT, BATCH_MENU_LAYOUT_CONTACT)
++	_batch_menu.add_item(Strings.BATCH_ACTION_LAYOUT_FOCUS, BATCH_MENU_LAYOUT_FOCUS)
++	_batch_menu.add_separator()
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_SPLIT, BATCH_MENU_COMPARE_SPLIT)
+@@ -464,6 +469,14 @@ func _on_batch_menu_id_pressed(id: int) -> void:
+ 			_set_batch_review_filter(
+ 				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
+ 			)
++		BATCH_MENU_LAYOUT_CONTACT:
++			_set_batch_review_layout(
++				CanvasBatchCardScript.LAYOUT_CONTACT, Strings.STATUS_BATCH_LAYOUT_CONTACT
++			)
++		BATCH_MENU_LAYOUT_FOCUS:
++			_set_batch_review_layout(
++				CanvasBatchCardScript.LAYOUT_FOCUS, Strings.STATUS_BATCH_LAYOUT_FOCUS
++			)
+ 		BATCH_MENU_COMPARE_CURRENT:
+ 			_set_batch_compare_mode(
+ 				CanvasBatchCardScript.COMPARE_CURRENT, Strings.STATUS_BATCH_COMPARE_CURRENT
+@@ -586,6 +599,13 @@ func _set_batch_review_filter(review_filter: String, status_text: String) -> voi
+ 	_status_label.text = status_text
+ 
+ 
++func _set_batch_review_layout(review_layout: String, status_text: String) -> void:
++	if not _canvas._set_batch_review_layout(_batch_menu_card_id, review_layout, true):
++		_status_label.text = Strings.STATUS_BATCH_LAYOUT_FAILED
++		return
++	_status_label.text = status_text
++
++
+ func _set_batch_compare_mode(compare_mode: String, status_text: String) -> void:
+ 	if not _canvas._set_batch_compare_mode(_batch_menu_card_id, compare_mode, true):
+ 		_status_label.text = Strings.STATUS_BATCH_COMPARE_EMPTY
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index f5b88fe..4954bff 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -56,6 +56,9 @@ const STATUS_BATCH_SHOW_PENDING := "Showing pending thumbnails"
+ const STATUS_BATCH_SHOW_REJECT := "Showing rejected thumbnails"
+ const STATUS_BATCH_SHOW_FLAG := "Showing flagged thumbnails"
+ const STATUS_BATCH_FILTER_FAILED := "Batch filter failed"
++const STATUS_BATCH_LAYOUT_CONTACT := "Showing contact sheet"
++const STATUS_BATCH_LAYOUT_FOCUS := "Showing focus view"
++const STATUS_BATCH_LAYOUT_FAILED := "Batch layout failed"
+ const STATUS_BATCH_FOCUS_EMPTY := "No visible thumbnails in batch"
+ const STATUS_BATCH_FOCUS_FORMAT := "Focused thumbnail %d of %d"
+ const STATUS_BATCH_COMPARE_CURRENT := "Showing current batch"
+@@ -158,6 +161,8 @@ const BATCH_ACTION_SHOW_KEEP := "Show Keep"
+ const BATCH_ACTION_SHOW_PENDING := "Show Pending"
+ const BATCH_ACTION_SHOW_REJECT := "Show Reject"
+ const BATCH_ACTION_SHOW_FLAG := "Show Flagged"
++const BATCH_ACTION_LAYOUT_CONTACT := "Contact Sheet"
++const BATCH_ACTION_LAYOUT_FOCUS := "Focus View"
+ const BATCH_ACTION_COMPARE_CURRENT := "Show Current"
+ const BATCH_ACTION_COMPARE_PREVIOUS := "Show Previous"
+ const BATCH_ACTION_COMPARE_SPLIT := "Show Compare"
+diff --git a/pixelforge-plan/02-contracts/PROJECT-FORMAT.md b/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
+index d0f4337..d5eb761 100644
+--- a/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
++++ b/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
+@@ -113,6 +113,7 @@ my_project.pxproj (ZIP)
+       "focus_asset_id": "uuid-a",
+       "compare_asset_ids": ["uuid-a-before", "uuid-b-before"],
+       "compare_mode": "current",     // current | previous | split
++      "review_layout": "contact",    // contact | focus
+       "label": "Batch",
+       "position": [320, 64],
+       "z_index": 1,
+@@ -125,6 +126,7 @@ my_project.pxproj (ZIP)
+       "graph_id": "graph_main",
+       "position": [256, -32],
+       "z_index": 0,
++      "review_layout": "contact",    // 仅 batch 节点使用：contact | focus
+       "collapsed": false           // LOD/折叠态（仅显示，不影响逻辑）
+     }
+   ]
+@@ -133,7 +135,7 @@ my_project.pxproj (ZIP)
+ 
+ 规则：
+ - 画布元素 position 强制整数（像素网格对齐，体验原则1）。
+-- `node` 元素是画布上一切图节点（style/prompt/generate/batch/process…）的统一引用形态：只存"画在哪、第几层、是否折叠"，节点的类型/参数/连线全在 `graphs/`。连线在画布上从 graphs 渲染，不写进本文件。
++- `node` 元素是画布上一切图节点（style/prompt/generate/batch/process…）的统一引用形态：只存"画在哪、第几层、是否折叠"，以及 batch 这类画布驻留节点的审阅视图状态；节点的类型/参数/连线全在 `graphs/`。连线在画布上从 graphs 渲染，不写进本文件。
+ - `batch` 是 `type:"node"` 的一种（其 graphs 节点 `type=batch`），渲染为容器卡（队列网格 + 边框菜单）；物化的 `asset_id` 队列存在 graphs 节点 params 中。这就是「一等节点 + 画布卡」双身份的落地方式（见 GRAPH-SCHEMA §5a）。
+ - **M2.1 临时例外**：M3 前尚无正式 graph 持久化，alpha 清洗台先允许 `type:"batch_card"` 直接在 canvas.json 中保存 `asset_ids` 队列、卡片位置和卡内勾选状态。它不含端口、不含连线、不写 graphs；M3 实施正式 batch 节点时，应把该形态迁入 `type:"node"` + `graphs/{graph_id}.json` 的 `type=batch` params。
+ - `graph_anchor` 标记为 **legacy**：统一画布后整张图直接长在画布上，锚点退化；保留仅为读取早期数据，不再新写。
+diff --git a/pixel/scripts/verify_m3_ux3.sh b/pixel/scripts/verify_m3_ux3.sh
+new file mode 100755
+index 0000000..334b309
+--- /dev/null
++++ b/pixel/scripts/verify_m3_ux3.sh
+@@ -0,0 +1,17 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/../.."
++
++./pixel/scripts/configure_editor_game_view.sh
++./pixel/scripts/lint.sh
++./pixel/scripts/run_tests.sh
++./pixel/scripts/check_ui_scaling.sh
++./pixel/scripts/check_export_templates.sh
++
++if git diff --cached --name-only | grep -iE '\.(png|jpe?g)$' >/dev/null; then
++  echo "Staged image files are not allowed for M3 UX-3 commits." >&2
++  exit 1
++fi
++
++echo "verify_m3_ux3: ok"
+```

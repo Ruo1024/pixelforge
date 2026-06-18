@@ -131,7 +131,7 @@ func _draw() -> void:
 		ScalePolicy.compute_art_physical_scale(camera_zoom, _resolve_viewport_scale_factor())
 		>= GRID_MIN_ZOOM
 	):
-		_draw_pixel_grid()
+		PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
 	_draw_graph_edges()
 
 	for item_id in _selection.selected_ids:
@@ -346,7 +346,7 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 			_add_sprite_direct(item_data, image)
 		elif item_type == "batch_card":
 			_add_batch_direct(item_data)
-		elif item_type == "node" and _is_graph_batch_node_data(item_data):
+		elif item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data):
 			_add_batch_direct(item_data)
 		elif item_type == "node":
 			_add_node_direct(item_data)
@@ -493,6 +493,14 @@ func _set_batch_review_filter(
 ) -> bool:
 	return BatchOps.set_review_filter(
 		_items_by_id, card_id, review_filter, record_undo, _select_only, _emit_canvas_changed
+	)
+
+
+func _set_batch_review_layout(
+	card_id: String, review_layout: String, record_undo: bool = true
+) -> bool:
+	return BatchOps.set_review_layout(
+		_items_by_id, card_id, review_layout, record_undo, _select_only, _emit_canvas_changed
 	)
 
 
@@ -773,12 +781,9 @@ func _add_node_direct(item_data: Dictionary) -> Node:
 func _is_batch_card_data(item_data: Dictionary) -> bool:
 	var item_type := String(item_data.get("type", ""))
 	return (
-		item_type == "batch_card" or (item_type == "node" and _is_graph_batch_node_data(item_data))
+		item_type == "batch_card"
+		or (item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data))
 	)
-
-
-func _is_graph_batch_node_data(item_data: Dictionary) -> bool:
-	return GraphItemBridge.is_graph_batch_node_data(item_data)
 
 
 func _remove_item_direct(item_id: String) -> void:
@@ -926,10 +931,6 @@ func _camera_center_for_snapped_anchor(anchor_world: Vector2, screen_anchor: Vec
 		_get_art_logical_scale(),
 		_resolve_viewport_scale_factor()
 	)
-
-
-func _draw_pixel_grid() -> void:
-	PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
 
 
 func _draw_graph_edges() -> void:

@@ -113,6 +113,7 @@ my_project.pxproj (ZIP)
       "focus_asset_id": "uuid-a",
       "compare_asset_ids": ["uuid-a-before", "uuid-b-before"],
       "compare_mode": "current",     // current | previous | split
+      "review_layout": "contact",    // contact | focus
       "label": "Batch",
       "position": [320, 64],
       "z_index": 1,
@@ -125,6 +126,7 @@ my_project.pxproj (ZIP)
       "graph_id": "graph_main",
       "position": [256, -32],
       "z_index": 0,
+      "review_layout": "contact",    // 仅 batch 节点使用：contact | focus
       "collapsed": false           // LOD/折叠态（仅显示，不影响逻辑）
     }
   ]
@@ -133,7 +135,7 @@ my_project.pxproj (ZIP)
 
 规则：
 - 画布元素 position 强制整数（像素网格对齐，体验原则1）。
-- `node` 元素是画布上一切图节点（style/prompt/generate/batch/process…）的统一引用形态：只存"画在哪、第几层、是否折叠"，节点的类型/参数/连线全在 `graphs/`。连线在画布上从 graphs 渲染，不写进本文件。
+- `node` 元素是画布上一切图节点（style/prompt/generate/batch/process…）的统一引用形态：只存"画在哪、第几层、是否折叠"，以及 batch 这类画布驻留节点的审阅视图状态；节点的类型/参数/连线全在 `graphs/`。连线在画布上从 graphs 渲染，不写进本文件。
 - `batch` 是 `type:"node"` 的一种（其 graphs 节点 `type=batch`），渲染为容器卡（队列网格 + 边框菜单）；物化的 `asset_id` 队列存在 graphs 节点 params 中。这就是「一等节点 + 画布卡」双身份的落地方式（见 GRAPH-SCHEMA §5a）。
 - **M2.1 临时例外**：M3 前尚无正式 graph 持久化，alpha 清洗台先允许 `type:"batch_card"` 直接在 canvas.json 中保存 `asset_ids` 队列、卡片位置和卡内勾选状态。它不含端口、不含连线、不写 graphs；M3 实施正式 batch 节点时，应把该形态迁入 `type:"node"` + `graphs/{graph_id}.json` 的 `type=batch` params。
 - `graph_anchor` 标记为 **legacy**：统一画布后整张图直接长在画布上，锚点退化；保留仅为读取早期数据，不再新写。

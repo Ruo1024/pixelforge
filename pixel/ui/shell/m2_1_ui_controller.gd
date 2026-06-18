@@ -56,6 +56,8 @@ const BATCH_MENU_FILTER_FLAG := 14
 const BATCH_MENU_COMPARE_CURRENT := 15
 const BATCH_MENU_COMPARE_PREVIOUS := 16
 const BATCH_MENU_COMPARE_SPLIT := 17
+const BATCH_MENU_LAYOUT_CONTACT := 18
+const BATCH_MENU_LAYOUT_FOCUS := 19
 const SELECTION_TOOLS_VISIBLE := false
 
 var _canvas: Control = null
@@ -319,6 +321,9 @@ func _create_batch_menu() -> void:
 	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
 	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
 	_batch_menu.add_separator()
+	_batch_menu.add_item(Strings.BATCH_ACTION_LAYOUT_CONTACT, BATCH_MENU_LAYOUT_CONTACT)
+	_batch_menu.add_item(Strings.BATCH_ACTION_LAYOUT_FOCUS, BATCH_MENU_LAYOUT_FOCUS)
+	_batch_menu.add_separator()
 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_SPLIT, BATCH_MENU_COMPARE_SPLIT)
@@ -464,6 +469,14 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 			_set_batch_review_filter(
 				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
 			)
+		BATCH_MENU_LAYOUT_CONTACT:
+			_set_batch_review_layout(
+				CanvasBatchCardScript.LAYOUT_CONTACT, Strings.STATUS_BATCH_LAYOUT_CONTACT
+			)
+		BATCH_MENU_LAYOUT_FOCUS:
+			_set_batch_review_layout(
+				CanvasBatchCardScript.LAYOUT_FOCUS, Strings.STATUS_BATCH_LAYOUT_FOCUS
+			)
 		BATCH_MENU_COMPARE_CURRENT:
 			_set_batch_compare_mode(
 				CanvasBatchCardScript.COMPARE_CURRENT, Strings.STATUS_BATCH_COMPARE_CURRENT
@@ -582,6 +595,13 @@ func _selected_batch_card_id() -> String:
 func _set_batch_review_filter(review_filter: String, status_text: String) -> void:
 	if not _canvas._set_batch_review_filter(_batch_menu_card_id, review_filter, true):
 		_status_label.text = Strings.STATUS_BATCH_FILTER_FAILED
+		return
+	_status_label.text = status_text
+
+
+func _set_batch_review_layout(review_layout: String, status_text: String) -> void:
+	if not _canvas._set_batch_review_layout(_batch_menu_card_id, review_layout, true):
+		_status_label.text = Strings.STATUS_BATCH_LAYOUT_FAILED
 		return
 	_status_label.text = status_text
 

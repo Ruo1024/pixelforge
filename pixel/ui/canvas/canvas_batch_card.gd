@@ -26,6 +26,8 @@ const REVIEW_REJECT := "reject"
 const REVIEW_FLAG := "flag"
 const FILTER_ALL := "all"
 const FILTER_PENDING := "pending"
+const LAYOUT_CONTACT := "contact"
+const LAYOUT_FOCUS := "focus"
 const COMPARE_CURRENT := "current"
 const COMPARE_PREVIOUS := "previous"
 const COMPARE_SPLIT := "split"
@@ -36,6 +38,9 @@ const FOCUS_BORDER := Color(0.96, 0.96, 0.9, 1.0)
 const COMPARE_DIVIDER := Color(0.96, 0.96, 0.9, 0.85)
 const INPUT_PORTS: Array[String] = ["in"]
 const OUTPUT_PORTS: Array[String] = ["images", "assets"]
+const FOCUS_IMAGE_HEIGHT := 320
+const FOCUS_FILMSTRIP_THUMB_SIZE := 72
+const FOCUS_FILMSTRIP_VISIBLE := 7
 
 var item_id := ""
 var graph_id := ""
@@ -47,6 +52,7 @@ var review_filter := FILTER_ALL
 var focus_asset_id := ""
 var compare_asset_ids: Array[String] = []
 var compare_mode := COMPARE_CURRENT
+var review_layout := LAYOUT_CONTACT
 var label := ""
 var locked := false
 
@@ -78,6 +84,7 @@ func setup_from_data(data: Dictionary) -> void:
 	compare_mode = _normalize_compare_mode(
 		String(graph_params.get("compare_mode", data.get("compare_mode", COMPARE_CURRENT)))
 	)
+	review_layout = _normalize_review_layout(String(data.get("review_layout", LAYOUT_CONTACT)))
 	_prune_selected_to_visible()
 	_prune_focus_to_visible()
 	locked = bool(data.get("locked", false))
@@ -99,6 +106,7 @@ func to_canvas_data() -> Dictionary:
 			"position": [int(round(position.x)), int(round(position.y))],
 			"z_index": z_index,
 			"collapsed": false,
+			"review_layout": review_layout,
 			"locked": locked,
 		}
 	return {
@@ -111,6 +119,7 @@ func to_canvas_data() -> Dictionary:
 		"focus_asset_id": focus_asset_id,
 		"compare_asset_ids": compare_asset_ids.duplicate(),
 		"compare_mode": compare_mode,
+		"review_layout": review_layout,
 		"label": label,
 		"position": [int(round(position.x)), int(round(position.y))],
 		"z_index": z_index,
@@ -223,6 +232,17 @@ func set_review_filter(new_review_filter: String) -> void:
 	queue_redraw()
 
 
+func get_review_layout() -> String:
+	return review_layout
+
+
+func set_review_layout(new_review_layout: String) -> void:
+	review_layout = _normalize_review_layout(new_review_layout)
+	if review_layout == LAYOUT_FOCUS and focus_asset_id.is_empty():
+		focus_asset_id = _initial_focus_asset_id()
+	queue_redraw()
+
+
 func _get_focus_asset_id() -> String:
 	return focus_asset_id
 
@@ -295,6 +315,8 @@ func asset_index_at_world(world_position: Vector2) -> int:
 	var local := world_position - position
 	if local.y < HEADER_HEIGHT:
 		return -1
+	if review_layout == LAYOUT_FOCUS:
+		return _focus_layout_asset_index_at_local(local)
 	var columns := _columns()
 	var visible_ids := get_visible_asset_ids()
 	for index in range(visible_ids.size()):
@@ -333,10 +355,26 @@ func _draw() -> void:
 
 	var columns := _columns()
 	var visible_ids := get_visible_asset_ids()
-	for index in range(visible_ids.size()):
-		_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
+	if review_layout == LAYOUT_FOCUS:
+		_draw_focus_layout(visible_ids)
+	else:
+		for index in range(visible_ids.size()):
+			_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
 	if has_graph_binding():
 		_draw_graph_ports()
+
+
+func _draw_focus_layout(visible_ids: Array[String]) -> void:
+	if visible_ids.is_empty():
+		return
+	var focused_asset_id := _focused_visible_asset_id()
+	if focused_asset_id.is_empty():
+		return
+	_draw_thumbnail(focused_asset_id, _focus_rect())
+	var start_index := _filmstrip_start_index(visible_ids)
+	var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
+	for index in range(start_index, end_index):
+		_draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
 
 
 func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
@@ -417,10 +455,36 @@ func _thumb_rect(index: int, columns: int) -> Rect2:
 	)
 
 
+func _focus_rect() -> Rect2:
+	return Rect2(
+		Vector2(PADDING, HEADER_HEIGHT + PADDING),
+		Vector2(CARD_WIDTH - PADDING * 2, FOCUS_IMAGE_HEIGHT)
+	)
+
+
+func _filmstrip_rect(slot_index: int) -> Rect2:
+	var y := HEADER_HEIGHT + PADDING + FOCUS_IMAGE_HEIGHT + THUMB_GAP
+	return Rect2(
+		Vector2(PADDING + slot_index * (FOCUS_FILMSTRIP_THUMB_SIZE + THUMB_GAP), y),
+		Vector2(FOCUS_FILMSTRIP_THUMB_SIZE, FOCUS_FILMSTRIP_THUMB_SIZE)
+	)
+
+
 func _card_height() -> int:
 	var visible_count := get_visible_asset_ids().size()
 	if visible_count <= 0:
 		return MIN_CARD_HEIGHT
+	if review_layout == LAYOUT_FOCUS:
+		return maxi(
+			MIN_CARD_HEIGHT,
+			(
+				HEADER_HEIGHT
+				+ PADDING * 2
+				+ FOCUS_IMAGE_HEIGHT
+				+ THUMB_GAP
+				+ FOCUS_FILMSTRIP_THUMB_SIZE
+			)
+		)
 	var rows := int(ceil(float(visible_count) / float(_columns())))
 	return maxi(
 		MIN_CARD_HEIGHT, HEADER_HEIGHT + PADDING * 2 + rows * THUMB_SIZE + (rows - 1) * THUMB_GAP
@@ -526,6 +590,14 @@ func _normalize_review_filter(value: String) -> String:
 			return FILTER_ALL
 
 
+func _normalize_review_layout(value: String) -> String:
+	match value:
+		LAYOUT_CONTACT, LAYOUT_FOCUS:
+			return value
+		_:
+			return LAYOUT_CONTACT
+
+
 func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
 	return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
 
@@ -568,6 +640,44 @@ func _focus_anchor_index(visible_ids: Array[String]) -> int:
 		if selected_index >= 0:
 			return selected_index
 	return -1
+
+
+func _focused_visible_asset_id() -> String:
+	var visible_ids := get_visible_asset_ids()
+	if visible_ids.is_empty():
+		return ""
+	var anchor_index := _focus_anchor_index(visible_ids)
+	if anchor_index >= 0:
+		return visible_ids[anchor_index]
+	return visible_ids[0]
+
+
+func _initial_focus_asset_id() -> String:
+	return _focused_visible_asset_id()
+
+
+func _focus_layout_asset_index_at_local(local: Vector2) -> int:
+	var visible_ids := get_visible_asset_ids()
+	if visible_ids.is_empty():
+		return -1
+	if _focus_rect().has_point(local):
+		return visible_ids.find(_focused_visible_asset_id())
+	var start_index := _filmstrip_start_index(visible_ids)
+	var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
+	for index in range(start_index, end_index):
+		if _filmstrip_rect(index - start_index).has_point(local):
+			return index
+	return -1
+
+
+func _filmstrip_start_index(visible_ids: Array[String]) -> int:
+	if visible_ids.size() <= FOCUS_FILMSTRIP_VISIBLE:
+		return 0
+	var anchor_index := _focus_anchor_index(visible_ids)
+	if anchor_index < 0:
+		anchor_index = 0
+	var half_window := int(floor(float(FOCUS_FILMSTRIP_VISIBLE) * 0.5))
+	return clampi(anchor_index - half_window, 0, visible_ids.size() - FOCUS_FILMSTRIP_VISIBLE)
 
 
 func _visible_selected_array(value: Array) -> Array[String]:
