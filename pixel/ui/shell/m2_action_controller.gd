@@ -331,14 +331,18 @@ func _on_batch_task_finished(result: Variant, done_status: String) -> void:
 		ErrorHelper.show_matte_error(_dialog_parent, first_warning)
 
 	var new_asset_ids: Array[String] = []
+	var source_asset_ids: Array[String] = []
 	for item_result in result.get("items", []):
 		var parent_asset_id := String(item_result.get("parent_asset", ""))
 		var asset_id := PixelOperations.register_result_asset(
 			AssetLibrary, parent_asset_id, item_result
 		)
 		new_asset_ids.append(asset_id)
+		source_asset_ids.append(parent_asset_id)
 
-	_canvas._replace_batch_asset_ids(String(result.get("card_id", "")), new_asset_ids, true)
+	_canvas._replace_batch_asset_ids(
+		String(result.get("card_id", "")), new_asset_ids, true, source_asset_ids
+	)
 	_status_label.text = done_status
 
 

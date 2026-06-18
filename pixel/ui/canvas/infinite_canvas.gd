@@ -84,7 +84,7 @@ func _process(delta: float) -> void:
 	if _cull_elapsed >= CULL_INTERVAL_SECONDS:
 		_cull_elapsed = 0.0
 		_update_item_visibility()
-	_update_cleanup_preview_alt_state()
+	_cleanup_preview.update_alt_state()
 	if tool_manager != null and tool_manager.needs_redraw():
 		queue_redraw()
 
@@ -488,10 +488,6 @@ func _get_batch_selected_asset_ids(card_id: String) -> Array:
 	return BatchOps.get_selected_asset_ids(_items_by_id, card_id)
 
 
-func _get_batch_marked_asset_ids(card_id: String, review_state: String) -> Array:
-	return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
-
-
 func _set_batch_review_filter(
 	card_id: String, review_filter: String, record_undo: bool = true
 ) -> bool:
@@ -501,10 +497,24 @@ func _set_batch_review_filter(
 
 
 func _replace_batch_asset_ids(
-	card_id: String, new_asset_ids: Array, record_undo: bool = true
+	card_id: String, new_asset_ids: Array, record_undo: bool = true, compare_asset_ids: Array = []
 ) -> void:
 	BatchOps.replace_asset_ids(
-		_items_by_id, card_id, new_asset_ids, record_undo, _select_only, _emit_canvas_changed
+		_items_by_id,
+		card_id,
+		new_asset_ids,
+		record_undo,
+		compare_asset_ids,
+		_select_only,
+		_emit_canvas_changed
+	)
+
+
+func _set_batch_compare_mode(
+	card_id: String, compare_mode: String, record_undo: bool = true
+) -> bool:
+	return BatchOps.set_compare_mode(
+		_items_by_id, card_id, compare_mode, record_undo, _select_only, _emit_canvas_changed
 	)
 
 
@@ -970,10 +980,6 @@ func _on_cleanup_grid_changed(scale: float, offset: Vector2) -> void:
 	_cleanup_grid_scale = scale
 	_cleanup_grid_offset = offset
 	cleanup_grid_changed.emit(scale, offset)
-
-
-func _update_cleanup_preview_alt_state() -> void:
-	_cleanup_preview.update_alt_state()
 
 
 func _tool_manager_handles(event: InputEvent) -> bool:

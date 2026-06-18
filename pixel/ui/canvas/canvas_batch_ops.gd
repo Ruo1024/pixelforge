@@ -41,6 +41,7 @@ static func replace_asset_ids(
 	card_id: String,
 	new_asset_ids: Array,
 	record_undo: bool,
+	compare_asset_ids: Array,
 	select_only: Callable,
 	emit_changed: Callable
 ) -> void:
@@ -51,19 +52,27 @@ static func replace_asset_ids(
 	var before_review_states: Dictionary = item.get_review_states()
 	var before_review_filter: String = item.get_review_filter()
 	var before_focus_asset_id: String = item._get_focus_asset_id()
+	var before_compare_asset_ids: Array = item._get_compare_asset_ids()
+	var before_compare_mode: String = item._get_compare_mode()
 	var after := new_asset_ids.duplicate()
 	var after_review_states := {}
 	var after_review_filter := CanvasBatchCardScript.FILTER_ALL
 	var after_focus_asset_id := ""
+	var after_compare_asset_ids := _aligned_compare_asset_ids(compare_asset_ids, after)
+	var after_compare_mode := CanvasBatchCardScript.COMPARE_CURRENT
 	var do_replace := func() -> void:
 		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
 		_apply_review_states(item, after_review_states)
 		_apply_review_filter(item, after_review_filter)
 		_apply_focus_asset_id(item, after_focus_asset_id)
+		_apply_compare_state(item, after_compare_asset_ids, after_compare_mode)
 		GraphItemBridge.sync_batch_node_asset_ids(item, after)
 		GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
 		GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
 		GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
+		GraphItemBridge.sync_batch_node_compare_state(
+			item, after_compare_asset_ids, after_compare_mode
+		)
 		select_only.call([card_id])
 		emit_changed.call()
 	var undo_replace := func() -> void:
@@ -71,10 +80,14 @@ static func replace_asset_ids(
 		_apply_review_states(item, before_review_states)
 		_apply_review_filter(item, before_review_filter)
 		_apply_focus_asset_id(item, before_focus_asset_id)
+		_apply_compare_state(item, before_compare_asset_ids, before_compare_mode)
 		GraphItemBridge.sync_batch_node_asset_ids(item, before)
 		GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
 		GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
 		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
+		GraphItemBridge.sync_batch_node_compare_state(
+			item, before_compare_asset_ids, before_compare_mode
+		)
 		select_only.call([card_id])
 		emit_changed.call()
 	if record_undo:
@@ -168,6 +181,46 @@ static func set_review_filter(
 		UndoService.perform_action("Set batch review filter", do_filter, undo_filter)
 	else:
 		do_filter.call()
+	return true
+
+
+static func set_compare_mode(
+	items_by_id: Dictionary,
+	card_id: String,
+	compare_mode: String,
+	record_undo: bool,
+	select_only: Callable,
+	emit_changed: Callable
+) -> bool:
+	var item := _batch_item(items_by_id, card_id)
+	if item == null:
+		return false
+	var before_mode: String = item._get_compare_mode()
+	var after_mode := _normalize_compare_mode(item, compare_mode)
+	if before_mode == after_mode:
+		return true
+	if (
+		after_mode == CanvasBatchCardScript.COMPARE_PREVIOUS
+		and item._get_compare_asset_ids().is_empty()
+	):
+		return false
+
+	var compare_asset_ids: Array = item._get_compare_asset_ids()
+	var do_compare := func() -> void:
+		_apply_compare_mode(item, after_mode)
+		GraphItemBridge.sync_batch_node_compare_state(item, compare_asset_ids, after_mode)
+		select_only.call([card_id])
+		emit_changed.call()
+	var undo_compare := func() -> void:
+		_apply_compare_mode(item, before_mode)
+		GraphItemBridge.sync_batch_node_compare_state(item, compare_asset_ids, before_mode)
+		select_only.call([card_id])
+		emit_changed.call()
+
+	if record_undo:
+		UndoService.perform_action("Set batch compare mode", do_compare, undo_compare)
+	else:
+		do_compare.call()
 	return true
 
 
@@ -270,6 +323,16 @@ static func _apply_selected_asset_ids(item: Node, selected_asset_ids: Array) -> 
 	item._set_selected_asset_ids(selected_asset_ids)
 
 
+static func _apply_compare_state(
+	item: Node, compare_asset_ids: Array, compare_mode: String
+) -> void:
+	item._set_compare_state(compare_asset_ids, compare_mode)
+
+
+static func _apply_compare_mode(item: Node, compare_mode: String) -> void:
+	item._set_compare_mode(compare_mode)
+
+
 static func _normalize_review_state(review_state: String) -> String:
 	if (
 		review_state
@@ -296,6 +359,24 @@ static func _normalize_review_filter(review_filter: String) -> String:
 	):
 		return review_filter
 	return CanvasBatchCardScript.FILTER_ALL
+
+
+static func _normalize_compare_mode(item: Node, compare_mode: String) -> String:
+	if (
+		compare_mode == CanvasBatchCardScript.COMPARE_PREVIOUS
+		and not item._get_compare_asset_ids().is_empty()
+	):
+		return CanvasBatchCardScript.COMPARE_PREVIOUS
+	return CanvasBatchCardScript.COMPARE_CURRENT
+
+
+static func _aligned_compare_asset_ids(compare_asset_ids: Array, current_asset_ids: Array) -> Array:
+	var result := []
+	if compare_asset_ids.size() != current_asset_ids.size():
+		return result
+	for raw_id in compare_asset_ids:
+		result.append(String(raw_id))
+	return result
 
 
 static func _focus_result(item: Node, focus_asset_id: String) -> Dictionary:

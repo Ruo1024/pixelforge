@@ -149,6 +149,38 @@ func test_canvas_batch_card_focuses_visible_review_thumbnails() -> void:
 	assert_eq(item["focus_asset_id"], ids[1])
 
 
+func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var before_ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
+	var after_ids := [
+		_register_asset(Color.GREEN, "green"),
+		_register_asset(Color.YELLOW, "yellow"),
+	]
+	var card: Node = canvas._add_batch_card(before_ids, Vector2(16, 24), "Batch", "batch_1", false)
+
+	canvas._replace_batch_asset_ids("batch_1", after_ids, false, before_ids)
+	assert_eq(card.asset_ids, after_ids)
+	assert_eq(card._get_compare_asset_ids(), before_ids)
+	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_CURRENT)
+	assert_eq(card.get_visible_asset_ids(), after_ids)
+
+	assert_true(
+		canvas._set_batch_compare_mode("batch_1", CanvasBatchCardScript.COMPARE_PREVIOUS, false)
+	)
+	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
+	assert_eq(card._texture_asset_id_for(after_ids[0]), before_ids[0])
+	assert_eq(card._texture_asset_id_for(after_ids[1]), before_ids[1])
+
+	var data: Dictionary = canvas.export_canvas_data()
+	var item: Dictionary = data["items"][0]
+	assert_eq(item["compare_asset_ids"], before_ids)
+	assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
+
+
 func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(512, 512)
@@ -314,6 +346,58 @@ func test_graph_batch_card_persists_focus_asset_id_in_graph_params() -> void:
 	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
 
 	assert_eq(reloaded_card._get_focus_asset_id(), ids[0])
+
+
+func test_graph_batch_card_persists_compare_state_in_graph_params() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var before_ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
+	var after_ids := [
+		_register_asset(Color.GREEN, "green"),
+		_register_asset(Color.YELLOW, "yellow"),
+	]
+	var graph := GraphScript.new()
+	graph.id = "graph_batch_compare_test"
+	graph.add_node(
+		BatchNodeScript.new(),
+		"batch_1",
+		{"label": "Candidates", "asset_ids": before_ids},
+		Vector2(16, 24)
+	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+
+	var card: Node = canvas._add_batch_card(
+		before_ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
+	)
+	canvas._replace_batch_asset_ids("node_item_1", after_ids, false, before_ids)
+	assert_true(
+		canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_PREVIOUS, false)
+	)
+	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
+
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
+	var batch_node: Dictionary = graph_data["nodes"][0]
+	assert_eq(batch_node["params"]["asset_ids"], after_ids)
+	assert_eq(batch_node["params"]["compare_asset_ids"], before_ids)
+	assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
+
+	var canvas_data: Dictionary = canvas.export_canvas_data()
+	assert_false(Dictionary(canvas_data["items"][0]).has("compare_asset_ids"))
+	assert_false(Dictionary(canvas_data["items"][0]).has("compare_mode"))
+
+	var reloaded_canvas: Control = CanvasScript.new()
+	reloaded_canvas.size = Vector2(512, 512)
+	add_child_autofree(reloaded_canvas)
+	await wait_process_frames(2)
+	reloaded_canvas.load_canvas_data(canvas_data)
+	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
+
+	assert_eq(reloaded_card.asset_ids, after_ids)
+	assert_eq(reloaded_card._get_compare_asset_ids(), before_ids)
+	assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
 
 
 func test_graph_node_card_exports_node_reference_and_survives_load() -> void:

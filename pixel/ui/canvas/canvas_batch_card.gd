@@ -5,6 +5,7 @@ extends Node2D
 ## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
 
 const IdUtil := preload("res://core/util/id_util.gd")
+const Strings := preload("res://ui/shell/strings.gd")
 
 const CARD_WIDTH := 600
 const HEADER_HEIGHT := 40
@@ -25,6 +26,8 @@ const REVIEW_REJECT := "reject"
 const REVIEW_FLAG := "flag"
 const FILTER_ALL := "all"
 const FILTER_PENDING := "pending"
+const COMPARE_CURRENT := "current"
+const COMPARE_PREVIOUS := "previous"
 const KEEP_MARK := Color(0.2, 0.88, 0.46, 1.0)
 const REJECT_MARK := Color(0.95, 0.22, 0.24, 0.95)
 const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
@@ -40,6 +43,8 @@ var selected_asset_ids: Array[String] = []
 var review_states := {}
 var review_filter := FILTER_ALL
 var focus_asset_id := ""
+var compare_asset_ids: Array[String] = []
+var compare_mode := COMPARE_CURRENT
 var label := ""
 var locked := false
 
@@ -64,6 +69,12 @@ func setup_from_data(data: Dictionary) -> void:
 	)
 	focus_asset_id = _normalize_focus_asset_id(
 		String(graph_params.get("focus_asset_id", data.get("focus_asset_id", "")))
+	)
+	compare_asset_ids = _aligned_compare_asset_ids(
+		graph_params.get("compare_asset_ids", data.get("compare_asset_ids", []))
+	)
+	compare_mode = _normalize_compare_mode(
+		String(graph_params.get("compare_mode", data.get("compare_mode", COMPARE_CURRENT)))
 	)
 	_prune_selected_to_visible()
 	_prune_focus_to_visible()
@@ -96,6 +107,8 @@ func to_canvas_data() -> Dictionary:
 		"review_states": review_states.duplicate(true),
 		"review_filter": review_filter,
 		"focus_asset_id": focus_asset_id,
+		"compare_asset_ids": compare_asset_ids.duplicate(),
+		"compare_mode": compare_mode,
 		"label": label,
 		"position": [int(round(position.x)), int(round(position.y))],
 		"z_index": z_index,
@@ -132,6 +145,8 @@ func set_asset_ids(new_asset_ids: Array) -> void:
 		if not asset_ids.has(selected_id):
 			selected_asset_ids.erase(selected_id)
 	review_states = _review_state_map(review_states, asset_ids)
+	compare_asset_ids = _aligned_compare_asset_ids(compare_asset_ids)
+	compare_mode = _normalize_compare_mode(compare_mode)
 	_prune_selected_to_visible()
 	_prune_focus_to_visible()
 	_rebuild_thumbnails()
@@ -235,6 +250,26 @@ func _focus_asset_id_relative(step: int) -> String:
 	return visible_ids[posmod(anchor_index + step, visible_ids.size())]
 
 
+func _get_compare_asset_ids() -> Array[String]:
+	return compare_asset_ids.duplicate()
+
+
+func _get_compare_mode() -> String:
+	return compare_mode
+
+
+func _set_compare_state(new_compare_asset_ids: Array, new_compare_mode: String) -> void:
+	compare_asset_ids = _aligned_compare_asset_ids(new_compare_asset_ids)
+	compare_mode = _normalize_compare_mode(new_compare_mode)
+	_rebuild_thumbnails()
+	queue_redraw()
+
+
+func _set_compare_mode(new_compare_mode: String) -> void:
+	compare_mode = _normalize_compare_mode(new_compare_mode)
+	queue_redraw()
+
+
 func toggle_asset_at_world(world_position: Vector2) -> bool:
 	var index := asset_index_at_world(world_position)
 	var visible_ids := get_visible_asset_ids()
@@ -280,6 +315,8 @@ func _draw() -> void:
 		var title := "%s (%d)" % [label, asset_ids.size()]
 		if visible_count != asset_ids.size():
 			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
+		if compare_mode == COMPARE_PREVIOUS:
+			title = "%s - %s" % [title, Strings.BATCH_COMPARE_PREVIOUS_SUFFIX]
 		draw_string(
 			_font,
 			Vector2(PADDING, 28),
@@ -300,7 +337,7 @@ func _draw() -> void:
 
 func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
 	draw_rect(rect, THUMB_BACKGROUND, true)
-	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
+	var texture: Texture2D = _thumbnail_textures.get(_texture_asset_id_for(asset_id), null)
 	if texture != null:
 		var image_size := texture.get_size()
 		var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
@@ -382,7 +419,11 @@ func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
 
 func _rebuild_thumbnails() -> void:
 	_thumbnail_textures.clear()
-	for asset_id in asset_ids:
+	var texture_asset_ids := asset_ids.duplicate()
+	for compare_asset_id in compare_asset_ids:
+		if not texture_asset_ids.has(compare_asset_id):
+			texture_asset_ids.append(compare_asset_id)
+	for asset_id in texture_asset_ids:
 		var image := AssetLibrary.get_image(asset_id)
 		if image == null:
 			continue
@@ -460,6 +501,19 @@ func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
 	return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
 
 
+func _normalize_compare_mode(new_compare_mode: String) -> String:
+	if new_compare_mode == COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
+		return COMPARE_PREVIOUS
+	return COMPARE_CURRENT
+
+
+func _aligned_compare_asset_ids(value: Variant) -> Array[String]:
+	var result := _string_array(value)
+	if result.size() != asset_ids.size():
+		return []
+	return result
+
+
 func _prune_selected_to_visible() -> void:
 	var visible_lookup := _visible_lookup()
 	for selected_id in selected_asset_ids.duplicate():
@@ -493,6 +547,15 @@ func _visible_selected_array(value: Array) -> Array[String]:
 		if visible_lookup.has(asset_id) and not result.has(asset_id):
 			result.append(asset_id)
 	return result
+
+
+func _texture_asset_id_for(asset_id: String) -> String:
+	if compare_mode != COMPARE_PREVIOUS:
+		return asset_id
+	var index := asset_ids.find(asset_id)
+	if index < 0 or index >= compare_asset_ids.size():
+		return asset_id
+	return compare_asset_ids[index]
 
 
 func _visible_lookup() -> Dictionary:

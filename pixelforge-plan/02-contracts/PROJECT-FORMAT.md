@@ -111,6 +111,8 @@ my_project.pxproj (ZIP)
       "review_states": { "uuid-a": "keep" },
       "review_filter": "all",
       "focus_asset_id": "uuid-a",
+      "compare_asset_ids": ["uuid-a-before", "uuid-b-before"],
+      "compare_mode": "current",
       "label": "Batch",
       "position": [320, 64],
       "z_index": 1,

@@ -57,6 +57,12 @@ static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
 			params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
 			params["review_filter"] = _review_filter(params.get("review_filter", "all"))
 			params["focus_asset_id"] = _focus_asset_id(params.get("focus_asset_id", ""), asset_ids)
+			params["compare_asset_ids"] = _compare_asset_ids(
+				params.get("compare_asset_ids", []), asset_ids
+			)
+			params["compare_mode"] = _compare_mode(
+				params.get("compare_mode", "current"), params["compare_asset_ids"]
+			)
 			node_data["params"] = params
 			changed = true
 		nodes.append(node_data)
@@ -156,6 +162,41 @@ static func sync_batch_node_focus_asset_id(item: Node, focus_asset_id: String) -
 		ProjectService.set_graph_data(item.graph_id, graph_data, true)
 
 
+static func sync_batch_node_compare_state(
+	item: Node, compare_asset_ids: Array, compare_mode: String
+) -> void:
+	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
+		return
+
+	var graph_data := ProjectService.get_graph_data(item.graph_id)
+	if graph_data.is_empty():
+		return
+
+	var nodes := []
+	var changed := false
+	for raw_node in graph_data.get("nodes", []):
+		if not (raw_node is Dictionary):
+			nodes.append(raw_node)
+			continue
+		var node_data: Dictionary = raw_node
+		if (
+			String(node_data.get("id", "")) == item.node_id
+			and String(node_data.get("type", "")) == "batch"
+		):
+			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+			params["compare_asset_ids"] = _compare_asset_ids(
+				compare_asset_ids, params.get("asset_ids", [])
+			)
+			params["compare_mode"] = _compare_mode(compare_mode, params["compare_asset_ids"])
+			node_data["params"] = params
+			changed = true
+		nodes.append(node_data)
+
+	if changed:
+		graph_data["nodes"] = nodes
+		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+
+
 static func _string_array(value: Variant) -> Array[String]:
 	var result: Array[String] = []
 	if value is Array:
@@ -203,3 +244,17 @@ static func _review_filter(value: Variant) -> String:
 static func _focus_asset_id(value: Variant, valid_asset_ids: Variant) -> String:
 	var asset_id := String(value)
 	return asset_id if _string_array(valid_asset_ids).has(asset_id) else ""
+
+
+static func _compare_asset_ids(value: Variant, current_asset_ids: Variant) -> Array[String]:
+	var result := _string_array(value)
+	if result.size() == _string_array(current_asset_ids).size():
+		return result
+	var empty: Array[String] = []
+	return empty
+
+
+static func _compare_mode(value: Variant, compare_asset_ids: Array) -> String:
+	if String(value) == CanvasBatchCardScript.COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
+		return CanvasBatchCardScript.COMPARE_PREVIOUS
+	return CanvasBatchCardScript.COMPARE_CURRENT

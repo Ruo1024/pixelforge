@@ -53,6 +53,8 @@ const BATCH_MENU_FILTER_KEEP := 11
 const BATCH_MENU_FILTER_PENDING := 12
 const BATCH_MENU_FILTER_REJECT := 13
 const BATCH_MENU_FILTER_FLAG := 14
+const BATCH_MENU_COMPARE_CURRENT := 15
+const BATCH_MENU_COMPARE_PREVIOUS := 16
 const SELECTION_TOOLS_VISIBLE := false
 
 var _canvas: Control = null
@@ -316,6 +318,9 @@ func _create_batch_menu() -> void:
 	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
 	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
 	_batch_menu.add_separator()
+	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
+	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
+	_batch_menu.add_separator()
 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
 	_batch_menu.add_separator()
@@ -457,6 +462,14 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 			_set_batch_review_filter(
 				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
 			)
+		BATCH_MENU_COMPARE_CURRENT:
+			_set_batch_compare_mode(
+				CanvasBatchCardScript.COMPARE_CURRENT, Strings.STATUS_BATCH_COMPARE_CURRENT
+			)
+		BATCH_MENU_COMPARE_PREVIOUS:
+			_set_batch_compare_mode(
+				CanvasBatchCardScript.COMPARE_PREVIOUS, Strings.STATUS_BATCH_COMPARE_PREVIOUS
+			)
 		BATCH_MENU_SPLIT_KEEP:
 			var new_keep_card: Variant = _canvas._split_batch_marked(
 				_batch_menu_card_id,
@@ -563,6 +576,13 @@ func _selected_batch_card_id() -> String:
 func _set_batch_review_filter(review_filter: String, status_text: String) -> void:
 	if not _canvas._set_batch_review_filter(_batch_menu_card_id, review_filter, true):
 		_status_label.text = Strings.STATUS_BATCH_FILTER_FAILED
+		return
+	_status_label.text = status_text
+
+
+func _set_batch_compare_mode(compare_mode: String, status_text: String) -> void:
+	if not _canvas._set_batch_compare_mode(_batch_menu_card_id, compare_mode, true):
+		_status_label.text = Strings.STATUS_BATCH_COMPARE_EMPTY
 		return
 	_status_label.text = status_text
 
