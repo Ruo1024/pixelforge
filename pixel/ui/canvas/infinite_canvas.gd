@@ -25,6 +25,7 @@ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
 const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
 const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
+const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
 const LODCoordinator := preload("res://ui/canvas/canvas_lod_coordinator.gd")
 const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
 const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
@@ -665,10 +666,11 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 
 func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 	var world_position := screen_to_world(screen_position)
-	var hit_item := _item_at_world(world_position)
+	var hit := _hit_at_world(world_position)
+	var hit_item: Node = hit.get("item", null)
 	if hit_item != null:
 		if (
-			hit_item.get_script() == CanvasBatchCardScript
+			String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
 			and hit_item.toggle_asset_at_world(world_position)
 		):
 			_select_only([hit_item.item_id])
@@ -802,21 +804,14 @@ func _remove_item_direct(item_id: String) -> void:
 	queue_redraw()
 
 
-func _item_at_world(world_position: Vector2) -> Node:
-	var children := item_layer.get_children()
-	for index in range(children.size() - 1, -1, -1):
-		var item := children[index]
-		if (
-			(
-				item.get_script() == CanvasItemSpriteScript
-				or item.get_script() == CanvasBatchCardScript
-				or item.get_script() == CanvasNodeCardScript
-			)
-			and item.visible
-			and item.contains_world_point(world_position)
-		):
-			return item
-	return null
+func _hit_at_world(world_position: Vector2) -> Dictionary:
+	return HitPolicy.hit_at_world(
+		item_layer,
+		world_position,
+		CanvasBatchCardScript,
+		CanvasItemSpriteScript,
+		CanvasNodeCardScript
+	)
 
 
 func _selected_positions() -> Dictionary:
@@ -988,7 +983,7 @@ func _tool_manager_handles(event: InputEvent) -> bool:
 
 
 func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
-	var hit_item := _item_at_world(screen_to_world(screen_position))
+	var hit_item: Node = _hit_at_world(screen_to_world(screen_position)).get("item", null)
 	if hit_item == null or hit_item.get_script() != CanvasBatchCardScript:
 		return
 	_select_only([hit_item.item_id])

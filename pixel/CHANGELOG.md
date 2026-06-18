@@ -30,3 +30,4 @@
 - M3 G-4 follow-up: AI Generate 画布卡将多个逻辑输入折叠为单个视觉输入点，降低基础节点链噪声。
 - M3 G-5: 新增 File > Run Selected Graph 最小重跑入口，选中 mock 节点链任一节点后可替换刷新正式 batch 队列。
 - M3 UX-4: 恢复 batch 语义 LOD 原型，改由 camera zoom 下发 overview/review/inspect，覆盖分数缩放下 25% 进入 overview 的回归路径。
+- M3 UX-7: 新增 CanvasHitPolicy 最小输入仲裁层，统一 batch 缩略图、整卡、sprite 和空白画布命中，避免缩略图点击误触拖卡。

@@ -7728,5 +7728,315 @@ index 4954bff..8e3a28a 100644
 +const BATCH_INSPECT_HINT_CAPPED_FORMAT := "%dx%d, %d+ colors"
  const BATCH_ACTION_SPLIT_KEEP := "Split Kept"
  const BATCH_ACTION_SPLIT := "Split Selected"
- const BATCH_ACTION_EXPORT := "Export Batch"
+const BATCH_ACTION_EXPORT := "Export Batch"
+```
+
+---
+
+## 2026-06-19 追加：M3 UX-7 Hit-test 最小输入仲裁层
+
+### 本轮实现说明
+
+- 新增 `PFCanvasHitPolicy`，把画布 item 命中判断从 `PFInfiniteCanvas` 中抽出，统一处理 batch 缩略图、整卡、sprite / node 卡、空白画布。
+- `PFInfiniteCanvas._begin_left_interaction()` 改为先读取 hit policy 结果：只有命中 `batch_thumbnail` 时才切换 batch 内缩略图选择；overview 或卡片边框命中整卡，继续走选中/拖拽路径。
+- 右键 batch 菜单入口也改用同一套 `_hit_at_world()`，避免左键/右键使用两套命中规则。
+- 补充 `test_canvas_hit_policy.gd`，覆盖 review 缩略图优先、缩略图点击不启动拖卡、overview 整卡命中、topmost z-order、空白命中。
+- 本轮是 UX-7 的最小基础层，尚未实现端口/连线手柄、resize handle、hit debug overlay；这些保留为后续小卡。
+
+### 验证结果
+
+| 命令 | 结果 | 备注 |
+|---|---|---|
+| `./pixel/scripts/lint.sh` | 通过 | 109 files would be left unchanged；gdlint 无问题；无裸 `print`。 |
+| `./pixel/scripts/run_tests.sh` | 通过 | 154/154 tests passed；仍有既有 GUT orphan / 退出资源提示，但退出码为 0。 |
+| `./pixel/scripts/verify_m3_ux7.sh` | 通过 | 串行通过 lint、run_tests、`check_ui_scaling.sh`、`check_export_templates.sh`。 |
+| staged 图片检查 | 通过 | `git diff --cached --name-only | grep -iE '\.(png|jpe?g)$'` 无输出。 |
+| staged 保留目录检查 | 通过 | `test picture/`、`pixel/tests/fixtures/real/`、`垃圾桶/`、`godot-interactive-guide/` 均未暂存。 |
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 在 100% 或 50% review 档点击 batch 内单张缩略图：应只切换缩略图选择，整张 batch 卡不应开始拖动。
+3. 点击 batch 标题/边框并拖动：应拖动整张 batch 卡。
+4. 缩放到 25% overview 档点击 batch：应选中/拖动整卡，不应误选单张缩略图。
+5. 在 batch 旁边空白处拖拽：应走框选；右键 batch 任意可见区域仍应打开 batch 菜单。
+
+### DoD 核查
+
+| 项 | 核查内容 | 状态 | 证据/路径 |
+|---|---|---|---|
+| 代码规范 | gdlint/gdformat 零告警 | 通过 | `./pixel/scripts/lint.sh` |
+| 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | `test_canvas_hit_policy.gd`、154/154 tests |
+| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按上方步骤实机复核拖卡/点图/框选 |
+| 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 本轮只改 UI 输入仲裁，不改持久化契约 |
+| TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 本轮未新增 TODO/FIXME/HACK |
+| 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 本轮只抽取命中判断，未新增重计算路径 |
+| 跨平台 | 目标平台验证结果已记录 | 延期登记 | headless 已过；触控板/鼠标手感需人工复核 |
+| 出口门控 | CI 绿灯或本地 agent 验证绿灯 | 通过 | `./pixel/scripts/verify_m3_ux7.sh` |
+
+### 本轮完整 diff（报告自身除外）
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 1e94c3e..30b57f0 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -30,3 +30,4 @@
+ - M3 G-4 follow-up: AI Generate 画布卡将多个逻辑输入折叠为单个视觉输入点，降低基础节点链噪声。
+ - M3 G-5: 新增 File > Run Selected Graph 最小重跑入口，选中 mock 节点链任一节点后可替换刷新正式 batch 队列。
+ - M3 UX-4: 恢复 batch 语义 LOD 原型，改由 camera zoom 下发 overview/review/inspect，覆盖分数缩放下 25% 进入 overview 的回归路径。
++- M3 UX-7: 新增 CanvasHitPolicy 最小输入仲裁层，统一 batch 缩略图、整卡、sprite 和空白画布命中，避免缩略图点击误触拖卡。
+diff --git a/pixel/scripts/verify_m3_ux7.sh b/pixel/scripts/verify_m3_ux7.sh
+new file mode 100755
+index 0000000..85d2fc1
+--- /dev/null
++++ b/pixel/scripts/verify_m3_ux7.sh
+@@ -0,0 +1,17 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/../.."
++
++./pixel/scripts/configure_editor_game_view.sh
++./pixel/scripts/lint.sh
++./pixel/scripts/run_tests.sh
++./pixel/scripts/check_ui_scaling.sh
++./pixel/scripts/check_export_templates.sh
++
++if git diff --cached --name-only | grep -iE '\.(png|jpe?g)$' >/dev/null; then
++  echo "Staged image files are not allowed for M3 UX-7 commits." >&2
++  exit 1
++fi
++
++echo "verify_m3_ux7: ok"
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd b/pixel/tests/unit/test_canvas_hit_policy.gd
+new file mode 100644
+index 0000000..c492fad
+--- /dev/null
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd
+@@ -0,0 +1,96 @@
++extends "res://addons/gut/test.gd"
++
++const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
++const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
++const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
++const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
++const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
++
++
++func before_each() -> void:
++	get_tree().root.get_node("ProjectService").new_project("Hit Policy")
++
++
++func test_canvas_hit_policy_prioritizes_batch_thumbnail_inside_review_card() -> void:
++	var canvas: Control = _canvas()
++	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++
++	var hit := _hit(canvas, card.position + Vector2(20, 60))
++
++	assert_eq(hit["kind"], HitPolicy.KIND_BATCH_THUMBNAIL)
++	assert_eq(hit["item_id"], "batch_1")
++	assert_eq(hit["asset_index"], 0)
++
++
++func test_canvas_left_click_on_batch_thumbnail_does_not_start_card_drag() -> void:
++	var canvas: Control = _canvas()
++	var ids := [_register_asset(Color.RED, "red")]
++	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++
++	canvas._begin_left_interaction(canvas.world_to_screen(card.position + Vector2(20, 60)), false)
++
++	assert_eq(canvas.get_selected_ids(), ["batch_1"])
++	assert_eq(card.get_selected_asset_ids(), [ids[0]])
++	assert_false(canvas._selection.is_dragging_items)
++
++
++func test_canvas_hit_policy_treats_overview_batch_as_whole_card() -> void:
++	var canvas: Control = _canvas()
++	var ids := [_register_asset(Color.RED, "red")]
++	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++	card.set_lod_camera_zoom(0.25)
++
++	var hit := _hit(canvas, card.position + Vector2(20, 60))
++
++	assert_eq(hit["kind"], HitPolicy.KIND_ITEM)
++	assert_eq(hit["item_id"], "batch_1")
++	assert_eq(hit["asset_index"], -1)
++
++
++func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
++	var canvas: Control = _canvas()
++	var ids := [_register_asset(Color.RED, "red")]
++	canvas._add_batch_card(ids, Vector2.ZERO, "Batch", "batch_1", false)
++	canvas.add_sprite_item(_image(Color.GREEN), "", Vector2.ZERO, "sprite_top", false)
++
++	var hit := _hit(canvas, Vector2(2, 2))
++
++	assert_eq(hit["kind"], HitPolicy.KIND_ITEM)
++	assert_eq(hit["item_id"], "sprite_top")
++
++
++func test_canvas_hit_policy_reports_empty_space() -> void:
++	var canvas: Control = _canvas()
++
++	var hit := _hit(canvas, Vector2(2000, 2000))
++
++	assert_eq(hit["kind"], HitPolicy.KIND_EMPTY)
++	assert_eq(hit["item_id"], "")
++
++
++func _canvas() -> Control:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	return canvas
++
++
++func _hit(canvas: Control, world_position: Vector2) -> Dictionary:
++	return HitPolicy.hit_at_world(
++		canvas.item_layer,
++		world_position,
++		CanvasBatchCardScript,
++		CanvasItemSpriteScript,
++		CanvasNodeCardScript
++	)
++
++
++func _register_asset(color: Color, name: String) -> String:
++	return AssetLibrary.register_image(_image(color), name, {"origin": "imported"})
++
++
++func _image(color: Color) -> Image:
++	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
++	image.fill(color)
++	return image
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd.uid b/pixel/tests/unit/test_canvas_hit_policy.gd.uid
+new file mode 100644
+index 0000000..286adb7
+--- /dev/null
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd.uid
+@@ -0,0 +1 @@
++uid://de6rcbahld0ig
+diff --git a/pixel/ui/canvas/canvas_hit_policy.gd b/pixel/ui/canvas/canvas_hit_policy.gd
+new file mode 100644
+index 0000000..7a31588
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_hit_policy.gd
+@@ -0,0 +1,43 @@
++class_name PFCanvasHitPolicy
++extends RefCounted
++
++## Canvas hit-test arbitration for item-level interactions.
++
++const KIND_EMPTY := "empty"
++const KIND_ITEM := "item"
++const KIND_BATCH_THUMBNAIL := "batch_thumbnail"
++
++
++static func hit_at_world(
++	item_layer: Node,
++	world_position: Vector2,
++	batch_card_script: Script,
++	sprite_script: Script,
++	node_card_script: Script
++) -> Dictionary:
++	var children := item_layer.get_children()
++	for index in range(children.size() - 1, -1, -1):
++		var item := children[index]
++		if not _is_canvas_item(item, batch_card_script, sprite_script, node_card_script):
++			continue
++		if not item.visible or not item.contains_world_point(world_position):
++			continue
++		if item.get_script() == batch_card_script:
++			var asset_index: int = item.asset_index_at_world(world_position)
++			if asset_index >= 0:
++				return _hit(KIND_BATCH_THUMBNAIL, item, asset_index)
++		return _hit(KIND_ITEM, item, -1)
++	return {"kind": KIND_EMPTY, "item": null, "item_id": "", "asset_index": -1}
++
++
++static func _is_canvas_item(
++	item: Variant, batch_card_script: Script, sprite_script: Script, node_card_script: Script
++) -> bool:
++	if not (item is Node):
++		return false
++	var script: Script = item.get_script()
++	return script == batch_card_script or script == sprite_script or script == node_card_script
++
++
++static func _hit(kind: String, item: Node, asset_index: int) -> Dictionary:
++	return {"kind": kind, "item": item, "item_id": item.item_id, "asset_index": asset_index}
+diff --git a/pixel/ui/canvas/canvas_hit_policy.gd.uid b/pixel/ui/canvas/canvas_hit_policy.gd.uid
+new file mode 100644
+index 0000000..996e267
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_hit_policy.gd.uid
+@@ -0,0 +1 @@
++uid://8qpxwdwvrua2
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 74821ee..09731f6 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -25,6 +25,7 @@ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+ const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
+ const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
+ const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
++const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
+ const LODCoordinator := preload("res://ui/canvas/canvas_lod_coordinator.gd")
+ const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
+ const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
+@@ -665,10 +666,11 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
+ 
+ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
+ 	var world_position := screen_to_world(screen_position)
+-	var hit_item := _item_at_world(world_position)
++	var hit := _hit_at_world(world_position)
++	var hit_item: Node = hit.get("item", null)
+ 	if hit_item != null:
+ 		if (
+-			hit_item.get_script() == CanvasBatchCardScript
++			String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
+ 			and hit_item.toggle_asset_at_world(world_position)
+ 		):
+ 			_select_only([hit_item.item_id])
+@@ -802,21 +804,14 @@ func _remove_item_direct(item_id: String) -> void:
+ 	queue_redraw()
+ 
+ 
+-func _item_at_world(world_position: Vector2) -> Node:
+-	var children := item_layer.get_children()
+-	for index in range(children.size() - 1, -1, -1):
+-		var item := children[index]
+-		if (
+-			(
+-				item.get_script() == CanvasItemSpriteScript
+-				or item.get_script() == CanvasBatchCardScript
+-				or item.get_script() == CanvasNodeCardScript
+-			)
+-			and item.visible
+-			and item.contains_world_point(world_position)
+-		):
+-			return item
+-	return null
++func _hit_at_world(world_position: Vector2) -> Dictionary:
++	return HitPolicy.hit_at_world(
++		item_layer,
++		world_position,
++		CanvasBatchCardScript,
++		CanvasItemSpriteScript,
++		CanvasNodeCardScript
++	)
+ 
+ 
+ func _selected_positions() -> Dictionary:
+@@ -988,7 +983,7 @@ func _tool_manager_handles(event: InputEvent) -> bool:
+ 
+ 
+ func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
+-	var hit_item := _item_at_world(screen_to_world(screen_position))
++	var hit_item: Node = _hit_at_world(screen_to_world(screen_position)).get("item", null)
+ 	if hit_item == null or hit_item.get_script() != CanvasBatchCardScript:
+ 		return
+ 	_select_only([hit_item.item_id])
 ```
