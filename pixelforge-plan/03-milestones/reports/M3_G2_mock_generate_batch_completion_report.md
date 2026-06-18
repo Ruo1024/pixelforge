@@ -270,6 +270,888 @@ const BATCH_ACTION_MATTE := "Matte Batch"
 const BATCH_ACTION_OUTLINE := "Outline Batch"
 ```
 
+## 追加开发：G-4 最小节点链可视化基础
+
+追加目标：把 G-2/G-3 已经能运行的 mock graph 从隐藏数据升级为画布上可见的最小节点链。此轮只做“从无到有”的基础载体：轻节点卡、连线渲染、保存重开一致；不做完整端口拖拽编辑器、参数检查器或通用 executor。
+
+### G-4 实现
+
+- 新增 `PFCanvasNodeCard`：
+  - 渲染非 batch 的 graph 节点卡。
+  - 从 `graphs/{graph_id}.json` 读取节点类型、参数摘要与端口数量。
+  - 导出仍是 `canvas.items[].type = "node"`，只保存 `graph_id/node_id/position/z_index/collapsed/locked`。
+- 新增 `PFCanvasGraphEdgeRenderer`：
+  - 根据 `ProjectService.current_project.graphs` 中的 edges 绘制连线。
+  - 连线不写入 `canvas.json`，符合 GRAPH-SCHEMA 与 PROJECT-FORMAT 的逻辑/视图分离要求。
+- 新增 `PFCanvasGraphItemBridge`：
+  - 承接 graph batch 判断与 batch `asset_ids` 回写，避免 `infinite_canvas.gd` 超过职责和行数上限。
+- 扩展 `PFInfiniteCanvas`：
+  - 支持普通 graph node card 的加载、导出、命中、拖动、删除撤销。
+  - 绘制 graph edges。
+  - `infinite_canvas.gd` 拆分后保持低于 gdlint `max-file-lines` 上限。
+- `File > Generate Mock Batch` 现在创建四个画布节点引用：
+  - `objects`
+  - `size`
+  - `generate`
+  - `batch_1`
+  并自动对焦整条链。
+- 新增 `pixel/scripts/verify_m3_g4.sh`。
+
+### G-4 修改文件
+
+- `pixel/ui/canvas/canvas_node_card.gd`
+- `pixel/ui/canvas/canvas_node_card.gd.uid`
+- `pixel/ui/canvas/canvas_graph_edge_renderer.gd`
+- `pixel/ui/canvas/canvas_graph_edge_renderer.gd.uid`
+- `pixel/ui/canvas/canvas_graph_item_bridge.gd`
+- `pixel/ui/canvas/canvas_graph_item_bridge.gd.uid`
+- `pixel/ui/canvas/infinite_canvas.gd`
+- `pixel/ui/shell/m2_1_ui_controller.gd`
+- `pixel/tests/smoke/test_main_window_ui.gd`
+- `pixel/tests/unit/test_canvas_batch_card.gd`
+- `pixel/scripts/verify_m3_g4.sh`
+- `pixel/CHANGELOG.md`
+
+### G-4 验证
+
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：133/133 passed。
+- `./pixel/scripts/verify_m3_g4.sh`：通过，输出 `verify_m3_g4: ok`。
+- 既有 GUT orphan/resource warning 仍存在；run summary 为 all tests passed。
+
+### G-4 人工测试步骤
+
+1. 打开 Godot 项目：`/Users/ruo/Desktop/pixelforge/pixel/project.godot`。
+2. 运行主场景。
+3. 点击 `File > Generate Mock Batch`。
+4. 画布应出现 4 个可见节点引用：`Object List`、`Size Spec`、`AI Generate`、`Mock Batch`，并能看到从 graph edges 渲染出的连线。
+5. 拖动任意轻节点卡，确认可移动、可选中，连线跟随新位置重绘。
+6. 右键 `Mock Batch` 批次卡，执行 `Outline Batch` 或 `Clean Batch`，确认批次卡仍可整批处理。
+7. 保存 `.pxproj` 后重新打开，4 个节点的位置、连线和 batch 队列应恢复。
+
+G-4 追加 diff：
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 2769c04..dbecd0d 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -25,3 +25,4 @@
+ - M3 G-1: 新增节点图最小领域模型、内置 batch 节点注册、端口连接矩阵/环检测，以及 `.pxproj` graphs 往返保存骨架。
+ - M3 G-2: 新增 object_list / size_spec / ai_generate(mock) 节点和最小 mock runner，可将确定性生成图物化进正式 batch 节点。
+ - M3 G-3: 新增 PixelOperations 共用服务，批次菜单 Clean/Matte/Outline 复用同一 core 操作，并让 Mock 批次卡以 graph batch 节点引用保存和同步资产队列。
++- M3 G-4: 新增画布轻节点卡与 graph edge 渲染，File > Generate Mock Batch 现在生成可见最小 mock 节点链并落入正式 batch 卡。
+diff --git a/pixel/scripts/verify_m3_g4.sh b/pixel/scripts/verify_m3_g4.sh
+new file mode 100755
+index 0000000..4db2ef7
+--- /dev/null
++++ b/pixel/scripts/verify_m3_g4.sh
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/.."
++
++./scripts/configure_editor_game_view.sh
++./scripts/lint.sh
++./scripts/run_tests.sh
++./scripts/check_ui_scaling.sh
++./scripts/check_export_templates.sh
++
++if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
++  if git diff --cached --name-only | grep -iE '\.png$|\.jpe?g$' >/dev/null; then
++    echo "Staged image files are not allowed for M3 G-4 commits." >&2
++    exit 1
++  fi
++fi
++
++echo "verify_m3_g4: ok"
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 72a4393..2e30fa2 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -231,14 +231,23 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
+ 	controller.generate_mock_batch()
+ 	await wait_process_frames(2)
+ 
+-	assert_eq(canvas.get_item_count(), 1)
++	assert_eq(canvas.get_item_count(), 4)
+ 	assert_eq(ProjectService.current_project.graphs.size(), 1)
+ 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+ 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+ 	var batch_node: Dictionary = graph_data["nodes"][3]
+ 	assert_eq(batch_node["type"], "batch")
+ 	assert_eq(batch_node["params"]["asset_ids"].size(), 10)
+-	var canvas_item: Dictionary = canvas.export_canvas_data()["items"][0]
+-	assert_eq(canvas_item["type"], "node")
+-	assert_eq(canvas_item["graph_id"], graph_id)
+-	assert_eq(canvas_item["node_id"], "batch_1")
++	var canvas_items: Array = canvas.export_canvas_data()["items"]
++	assert_eq(canvas_items.size(), 4)
++	assert_eq(_node_ids_from_canvas_items(canvas_items), ["objects", "size", "generate", "batch_1"])
++	for canvas_item in canvas_items:
++		assert_eq(canvas_item["type"], "node")
++		assert_eq(canvas_item["graph_id"], graph_id)
++
++
++func _node_ids_from_canvas_items(items: Array) -> Array:
++	var node_ids := []
++	for item in items:
++		node_ids.append(String(Dictionary(item).get("node_id", "")))
++	return node_ids
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+index aefa8fb..e5e6e96 100644
+--- a/pixel/tests/unit/test_canvas_batch_card.gd
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
+ const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
+ const GraphScript := preload("res://core/graph/pf_graph.gd")
+ const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
++const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+ 
+ 
+ func before_each() -> void:
+@@ -78,6 +79,41 @@ func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement()
+ 	assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), [green_id])
+ 
+ 
++func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var graph := GraphScript.new()
++	graph.id = "graph_node_card_test"
++	graph.add_node(
++		ObjectListNodeScript.new(), "objects", {"items": "barrel\ncrate"}, Vector2(24, 32)
++	)
++	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++
++	var node_card: Node = canvas._add_graph_node_card(
++		graph.id, "objects", Vector2(24, 32), "node_item_objects", false
++	)
++	assert_not_null(node_card)
++
++	var canvas_data: Dictionary = canvas.export_canvas_data()
++	var item: Dictionary = canvas_data["items"][0]
++	assert_eq(item["type"], "node")
++	assert_eq(item["graph_id"], graph.id)
++	assert_eq(item["node_id"], "objects")
++	assert_false(item.has("asset_ids"))
++
++	var reloaded_canvas: Control = CanvasScript.new()
++	reloaded_canvas.size = Vector2(512, 512)
++	add_child_autofree(reloaded_canvas)
++	await wait_process_frames(2)
++	reloaded_canvas.load_canvas_data(canvas_data)
++
++	assert_eq(reloaded_canvas.get_item_count(), 1)
++	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
++
++
+ func _register_asset(color: Color, name: String) -> String:
+ 	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+ 	image.fill(color)
+diff --git a/pixel/ui/canvas/canvas_graph_edge_renderer.gd b/pixel/ui/canvas/canvas_graph_edge_renderer.gd
+new file mode 100644
+index 0000000..3ee0fb5
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_graph_edge_renderer.gd
+@@ -0,0 +1,80 @@
++class_name PFCanvasGraphEdgeRenderer
++extends RefCounted
++
++## Graph 连线渲染 helper。
++## contract: 02-contracts/GRAPH-SCHEMA.md §1；连线来自 graphs，不写入 canvas.json。
++
++
++static func draw(
++	canvas: Control,
++	items_by_id: Dictionary,
++	batch_script: Script,
++	node_script: Script,
++	color: Color
++) -> void:
++	var graph_items := _graph_items_by_node(items_by_id, batch_script, node_script)
++	for graph_id in graph_items.keys():
++		var graph_data := ProjectService.get_graph_data(String(graph_id))
++		var items_by_node: Dictionary = graph_items[graph_id]
++		for edge in graph_data.get("edges", []):
++			if edge is Dictionary:
++				_draw_edge_if_visible(canvas, Dictionary(edge), items_by_node, color)
++
++
++static func _draw_edge_if_visible(
++	canvas: Control, edge: Dictionary, items_by_node: Dictionary, color: Color
++) -> void:
++	var from_data: Array = edge.get("from", ["", ""])
++	var to_data: Array = edge.get("to", ["", ""])
++	var from_node := String(from_data[0])
++	var to_node := String(to_data[0])
++	if not items_by_node.has(from_node) or not items_by_node.has(to_node):
++		return
++	_draw_graph_edge(canvas, items_by_node[from_node], items_by_node[to_node], color)
++
++
++static func _draw_graph_edge(canvas: Control, from_item: Node, to_item: Node, color: Color) -> void:
++	var from_bounds: Rect2 = from_item.get_canvas_bounds()
++	var to_bounds: Rect2 = to_item.get_canvas_bounds()
++	var start: Vector2 = canvas.world_to_screen(
++		from_bounds.position + Vector2(from_bounds.size.x, from_bounds.size.y * 0.5)
++	)
++	var end: Vector2 = canvas.world_to_screen(
++		to_bounds.position + Vector2(0.0, to_bounds.size.y * 0.5)
++	)
++	var bend := maxf(48.0, absf(end.x - start.x) * 0.35)
++	var control_a := start + Vector2(bend, 0.0)
++	var control_b := end - Vector2(bend, 0.0)
++	var points := PackedVector2Array()
++	for index in range(17):
++		var t := float(index) / 16.0
++		points.append(_cubic_bezier(start, control_a, control_b, end, t))
++	canvas.draw_polyline(points, color, 2.0, true)
++
++
++static func _graph_items_by_node(
++	items_by_id: Dictionary, batch_script: Script, node_script: Script
++) -> Dictionary:
++	var graph_items := {}
++	for item in items_by_id.values():
++		if not _is_canvas_graph_item(item, batch_script, node_script):
++			continue
++		if item.graph_id.is_empty() or item.node_id.is_empty():
++			continue
++		if not graph_items.has(item.graph_id):
++			graph_items[item.graph_id] = {}
++		graph_items[item.graph_id][item.node_id] = item
++	return graph_items
++
++
++static func _is_canvas_graph_item(item: Node, batch_script: Script, node_script: Script) -> bool:
++	return item.get_script() == batch_script or item.get_script() == node_script
++
++
++static func _cubic_bezier(a: Vector2, b: Vector2, c: Vector2, d: Vector2, t: float) -> Vector2:
++	var ab := a.lerp(b, t)
++	var bc := b.lerp(c, t)
++	var cd := c.lerp(d, t)
++	var abbc := ab.lerp(bc, t)
++	var bccd := bc.lerp(cd, t)
++	return abbc.lerp(bccd, t)
+diff --git a/pixel/ui/canvas/canvas_graph_edge_renderer.gd.uid b/pixel/ui/canvas/canvas_graph_edge_renderer.gd.uid
+new file mode 100644
+index 0000000..b4ad0ec
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_graph_edge_renderer.gd.uid
+@@ -0,0 +1 @@
++uid://q51kyw7k2gmm
+diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+new file mode 100644
+index 0000000..9cbd4de
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+@@ -0,0 +1,71 @@
++class_name PFCanvasGraphItemBridge
++extends RefCounted
++
++## Graph 节点引用与画布卡片之间的桥接 helper。
++## contract: 02-contracts/PROJECT-FORMAT.md §4；canvas 只存 node 引用，batch 队列回写 graph params。
++
++
++static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
++	if String(item_data.get("type", "")) != "node":
++		return false
++	var graph_id := String(item_data.get("graph_id", ""))
++	var node_id := String(item_data.get("node_id", ""))
++	if graph_id.is_empty() or node_id.is_empty():
++		return false
++
++	var graph_data := ProjectService.get_graph_data(graph_id)
++	for raw_node in graph_data.get("nodes", []):
++		if not (raw_node is Dictionary):
++			continue
++		var node_data: Dictionary = raw_node
++		if String(node_data.get("id", "")) == node_id:
++			return String(node_data.get("type", "")) == "batch"
++	return false
++
++
++static func apply_batch_asset_ids(item: Node, asset_ids: Array, asset_library: Node) -> void:
++	for asset_id in item.asset_ids:
++		asset_library.release_ref(asset_id)
++	item.set_asset_ids(asset_ids)
++	for asset_id in item.asset_ids:
++		asset_library.add_ref(asset_id)
++
++
++static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
++	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
++		return
++
++	var graph_data := ProjectService.get_graph_data(item.graph_id)
++	if graph_data.is_empty():
++		return
++
++	var nodes := []
++	var changed := false
++	for raw_node in graph_data.get("nodes", []):
++		if not (raw_node is Dictionary):
++			nodes.append(raw_node)
++			continue
++		var node_data: Dictionary = raw_node
++		if (
++			String(node_data.get("id", "")) == item.node_id
++			and String(node_data.get("type", "")) == "batch"
++		):
++			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
++			params["asset_ids"] = _string_array(asset_ids)
++			node_data["params"] = params
++			changed = true
++		nodes.append(node_data)
++
++	if changed:
++		graph_data["nodes"] = nodes
++		ProjectService.set_graph_data(item.graph_id, graph_data, true)
++
++
++static func _string_array(value: Variant) -> Array[String]:
++	var result: Array[String] = []
++	if value is Array:
++		for item in Array(value):
++			var id := String(item)
++			if not id.is_empty():
++				result.append(id)
++	return result
+diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd.uid b/pixel/ui/canvas/canvas_graph_item_bridge.gd.uid
+new file mode 100644
+index 0000000..bcbffc3
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd.uid
+@@ -0,0 +1 @@
++uid://dh7007h1o75xt
+diff --git a/pixel/ui/canvas/canvas_node_card.gd b/pixel/ui/canvas/canvas_node_card.gd
+new file mode 100644
+index 0000000..1377b36
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_node_card.gd
+@@ -0,0 +1,165 @@
++class_name PFCanvasNodeCard
++extends Node2D
++
++## M3 画布轻节点卡。
++## contract: 02-contracts/PROJECT-FORMAT.md §4；只保存 graph/node 引用，节点逻辑从 graphs 读取。
++
++const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
++const IdUtil := preload("res://core/util/id_util.gd")
++
++const CARD_SIZE := Vector2(220, 116)
++const HEADER_HEIGHT := 32
++const PADDING := 12
++const BACKGROUND := Color(0.13, 0.145, 0.155, 0.98)
++const HEADER := Color(0.22, 0.27, 0.3, 1.0)
++const BORDER := Color(0.56, 0.64, 0.66, 1.0)
++const GHOST_BORDER := Color(0.8, 0.36, 0.36, 1.0)
++const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
++const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
++
++var item_id := ""
++var graph_id := ""
++var node_id := ""
++var locked := false
++
++var _node_type := ""
++var _display_name := "Missing Node"
++var _summary := ""
++var _input_count := 0
++var _output_count := 0
++var _is_ghost := false
++var _font: Font = null
++
++
++func setup_from_data(data: Dictionary) -> void:
++	item_id = String(data.get("id", IdUtil.uuid_v4()))
++	graph_id = String(data.get("graph_id", ""))
++	node_id = String(data.get("node_id", ""))
++	locked = bool(data.get("locked", false))
++	z_index = int(data.get("z_index", 0))
++	var raw_position: Variant = data.get("position", [0, 0])
++	position = Vector2(float(raw_position[0]), float(raw_position[1])).round()
++	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
++	_resolve_graph_node()
++	queue_redraw()
++
++
++func to_canvas_data() -> Dictionary:
++	return {
++		"id": item_id,
++		"type": "node",
++		"graph_id": graph_id,
++		"node_id": node_id,
++		"position": [int(round(position.x)), int(round(position.y))],
++		"z_index": z_index,
++		"collapsed": false,
++		"locked": locked,
++	}
++
++
++func get_canvas_bounds() -> Rect2:
++	return Rect2(position, CARD_SIZE)
++
++
++func contains_world_point(world_position: Vector2) -> bool:
++	return get_canvas_bounds().has_point(world_position)
++
++
++func is_graph_node() -> bool:
++	return not graph_id.is_empty() and not node_id.is_empty()
++
++
++func _draw() -> void:
++	_font = ThemeDB.fallback_font if _font == null else _font
++	var rect := Rect2(Vector2.ZERO, CARD_SIZE)
++	draw_rect(rect, BACKGROUND, true)
++	draw_rect(Rect2(Vector2.ZERO, Vector2(CARD_SIZE.x, HEADER_HEIGHT)), HEADER, true)
++	draw_rect(rect, GHOST_BORDER if _is_ghost else BORDER, false, 1.4)
++	_draw_ports()
++	if _font == null:
++		return
++	draw_string(
++		_font,
++		Vector2(PADDING, 22),
++		_display_name,
++		HORIZONTAL_ALIGNMENT_LEFT,
++		CARD_SIZE.x - PADDING * 2,
++		16,
++		Color(0.92, 0.94, 0.94, 1.0)
++	)
++	draw_string(
++		_font,
++		Vector2(PADDING, 54),
++		_node_type,
++		HORIZONTAL_ALIGNMENT_LEFT,
++		CARD_SIZE.x - PADDING * 2,
++		13,
++		Color(0.66, 0.72, 0.74, 1.0)
++	)
++	draw_string(
++		_font,
++		Vector2(PADDING, 82),
++		_summary,
++		HORIZONTAL_ALIGNMENT_LEFT,
++		CARD_SIZE.x - PADDING * 2,
++		13,
++		Color(0.82, 0.84, 0.82, 1.0)
++	)
++
++
++func _draw_ports() -> void:
++	for index in range(_input_count):
++		draw_circle(_port_position(index, _input_count, true), 5.0, PORT_IN)
++	for index in range(_output_count):
++		draw_circle(_port_position(index, _output_count, false), 5.0, PORT_OUT)
++
++
++func _port_position(index: int, count: int, is_input: bool) -> Vector2:
++	var usable_height := CARD_SIZE.y - HEADER_HEIGHT - PADDING * 2
++	var y := HEADER_HEIGHT + PADDING + usable_height * float(index + 1) / float(count + 1)
++	return Vector2(0.0 if is_input else CARD_SIZE.x, y)
++
++
++func _resolve_graph_node() -> void:
++	var node_data := _find_node_data()
++	_node_type = String(node_data.get("type", "missing"))
++	_summary = _summarize_params(node_data.get("params", {}))
++
++	var registry := NodeRegistryScript.new()
++	var node: PFNode = registry.create(_node_type)
++	if node == null:
++		_is_ghost = true
++		_display_name = "Missing: %s" % _node_type
++		_input_count = 0
++		_output_count = 0
++		return
++
++	_display_name = node.get_display_name()
++	_input_count = node.get_input_ports().size()
++	_output_count = node.get_output_ports().size()
++	_is_ghost = false
++
++
++func _find_node_data() -> Dictionary:
++	var graph_data := ProjectService.get_graph_data(graph_id)
++	for raw_node in graph_data.get("nodes", []):
++		if not (raw_node is Dictionary):
++			continue
++		var node_data: Dictionary = raw_node
++		if String(node_data.get("id", "")) == node_id:
++			return node_data
++	return {"id": node_id, "type": "missing", "params": {}}
++
++
++func _summarize_params(params: Variant) -> String:
++	if not (params is Dictionary):
++		return ""
++	var source: Dictionary = params
++	if source.has("items"):
++		var lines := String(source["items"]).split("\n", false)
++		return "%d objects" % lines.size()
++	if source.has("width") and source.has("height"):
++		return "%dx%d px" % [int(source["width"]), int(source["height"])]
++	if source.has("provider_id"):
++		return "%s seed %d" % [String(source["provider_id"]), int(source.get("seed", 0))]
++	return ""
+diff --git a/pixel/ui/canvas/canvas_node_card.gd.uid b/pixel/ui/canvas/canvas_node_card.gd.uid
+new file mode 100644
+index 0000000..e2a9d18
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_node_card.gd.uid
+@@ -0,0 +1 @@
++uid://drusrdh20fcat
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index d9118fe..10ef29b 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -19,8 +19,12 @@ const GRID_MIN_ZOOM := 4.0
+ const SELECTION_COLOR := Color(0.1, 0.85, 0.65, 1.0)
+ const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
+ const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
++const EDGE_COLOR := Color(0.42, 0.58, 0.62, 0.9)
+ const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
+ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
++const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
++const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
++const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
+ const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
+ const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
+ const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
+@@ -127,6 +131,7 @@ func _draw() -> void:
+ 		>= GRID_MIN_ZOOM
+ 	):
+ 		_draw_pixel_grid()
++	_draw_graph_edges()
+ 
+ 	for item_id in _selection.selected_ids:
+ 		if not _items_by_id.has(item_id):
+@@ -224,6 +229,42 @@ func _add_batch_card(
+ 	return _items_by_id.get(String(data["id"]), null)
+ 
+ 
++func _add_graph_node_card(
++	graph_id: String,
++	node_id: String,
++	world_position: Vector2 = Vector2.ZERO,
++	item_id: String = "",
++	record_undo: bool = true
++) -> Node:
++	var data := {
++		"id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
++		"type": "node",
++		"graph_id": graph_id,
++		"node_id": node_id,
++		"position": [int(round(world_position.x)), int(round(world_position.y))],
++		"z_index": _items_by_id.size(),
++		"collapsed": false,
++		"locked": false,
++	}
++
++	var do_add := func() -> void:
++		_add_node_direct(data)
++		_select_only([String(data["id"])])
++		_emit_canvas_changed()
++
++	var undo_add := func() -> void:
++		_remove_item_direct(String(data["id"]))
++		_clear_selection()
++		_emit_canvas_changed()
++
++	if record_undo:
++		UndoService.perform_action("Add node", do_add, undo_add)
++	else:
++		do_add.call()
++
++	return _items_by_id.get(String(data["id"]), null)
++
++
+ func delete_selected(record_undo: bool = true) -> void:
+ 	if _selection.is_empty():
+ 		return
+@@ -254,6 +295,8 @@ func delete_selected(record_undo: bool = true) -> void:
+ 				_add_sprite_direct(data, snapshot["image"])
+ 			elif _is_batch_card_data(data):
+ 				_add_batch_direct(data)
++			elif String(data.get("type", "")) == "node":
++				_add_node_direct(data)
+ 		_select_only(_ids_from_snapshots(snapshots))
+ 		_emit_canvas_changed()
+ 
+@@ -304,6 +347,8 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
+ 			_add_batch_direct(item_data)
+ 		elif item_type == "node" and _is_graph_batch_node_data(item_data):
+ 			_add_batch_direct(item_data)
++		elif item_type == "node":
++			_add_node_direct(item_data)
+ 
+ 	_suppress_change_signal = false
+ 	_update_layer_transform()
+@@ -322,6 +367,8 @@ func export_canvas_data() -> Dictionary:
+ 			items.append(node.to_canvas_data())
+ 		elif node.get_script() == CanvasBatchCardScript:
+ 			items.append(node.to_canvas_data())
++		elif node.get_script() == CanvasNodeCardScript:
++			items.append(node.to_canvas_data())
+ 
+ 	return {
+ 		"camera":
+@@ -454,13 +501,13 @@ func _replace_batch_asset_ids(
+ 	var before: Array = item.asset_ids.duplicate()
+ 	var after := new_asset_ids.duplicate()
+ 	var do_replace := func() -> void:
+-		_apply_batch_asset_ids(item, after)
+-		_sync_batch_node_asset_ids(item, after)
++		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
++		GraphItemBridge.sync_batch_node_asset_ids(item, after)
+ 		_select_only([card_id])
+ 		_emit_canvas_changed()
+ 	var undo_replace := func() -> void:
+-		_apply_batch_asset_ids(item, before)
+-		_sync_batch_node_asset_ids(item, before)
++		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
++		GraphItemBridge.sync_batch_node_asset_ids(item, before)
+ 		_select_only([card_id])
+ 		_emit_canvas_changed()
+ 	if record_undo:
+@@ -469,44 +516,6 @@ func _replace_batch_asset_ids(
+ 		do_replace.call()
+ 
+ 
+-func _apply_batch_asset_ids(item: Node, asset_ids: Array) -> void:
+-	for asset_id in item.asset_ids:
+-		AssetLibrary.release_ref(asset_id)
+-	item.set_asset_ids(asset_ids)
+-	for asset_id in item.asset_ids:
+-		AssetLibrary.add_ref(asset_id)
+-
+-
+-func _sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
+-	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
+-		return
+-
+-	var graph_data := ProjectService.get_graph_data(item.graph_id)
+-	if graph_data.is_empty():
+-		return
+-
+-	var nodes := []
+-	var changed := false
+-	for raw_node in graph_data.get("nodes", []):
+-		if not (raw_node is Dictionary):
+-			nodes.append(raw_node)
+-			continue
+-		var node_data: Dictionary = raw_node
+-		if (
+-			String(node_data.get("id", "")) == item.node_id
+-			and String(node_data.get("type", "")) == "batch"
+-		):
+-			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+-			params["asset_ids"] = _string_array(asset_ids)
+-			node_data["params"] = params
+-			changed = true
+-		nodes.append(node_data)
+-
+-	if changed:
+-		graph_data["nodes"] = nodes
+-		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+-
+-
+ func _split_batch_selection(card_id: String) -> Node:
+ 	if not _items_by_id.has(card_id):
+ 		return null
+@@ -731,6 +740,16 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
+ 	return item
+ 
+ 
++func _add_node_direct(item_data: Dictionary) -> Node:
++	var item: Node = CanvasNodeCardScript.new()
++	item.setup_from_data(item_data)
++	item_layer.add_child(item)
++	_items_by_id[item.item_id] = item
++	_update_item_visibility()
++	queue_redraw()
++	return item
++
++
+ func _is_batch_card_data(item_data: Dictionary) -> bool:
+ 	var item_type := String(item_data.get("type", ""))
+ 	return (
+@@ -739,21 +758,7 @@ func _is_batch_card_data(item_data: Dictionary) -> bool:
+ 
+ 
+ func _is_graph_batch_node_data(item_data: Dictionary) -> bool:
+-	if String(item_data.get("type", "")) != "node":
+-		return false
+-	var graph_id := String(item_data.get("graph_id", ""))
+-	var node_id := String(item_data.get("node_id", ""))
+-	if graph_id.is_empty() or node_id.is_empty():
+-		return false
+-
+-	var graph_data := ProjectService.get_graph_data(graph_id)
+-	for raw_node in graph_data.get("nodes", []):
+-		if not (raw_node is Dictionary):
+-			continue
+-		var node_data: Dictionary = raw_node
+-		if String(node_data.get("id", "")) == node_id:
+-			return String(node_data.get("type", "")) == "batch"
+-	return false
++	return GraphItemBridge.is_graph_batch_node_data(item_data)
+ 
+ 
+ func _remove_item_direct(item_id: String) -> void:
+@@ -783,6 +788,7 @@ func _item_at_world(world_position: Vector2) -> Node:
+ 			(
+ 				item.get_script() == CanvasItemSpriteScript
+ 				or item.get_script() == CanvasBatchCardScript
++				or item.get_script() == CanvasNodeCardScript
+ 			)
+ 			and item.visible
+ 			and item.contains_world_point(world_position)
+@@ -833,16 +839,6 @@ func _ids_from_snapshots(snapshots: Array) -> Array:
+ 	return ids
+ 
+ 
+-func _string_array(value: Variant) -> Array[String]:
+-	var result: Array[String] = []
+-	if value is Array:
+-		for item in Array(value):
+-			var id := String(item)
+-			if not id.is_empty():
+-				result.append(id)
+-	return result
+-
+-
+ func _set_zoom_to_value(value: float) -> void:
+ 	var nearest_index := 0
+ 	var nearest_distance := INF
+@@ -916,6 +912,12 @@ func _draw_pixel_grid() -> void:
+ 	PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+ 
+ 
++func _draw_graph_edges() -> void:
++	GraphEdgeRenderer.draw(
++		self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
++	)
++
++
+ func _emit_canvas_changed() -> void:
+ 	if _suppress_change_signal:
+ 		return
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index d1ebdc3..851efd4 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -209,17 +209,9 @@ func generate_mock_batch() -> void:
+ 
+ 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+ 	var asset_ids: Array = result["asset_ids"]
+-	var card: Node = _canvas._add_batch_card(
+-		asset_ids,
+-		_canvas.get_mouse_world_position(),
+-		Strings.MOCK_BATCH_LABEL,
+-		"",
+-		true,
+-		graph.id,
+-		"batch_1"
+-	)
+-	if card != null:
+-		_focus_canvas_on_card(card)
++	var items := _add_mock_graph_canvas_items(graph, asset_ids, _canvas.get_mouse_world_position())
++	if not items.is_empty():
++		_focus_canvas_on_bounds(_bounds_for_items(items))
+ 	_status_label.text = Strings.STATUS_MOCK_GENERATE_DONE % asset_ids.size()
+ 
+ 
+@@ -386,7 +378,10 @@ func _emit_batch_export(asset_ids: Array) -> void:
+ 
+ 
+ func _focus_canvas_on_card(card: Node) -> void:
+-	var bounds: Rect2 = card.get_canvas_bounds()
++	_focus_canvas_on_bounds(card.get_canvas_bounds())
++
++
++func _focus_canvas_on_bounds(bounds: Rect2) -> void:
+ 	if (
+ 		bounds.size.x <= 0.0
+ 		or bounds.size.y <= 0.0
+@@ -401,6 +396,13 @@ func _focus_canvas_on_card(card: Node) -> void:
+ 	_canvas.pan_by_pixels(_canvas.world_to_screen(bounds.get_center()) - _canvas.size * 0.5)
+ 
+ 
++func _bounds_for_items(items: Array) -> Rect2:
++	var bounds: Rect2 = items[0].get_canvas_bounds()
++	for index in range(1, items.size()):
++		bounds = bounds.merge(items[index].get_canvas_bounds())
++	return bounds
++
++
+ func _single_selected_image() -> Image:
+ 	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
+ 	if snapshots.size() != 1:
+@@ -448,16 +450,16 @@ func _make_mock_generate_graph() -> PFGraph:
+ 		SizeSpecNodeScript.new(),
+ 		"size",
+ 		{"width": 32, "height": 32, "per_subject": 1},
+-		Vector2(220, 0)
++		Vector2(0, 150)
+ 	)
+ 	graph.add_node(
+ 		AiGenerateNodeScript.new(),
+ 		"generate",
+ 		{"provider_id": "mock", "batch_size": 2, "seed": 1000},
+-		Vector2(440, 0)
++		Vector2(280, 75)
+ 	)
+ 	graph.add_node(
+-		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(660, 0)
++		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, -20)
+ 	)
+ 	graph.add_edge("objects", "items", "generate", "items")
+ 	graph.add_edge("size", "spec", "generate", "spec")
+@@ -465,6 +467,34 @@ func _make_mock_generate_graph() -> PFGraph:
+ 	return graph
+ 
+ 
++func _add_mock_graph_canvas_items(graph: PFGraph, asset_ids: Array, anchor: Vector2) -> Array:
++	var items := []
++	for node_id in ["objects", "size", "generate"]:
++		var node_item: Node = _canvas._add_graph_node_card(
++			graph.id, node_id, anchor + _graph_node_position(graph, node_id), "", false
++		)
++		if node_item != null:
++			items.append(node_item)
++	var batch_card: Node = _canvas._add_batch_card(
++		asset_ids,
++		anchor + _graph_node_position(graph, "batch_1"),
++		Strings.MOCK_BATCH_LABEL,
++		"",
++		false,
++		graph.id,
++		"batch_1"
++	)
++	if batch_card != null:
++		items.append(batch_card)
++	return items
++
++
++func _graph_node_position(graph: PFGraph, node_id: String) -> Vector2:
++	var node_data: Dictionary = graph.nodes.get(node_id, {})
++	var raw_position: Variant = node_data.get("position", [0, 0])
++	return Vector2(float(raw_position[0]), float(raw_position[1])).round()
++
++
+ func _show_onboarding_dialog() -> void:
+ 	var dialog: AcceptDialog = OnboardingScript.show_first_run_tips(self)
+ 	if dialog == null:
+```
+
 ## 追加开发：G-3 批次菜单与 PixelOperations
 
 追加目标：让批次菜单的 Clean / Matte / Outline 不再把算法和素材登记逻辑散落在 UI controller 内，而是通过 `PFPixelOperations` 这一条服务层入口执行。该入口后续可直接被 process 节点复用，避免“菜单可用”和“节点可复现”分叉。

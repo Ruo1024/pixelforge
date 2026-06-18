@@ -1,0 +1,71 @@
+class_name PFCanvasGraphItemBridge
+extends RefCounted
+
+## Graph 节点引用与画布卡片之间的桥接 helper。
+## contract: 02-contracts/PROJECT-FORMAT.md §4；canvas 只存 node 引用，batch 队列回写 graph params。
+
+
+static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
+	if String(item_data.get("type", "")) != "node":
+		return false
+	var graph_id := String(item_data.get("graph_id", ""))
+	var node_id := String(item_data.get("node_id", ""))
+	if graph_id.is_empty() or node_id.is_empty():
+		return false
+
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	for raw_node in graph_data.get("nodes", []):
+		if not (raw_node is Dictionary):
+			continue
+		var node_data: Dictionary = raw_node
+		if String(node_data.get("id", "")) == node_id:
+			return String(node_data.get("type", "")) == "batch"
+	return false
+
+
+static func apply_batch_asset_ids(item: Node, asset_ids: Array, asset_library: Node) -> void:
+	for asset_id in item.asset_ids:
+		asset_library.release_ref(asset_id)
+	item.set_asset_ids(asset_ids)
+	for asset_id in item.asset_ids:
+		asset_library.add_ref(asset_id)
+
+
+static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
+	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
+		return
+
+	var graph_data := ProjectService.get_graph_data(item.graph_id)
+	if graph_data.is_empty():
+		return
+
+	var nodes := []
+	var changed := false
+	for raw_node in graph_data.get("nodes", []):
+		if not (raw_node is Dictionary):
+			nodes.append(raw_node)
+			continue
+		var node_data: Dictionary = raw_node
+		if (
+			String(node_data.get("id", "")) == item.node_id
+			and String(node_data.get("type", "")) == "batch"
+		):
+			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+			params["asset_ids"] = _string_array(asset_ids)
+			node_data["params"] = params
+			changed = true
+		nodes.append(node_data)
+
+	if changed:
+		graph_data["nodes"] = nodes
+		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+
+
+static func _string_array(value: Variant) -> Array[String]:
+	var result: Array[String] = []
+	if value is Array:
+		for item in Array(value):
+			var id := String(item)
+			if not id.is_empty():
+				result.append(id)
+	return result

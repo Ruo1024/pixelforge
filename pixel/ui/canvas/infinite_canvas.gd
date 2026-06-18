@@ -19,8 +19,12 @@ const GRID_MIN_ZOOM := 4.0
 const SELECTION_COLOR := Color(0.1, 0.85, 0.65, 1.0)
 const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
 const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
+const EDGE_COLOR := Color(0.42, 0.58, 0.62, 0.9)
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
+const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
+const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
 const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
 const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
@@ -127,6 +131,7 @@ func _draw() -> void:
 		>= GRID_MIN_ZOOM
 	):
 		_draw_pixel_grid()
+	_draw_graph_edges()
 
 	for item_id in _selection.selected_ids:
 		if not _items_by_id.has(item_id):
@@ -224,6 +229,42 @@ func _add_batch_card(
 	return _items_by_id.get(String(data["id"]), null)
 
 
+func _add_graph_node_card(
+	graph_id: String,
+	node_id: String,
+	world_position: Vector2 = Vector2.ZERO,
+	item_id: String = "",
+	record_undo: bool = true
+) -> Node:
+	var data := {
+		"id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
+		"type": "node",
+		"graph_id": graph_id,
+		"node_id": node_id,
+		"position": [int(round(world_position.x)), int(round(world_position.y))],
+		"z_index": _items_by_id.size(),
+		"collapsed": false,
+		"locked": false,
+	}
+
+	var do_add := func() -> void:
+		_add_node_direct(data)
+		_select_only([String(data["id"])])
+		_emit_canvas_changed()
+
+	var undo_add := func() -> void:
+		_remove_item_direct(String(data["id"]))
+		_clear_selection()
+		_emit_canvas_changed()
+
+	if record_undo:
+		UndoService.perform_action("Add node", do_add, undo_add)
+	else:
+		do_add.call()
+
+	return _items_by_id.get(String(data["id"]), null)
+
+
 func delete_selected(record_undo: bool = true) -> void:
 	if _selection.is_empty():
 		return
@@ -254,6 +295,8 @@ func delete_selected(record_undo: bool = true) -> void:
 				_add_sprite_direct(data, snapshot["image"])
 			elif _is_batch_card_data(data):
 				_add_batch_direct(data)
+			elif String(data.get("type", "")) == "node":
+				_add_node_direct(data)
 		_select_only(_ids_from_snapshots(snapshots))
 		_emit_canvas_changed()
 
@@ -304,6 +347,8 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 			_add_batch_direct(item_data)
 		elif item_type == "node" and _is_graph_batch_node_data(item_data):
 			_add_batch_direct(item_data)
+		elif item_type == "node":
+			_add_node_direct(item_data)
 
 	_suppress_change_signal = false
 	_update_layer_transform()
@@ -321,6 +366,8 @@ func export_canvas_data() -> Dictionary:
 		if node.get_script() == CanvasItemSpriteScript:
 			items.append(node.to_canvas_data())
 		elif node.get_script() == CanvasBatchCardScript:
+			items.append(node.to_canvas_data())
+		elif node.get_script() == CanvasNodeCardScript:
 			items.append(node.to_canvas_data())
 
 	return {
@@ -454,57 +501,19 @@ func _replace_batch_asset_ids(
 	var before: Array = item.asset_ids.duplicate()
 	var after := new_asset_ids.duplicate()
 	var do_replace := func() -> void:
-		_apply_batch_asset_ids(item, after)
-		_sync_batch_node_asset_ids(item, after)
+		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
+		GraphItemBridge.sync_batch_node_asset_ids(item, after)
 		_select_only([card_id])
 		_emit_canvas_changed()
 	var undo_replace := func() -> void:
-		_apply_batch_asset_ids(item, before)
-		_sync_batch_node_asset_ids(item, before)
+		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
+		GraphItemBridge.sync_batch_node_asset_ids(item, before)
 		_select_only([card_id])
 		_emit_canvas_changed()
 	if record_undo:
 		UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
 	else:
 		do_replace.call()
-
-
-func _apply_batch_asset_ids(item: Node, asset_ids: Array) -> void:
-	for asset_id in item.asset_ids:
-		AssetLibrary.release_ref(asset_id)
-	item.set_asset_ids(asset_ids)
-	for asset_id in item.asset_ids:
-		AssetLibrary.add_ref(asset_id)
-
-
-func _sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
-	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-		return
-
-	var graph_data := ProjectService.get_graph_data(item.graph_id)
-	if graph_data.is_empty():
-		return
-
-	var nodes := []
-	var changed := false
-	for raw_node in graph_data.get("nodes", []):
-		if not (raw_node is Dictionary):
-			nodes.append(raw_node)
-			continue
-		var node_data: Dictionary = raw_node
-		if (
-			String(node_data.get("id", "")) == item.node_id
-			and String(node_data.get("type", "")) == "batch"
-		):
-			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-			params["asset_ids"] = _string_array(asset_ids)
-			node_data["params"] = params
-			changed = true
-		nodes.append(node_data)
-
-	if changed:
-		graph_data["nodes"] = nodes
-		ProjectService.set_graph_data(item.graph_id, graph_data, true)
 
 
 func _split_batch_selection(card_id: String) -> Node:
@@ -731,6 +740,16 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 	return item
 
 
+func _add_node_direct(item_data: Dictionary) -> Node:
+	var item: Node = CanvasNodeCardScript.new()
+	item.setup_from_data(item_data)
+	item_layer.add_child(item)
+	_items_by_id[item.item_id] = item
+	_update_item_visibility()
+	queue_redraw()
+	return item
+
+
 func _is_batch_card_data(item_data: Dictionary) -> bool:
 	var item_type := String(item_data.get("type", ""))
 	return (
@@ -739,21 +758,7 @@ func _is_batch_card_data(item_data: Dictionary) -> bool:
 
 
 func _is_graph_batch_node_data(item_data: Dictionary) -> bool:
-	if String(item_data.get("type", "")) != "node":
-		return false
-	var graph_id := String(item_data.get("graph_id", ""))
-	var node_id := String(item_data.get("node_id", ""))
-	if graph_id.is_empty() or node_id.is_empty():
-		return false
-
-	var graph_data := ProjectService.get_graph_data(graph_id)
-	for raw_node in graph_data.get("nodes", []):
-		if not (raw_node is Dictionary):
-			continue
-		var node_data: Dictionary = raw_node
-		if String(node_data.get("id", "")) == node_id:
-			return String(node_data.get("type", "")) == "batch"
-	return false
+	return GraphItemBridge.is_graph_batch_node_data(item_data)
 
 
 func _remove_item_direct(item_id: String) -> void:
@@ -783,6 +788,7 @@ func _item_at_world(world_position: Vector2) -> Node:
 			(
 				item.get_script() == CanvasItemSpriteScript
 				or item.get_script() == CanvasBatchCardScript
+				or item.get_script() == CanvasNodeCardScript
 			)
 			and item.visible
 			and item.contains_world_point(world_position)
@@ -831,16 +837,6 @@ func _ids_from_snapshots(snapshots: Array) -> Array:
 	for snapshot in snapshots:
 		ids.append(String(snapshot["data"]["id"]))
 	return ids
-
-
-func _string_array(value: Variant) -> Array[String]:
-	var result: Array[String] = []
-	if value is Array:
-		for item in Array(value):
-			var id := String(item)
-			if not id.is_empty():
-				result.append(id)
-	return result
 
 
 func _set_zoom_to_value(value: float) -> void:
@@ -914,6 +910,12 @@ func _camera_center_for_snapped_anchor(anchor_world: Vector2, screen_anchor: Vec
 
 func _draw_pixel_grid() -> void:
 	PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+
+
+func _draw_graph_edges() -> void:
+	GraphEdgeRenderer.draw(
+		self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
+	)
 
 
 func _emit_canvas_changed() -> void:

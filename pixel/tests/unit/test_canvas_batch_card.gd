@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 
 
 func before_each() -> void:
@@ -76,6 +77,41 @@ func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() 
 
 	assert_eq(reloaded_canvas.get_item_count(), 1)
 	assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), [green_id])
+
+
+func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var graph := GraphScript.new()
+	graph.id = "graph_node_card_test"
+	graph.add_node(
+		ObjectListNodeScript.new(), "objects", {"items": "barrel\ncrate"}, Vector2(24, 32)
+	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+
+	var node_card: Node = canvas._add_graph_node_card(
+		graph.id, "objects", Vector2(24, 32), "node_item_objects", false
+	)
+	assert_not_null(node_card)
+
+	var canvas_data: Dictionary = canvas.export_canvas_data()
+	var item: Dictionary = canvas_data["items"][0]
+	assert_eq(item["type"], "node")
+	assert_eq(item["graph_id"], graph.id)
+	assert_eq(item["node_id"], "objects")
+	assert_false(item.has("asset_ids"))
+
+	var reloaded_canvas: Control = CanvasScript.new()
+	reloaded_canvas.size = Vector2(512, 512)
+	add_child_autofree(reloaded_canvas)
+	await wait_process_frames(2)
+	reloaded_canvas.load_canvas_data(canvas_data)
+
+	assert_eq(reloaded_canvas.get_item_count(), 1)
+	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
 
 
 func _register_asset(color: Color, name: String) -> String:

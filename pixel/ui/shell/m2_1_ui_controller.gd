@@ -209,17 +209,9 @@ func generate_mock_batch() -> void:
 
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	var asset_ids: Array = result["asset_ids"]
-	var card: Node = _canvas._add_batch_card(
-		asset_ids,
-		_canvas.get_mouse_world_position(),
-		Strings.MOCK_BATCH_LABEL,
-		"",
-		true,
-		graph.id,
-		"batch_1"
-	)
-	if card != null:
-		_focus_canvas_on_card(card)
+	var items := _add_mock_graph_canvas_items(graph, asset_ids, _canvas.get_mouse_world_position())
+	if not items.is_empty():
+		_focus_canvas_on_bounds(_bounds_for_items(items))
 	_status_label.text = Strings.STATUS_MOCK_GENERATE_DONE % asset_ids.size()
 
 
@@ -386,7 +378,10 @@ func _emit_batch_export(asset_ids: Array) -> void:
 
 
 func _focus_canvas_on_card(card: Node) -> void:
-	var bounds: Rect2 = card.get_canvas_bounds()
+	_focus_canvas_on_bounds(card.get_canvas_bounds())
+
+
+func _focus_canvas_on_bounds(bounds: Rect2) -> void:
 	if (
 		bounds.size.x <= 0.0
 		or bounds.size.y <= 0.0
@@ -399,6 +394,13 @@ func _focus_canvas_on_card(card: Node) -> void:
 	)
 	_canvas.set_camera_zoom(target_zoom, _canvas.size * 0.5)
 	_canvas.pan_by_pixels(_canvas.world_to_screen(bounds.get_center()) - _canvas.size * 0.5)
+
+
+func _bounds_for_items(items: Array) -> Rect2:
+	var bounds: Rect2 = items[0].get_canvas_bounds()
+	for index in range(1, items.size()):
+		bounds = bounds.merge(items[index].get_canvas_bounds())
+	return bounds
 
 
 func _single_selected_image() -> Image:
@@ -448,21 +450,49 @@ func _make_mock_generate_graph() -> PFGraph:
 		SizeSpecNodeScript.new(),
 		"size",
 		{"width": 32, "height": 32, "per_subject": 1},
-		Vector2(220, 0)
+		Vector2(0, 150)
 	)
 	graph.add_node(
 		AiGenerateNodeScript.new(),
 		"generate",
 		{"provider_id": "mock", "batch_size": 2, "seed": 1000},
-		Vector2(440, 0)
+		Vector2(280, 75)
 	)
 	graph.add_node(
-		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(660, 0)
+		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, -20)
 	)
 	graph.add_edge("objects", "items", "generate", "items")
 	graph.add_edge("size", "spec", "generate", "spec")
 	graph.add_edge("generate", "images", "batch_1", "in")
 	return graph
+
+
+func _add_mock_graph_canvas_items(graph: PFGraph, asset_ids: Array, anchor: Vector2) -> Array:
+	var items := []
+	for node_id in ["objects", "size", "generate"]:
+		var node_item: Node = _canvas._add_graph_node_card(
+			graph.id, node_id, anchor + _graph_node_position(graph, node_id), "", false
+		)
+		if node_item != null:
+			items.append(node_item)
+	var batch_card: Node = _canvas._add_batch_card(
+		asset_ids,
+		anchor + _graph_node_position(graph, "batch_1"),
+		Strings.MOCK_BATCH_LABEL,
+		"",
+		false,
+		graph.id,
+		"batch_1"
+	)
+	if batch_card != null:
+		items.append(batch_card)
+	return items
+
+
+func _graph_node_position(graph: PFGraph, node_id: String) -> Vector2:
+	var node_data: Dictionary = graph.nodes.get(node_id, {})
+	var raw_position: Variant = node_data.get("position", [0, 0])
+	return Vector2(float(raw_position[0]), float(raw_position[1])).round()
 
 
 func _show_onboarding_dialog() -> void:
