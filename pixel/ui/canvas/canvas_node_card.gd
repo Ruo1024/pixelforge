@@ -29,6 +29,8 @@ var _input_count := 0
 var _output_count := 0
 var _input_ports: Array[String] = []
 var _output_ports: Array[String] = []
+var _visible_input_ports: Array[String] = []
+var _visible_output_ports: Array[String] = []
 var _is_ghost := false
 var _font: Font = null
 
@@ -133,7 +135,7 @@ func _port_position(index: int, count: int, is_input: bool) -> Vector2:
 
 
 func _port_index(port_name: String, is_input: bool) -> int:
-	var ports := _input_ports if is_input else _output_ports
+	var ports := _visible_input_ports if is_input else _visible_output_ports
 	return ports.find(port_name)
 
 
@@ -151,14 +153,25 @@ func _resolve_graph_node() -> void:
 		_output_count = 0
 		_input_ports = []
 		_output_ports = []
+		_visible_input_ports = []
+		_visible_output_ports = []
 		return
 
 	_display_name = node.get_display_name()
 	_input_ports = _port_names(node.get_input_ports())
 	_output_ports = _port_names(node.get_output_ports())
-	_input_count = _input_ports.size()
-	_output_count = _output_ports.size()
+	_visible_input_ports = _visible_input_ports_for_node(_node_type, _input_ports)
+	_visible_output_ports = _output_ports.duplicate()
+	_input_count = _visible_input_ports.size()
+	_output_count = _visible_output_ports.size()
 	_is_ghost = false
+
+
+func _visible_input_ports_for_node(node_type: String, port_names: Array[String]) -> Array[String]:
+	# M3 画布 MVP 只折叠视觉入口；graph edge 仍保留原始命名端口。
+	if node_type == "ai_generate" and not port_names.is_empty():
+		return ["in"]
+	return port_names.duplicate()
 
 
 func _port_names(port_specs: Array[Dictionary]) -> Array[String]:

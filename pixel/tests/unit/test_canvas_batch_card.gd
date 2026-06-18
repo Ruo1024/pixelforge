@@ -116,7 +116,7 @@ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
 	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
 
 
-func test_graph_edge_anchors_follow_named_ports() -> void:
+func test_ai_generate_inputs_share_single_canvas_anchor() -> void:
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(512, 512)
 	add_child_autofree(canvas)
@@ -156,8 +156,10 @@ func test_graph_edge_anchors_follow_named_ports() -> void:
 		)
 	)
 
-	assert_ne(items_anchor, spec_anchor)
+	assert_eq(items_anchor, spec_anchor)
 	assert_ne(output_anchor, right_center)
+	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "items", true), items_anchor)
+	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "spec", true), items_anchor)
 	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "images", false), output_anchor)
 	assert_eq(
 		GraphEdgeRenderer._edge_anchor_world(batch_card, "in", true),

@@ -2543,3 +2543,123 @@ index 851efd4..58e6b2d 100644
  	graph.add_edge("objects", "items", "generate", "items")
  	graph.add_edge("size", "spec", "generate", "spec")
 ```
+
+## 追加修复：AI Generate 单视觉输入点
+
+问题来源：人工验证截图中，`AI Generate` 左侧显示了 5 个逻辑输入点；当前基础链只连接 `items` 和 `spec`，其余未连接输入点会制造视觉噪声。
+
+### 修复内容
+
+- `pixel/ui/canvas/canvas_node_card.gd`
+  - 新增视觉端口列表，与逻辑端口列表分离。
+  - `ai_generate` 的多个逻辑输入端口在画布 MVP 中折叠为单个视觉输入点。
+  - 注释明确：这里只折叠画布视觉入口，graph edge 仍保留原始命名端口。
+- `pixel/tests/unit/test_canvas_batch_card.gd`
+  - 更新端口锚点测试，确认 `items` / `spec` 共享同一个 AI Generate 输入锚点。
+- `pixel/CHANGELOG.md`
+  - 记录本次视觉折叠修复。
+
+### 验证
+
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：通过，`134/134` tests，`1109` asserts。
+- `./pixel/scripts/verify_m3_g4.sh`：通过，`verify_m3_g4: ok`。
+
+### 人工测试步骤
+
+1. 打开 `/Users/ruo/Desktop/pixelforge/pixel/project.godot` 并运行主场景。
+2. 点击 `File > Generate Mock Batch`。
+3. 确认 `AI Generate` 左侧只显示 1 个蓝色输入点。
+4. 确认 `Object List` 和 `Size Spec` 两条线都连到这个输入点。
+5. 拖动 `AI Generate` 或上游节点，确认线端点继续贴合这个单输入点。
+
+AI Generate 单视觉输入点 diff：
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 4604944..20427b6 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -27,3 +27,4 @@
+ - M3 G-3: 新增 PixelOperations 共用服务，批次菜单 Clean/Matte/Outline 复用同一 core 操作，并让 Mock 批次卡以 graph batch 节点引用保存和同步资产队列。
+ - M3 G-4: 新增画布轻节点卡与 graph edge 渲染，File > Generate Mock Batch 现在生成可见最小 mock 节点链并落入正式 batch 卡。
+ - M3 G-4 follow-up: graph 连线改用命名端口锚点，修正轻节点端口点、batch 输入点与连线端点错位。
++- M3 G-4 follow-up: AI Generate 画布卡将多个逻辑输入折叠为单个视觉输入点，降低基础节点链噪声。
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+index 732c28c..913ef43 100644
+--- a/pixel/tests/unit/test_canvas_batch_card.gd
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -116,7 +116,7 @@ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
+ 	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
+ 
+ 
+-func test_graph_edge_anchors_follow_named_ports() -> void:
++func test_ai_generate_inputs_share_single_canvas_anchor() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+ 	add_child_autofree(canvas)
+@@ -156,8 +156,10 @@ func test_graph_edge_anchors_follow_named_ports() -> void:
+ 		)
+ 	)
+ 
+-	assert_ne(items_anchor, spec_anchor)
++	assert_eq(items_anchor, spec_anchor)
+ 	assert_ne(output_anchor, right_center)
++	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "items", true), items_anchor)
++	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "spec", true), items_anchor)
+ 	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "images", false), output_anchor)
+ 	assert_eq(
+ 		GraphEdgeRenderer._edge_anchor_world(batch_card, "in", true),
+diff --git a/pixel/ui/canvas/canvas_node_card.gd b/pixel/ui/canvas/canvas_node_card.gd
+index 382cf04..256e81f 100644
+--- a/pixel/ui/canvas/canvas_node_card.gd
++++ b/pixel/ui/canvas/canvas_node_card.gd
+@@ -29,6 +29,8 @@ var _input_count := 0
+ var _output_count := 0
+ var _input_ports: Array[String] = []
+ var _output_ports: Array[String] = []
++var _visible_input_ports: Array[String] = []
++var _visible_output_ports: Array[String] = []
+ var _is_ghost := false
+ var _font: Font = null
+ 
+@@ -133,7 +135,7 @@ func _port_position(index: int, count: int, is_input: bool) -> Vector2:
+ 
+ 
+ func _port_index(port_name: String, is_input: bool) -> int:
+-	var ports := _input_ports if is_input else _output_ports
++	var ports := _visible_input_ports if is_input else _visible_output_ports
+ 	return ports.find(port_name)
+ 
+ 
+@@ -151,16 +153,27 @@ func _resolve_graph_node() -> void:
+ 		_output_count = 0
+ 		_input_ports = []
+ 		_output_ports = []
++		_visible_input_ports = []
++		_visible_output_ports = []
+ 		return
+ 
+ 	_display_name = node.get_display_name()
+ 	_input_ports = _port_names(node.get_input_ports())
+ 	_output_ports = _port_names(node.get_output_ports())
+-	_input_count = _input_ports.size()
+-	_output_count = _output_ports.size()
++	_visible_input_ports = _visible_input_ports_for_node(_node_type, _input_ports)
++	_visible_output_ports = _output_ports.duplicate()
++	_input_count = _visible_input_ports.size()
++	_output_count = _visible_output_ports.size()
+ 	_is_ghost = false
+ 
+ 
++func _visible_input_ports_for_node(node_type: String, port_names: Array[String]) -> Array[String]:
++	# M3 画布 MVP 只折叠视觉入口；graph edge 仍保留原始命名端口。
++	if node_type == "ai_generate" and not port_names.is_empty():
++		return ["in"]
++	return port_names.duplicate()
++
++
+ func _port_names(port_specs: Array[Dictionary]) -> Array[String]:
+ 	var result: Array[String] = []
+ 	for port_spec in port_specs:
+```
