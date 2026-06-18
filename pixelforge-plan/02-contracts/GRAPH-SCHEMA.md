@@ -127,7 +127,7 @@ func get_canvas_actions() -> Array[Dictionary]
 新概念，本模型的核心。装一个批次的图片队列，是「AI 输出自由」与「批量加工」的落脚点。
 
 - **双身份**：① 图节点（`type=batch`，`category=container`，`is_canvas_resident()=true`）；② 画布卡（PROJECT-FORMAT canvas.json 的 `node` 引用，特化渲染为容器卡）。
-- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
+- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
 - **整批菜单**（`get_canvas_actions()` 声明，边框弹出）：整批清洗 / 整批抠图 / 整批描边 / 整批量化 / 导出整批 / 拆小批次 / 逐张发送到编辑器。均调 core，记 undo + provenance（§4.7）。
 - **拆小批次**：勾选子集 → 生成子 `batch`（新卡，引用子集 asset_id），可独立处理；复用 `select` 语义。
 - **分离单图**：把某张拖出批次卡 → 成为独立 sprite 卡（仍在同一画布，见 PROJECT-FORMAT §4 `sprite`）。

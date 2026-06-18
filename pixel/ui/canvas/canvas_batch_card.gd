@@ -19,6 +19,13 @@ const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
 const THUMB_BACKGROUND := Color(0.08, 0.085, 0.09, 1.0)
 const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
 const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
+const REVIEW_NONE := ""
+const REVIEW_KEEP := "keep"
+const REVIEW_REJECT := "reject"
+const REVIEW_FLAG := "flag"
+const KEEP_MARK := Color(0.2, 0.88, 0.46, 1.0)
+const REJECT_MARK := Color(0.95, 0.22, 0.24, 0.95)
+const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
 const INPUT_PORTS: Array[String] = ["in"]
 const OUTPUT_PORTS: Array[String] = ["images", "assets"]
 
@@ -27,6 +34,7 @@ var graph_id := ""
 var node_id := ""
 var asset_ids: Array[String] = []
 var selected_asset_ids: Array[String] = []
+var review_states := {}
 var label := ""
 var locked := false
 
@@ -43,6 +51,9 @@ func setup_from_data(data: Dictionary) -> void:
 	label = String(graph_params.get("label", data.get("label", "Batch")))
 	asset_ids = _string_array(graph_params.get("asset_ids", data.get("asset_ids", [])))
 	selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
+	review_states = _review_state_map(
+		graph_params.get("review_states", data.get("review_states", {})), asset_ids
+	)
 	locked = bool(data.get("locked", false))
 	z_index = int(data.get("z_index", 0))
 	var raw_position: Variant = data.get("position", [0, 0])
@@ -69,6 +80,7 @@ func to_canvas_data() -> Dictionary:
 		"type": "batch_card",
 		"asset_ids": asset_ids.duplicate(),
 		"selected_asset_ids": selected_asset_ids.duplicate(),
+		"review_states": review_states.duplicate(true),
 		"label": label,
 		"position": [int(round(position.x)), int(round(position.y))],
 		"z_index": z_index,
@@ -104,14 +116,37 @@ func set_asset_ids(new_asset_ids: Array) -> void:
 	for selected_id in selected_asset_ids.duplicate():
 		if not asset_ids.has(selected_id):
 			selected_asset_ids.erase(selected_id)
+	review_states = _review_state_map(review_states, asset_ids)
 	_rebuild_thumbnails()
 	queue_redraw()
+
+
+func get_selected_asset_ids() -> Array[String]:
+	return selected_asset_ids.duplicate()
 
 
 func get_selected_or_all_asset_ids() -> Array[String]:
 	if selected_asset_ids.is_empty():
 		return asset_ids.duplicate()
 	return selected_asset_ids.duplicate()
+
+
+func get_marked_asset_ids(review_state: String) -> Array[String]:
+	var normalized_state := _normalize_review_state(review_state)
+	var result: Array[String] = []
+	for asset_id in asset_ids:
+		if String(review_states.get(asset_id, REVIEW_NONE)) == normalized_state:
+			result.append(asset_id)
+	return result
+
+
+func get_review_states() -> Dictionary:
+	return review_states.duplicate(true)
+
+
+func set_review_states(new_review_states: Dictionary) -> void:
+	review_states = _review_state_map(new_review_states, asset_ids)
+	queue_redraw()
 
 
 func toggle_asset_at_world(world_position: Vector2) -> bool:
@@ -177,6 +212,32 @@ func _draw_thumbnail(index: int, rect: Rect2) -> void:
 		draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
 	draw_rect(rect, border_color, false, 1.5)
+	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
+
+
+func _draw_review_marker(rect: Rect2, review_state: String) -> void:
+	match _normalize_review_state(review_state):
+		REVIEW_KEEP:
+			draw_rect(Rect2(rect.position, Vector2(7.0, rect.size.y)), KEEP_MARK, true)
+		REVIEW_REJECT:
+			draw_line(rect.position + Vector2(8, 8), rect.end - Vector2(8, 8), REJECT_MARK, 4.0)
+			draw_line(
+				Vector2(rect.end.x - 8, rect.position.y + 8),
+				Vector2(rect.position.x + 8, rect.end.y - 8),
+				REJECT_MARK,
+				4.0
+			)
+		REVIEW_FLAG:
+			draw_colored_polygon(
+				PackedVector2Array(
+					[
+						rect.position + Vector2(rect.size.x - 30.0, 0.0),
+						rect.position + Vector2(rect.size.x, 0.0),
+						rect.position + Vector2(rect.size.x, 30.0),
+					]
+				),
+				FLAG_MARK
+			)
 
 
 func _thumb_rect(index: int, columns: int) -> Rect2:
@@ -259,3 +320,29 @@ func _string_array(value: Variant) -> Array[String]:
 		for item in Array(value):
 			result.append(String(item))
 	return result
+
+
+func _review_state_map(value: Variant, valid_asset_ids: Array[String]) -> Dictionary:
+	var result := {}
+	if not (value is Dictionary):
+		return result
+	var valid_lookup := {}
+	for asset_id in valid_asset_ids:
+		valid_lookup[asset_id] = true
+	var raw_states: Dictionary = value
+	for key in raw_states.keys():
+		var asset_id := String(key)
+		if not valid_lookup.has(asset_id):
+			continue
+		var review_state := _normalize_review_state(String(raw_states[key]))
+		if not review_state.is_empty():
+			result[asset_id] = review_state
+	return result
+
+
+func _normalize_review_state(review_state: String) -> String:
+	match review_state:
+		REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
+			return review_state
+		_:
+			return REVIEW_NONE

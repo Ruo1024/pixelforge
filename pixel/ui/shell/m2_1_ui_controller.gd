@@ -24,6 +24,7 @@ const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.g
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 const GraphMockRunnerScript := preload("res://services/graph_mock_runner.gd")
+const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Log := preload("res://core/util/log_util.gd")
 
@@ -42,6 +43,11 @@ const BATCH_MENU_MATTE := 1
 const BATCH_MENU_OUTLINE := 2
 const BATCH_MENU_SPLIT := 3
 const BATCH_MENU_EXPORT := 4
+const BATCH_MENU_MARK_KEEP := 5
+const BATCH_MENU_MARK_REJECT := 6
+const BATCH_MENU_MARK_FLAG := 7
+const BATCH_MENU_CLEAR_MARK := 8
+const BATCH_MENU_SPLIT_KEEP := 9
 const SELECTION_TOOLS_VISIBLE := false
 
 var _canvas: Control = null
@@ -292,7 +298,14 @@ func _create_batch_menu() -> void:
 	_batch_menu.add_item(Strings.BATCH_ACTION_MATTE, BATCH_MENU_MATTE)
 	_batch_menu.add_item(Strings.BATCH_ACTION_OUTLINE, BATCH_MENU_OUTLINE)
 	_batch_menu.add_separator()
+	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_KEEP, BATCH_MENU_MARK_KEEP)
+	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_REJECT, BATCH_MENU_MARK_REJECT)
+	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_FLAG, BATCH_MENU_MARK_FLAG)
+	_batch_menu.add_item(Strings.BATCH_ACTION_CLEAR_MARK, BATCH_MENU_CLEAR_MARK)
+	_batch_menu.add_separator()
+	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
+	_batch_menu.add_separator()
 	_batch_menu.add_item(Strings.BATCH_ACTION_EXPORT, BATCH_MENU_EXPORT)
 	_batch_menu.id_pressed.connect(_on_batch_menu_id_pressed)
 	add_child(_batch_menu)
@@ -395,6 +408,33 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 			_m2_actions.batch_outline(
 				_batch_menu_card_id, asset_ids, {"type": "outer", "color": Color.BLACK}
 			)
+		BATCH_MENU_MARK_KEEP:
+			_mark_batch_review_state(
+				CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
+			)
+		BATCH_MENU_MARK_REJECT:
+			_mark_batch_review_state(
+				CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
+			)
+		BATCH_MENU_MARK_FLAG:
+			_mark_batch_review_state(
+				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
+			)
+		BATCH_MENU_CLEAR_MARK:
+			_mark_batch_review_state(
+				CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
+			)
+		BATCH_MENU_SPLIT_KEEP:
+			var new_keep_card: Variant = _canvas._split_batch_marked(
+				_batch_menu_card_id,
+				CanvasBatchCardScript.REVIEW_KEEP,
+				Strings.BATCH_KEEP_LABEL_SUFFIX
+			)
+			_status_label.text = (
+				Strings.STATUS_BATCH_SPLIT_KEEP
+				if new_keep_card != null
+				else Strings.STATUS_BATCH_SPLIT_KEEP_EMPTY
+			)
 		BATCH_MENU_SPLIT:
 			var new_card: Variant = _canvas._split_batch_selection(_batch_menu_card_id)
 			_status_label.text = (
@@ -402,6 +442,20 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 			)
 		BATCH_MENU_EXPORT:
 			_emit_batch_export(asset_ids)
+
+
+func _mark_batch_review_state(review_state: String, status_format: String) -> void:
+	var selected_ids: Array = _canvas._get_batch_selected_asset_ids(_batch_menu_card_id)
+	if selected_ids.is_empty():
+		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
+		return
+	var marked_count: int = _canvas._set_batch_review_state(
+		_batch_menu_card_id, selected_ids, review_state, true
+	)
+	if marked_count <= 0:
+		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
+		return
+	_status_label.text = status_format % marked_count
 
 
 func _emit_batch_export(asset_ids: Array) -> void:

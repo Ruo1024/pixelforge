@@ -3041,7 +3041,832 @@ index 25d32a0..fa7475e 100644
 +const STATUS_GRAPH_RUN_DONE := "Graph run complete: %d sprites"
 +const STATUS_GRAPH_RUN_FAILED := "Graph run failed"
 +const STATUS_GRAPH_RUN_NEEDS_SELECTION := "Select a graph node or batch before running"
- const CLEANUP_TITLE := "Pixel Cleanup"
- const CLEANUP_SELECTED_FORMAT := "%d selected"
- const CLEANUP_PRESET_PRIOR_FORMAT := "Preset prior: %dpx"
+const CLEANUP_TITLE := "Pixel Cleanup"
+const CLEANUP_SELECTED_FORMAT := "%d selected"
+const CLEANUP_PRESET_PRIOR_FORMAT := "Preset prior: %dpx"
+```
+
+---
+
+## 2026-06-18 M3 UX-5 批次审阅状态最小闭环
+
+### 本轮实现说明
+
+- 服务对象：一次生成或导入一批候选图后，需要快速挑出可用素材并拆成小批次继续处理的用户。
+- 当前痛点：此前 batch 只有“临时勾选 + Split Selected”，没有 keep/reject/flag 语义；用户无法把筛选判断留在卡片上，也不能直接按 keep 集合收窄。
+- 技术选择：在 `PFCanvasBatchCard` 增加 `review_states`（`asset_id -> keep|reject|flag`）与可视标记；右键菜单增加 Mark Keep / Mark Reject / Flag / Clear Mark / Split Kept；正式 graph batch 将状态写入 batch 节点 params，旧 `batch_card` 则继续随 canvas 数据保存。
+- 选择原因：这是 UX-5 最小可用闭环，不引入完整过滤/评分系统，先让“看一批 -> 标记 -> 拆小批次”走通。
+- 优势：review 状态可撤销、可保存/重载，Split Kept 不影响原批次；批处理/重跑替换 asset ids 时会过滤或清空旧 review 状态，避免标记错位。
+- 缺陷：本轮还没有键盘上一张/下一张、只看 keep/reject/未定、焦点图模式；视觉标记也是原型级。
+- 改进空间：后续可在 UX-5b 补键盘审阅节奏、过滤视图、焦点图；UX-6 可接 before/after 对比。
+
+### 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `./pixel/scripts/lint.sh` | 通过，105 files unchanged，gdlint no problems |
+| `./pixel/scripts/run_tests.sh` | 通过，137/137 tests passing，1133 asserts |
+| `./pixel/scripts/verify_m3_ux5.sh` | 通过，含 lint / tests / `check_ui_scaling` / export-template headless gate / staged image check |
+| staged 图片检查 | `git diff --cached --name-only \| grep -iE '\.(png\|jpe?g)$'` 无输出 |
+| staged 保留目录检查 | `test picture/`、`pixel/tests/fixtures/real/`、`垃圾桶/`、`godot-interactive-guide/` 均未 staged |
+
+备注：GUT 仍报告既有 `1 Orphans` 与退出时 resource leak warning，但测试总结果为 All tests passed；本轮未引入图片提交。
+
+### 人工测试步骤
+
+1. 打开工程，使用 `File > Generate Mock Batch` 生成一条 mock graph 与 Mock Batch。
+2. 在 batch 卡内左键点选 2-3 张缩略图，右键 batch 卡，依次试 `Mark Keep`、`Mark Reject`、`Flag`、`Clear Mark`，确认缩略图出现/清除绿色条、红叉、黄色角标。
+3. 标记至少 1 张 Keep 后右键选择 `Split Kept`，确认右侧生成一个只含 Keep 图的新 batch，原 batch 不减少。
+4. 保存项目再重开，确认 graph batch 的 keep/reject/flag 标记仍在。
+5. 对原 batch 执行 `Clean Batch` 或 `File > Run Selected Graph`，确认替换后的新资产不继承旧 asset id 的标记；撤销替换时旧标记恢复。
+
+### DoD 核查
+
+| 项 | 核查内容 | 状态 | 证据/路径 |
+|---|---|---|---|
+| 代码规范 | gdlint/gdformat 零告警 | 通过 | `./pixel/scripts/lint.sh` |
+| 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | `pixel/tests/unit/test_canvas_batch_card.gd` 新增 2 个 review-state 测试；`./pixel/scripts/run_tests.sh` 137/137 |
+| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 上方人工测试步骤待 owner 实机验证 |
+| 契约同步 | 影响契约的改动已更新 `02-contracts/` | 通过 | `pixelforge-plan/02-contracts/GRAPH-SCHEMA.md` 补充 `review_states` |
+| TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 本轮未新增 TODO/FIXME/HACK |
+| 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | UX-5 状态标记/拆分不涉及性能预算 |
+| 跨平台 | 目标平台验证结果已记录 | 通过 | macOS headless 本地验证；export templates 缺失时按现有脚本退化为 headless startup gate |
+| 出口门控 | CI 绿灯或本地 agent 验证绿灯 | 通过 | `./pixel/scripts/verify_m3_ux5.sh` |
+
+### 本轮完整 diff（报告追加前）
+
+```diff
+diff --git a/pixel/scripts/verify_m3_ux5.sh b/pixel/scripts/verify_m3_ux5.sh
+new file mode 100755
+index 0000000..bc900a4
+--- /dev/null
++++ b/pixel/scripts/verify_m3_ux5.sh
+@@ -0,0 +1,17 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/../.."
++
++./pixel/scripts/configure_editor_game_view.sh
++./pixel/scripts/lint.sh
++./pixel/scripts/run_tests.sh
++./pixel/scripts/check_ui_scaling.sh
++./pixel/scripts/check_export_templates.sh
++
++if git diff --cached --name-only | grep -iE '\.(png|jpe?g)$' >/dev/null; then
++  echo "Staged image files are not allowed for M3 UX-5 commits." >&2
++  exit 1
++fi
++
++echo "verify_m3_ux5: ok"
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+index 913ef43..bc96991 100644
+--- a/pixel/tests/unit/test_canvas_batch_card.gd
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -1,6 +1,7 @@
+ extends "res://addons/gut/test.gd"
+ 
+ const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
++const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+ const GraphScript := preload("res://core/graph/pf_graph.gd")
+ const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
+ const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
+@@ -37,6 +38,40 @@ func test_canvas_batch_card_exports_asset_queue_and_can_split_subset() -> void:
+ 	assert_eq(canvas.get_item_count(), 2)
+ 
+ 
++func test_canvas_batch_card_marks_review_state_and_splits_kept_subset() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids := [
++		_register_asset(Color.RED, "red"),
++		_register_asset(Color.BLUE, "blue"),
++		_register_asset(Color.GREEN, "green"),
++	]
++	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++
++	assert_eq(
++		canvas._set_batch_review_state(
++			"batch_1", [ids[0], ids[2]], CanvasBatchCardScript.REVIEW_KEEP, false
++		),
++		2
++	)
++	assert_eq(card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_KEEP), [ids[0], ids[2]])
++
++	var data: Dictionary = canvas.export_canvas_data()
++	var item: Dictionary = data["items"][0]
++	assert_eq(item["review_states"][ids[0]], CanvasBatchCardScript.REVIEW_KEEP)
++	assert_eq(item["review_states"][ids[2]], CanvasBatchCardScript.REVIEW_KEEP)
++
++	var child: Node = canvas._split_batch_marked(
++		"batch_1", CanvasBatchCardScript.REVIEW_KEEP, "keep"
++	)
++	assert_not_null(child)
++	assert_eq(child.asset_ids, [ids[0], ids[2]])
++	assert_eq(canvas.get_item_count(), 2)
++
++
+ func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+@@ -81,6 +116,48 @@ func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement()
+ 	assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), [green_id])
+ 
+ 
++func test_graph_batch_card_persists_review_state_in_graph_params() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++	var graph := GraphScript.new()
++	graph.id = "graph_batch_review_test"
++	graph.add_node(
++		BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
++	)
++	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++
++	var card: Node = canvas._add_batch_card(
++		ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
++	)
++	assert_eq(
++		canvas._set_batch_review_state(
++			"node_item_1", [ids[1]], CanvasBatchCardScript.REVIEW_FLAG, false
++		),
++		1
++	)
++	assert_eq(card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_FLAG), [ids[1]])
++
++	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
++	var batch_node: Dictionary = graph_data["nodes"][0]
++	assert_eq(batch_node["params"]["review_states"][ids[1]], CanvasBatchCardScript.REVIEW_FLAG)
++
++	var canvas_data: Dictionary = canvas.export_canvas_data()
++	assert_false(Dictionary(canvas_data["items"][0]).has("review_states"))
++
++	var reloaded_canvas: Control = CanvasScript.new()
++	reloaded_canvas.size = Vector2(512, 512)
++	add_child_autofree(reloaded_canvas)
++	await wait_process_frames(2)
++	reloaded_canvas.load_canvas_data(canvas_data)
++	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
++
++	assert_eq(reloaded_card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_FLAG), [ids[1]])
++
++
+ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
+index 426b25d..176a229 100644
+--- a/pixel/ui/canvas/canvas_batch_card.gd
++++ b/pixel/ui/canvas/canvas_batch_card.gd
+@@ -19,6 +19,13 @@ const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
+ const THUMB_BACKGROUND := Color(0.08, 0.085, 0.09, 1.0)
+ const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
+ const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
++const REVIEW_NONE := ""
++const REVIEW_KEEP := "keep"
++const REVIEW_REJECT := "reject"
++const REVIEW_FLAG := "flag"
++const KEEP_MARK := Color(0.2, 0.88, 0.46, 1.0)
++const REJECT_MARK := Color(0.95, 0.22, 0.24, 0.95)
++const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
+ const INPUT_PORTS: Array[String] = ["in"]
+ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
+ 
+@@ -27,6 +34,7 @@ var graph_id := ""
+ var node_id := ""
+ var asset_ids: Array[String] = []
+ var selected_asset_ids: Array[String] = []
++var review_states := {}
+ var label := ""
+ var locked := false
+ 
+@@ -43,6 +51,9 @@ func setup_from_data(data: Dictionary) -> void:
+ 	label = String(graph_params.get("label", data.get("label", "Batch")))
+ 	asset_ids = _string_array(graph_params.get("asset_ids", data.get("asset_ids", [])))
+ 	selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
++	review_states = _review_state_map(
++		graph_params.get("review_states", data.get("review_states", {})), asset_ids
++	)
+ 	locked = bool(data.get("locked", false))
+ 	z_index = int(data.get("z_index", 0))
+ 	var raw_position: Variant = data.get("position", [0, 0])
+@@ -69,6 +80,7 @@ func to_canvas_data() -> Dictionary:
+ 		"type": "batch_card",
+ 		"asset_ids": asset_ids.duplicate(),
+ 		"selected_asset_ids": selected_asset_ids.duplicate(),
++		"review_states": review_states.duplicate(true),
+ 		"label": label,
+ 		"position": [int(round(position.x)), int(round(position.y))],
+ 		"z_index": z_index,
+@@ -104,16 +116,39 @@ func set_asset_ids(new_asset_ids: Array) -> void:
+ 	for selected_id in selected_asset_ids.duplicate():
+ 		if not asset_ids.has(selected_id):
+ 			selected_asset_ids.erase(selected_id)
++	review_states = _review_state_map(review_states, asset_ids)
+ 	_rebuild_thumbnails()
+ 	queue_redraw()
+ 
+ 
++func get_selected_asset_ids() -> Array[String]:
++	return selected_asset_ids.duplicate()
++
++
+ func get_selected_or_all_asset_ids() -> Array[String]:
+ 	if selected_asset_ids.is_empty():
+ 		return asset_ids.duplicate()
+ 	return selected_asset_ids.duplicate()
+ 
+ 
++func get_marked_asset_ids(review_state: String) -> Array[String]:
++	var normalized_state := _normalize_review_state(review_state)
++	var result: Array[String] = []
++	for asset_id in asset_ids:
++		if String(review_states.get(asset_id, REVIEW_NONE)) == normalized_state:
++			result.append(asset_id)
++	return result
++
++
++func get_review_states() -> Dictionary:
++	return review_states.duplicate(true)
++
++
++func set_review_states(new_review_states: Dictionary) -> void:
++	review_states = _review_state_map(new_review_states, asset_ids)
++	queue_redraw()
++
++
+ func toggle_asset_at_world(world_position: Vector2) -> bool:
+ 	var index := asset_index_at_world(world_position)
+ 	if index < 0 or index >= asset_ids.size():
+@@ -177,6 +212,32 @@ func _draw_thumbnail(index: int, rect: Rect2) -> void:
+ 		draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
+ 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
+ 	draw_rect(rect, border_color, false, 1.5)
++	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
++
++
++func _draw_review_marker(rect: Rect2, review_state: String) -> void:
++	match _normalize_review_state(review_state):
++		REVIEW_KEEP:
++			draw_rect(Rect2(rect.position, Vector2(7.0, rect.size.y)), KEEP_MARK, true)
++		REVIEW_REJECT:
++			draw_line(rect.position + Vector2(8, 8), rect.end - Vector2(8, 8), REJECT_MARK, 4.0)
++			draw_line(
++				Vector2(rect.end.x - 8, rect.position.y + 8),
++				Vector2(rect.position.x + 8, rect.end.y - 8),
++				REJECT_MARK,
++				4.0
++			)
++		REVIEW_FLAG:
++			draw_colored_polygon(
++				PackedVector2Array(
++					[
++						rect.position + Vector2(rect.size.x - 30.0, 0.0),
++						rect.position + Vector2(rect.size.x, 0.0),
++						rect.position + Vector2(rect.size.x, 30.0),
++					]
++				),
++				FLAG_MARK
++			)
+ 
+ 
+ func _thumb_rect(index: int, columns: int) -> Rect2:
+@@ -259,3 +320,29 @@ func _string_array(value: Variant) -> Array[String]:
+ 		for item in Array(value):
+ 			result.append(String(item))
+ 	return result
++
++
++func _review_state_map(value: Variant, valid_asset_ids: Array[String]) -> Dictionary:
++	var result := {}
++	if not (value is Dictionary):
++		return result
++	var valid_lookup := {}
++	for asset_id in valid_asset_ids:
++		valid_lookup[asset_id] = true
++	var raw_states: Dictionary = value
++	for key in raw_states.keys():
++		var asset_id := String(key)
++		if not valid_lookup.has(asset_id):
++			continue
++		var review_state := _normalize_review_state(String(raw_states[key]))
++		if not review_state.is_empty():
++			result[asset_id] = review_state
++	return result
++
++
++func _normalize_review_state(review_state: String) -> String:
++	match review_state:
++		REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
++			return review_state
++		_:
++			return REVIEW_NONE
+diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
+new file mode 100644
+index 0000000..99403b0
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_batch_ops.gd
+@@ -0,0 +1,175 @@
++class_name PFCanvasBatchOps
++extends RefCounted
++
++## Batch-card operations that would otherwise bloat PFInfiniteCanvas.
++
++const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
++const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
++
++const SPLIT_GAP := 24.0
++
++
++static func get_asset_ids(
++	items_by_id: Dictionary, card_id: String, selected_only: bool = false
++) -> Array:
++	var item := _batch_item(items_by_id, card_id)
++	if item == null:
++		return []
++	if selected_only:
++		return item.get_selected_or_all_asset_ids()
++	return item.asset_ids.duplicate()
++
++
++static func get_selected_asset_ids(items_by_id: Dictionary, card_id: String) -> Array:
++	var item := _batch_item(items_by_id, card_id)
++	if item == null:
++		return []
++	return item.get_selected_asset_ids()
++
++
++static func get_marked_asset_ids(
++	items_by_id: Dictionary, card_id: String, review_state: String
++) -> Array:
++	var item := _batch_item(items_by_id, card_id)
++	if item == null:
++		return []
++	return item.get_marked_asset_ids(review_state)
++
++
++static func replace_asset_ids(
++	items_by_id: Dictionary,
++	card_id: String,
++	new_asset_ids: Array,
++	record_undo: bool,
++	select_only: Callable,
++	emit_changed: Callable
++) -> void:
++	var item := _batch_item(items_by_id, card_id)
++	if item == null:
++		return
++	var before: Array = item.asset_ids.duplicate()
++	var before_review_states: Dictionary = item.get_review_states()
++	var after := new_asset_ids.duplicate()
++	var after_review_states := {}
++	var do_replace := func() -> void:
++		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
++		_apply_review_states(item, after_review_states)
++		GraphItemBridge.sync_batch_node_asset_ids(item, after)
++		GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
++		select_only.call([card_id])
++		emit_changed.call()
++	var undo_replace := func() -> void:
++		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
++		_apply_review_states(item, before_review_states)
++		GraphItemBridge.sync_batch_node_asset_ids(item, before)
++		GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
++		select_only.call([card_id])
++		emit_changed.call()
++	if record_undo:
++		UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
++	else:
++		do_replace.call()
++
++
++static func set_review_state(
++	items_by_id: Dictionary,
++	card_id: String,
++	asset_ids: Array,
++	review_state: String,
++	record_undo: bool,
++	select_only: Callable,
++	emit_changed: Callable
++) -> int:
++	var item := _batch_item(items_by_id, card_id)
++	if item == null:
++		return 0
++	var target_ids := _valid_target_ids(item, asset_ids)
++	if target_ids.is_empty():
++		return 0
++
++	var before: Dictionary = item.get_review_states()
++	var after := before.duplicate(true)
++	var normalized_state := _normalize_review_state(review_state)
++	for asset_id in target_ids:
++		if normalized_state.is_empty():
++			after.erase(asset_id)
++		else:
++			after[asset_id] = normalized_state
++
++	var do_mark := func() -> void:
++		_apply_review_states(item, after)
++		GraphItemBridge.sync_batch_node_review_states(item, after)
++		select_only.call([card_id])
++		emit_changed.call()
++	var undo_mark := func() -> void:
++		_apply_review_states(item, before)
++		GraphItemBridge.sync_batch_node_review_states(item, before)
++		select_only.call([card_id])
++		emit_changed.call()
++
++	if record_undo:
++		UndoService.perform_action("Mark batch review state", do_mark, undo_mark)
++	else:
++		do_mark.call()
++	return target_ids.size()
++
++
++static func split_selection_spec(items_by_id: Dictionary, card_id: String) -> Dictionary:
++	var item := _batch_item(items_by_id, card_id)
++	if item == null:
++		return {}
++	return _split_spec(item, item.get_selected_or_all_asset_ids(), "subset")
++
++
++static func split_marked_spec(
++	items_by_id: Dictionary, card_id: String, review_state: String, label_suffix: String
++) -> Dictionary:
++	var item := _batch_item(items_by_id, card_id)
++	if item == null:
++		return {}
++	return _split_spec(item, item.get_marked_asset_ids(review_state), label_suffix)
++
++
++static func _batch_item(items_by_id: Dictionary, card_id: String) -> Node:
++	if not items_by_id.has(card_id):
++		return null
++	var item: Node = items_by_id[card_id]
++	if item.get_script() != CanvasBatchCardScript:
++		return null
++	return item
++
++
++static func _valid_target_ids(item: Node, asset_ids: Array) -> Array:
++	var result := []
++	for raw_id in asset_ids:
++		var asset_id := String(raw_id)
++		if item.asset_ids.has(asset_id) and not result.has(asset_id):
++			result.append(asset_id)
++	return result
++
++
++static func _split_spec(item: Node, subset: Array, label_suffix: String) -> Dictionary:
++	if subset.is_empty() or subset.size() == item.asset_ids.size():
++		return {}
++	return {
++		"asset_ids": subset,
++		"position": item.position + Vector2(item.get_canvas_bounds().size.x + SPLIT_GAP, 0.0),
++		"label": "%s %s" % [item.label, label_suffix],
++	}
++
++
++static func _apply_review_states(item: Node, review_states: Dictionary) -> void:
++	item.set_review_states(review_states)
++
++
++static func _normalize_review_state(review_state: String) -> String:
++	if (
++		review_state
++		in [
++			CanvasBatchCardScript.REVIEW_KEEP,
++			CanvasBatchCardScript.REVIEW_REJECT,
++			CanvasBatchCardScript.REVIEW_FLAG,
++		]
++	):
++		return review_state
++	return CanvasBatchCardScript.REVIEW_NONE
+diff --git a/pixel/ui/canvas/canvas_batch_ops.gd.uid b/pixel/ui/canvas/canvas_batch_ops.gd.uid
+new file mode 100644
+index 0000000..dbe60e0
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_batch_ops.gd.uid
+@@ -0,0 +1 @@
++uid://wabtp0ptq26k
+diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+index 9cbd4de..5371ed5 100644
+--- a/pixel/ui/canvas/canvas_graph_item_bridge.gd
++++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+@@ -52,6 +52,37 @@ static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
+ 		):
+ 			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+ 			params["asset_ids"] = _string_array(asset_ids)
++			params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
++			node_data["params"] = params
++			changed = true
++		nodes.append(node_data)
++
++	if changed:
++		graph_data["nodes"] = nodes
++		ProjectService.set_graph_data(item.graph_id, graph_data, true)
++
++
++static func sync_batch_node_review_states(item: Node, review_states: Dictionary) -> void:
++	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
++		return
++
++	var graph_data := ProjectService.get_graph_data(item.graph_id)
++	if graph_data.is_empty():
++		return
++
++	var nodes := []
++	var changed := false
++	for raw_node in graph_data.get("nodes", []):
++		if not (raw_node is Dictionary):
++			nodes.append(raw_node)
++			continue
++		var node_data: Dictionary = raw_node
++		if (
++			String(node_data.get("id", "")) == item.node_id
++			and String(node_data.get("type", "")) == "batch"
++		):
++			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
++			params["review_states"] = _review_state_map(review_states, params.get("asset_ids", []))
+ 			node_data["params"] = params
+ 			changed = true
+ 		nodes.append(node_data)
+@@ -69,3 +100,21 @@ static func _string_array(value: Variant) -> Array[String]:
+ 			if not id.is_empty():
+ 				result.append(id)
+ 	return result
++
++
++static func _review_state_map(value: Variant, valid_asset_ids: Variant) -> Dictionary:
++	var result := {}
++	if not (value is Dictionary):
++		return result
++	var valid_lookup := {}
++	for asset_id in _string_array(valid_asset_ids):
++		valid_lookup[asset_id] = true
++	var raw_states: Dictionary = value
++	for key in raw_states.keys():
++		var asset_id := String(key)
++		if not valid_lookup.has(asset_id):
++			continue
++		var review_state := String(raw_states[key])
++		if review_state in ["keep", "reject", "flag"]:
++			result[asset_id] = review_state
++	return result
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 10ef29b..0a76239 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -25,6 +25,7 @@ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+ const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
+ const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
+ const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
++const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
+ const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
+ const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
+ const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
+@@ -480,58 +481,53 @@ func _get_active_tool_target() -> Dictionary:
+ 
+ 
+ func _get_batch_asset_ids(card_id: String, selected_only: bool = false) -> Array:
+-	if not _items_by_id.has(card_id):
+-		return []
+-	var item: Node = _items_by_id[card_id]
+-	if item.get_script() != CanvasBatchCardScript:
+-		return []
+-	if selected_only:
+-		return item.get_selected_or_all_asset_ids()
+-	return item.asset_ids.duplicate()
++	return BatchOps.get_asset_ids(_items_by_id, card_id, selected_only)
++
++
++func _get_batch_selected_asset_ids(card_id: String) -> Array:
++	return BatchOps.get_selected_asset_ids(_items_by_id, card_id)
++
++
++func _get_batch_marked_asset_ids(card_id: String, review_state: String) -> Array:
++	return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
+ 
+ 
+ func _replace_batch_asset_ids(
+ 	card_id: String, new_asset_ids: Array, record_undo: bool = true
+ ) -> void:
+-	if not _items_by_id.has(card_id):
+-		return
+-	var item: Node = _items_by_id[card_id]
+-	if item.get_script() != CanvasBatchCardScript:
+-		return
+-	var before: Array = item.asset_ids.duplicate()
+-	var after := new_asset_ids.duplicate()
+-	var do_replace := func() -> void:
+-		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
+-		GraphItemBridge.sync_batch_node_asset_ids(item, after)
+-		_select_only([card_id])
+-		_emit_canvas_changed()
+-	var undo_replace := func() -> void:
+-		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
+-		GraphItemBridge.sync_batch_node_asset_ids(item, before)
+-		_select_only([card_id])
+-		_emit_canvas_changed()
+-	if record_undo:
+-		UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
+-	else:
+-		do_replace.call()
++	BatchOps.replace_asset_ids(
++		_items_by_id, card_id, new_asset_ids, record_undo, _select_only, _emit_canvas_changed
++	)
++
++
++func _set_batch_review_state(
++	card_id: String, asset_ids: Array, review_state: String, record_undo: bool = true
++) -> int:
++	return BatchOps.set_review_state(
++		_items_by_id,
++		card_id,
++		asset_ids,
++		review_state,
++		record_undo,
++		_select_only,
++		_emit_canvas_changed
++	)
+ 
+ 
+ func _split_batch_selection(card_id: String) -> Node:
+-	if not _items_by_id.has(card_id):
+-		return null
+-	var item: Node = _items_by_id[card_id]
+-	if item.get_script() != CanvasBatchCardScript:
++	var spec: Dictionary = BatchOps.split_selection_spec(_items_by_id, card_id)
++	if spec.is_empty():
+ 		return null
+-	var subset: Array = item.get_selected_or_all_asset_ids()
+-	if subset.is_empty() or subset.size() == item.asset_ids.size():
+-		return null
+-	return _add_batch_card(
+-		subset,
+-		item.position + Vector2(item.get_canvas_bounds().size.x + 24.0, 0.0),
+-		"%s subset" % item.label,
+-		"",
+-		true
++	return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
++
++
++func _split_batch_marked(card_id: String, review_state: String, label_suffix: String) -> Node:
++	var spec: Dictionary = BatchOps.split_marked_spec(
++		_items_by_id, card_id, review_state, label_suffix
+ 	)
++	if spec.is_empty():
++		return null
++	return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
+ 
+ 
+ func show_cleanup_preview(
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index b39fd18..fd0cf59 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -24,6 +24,7 @@ const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.g
+ const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+ const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+ const GraphMockRunnerScript := preload("res://services/graph_mock_runner.gd")
++const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+ const IdUtil := preload("res://core/util/id_util.gd")
+ const Log := preload("res://core/util/log_util.gd")
+ 
+@@ -42,6 +43,11 @@ const BATCH_MENU_MATTE := 1
+ const BATCH_MENU_OUTLINE := 2
+ const BATCH_MENU_SPLIT := 3
+ const BATCH_MENU_EXPORT := 4
++const BATCH_MENU_MARK_KEEP := 5
++const BATCH_MENU_MARK_REJECT := 6
++const BATCH_MENU_MARK_FLAG := 7
++const BATCH_MENU_CLEAR_MARK := 8
++const BATCH_MENU_SPLIT_KEEP := 9
+ const SELECTION_TOOLS_VISIBLE := false
+ 
+ var _canvas: Control = null
+@@ -292,7 +298,14 @@ func _create_batch_menu() -> void:
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_MATTE, BATCH_MENU_MATTE)
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_OUTLINE, BATCH_MENU_OUTLINE)
+ 	_batch_menu.add_separator()
++	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_KEEP, BATCH_MENU_MARK_KEEP)
++	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_REJECT, BATCH_MENU_MARK_REJECT)
++	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_FLAG, BATCH_MENU_MARK_FLAG)
++	_batch_menu.add_item(Strings.BATCH_ACTION_CLEAR_MARK, BATCH_MENU_CLEAR_MARK)
++	_batch_menu.add_separator()
++	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
++	_batch_menu.add_separator()
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_EXPORT, BATCH_MENU_EXPORT)
+ 	_batch_menu.id_pressed.connect(_on_batch_menu_id_pressed)
+ 	add_child(_batch_menu)
+@@ -395,6 +408,33 @@ func _on_batch_menu_id_pressed(id: int) -> void:
+ 			_m2_actions.batch_outline(
+ 				_batch_menu_card_id, asset_ids, {"type": "outer", "color": Color.BLACK}
+ 			)
++		BATCH_MENU_MARK_KEEP:
++			_mark_batch_review_state(
++				CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
++			)
++		BATCH_MENU_MARK_REJECT:
++			_mark_batch_review_state(
++				CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
++			)
++		BATCH_MENU_MARK_FLAG:
++			_mark_batch_review_state(
++				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
++			)
++		BATCH_MENU_CLEAR_MARK:
++			_mark_batch_review_state(
++				CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
++			)
++		BATCH_MENU_SPLIT_KEEP:
++			var new_keep_card: Variant = _canvas._split_batch_marked(
++				_batch_menu_card_id,
++				CanvasBatchCardScript.REVIEW_KEEP,
++				Strings.BATCH_KEEP_LABEL_SUFFIX
++			)
++			_status_label.text = (
++				Strings.STATUS_BATCH_SPLIT_KEEP
++				if new_keep_card != null
++				else Strings.STATUS_BATCH_SPLIT_KEEP_EMPTY
++			)
+ 		BATCH_MENU_SPLIT:
+ 			var new_card: Variant = _canvas._split_batch_selection(_batch_menu_card_id)
+ 			_status_label.text = (
+@@ -404,6 +444,20 @@ func _on_batch_menu_id_pressed(id: int) -> void:
+ 			_emit_batch_export(asset_ids)
+ 
+ 
++func _mark_batch_review_state(review_state: String, status_format: String) -> void:
++	var selected_ids: Array = _canvas._get_batch_selected_asset_ids(_batch_menu_card_id)
++	if selected_ids.is_empty():
++		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
++		return
++	var marked_count: int = _canvas._set_batch_review_state(
++		_batch_menu_card_id, selected_ids, review_state, true
++	)
++	if marked_count <= 0:
++		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
++		return
++	_status_label.text = status_format % marked_count
++
++
+ func _emit_batch_export(asset_ids: Array) -> void:
+ 	var snapshots := []
+ 	for asset_id in asset_ids:
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index fa7475e..115cf3a 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -43,6 +43,13 @@ const ZOOM_CONTROL_TOOLTIP := "Canvas zoom"
+ const STATUS_BATCH_NEEDS_SELECTION := "Select two or more sprites to make a batch"
+ const STATUS_BATCH_SPLIT := "Batch subset created"
+ const STATUS_BATCH_SPLIT_EMPTY := "Select thumbnails inside a batch before splitting"
++const STATUS_BATCH_SPLIT_KEEP := "Kept subset created"
++const STATUS_BATCH_SPLIT_KEEP_EMPTY := "Mark at least one kept thumbnail before splitting"
++const STATUS_BATCH_MARK_NEEDS_SELECTION := "Select thumbnails inside a batch before marking"
++const STATUS_BATCH_MARK_KEEP := "%d thumbnails marked keep"
++const STATUS_BATCH_MARK_REJECT := "%d thumbnails marked reject"
++const STATUS_BATCH_MARK_FLAG := "%d thumbnails flagged"
++const STATUS_BATCH_MARK_CLEAR := "%d thumbnail marks cleared"
+ const STATUS_MOCK_GENERATE_DONE := "Mock batch generated: %d sprites"
+ const STATUS_MOCK_GENERATE_FAILED := "Mock batch generation failed"
+ const STATUS_GRAPH_RUN_DONE := "Graph run complete: %d sprites"
+@@ -130,9 +137,15 @@ const BATCH_ACTION_CLEANUP := "Clean Batch"
+ const BATCH_ACTION_MATTE := "Matte Batch"
+ const BATCH_ACTION_OUTLINE := "Outline Batch"
+ const BATCH_ACTION_QUANTIZE := "Quantize Batch"
++const BATCH_ACTION_MARK_KEEP := "Mark Keep"
++const BATCH_ACTION_MARK_REJECT := "Mark Reject"
++const BATCH_ACTION_MARK_FLAG := "Flag"
++const BATCH_ACTION_CLEAR_MARK := "Clear Mark"
++const BATCH_ACTION_SPLIT_KEEP := "Split Kept"
+ const BATCH_ACTION_SPLIT := "Split Selected"
+ const BATCH_ACTION_EXPORT := "Export Batch"
+ const BATCH_ACTION_SEND_TO_EDITOR := "Send to Editor"
++const BATCH_KEEP_LABEL_SUFFIX := "keep"
+ const GRAPH_PARAM_OBJECT_LIST := "Objects"
+ const GRAPH_PARAM_WIDTH := "Width"
+ const GRAPH_PARAM_HEIGHT := "Height"
+diff --git a/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
+index 5018177..529975e 100644
+--- a/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
++++ b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
+@@ -127,7 +127,7 @@ func get_canvas_actions() -> Array[Dictionary]
+ 新概念，本模型的核心。装一个批次的图片队列，是「AI 输出自由」与「批量加工」的落脚点。
+ 
+ - **双身份**：① 图节点（`type=batch`，`category=container`，`is_canvas_resident()=true`）；② 画布卡（PROJECT-FORMAT canvas.json 的 `node` 引用，特化渲染为容器卡）。
+-- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
++- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
+ - **整批菜单**（`get_canvas_actions()` 声明，边框弹出）：整批清洗 / 整批抠图 / 整批描边 / 整批量化 / 导出整批 / 拆小批次 / 逐张发送到编辑器。均调 core，记 undo + provenance（§4.7）。
+ - **拆小批次**：勾选子集 → 生成子 `batch`（新卡，引用子集 asset_id），可独立处理；复用 `select` 语义。
+ - **分离单图**：把某张拖出批次卡 → 成为独立 sprite 卡（仍在同一画布，见 PROJECT-FORMAT §4 `sprite`）。
 ```

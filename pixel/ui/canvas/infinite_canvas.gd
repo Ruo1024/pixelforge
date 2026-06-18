@@ -25,6 +25,7 @@ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
 const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
 const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
+const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
 const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
 const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
@@ -480,58 +481,53 @@ func _get_active_tool_target() -> Dictionary:
 
 
 func _get_batch_asset_ids(card_id: String, selected_only: bool = false) -> Array:
-	if not _items_by_id.has(card_id):
-		return []
-	var item: Node = _items_by_id[card_id]
-	if item.get_script() != CanvasBatchCardScript:
-		return []
-	if selected_only:
-		return item.get_selected_or_all_asset_ids()
-	return item.asset_ids.duplicate()
+	return BatchOps.get_asset_ids(_items_by_id, card_id, selected_only)
+
+
+func _get_batch_selected_asset_ids(card_id: String) -> Array:
+	return BatchOps.get_selected_asset_ids(_items_by_id, card_id)
+
+
+func _get_batch_marked_asset_ids(card_id: String, review_state: String) -> Array:
+	return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
 
 
 func _replace_batch_asset_ids(
 	card_id: String, new_asset_ids: Array, record_undo: bool = true
 ) -> void:
-	if not _items_by_id.has(card_id):
-		return
-	var item: Node = _items_by_id[card_id]
-	if item.get_script() != CanvasBatchCardScript:
-		return
-	var before: Array = item.asset_ids.duplicate()
-	var after := new_asset_ids.duplicate()
-	var do_replace := func() -> void:
-		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
-		GraphItemBridge.sync_batch_node_asset_ids(item, after)
-		_select_only([card_id])
-		_emit_canvas_changed()
-	var undo_replace := func() -> void:
-		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
-		GraphItemBridge.sync_batch_node_asset_ids(item, before)
-		_select_only([card_id])
-		_emit_canvas_changed()
-	if record_undo:
-		UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
-	else:
-		do_replace.call()
+	BatchOps.replace_asset_ids(
+		_items_by_id, card_id, new_asset_ids, record_undo, _select_only, _emit_canvas_changed
+	)
+
+
+func _set_batch_review_state(
+	card_id: String, asset_ids: Array, review_state: String, record_undo: bool = true
+) -> int:
+	return BatchOps.set_review_state(
+		_items_by_id,
+		card_id,
+		asset_ids,
+		review_state,
+		record_undo,
+		_select_only,
+		_emit_canvas_changed
+	)
 
 
 func _split_batch_selection(card_id: String) -> Node:
-	if not _items_by_id.has(card_id):
+	var spec: Dictionary = BatchOps.split_selection_spec(_items_by_id, card_id)
+	if spec.is_empty():
 		return null
-	var item: Node = _items_by_id[card_id]
-	if item.get_script() != CanvasBatchCardScript:
-		return null
-	var subset: Array = item.get_selected_or_all_asset_ids()
-	if subset.is_empty() or subset.size() == item.asset_ids.size():
-		return null
-	return _add_batch_card(
-		subset,
-		item.position + Vector2(item.get_canvas_bounds().size.x + 24.0, 0.0),
-		"%s subset" % item.label,
-		"",
-		true
+	return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
+
+
+func _split_batch_marked(card_id: String, review_state: String, label_suffix: String) -> Node:
+	var spec: Dictionary = BatchOps.split_marked_spec(
+		_items_by_id, card_id, review_state, label_suffix
 	)
+	if spec.is_empty():
+		return null
+	return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
 
 
 func show_cleanup_preview(
