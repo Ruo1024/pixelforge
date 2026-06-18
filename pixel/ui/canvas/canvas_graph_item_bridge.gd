@@ -4,6 +4,8 @@ extends RefCounted
 ## Graph 节点引用与画布卡片之间的桥接 helper。
 ## contract: 02-contracts/PROJECT-FORMAT.md §4；canvas 只存 node 引用，batch 队列回写 graph params。
 
+const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+
 
 static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
 	if String(item_data.get("type", "")) != "node":
@@ -53,6 +55,7 @@ static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
 			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
 			params["asset_ids"] = _string_array(asset_ids)
 			params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
+			params["review_filter"] = _review_filter(params.get("review_filter", "all"))
 			node_data["params"] = params
 			changed = true
 		nodes.append(node_data)
@@ -92,6 +95,36 @@ static func sync_batch_node_review_states(item: Node, review_states: Dictionary)
 		ProjectService.set_graph_data(item.graph_id, graph_data, true)
 
 
+static func sync_batch_node_review_filter(item: Node, review_filter: String) -> void:
+	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
+		return
+
+	var graph_data := ProjectService.get_graph_data(item.graph_id)
+	if graph_data.is_empty():
+		return
+
+	var nodes := []
+	var changed := false
+	for raw_node in graph_data.get("nodes", []):
+		if not (raw_node is Dictionary):
+			nodes.append(raw_node)
+			continue
+		var node_data: Dictionary = raw_node
+		if (
+			String(node_data.get("id", "")) == item.node_id
+			and String(node_data.get("type", "")) == "batch"
+		):
+			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+			params["review_filter"] = _review_filter(review_filter)
+			node_data["params"] = params
+			changed = true
+		nodes.append(node_data)
+
+	if changed:
+		graph_data["nodes"] = nodes
+		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+
+
 static func _string_array(value: Variant) -> Array[String]:
 	var result: Array[String] = []
 	if value is Array:
@@ -118,3 +151,19 @@ static func _review_state_map(value: Variant, valid_asset_ids: Variant) -> Dicti
 		if review_state in ["keep", "reject", "flag"]:
 			result[asset_id] = review_state
 	return result
+
+
+static func _review_filter(value: Variant) -> String:
+	var filter := String(value)
+	if (
+		filter
+		in [
+			CanvasBatchCardScript.FILTER_ALL,
+			CanvasBatchCardScript.FILTER_PENDING,
+			CanvasBatchCardScript.REVIEW_KEEP,
+			CanvasBatchCardScript.REVIEW_REJECT,
+			CanvasBatchCardScript.REVIEW_FLAG,
+		]
+	):
+		return filter
+	return CanvasBatchCardScript.FILTER_ALL

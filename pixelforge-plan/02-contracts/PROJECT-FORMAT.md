@@ -108,6 +108,8 @@ my_project.pxproj (ZIP)
       "type": "batch_card",        // M2.1 临时批次卡；M3 后升级为 type=node + graphs batch
       "asset_ids": ["uuid-a", "uuid-b"],
       "selected_asset_ids": [],
+      "review_states": { "uuid-a": "keep" },
+      "review_filter": "all",
       "label": "Batch",
       "position": [320, 64],
       "z_index": 1,

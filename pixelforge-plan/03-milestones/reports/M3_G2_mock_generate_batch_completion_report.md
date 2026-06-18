@@ -3870,3 +3870,686 @@ index 5018177..529975e 100644
  - **拆小批次**：勾选子集 → 生成子 `batch`（新卡，引用子集 asset_id），可独立处理；复用 `select` 语义。
  - **分离单图**：把某张拖出批次卡 → 成为独立 sprite 卡（仍在同一画布，见 PROJECT-FORMAT §4 `sprite`）。
 ```
+
+---
+
+## 2026-06-18 M3 UX-5 批次审阅过滤最小闭环
+
+### 本轮实现说明
+
+- 服务对象：已经给 batch 缩略图标记 keep/reject/flag 后，需要快速只看保留项、未定项或废弃项继续筛选的人。
+- 当前痛点：上一轮已经能标记和 Split Kept，但所有缩略图仍混在一起；50 张候选中想复查保留/未定项仍要靠肉眼找标记。
+- 技术选择：在 batch 审阅状态中新增 `review_filter`，取值 `all|pending|keep|reject|flag`；batch 卡绘制、缩略图命中、默认批处理/导出范围都基于当前可见集合；右键菜单增加 Show All / Show Keep / Show Pending / Show Reject / Show Flagged。
+- 选择原因：这是 UX-5 “只看保留/只看未定/只看 reject” 的最小实现，不引入完整焦点图和键盘审阅系统，先让收窄流程可用。
+- 优势：过滤状态可保存/重载；正式 graph batch 写入 batch 节点 params，旧 `batch_card` 写入 canvas；当前过滤下未显式选择时，Clean/Matte/Outline/Export 默认只作用于可见集合，减少误处理隐藏项。
+- 缺陷：本轮仍未实现上一张/下一张焦点审阅，也没有过滤菜单勾选态；空过滤结果仅显示空卡片，没有专门 empty-state 文案。
+- 改进空间：后续可补焦点图、键盘 K/R/F 标记、过滤快捷键、菜单 checkmark，以及 UX-6 before/after A/B 过滤联动。
+
+### 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `./pixel/scripts/lint.sh` | 通过，105 files unchanged，gdlint no problems |
+| `./pixel/scripts/run_tests.sh` | 通过，139/139 tests passing，1147 asserts |
+| `./pixel/scripts/verify_m3_ux5.sh` | 通过，含 lint / tests / `check_ui_scaling` / export-template headless gate / staged image check |
+| staged 图片检查 | `git diff --cached --name-only \| grep -iE '\.(png\|jpe?g)$'` 无输出 |
+| staged 保留目录检查 | `test picture/`、`pixel/tests/fixtures/real/`、`垃圾桶/`、`godot-interactive-guide/` 均未 staged |
+
+备注：GUT 仍报告既有 `1 Orphans` 与退出时 resource leak warning，但测试总结果为 All tests passed；本轮未引入图片提交。
+
+### 人工测试步骤
+
+1. 打开工程，使用 `File > Generate Mock Batch` 生成 Mock Batch。
+2. 点选若干缩略图，右键 batch 卡分别执行 `Mark Keep`、`Mark Reject`、`Flag`。
+3. 右键 batch 卡依次切换 `Show Keep`、`Show Pending`、`Show Reject`、`Show Flagged`、`Show All`，确认卡片只显示对应集合，标题计数显示为 `可见/总数`。
+4. 在 `Show Pending` 或 `Show Keep` 下点选缩略图，确认只会选中当前可见项；右键 `Export Batch` 或 `Clean Batch` 时默认只处理当前可见集合（可用少量 mock 图观察数量变化）。
+5. 保存项目再重开，确认 graph batch 的过滤状态仍在；执行 `File > Run Selected Graph` 重跑后，确认新结果回到 Show All，不被旧过滤器藏起来。
+
+### DoD 核查
+
+| 项 | 核查内容 | 状态 | 证据/路径 |
+|---|---|---|---|
+| 代码规范 | gdlint/gdformat 零告警 | 通过 | `./pixel/scripts/lint.sh` |
+| 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | `pixel/tests/unit/test_canvas_batch_card.gd` 新增 2 个 filter 测试；`./pixel/scripts/run_tests.sh` 139/139 |
+| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 上方人工测试步骤待 owner 实机验证 |
+| 契约同步 | 影响契约的改动已更新 `02-contracts/` | 通过 | `GRAPH-SCHEMA.md` 补 `review_filter`；`PROJECT-FORMAT.md` 补旧 `batch_card` 示例字段 |
+| TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 本轮未新增 TODO/FIXME/HACK |
+| 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | UX-5 filter 仅影响 batch 卡局部列表/绘制 |
+| 跨平台 | 目标平台验证结果已记录 | 通过 | macOS headless 本地验证；export templates 缺失时按现有脚本退化为 headless startup gate |
+| 出口门控 | CI 绿灯或本地 agent 验证绿灯 | 通过 | `./pixel/scripts/verify_m3_ux5.sh` |
+
+### 本轮完整 diff（报告追加前）
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+index bc96991..5103402 100644
+--- a/pixel/tests/unit/test_canvas_batch_card.gd
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -72,6 +72,39 @@ func test_canvas_batch_card_marks_review_state_and_splits_kept_subset() -> void:
+ 	assert_eq(canvas.get_item_count(), 2)
+ 
+ 
++func test_canvas_batch_card_filters_visible_review_subset() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids := [
++		_register_asset(Color.RED, "red"),
++		_register_asset(Color.BLUE, "blue"),
++		_register_asset(Color.GREEN, "green"),
++	]
++	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++	canvas._set_batch_review_state("batch_1", [ids[0]], CanvasBatchCardScript.REVIEW_KEEP, false)
++	canvas._set_batch_review_state("batch_1", [ids[1]], CanvasBatchCardScript.REVIEW_REJECT, false)
++
++	assert_true(
++		canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.REVIEW_KEEP, false)
++	)
++	assert_eq(card.get_visible_asset_ids(), [ids[0]])
++	assert_eq(canvas._get_batch_asset_ids("batch_1", true), [ids[0]])
++
++	assert_true(
++		canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.FILTER_PENDING, false)
++	)
++	assert_eq(card.get_visible_asset_ids(), [ids[2]])
++	assert_true(card.toggle_asset_at_world(card.position + Vector2(20, 60)))
++	assert_eq(card.get_selected_asset_ids(), [ids[2]])
++
++	var data: Dictionary = canvas.export_canvas_data()
++	var item: Dictionary = data["items"][0]
++	assert_eq(item["review_filter"], CanvasBatchCardScript.FILTER_PENDING)
++
++
+ func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+@@ -158,6 +191,49 @@ func test_graph_batch_card_persists_review_state_in_graph_params() -> void:
+ 	assert_eq(reloaded_card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_FLAG), [ids[1]])
+ 
+ 
++func test_graph_batch_card_persists_review_filter_in_graph_params() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++	var graph := GraphScript.new()
++	graph.id = "graph_batch_filter_test"
++	graph.add_node(
++		BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
++	)
++	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++
++	var card: Node = canvas._add_batch_card(
++		ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
++	)
++	canvas._set_batch_review_state(
++		"node_item_1", [ids[1]], CanvasBatchCardScript.REVIEW_FLAG, false
++	)
++	assert_true(
++		canvas._set_batch_review_filter("node_item_1", CanvasBatchCardScript.REVIEW_FLAG, false)
++	)
++	assert_eq(card.get_visible_asset_ids(), [ids[1]])
++
++	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
++	var batch_node: Dictionary = graph_data["nodes"][0]
++	assert_eq(batch_node["params"]["review_filter"], CanvasBatchCardScript.REVIEW_FLAG)
++
++	var canvas_data: Dictionary = canvas.export_canvas_data()
++	assert_false(Dictionary(canvas_data["items"][0]).has("review_filter"))
++
++	var reloaded_canvas: Control = CanvasScript.new()
++	reloaded_canvas.size = Vector2(512, 512)
++	add_child_autofree(reloaded_canvas)
++	await wait_process_frames(2)
++	reloaded_canvas.load_canvas_data(canvas_data)
++	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
++
++	assert_eq(reloaded_card.get_review_filter(), CanvasBatchCardScript.REVIEW_FLAG)
++	assert_eq(reloaded_card.get_visible_asset_ids(), [ids[1]])
++
++
+ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
+index 176a229..793f7d4 100644
+--- a/pixel/ui/canvas/canvas_batch_card.gd
++++ b/pixel/ui/canvas/canvas_batch_card.gd
+@@ -23,6 +23,8 @@ const REVIEW_NONE := ""
+ const REVIEW_KEEP := "keep"
+ const REVIEW_REJECT := "reject"
+ const REVIEW_FLAG := "flag"
++const FILTER_ALL := "all"
++const FILTER_PENDING := "pending"
+ const KEEP_MARK := Color(0.2, 0.88, 0.46, 1.0)
+ const REJECT_MARK := Color(0.95, 0.22, 0.24, 0.95)
+ const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
+@@ -35,6 +37,7 @@ var node_id := ""
+ var asset_ids: Array[String] = []
+ var selected_asset_ids: Array[String] = []
+ var review_states := {}
++var review_filter := FILTER_ALL
+ var label := ""
+ var locked := false
+ 
+@@ -54,6 +57,10 @@ func setup_from_data(data: Dictionary) -> void:
+ 	review_states = _review_state_map(
+ 		graph_params.get("review_states", data.get("review_states", {})), asset_ids
+ 	)
++	review_filter = _normalize_review_filter(
++		String(graph_params.get("review_filter", data.get("review_filter", FILTER_ALL)))
++	)
++	_prune_selected_to_visible()
+ 	locked = bool(data.get("locked", false))
+ 	z_index = int(data.get("z_index", 0))
+ 	var raw_position: Variant = data.get("position", [0, 0])
+@@ -81,6 +88,7 @@ func to_canvas_data() -> Dictionary:
+ 		"asset_ids": asset_ids.duplicate(),
+ 		"selected_asset_ids": selected_asset_ids.duplicate(),
+ 		"review_states": review_states.duplicate(true),
++		"review_filter": review_filter,
+ 		"label": label,
+ 		"position": [int(round(position.x)), int(round(position.y))],
+ 		"z_index": z_index,
+@@ -117,18 +125,30 @@ func set_asset_ids(new_asset_ids: Array) -> void:
+ 		if not asset_ids.has(selected_id):
+ 			selected_asset_ids.erase(selected_id)
+ 	review_states = _review_state_map(review_states, asset_ids)
++	_prune_selected_to_visible()
+ 	_rebuild_thumbnails()
+ 	queue_redraw()
+ 
+ 
+ func get_selected_asset_ids() -> Array[String]:
+-	return selected_asset_ids.duplicate()
++	var visible_lookup := _visible_lookup()
++	var result: Array[String] = []
++	for asset_id in selected_asset_ids:
++		if visible_lookup.has(asset_id):
++			result.append(asset_id)
++	return result
+ 
+ 
+ func get_selected_or_all_asset_ids() -> Array[String]:
++	var visible_ids := get_visible_asset_ids()
+ 	if selected_asset_ids.is_empty():
+-		return asset_ids.duplicate()
+-	return selected_asset_ids.duplicate()
++		return visible_ids
++	var visible_lookup := _lookup(visible_ids)
++	var result: Array[String] = []
++	for selected_id in selected_asset_ids:
++		if visible_lookup.has(selected_id):
++			result.append(selected_id)
++	return result
+ 
+ 
+ func get_marked_asset_ids(review_state: String) -> Array[String]:
+@@ -140,20 +160,48 @@ func get_marked_asset_ids(review_state: String) -> Array[String]:
+ 	return result
+ 
+ 
++func get_visible_asset_ids() -> Array[String]:
++	var result: Array[String] = []
++	match review_filter:
++		FILTER_ALL:
++			return asset_ids.duplicate()
++		FILTER_PENDING:
++			for asset_id in asset_ids:
++				if not review_states.has(asset_id):
++					result.append(asset_id)
++		REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
++			for asset_id in asset_ids:
++				if String(review_states.get(asset_id, REVIEW_NONE)) == review_filter:
++					result.append(asset_id)
++	return result
++
++
+ func get_review_states() -> Dictionary:
+ 	return review_states.duplicate(true)
+ 
+ 
+ func set_review_states(new_review_states: Dictionary) -> void:
+ 	review_states = _review_state_map(new_review_states, asset_ids)
++	_prune_selected_to_visible()
++	queue_redraw()
++
++
++func get_review_filter() -> String:
++	return review_filter
++
++
++func set_review_filter(new_review_filter: String) -> void:
++	review_filter = _normalize_review_filter(new_review_filter)
++	_prune_selected_to_visible()
+ 	queue_redraw()
+ 
+ 
+ func toggle_asset_at_world(world_position: Vector2) -> bool:
+ 	var index := asset_index_at_world(world_position)
+-	if index < 0 or index >= asset_ids.size():
++	var visible_ids := get_visible_asset_ids()
++	if index < 0 or index >= visible_ids.size():
+ 		return false
+-	var asset_id := asset_ids[index]
++	var asset_id := visible_ids[index]
+ 	if selected_asset_ids.has(asset_id):
+ 		selected_asset_ids.erase(asset_id)
+ 	else:
+@@ -167,7 +215,8 @@ func asset_index_at_world(world_position: Vector2) -> int:
+ 	if local.y < HEADER_HEIGHT:
+ 		return -1
+ 	var columns := _columns()
+-	for index in range(asset_ids.size()):
++	var visible_ids := get_visible_asset_ids()
++	for index in range(visible_ids.size()):
+ 		var rect := _thumb_rect(index, columns)
+ 		if rect.has_point(local):
+ 			return index
+@@ -183,10 +232,14 @@ func _draw() -> void:
+ 		Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
+ 	)
+ 	if _font != null:
++		var visible_count := get_visible_asset_ids().size()
++		var title := "%s (%d)" % [label, asset_ids.size()]
++		if visible_count != asset_ids.size():
++			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
+ 		draw_string(
+ 			_font,
+ 			Vector2(PADDING, 28),
+-			"%s (%d)" % [label, asset_ids.size()],
++			title,
+ 			HORIZONTAL_ALIGNMENT_LEFT,
+ 			CARD_WIDTH - PADDING * 2,
+ 			18,
+@@ -194,14 +247,14 @@ func _draw() -> void:
+ 		)
+ 
+ 	var columns := _columns()
+-	for index in range(asset_ids.size()):
+-		_draw_thumbnail(index, _thumb_rect(index, columns))
++	var visible_ids := get_visible_asset_ids()
++	for index in range(visible_ids.size()):
++		_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
+ 	if has_graph_binding():
+ 		_draw_graph_ports()
+ 
+ 
+-func _draw_thumbnail(index: int, rect: Rect2) -> void:
+-	var asset_id := asset_ids[index]
++func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
+ 	draw_rect(rect, THUMB_BACKGROUND, true)
+ 	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
+ 	if texture != null:
+@@ -253,9 +306,10 @@ func _thumb_rect(index: int, columns: int) -> Rect2:
+ 
+ 
+ func _card_height() -> int:
+-	if asset_ids.is_empty():
++	var visible_count := get_visible_asset_ids().size()
++	if visible_count <= 0:
+ 		return MIN_CARD_HEIGHT
+-	var rows := int(ceil(float(asset_ids.size()) / float(_columns())))
++	var rows := int(ceil(float(visible_count) / float(_columns())))
+ 	return maxi(
+ 		MIN_CARD_HEIGHT, HEADER_HEIGHT + PADDING * 2 + rows * THUMB_SIZE + (rows - 1) * THUMB_GAP
+ 	)
+@@ -346,3 +400,29 @@ func _normalize_review_state(review_state: String) -> String:
+ 			return review_state
+ 		_:
+ 			return REVIEW_NONE
++
++
++func _normalize_review_filter(value: String) -> String:
++	match value:
++		FILTER_ALL, FILTER_PENDING, REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
++			return value
++		_:
++			return FILTER_ALL
++
++
++func _prune_selected_to_visible() -> void:
++	var visible_lookup := _visible_lookup()
++	for selected_id in selected_asset_ids.duplicate():
++		if not visible_lookup.has(selected_id):
++			selected_asset_ids.erase(selected_id)
++
++
++func _visible_lookup() -> Dictionary:
++	return _lookup(get_visible_asset_ids())
++
++
++func _lookup(values: Array[String]) -> Dictionary:
++	var result := {}
++	for value in values:
++		result[value] = true
++	return result
+diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
+index 99403b0..a174ed5 100644
+--- a/pixel/ui/canvas/canvas_batch_ops.gd
++++ b/pixel/ui/canvas/canvas_batch_ops.gd
+@@ -49,20 +49,26 @@ static func replace_asset_ids(
+ 		return
+ 	var before: Array = item.asset_ids.duplicate()
+ 	var before_review_states: Dictionary = item.get_review_states()
++	var before_review_filter: String = item.get_review_filter()
+ 	var after := new_asset_ids.duplicate()
+ 	var after_review_states := {}
++	var after_review_filter := CanvasBatchCardScript.FILTER_ALL
+ 	var do_replace := func() -> void:
+ 		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
+ 		_apply_review_states(item, after_review_states)
++		_apply_review_filter(item, after_review_filter)
+ 		GraphItemBridge.sync_batch_node_asset_ids(item, after)
+ 		GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
++		GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
+ 		select_only.call([card_id])
+ 		emit_changed.call()
+ 	var undo_replace := func() -> void:
+ 		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
+ 		_apply_review_states(item, before_review_states)
++		_apply_review_filter(item, before_review_filter)
+ 		GraphItemBridge.sync_batch_node_asset_ids(item, before)
+ 		GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
++		GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
+ 		select_only.call([card_id])
+ 		emit_changed.call()
+ 	if record_undo:
+@@ -114,6 +120,40 @@ static func set_review_state(
+ 	return target_ids.size()
+ 
+ 
++static func set_review_filter(
++	items_by_id: Dictionary,
++	card_id: String,
++	review_filter: String,
++	record_undo: bool,
++	select_only: Callable,
++	emit_changed: Callable
++) -> bool:
++	var item := _batch_item(items_by_id, card_id)
++	if item == null:
++		return false
++	var before: String = item.get_review_filter()
++	var after := _normalize_review_filter(review_filter)
++	if before == after:
++		return true
++
++	var do_filter := func() -> void:
++		_apply_review_filter(item, after)
++		GraphItemBridge.sync_batch_node_review_filter(item, after)
++		select_only.call([card_id])
++		emit_changed.call()
++	var undo_filter := func() -> void:
++		_apply_review_filter(item, before)
++		GraphItemBridge.sync_batch_node_review_filter(item, before)
++		select_only.call([card_id])
++		emit_changed.call()
++
++	if record_undo:
++		UndoService.perform_action("Set batch review filter", do_filter, undo_filter)
++	else:
++		do_filter.call()
++	return true
++
++
+ static func split_selection_spec(items_by_id: Dictionary, card_id: String) -> Dictionary:
+ 	var item := _batch_item(items_by_id, card_id)
+ 	if item == null:
+@@ -162,6 +202,10 @@ static func _apply_review_states(item: Node, review_states: Dictionary) -> void:
+ 	item.set_review_states(review_states)
+ 
+ 
++static func _apply_review_filter(item: Node, review_filter: String) -> void:
++	item.set_review_filter(review_filter)
++
++
+ static func _normalize_review_state(review_state: String) -> String:
+ 	if (
+ 		review_state
+@@ -173,3 +217,18 @@ static func _normalize_review_state(review_state: String) -> String:
+ 	):
+ 		return review_state
+ 	return CanvasBatchCardScript.REVIEW_NONE
++
++
++static func _normalize_review_filter(review_filter: String) -> String:
++	if (
++		review_filter
++		in [
++			CanvasBatchCardScript.FILTER_ALL,
++			CanvasBatchCardScript.FILTER_PENDING,
++			CanvasBatchCardScript.REVIEW_KEEP,
++			CanvasBatchCardScript.REVIEW_REJECT,
++			CanvasBatchCardScript.REVIEW_FLAG,
++		]
++	):
++		return review_filter
++	return CanvasBatchCardScript.FILTER_ALL
+diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+index 5371ed5..1c43497 100644
+--- a/pixel/ui/canvas/canvas_graph_item_bridge.gd
++++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+@@ -4,6 +4,8 @@ extends RefCounted
+ ## Graph 节点引用与画布卡片之间的桥接 helper。
+ ## contract: 02-contracts/PROJECT-FORMAT.md §4；canvas 只存 node 引用，batch 队列回写 graph params。
+ 
++const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
++
+ 
+ static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
+ 	if String(item_data.get("type", "")) != "node":
+@@ -53,6 +55,7 @@ static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
+ 			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+ 			params["asset_ids"] = _string_array(asset_ids)
+ 			params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
++			params["review_filter"] = _review_filter(params.get("review_filter", "all"))
+ 			node_data["params"] = params
+ 			changed = true
+ 		nodes.append(node_data)
+@@ -92,6 +95,36 @@ static func sync_batch_node_review_states(item: Node, review_states: Dictionary)
+ 		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+ 
+ 
++static func sync_batch_node_review_filter(item: Node, review_filter: String) -> void:
++	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
++		return
++
++	var graph_data := ProjectService.get_graph_data(item.graph_id)
++	if graph_data.is_empty():
++		return
++
++	var nodes := []
++	var changed := false
++	for raw_node in graph_data.get("nodes", []):
++		if not (raw_node is Dictionary):
++			nodes.append(raw_node)
++			continue
++		var node_data: Dictionary = raw_node
++		if (
++			String(node_data.get("id", "")) == item.node_id
++			and String(node_data.get("type", "")) == "batch"
++		):
++			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
++			params["review_filter"] = _review_filter(review_filter)
++			node_data["params"] = params
++			changed = true
++		nodes.append(node_data)
++
++	if changed:
++		graph_data["nodes"] = nodes
++		ProjectService.set_graph_data(item.graph_id, graph_data, true)
++
++
+ static func _string_array(value: Variant) -> Array[String]:
+ 	var result: Array[String] = []
+ 	if value is Array:
+@@ -118,3 +151,19 @@ static func _review_state_map(value: Variant, valid_asset_ids: Variant) -> Dicti
+ 		if review_state in ["keep", "reject", "flag"]:
+ 			result[asset_id] = review_state
+ 	return result
++
++
++static func _review_filter(value: Variant) -> String:
++	var filter := String(value)
++	if (
++		filter
++		in [
++			CanvasBatchCardScript.FILTER_ALL,
++			CanvasBatchCardScript.FILTER_PENDING,
++			CanvasBatchCardScript.REVIEW_KEEP,
++			CanvasBatchCardScript.REVIEW_REJECT,
++			CanvasBatchCardScript.REVIEW_FLAG,
++		]
++	):
++		return filter
++	return CanvasBatchCardScript.FILTER_ALL
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 0a76239..b81dd3f 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -492,6 +492,14 @@ func _get_batch_marked_asset_ids(card_id: String, review_state: String) -> Array
+ 	return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
+ 
+ 
++func _set_batch_review_filter(
++	card_id: String, review_filter: String, record_undo: bool = true
++) -> bool:
++	return BatchOps.set_review_filter(
++		_items_by_id, card_id, review_filter, record_undo, _select_only, _emit_canvas_changed
++	)
++
++
+ func _replace_batch_asset_ids(
+ 	card_id: String, new_asset_ids: Array, record_undo: bool = true
+ ) -> void:
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index fd0cf59..b61aee0 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -48,6 +48,11 @@ const BATCH_MENU_MARK_REJECT := 6
+ const BATCH_MENU_MARK_FLAG := 7
+ const BATCH_MENU_CLEAR_MARK := 8
+ const BATCH_MENU_SPLIT_KEEP := 9
++const BATCH_MENU_FILTER_ALL := 10
++const BATCH_MENU_FILTER_KEEP := 11
++const BATCH_MENU_FILTER_PENDING := 12
++const BATCH_MENU_FILTER_REJECT := 13
++const BATCH_MENU_FILTER_FLAG := 14
+ const SELECTION_TOOLS_VISIBLE := false
+ 
+ var _canvas: Control = null
+@@ -303,6 +308,12 @@ func _create_batch_menu() -> void:
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_FLAG, BATCH_MENU_MARK_FLAG)
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_CLEAR_MARK, BATCH_MENU_CLEAR_MARK)
+ 	_batch_menu.add_separator()
++	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_ALL, BATCH_MENU_FILTER_ALL)
++	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_KEEP, BATCH_MENU_FILTER_KEEP)
++	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_PENDING, BATCH_MENU_FILTER_PENDING)
++	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
++	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
++	_batch_menu.add_separator()
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
+ 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
+ 	_batch_menu.add_separator()
+@@ -424,6 +435,26 @@ func _on_batch_menu_id_pressed(id: int) -> void:
+ 			_mark_batch_review_state(
+ 				CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
+ 			)
++		BATCH_MENU_FILTER_ALL:
++			_set_batch_review_filter(
++				CanvasBatchCardScript.FILTER_ALL, Strings.STATUS_BATCH_SHOW_ALL
++			)
++		BATCH_MENU_FILTER_KEEP:
++			_set_batch_review_filter(
++				CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_SHOW_KEEP
++			)
++		BATCH_MENU_FILTER_PENDING:
++			_set_batch_review_filter(
++				CanvasBatchCardScript.FILTER_PENDING, Strings.STATUS_BATCH_SHOW_PENDING
++			)
++		BATCH_MENU_FILTER_REJECT:
++			_set_batch_review_filter(
++				CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_SHOW_REJECT
++			)
++		BATCH_MENU_FILTER_FLAG:
++			_set_batch_review_filter(
++				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
++			)
+ 		BATCH_MENU_SPLIT_KEEP:
+ 			var new_keep_card: Variant = _canvas._split_batch_marked(
+ 				_batch_menu_card_id,
+@@ -458,6 +489,13 @@ func _mark_batch_review_state(review_state: String, status_format: String) -> vo
+ 	_status_label.text = status_format % marked_count
+ 
+ 
++func _set_batch_review_filter(review_filter: String, status_text: String) -> void:
++	if not _canvas._set_batch_review_filter(_batch_menu_card_id, review_filter, true):
++		_status_label.text = Strings.STATUS_BATCH_FILTER_FAILED
++		return
++	_status_label.text = status_text
++
++
+ func _emit_batch_export(asset_ids: Array) -> void:
+ 	var snapshots := []
+ 	for asset_id in asset_ids:
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index 115cf3a..6b00e04 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -50,6 +50,12 @@ const STATUS_BATCH_MARK_KEEP := "%d thumbnails marked keep"
+ const STATUS_BATCH_MARK_REJECT := "%d thumbnails marked reject"
+ const STATUS_BATCH_MARK_FLAG := "%d thumbnails flagged"
+ const STATUS_BATCH_MARK_CLEAR := "%d thumbnail marks cleared"
++const STATUS_BATCH_SHOW_ALL := "Showing all thumbnails"
++const STATUS_BATCH_SHOW_KEEP := "Showing kept thumbnails"
++const STATUS_BATCH_SHOW_PENDING := "Showing pending thumbnails"
++const STATUS_BATCH_SHOW_REJECT := "Showing rejected thumbnails"
++const STATUS_BATCH_SHOW_FLAG := "Showing flagged thumbnails"
++const STATUS_BATCH_FILTER_FAILED := "Batch filter failed"
+ const STATUS_MOCK_GENERATE_DONE := "Mock batch generated: %d sprites"
+ const STATUS_MOCK_GENERATE_FAILED := "Mock batch generation failed"
+ const STATUS_GRAPH_RUN_DONE := "Graph run complete: %d sprites"
+@@ -141,6 +147,11 @@ const BATCH_ACTION_MARK_KEEP := "Mark Keep"
+ const BATCH_ACTION_MARK_REJECT := "Mark Reject"
+ const BATCH_ACTION_MARK_FLAG := "Flag"
+ const BATCH_ACTION_CLEAR_MARK := "Clear Mark"
++const BATCH_ACTION_SHOW_ALL := "Show All"
++const BATCH_ACTION_SHOW_KEEP := "Show Keep"
++const BATCH_ACTION_SHOW_PENDING := "Show Pending"
++const BATCH_ACTION_SHOW_REJECT := "Show Reject"
++const BATCH_ACTION_SHOW_FLAG := "Show Flagged"
+ const BATCH_ACTION_SPLIT_KEEP := "Split Kept"
+ const BATCH_ACTION_SPLIT := "Split Selected"
+ const BATCH_ACTION_EXPORT := "Export Batch"
+diff --git a/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
+index 529975e..5f675ae 100644
+--- a/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
++++ b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
+@@ -127,7 +127,7 @@ func get_canvas_actions() -> Array[Dictionary]
+ 新概念，本模型的核心。装一个批次的图片队列，是「AI 输出自由」与「批量加工」的落脚点。
+ 
+ - **双身份**：① 图节点（`type=batch`，`category=container`，`is_canvas_resident()=true`）；② 画布卡（PROJECT-FORMAT canvas.json 的 `node` 引用，特化渲染为容器卡）。
+-- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
++- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），二者均随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
+ - **整批菜单**（`get_canvas_actions()` 声明，边框弹出）：整批清洗 / 整批抠图 / 整批描边 / 整批量化 / 导出整批 / 拆小批次 / 逐张发送到编辑器。均调 core，记 undo + provenance（§4.7）。
+ - **拆小批次**：勾选子集 → 生成子 `batch`（新卡，引用子集 asset_id），可独立处理；复用 `select` 语义。
+ - **分离单图**：把某张拖出批次卡 → 成为独立 sprite 卡（仍在同一画布，见 PROJECT-FORMAT §4 `sprite`）。
+diff --git a/pixelforge-plan/02-contracts/PROJECT-FORMAT.md b/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
+index 9bf2899..2a78aa8 100644
+--- a/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
++++ b/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
+@@ -108,6 +108,8 @@ my_project.pxproj (ZIP)
+       "type": "batch_card",        // M2.1 临时批次卡；M3 后升级为 type=node + graphs batch
+       "asset_ids": ["uuid-a", "uuid-b"],
+       "selected_asset_ids": [],
++      "review_states": { "uuid-a": "keep" },
++      "review_filter": "all",
+       "label": "Batch",
+       "position": [320, 64],
+       "z_index": 1,
+```

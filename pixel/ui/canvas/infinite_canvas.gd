@@ -492,6 +492,14 @@ func _get_batch_marked_asset_ids(card_id: String, review_state: String) -> Array
 	return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
 
 
+func _set_batch_review_filter(
+	card_id: String, review_filter: String, record_undo: bool = true
+) -> bool:
+	return BatchOps.set_review_filter(
+		_items_by_id, card_id, review_filter, record_undo, _select_only, _emit_canvas_changed
+	)
+
+
 func _replace_batch_asset_ids(
 	card_id: String, new_asset_ids: Array, record_undo: bool = true
 ) -> void:

@@ -23,6 +23,8 @@ const REVIEW_NONE := ""
 const REVIEW_KEEP := "keep"
 const REVIEW_REJECT := "reject"
 const REVIEW_FLAG := "flag"
+const FILTER_ALL := "all"
+const FILTER_PENDING := "pending"
 const KEEP_MARK := Color(0.2, 0.88, 0.46, 1.0)
 const REJECT_MARK := Color(0.95, 0.22, 0.24, 0.95)
 const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
@@ -35,6 +37,7 @@ var node_id := ""
 var asset_ids: Array[String] = []
 var selected_asset_ids: Array[String] = []
 var review_states := {}
+var review_filter := FILTER_ALL
 var label := ""
 var locked := false
 
@@ -54,6 +57,10 @@ func setup_from_data(data: Dictionary) -> void:
 	review_states = _review_state_map(
 		graph_params.get("review_states", data.get("review_states", {})), asset_ids
 	)
+	review_filter = _normalize_review_filter(
+		String(graph_params.get("review_filter", data.get("review_filter", FILTER_ALL)))
+	)
+	_prune_selected_to_visible()
 	locked = bool(data.get("locked", false))
 	z_index = int(data.get("z_index", 0))
 	var raw_position: Variant = data.get("position", [0, 0])
@@ -81,6 +88,7 @@ func to_canvas_data() -> Dictionary:
 		"asset_ids": asset_ids.duplicate(),
 		"selected_asset_ids": selected_asset_ids.duplicate(),
 		"review_states": review_states.duplicate(true),
+		"review_filter": review_filter,
 		"label": label,
 		"position": [int(round(position.x)), int(round(position.y))],
 		"z_index": z_index,
@@ -117,18 +125,30 @@ func set_asset_ids(new_asset_ids: Array) -> void:
 		if not asset_ids.has(selected_id):
 			selected_asset_ids.erase(selected_id)
 	review_states = _review_state_map(review_states, asset_ids)
+	_prune_selected_to_visible()
 	_rebuild_thumbnails()
 	queue_redraw()
 
 
 func get_selected_asset_ids() -> Array[String]:
-	return selected_asset_ids.duplicate()
+	var visible_lookup := _visible_lookup()
+	var result: Array[String] = []
+	for asset_id in selected_asset_ids:
+		if visible_lookup.has(asset_id):
+			result.append(asset_id)
+	return result
 
 
 func get_selected_or_all_asset_ids() -> Array[String]:
+	var visible_ids := get_visible_asset_ids()
 	if selected_asset_ids.is_empty():
-		return asset_ids.duplicate()
-	return selected_asset_ids.duplicate()
+		return visible_ids
+	var visible_lookup := _lookup(visible_ids)
+	var result: Array[String] = []
+	for selected_id in selected_asset_ids:
+		if visible_lookup.has(selected_id):
+			result.append(selected_id)
+	return result
 
 
 func get_marked_asset_ids(review_state: String) -> Array[String]:
@@ -140,20 +160,48 @@ func get_marked_asset_ids(review_state: String) -> Array[String]:
 	return result
 
 
+func get_visible_asset_ids() -> Array[String]:
+	var result: Array[String] = []
+	match review_filter:
+		FILTER_ALL:
+			return asset_ids.duplicate()
+		FILTER_PENDING:
+			for asset_id in asset_ids:
+				if not review_states.has(asset_id):
+					result.append(asset_id)
+		REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
+			for asset_id in asset_ids:
+				if String(review_states.get(asset_id, REVIEW_NONE)) == review_filter:
+					result.append(asset_id)
+	return result
+
+
 func get_review_states() -> Dictionary:
 	return review_states.duplicate(true)
 
 
 func set_review_states(new_review_states: Dictionary) -> void:
 	review_states = _review_state_map(new_review_states, asset_ids)
+	_prune_selected_to_visible()
+	queue_redraw()
+
+
+func get_review_filter() -> String:
+	return review_filter
+
+
+func set_review_filter(new_review_filter: String) -> void:
+	review_filter = _normalize_review_filter(new_review_filter)
+	_prune_selected_to_visible()
 	queue_redraw()
 
 
 func toggle_asset_at_world(world_position: Vector2) -> bool:
 	var index := asset_index_at_world(world_position)
-	if index < 0 or index >= asset_ids.size():
+	var visible_ids := get_visible_asset_ids()
+	if index < 0 or index >= visible_ids.size():
 		return false
-	var asset_id := asset_ids[index]
+	var asset_id := visible_ids[index]
 	if selected_asset_ids.has(asset_id):
 		selected_asset_ids.erase(asset_id)
 	else:
@@ -167,7 +215,8 @@ func asset_index_at_world(world_position: Vector2) -> int:
 	if local.y < HEADER_HEIGHT:
 		return -1
 	var columns := _columns()
-	for index in range(asset_ids.size()):
+	var visible_ids := get_visible_asset_ids()
+	for index in range(visible_ids.size()):
 		var rect := _thumb_rect(index, columns)
 		if rect.has_point(local):
 			return index
@@ -183,10 +232,14 @@ func _draw() -> void:
 		Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
 	)
 	if _font != null:
+		var visible_count := get_visible_asset_ids().size()
+		var title := "%s (%d)" % [label, asset_ids.size()]
+		if visible_count != asset_ids.size():
+			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
 		draw_string(
 			_font,
 			Vector2(PADDING, 28),
-			"%s (%d)" % [label, asset_ids.size()],
+			title,
 			HORIZONTAL_ALIGNMENT_LEFT,
 			CARD_WIDTH - PADDING * 2,
 			18,
@@ -194,14 +247,14 @@ func _draw() -> void:
 		)
 
 	var columns := _columns()
-	for index in range(asset_ids.size()):
-		_draw_thumbnail(index, _thumb_rect(index, columns))
+	var visible_ids := get_visible_asset_ids()
+	for index in range(visible_ids.size()):
+		_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
 	if has_graph_binding():
 		_draw_graph_ports()
 
 
-func _draw_thumbnail(index: int, rect: Rect2) -> void:
-	var asset_id := asset_ids[index]
+func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
 	draw_rect(rect, THUMB_BACKGROUND, true)
 	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
 	if texture != null:
@@ -253,9 +306,10 @@ func _thumb_rect(index: int, columns: int) -> Rect2:
 
 
 func _card_height() -> int:
-	if asset_ids.is_empty():
+	var visible_count := get_visible_asset_ids().size()
+	if visible_count <= 0:
 		return MIN_CARD_HEIGHT
-	var rows := int(ceil(float(asset_ids.size()) / float(_columns())))
+	var rows := int(ceil(float(visible_count) / float(_columns())))
 	return maxi(
 		MIN_CARD_HEIGHT, HEADER_HEIGHT + PADDING * 2 + rows * THUMB_SIZE + (rows - 1) * THUMB_GAP
 	)
@@ -346,3 +400,29 @@ func _normalize_review_state(review_state: String) -> String:
 			return review_state
 		_:
 			return REVIEW_NONE
+
+
+func _normalize_review_filter(value: String) -> String:
+	match value:
+		FILTER_ALL, FILTER_PENDING, REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
+			return value
+		_:
+			return FILTER_ALL
+
+
+func _prune_selected_to_visible() -> void:
+	var visible_lookup := _visible_lookup()
+	for selected_id in selected_asset_ids.duplicate():
+		if not visible_lookup.has(selected_id):
+			selected_asset_ids.erase(selected_id)
+
+
+func _visible_lookup() -> Dictionary:
+	return _lookup(get_visible_asset_ids())
+
+
+func _lookup(values: Array[String]) -> Dictionary:
+	var result := {}
+	for value in values:
+		result[value] = true
+	return result

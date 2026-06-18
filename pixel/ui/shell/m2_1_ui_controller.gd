@@ -48,6 +48,11 @@ const BATCH_MENU_MARK_REJECT := 6
 const BATCH_MENU_MARK_FLAG := 7
 const BATCH_MENU_CLEAR_MARK := 8
 const BATCH_MENU_SPLIT_KEEP := 9
+const BATCH_MENU_FILTER_ALL := 10
+const BATCH_MENU_FILTER_KEEP := 11
+const BATCH_MENU_FILTER_PENDING := 12
+const BATCH_MENU_FILTER_REJECT := 13
+const BATCH_MENU_FILTER_FLAG := 14
 const SELECTION_TOOLS_VISIBLE := false
 
 var _canvas: Control = null
@@ -303,6 +308,12 @@ func _create_batch_menu() -> void:
 	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_FLAG, BATCH_MENU_MARK_FLAG)
 	_batch_menu.add_item(Strings.BATCH_ACTION_CLEAR_MARK, BATCH_MENU_CLEAR_MARK)
 	_batch_menu.add_separator()
+	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_ALL, BATCH_MENU_FILTER_ALL)
+	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_KEEP, BATCH_MENU_FILTER_KEEP)
+	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_PENDING, BATCH_MENU_FILTER_PENDING)
+	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
+	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
+	_batch_menu.add_separator()
 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
 	_batch_menu.add_separator()
@@ -424,6 +435,26 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 			_mark_batch_review_state(
 				CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
 			)
+		BATCH_MENU_FILTER_ALL:
+			_set_batch_review_filter(
+				CanvasBatchCardScript.FILTER_ALL, Strings.STATUS_BATCH_SHOW_ALL
+			)
+		BATCH_MENU_FILTER_KEEP:
+			_set_batch_review_filter(
+				CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_SHOW_KEEP
+			)
+		BATCH_MENU_FILTER_PENDING:
+			_set_batch_review_filter(
+				CanvasBatchCardScript.FILTER_PENDING, Strings.STATUS_BATCH_SHOW_PENDING
+			)
+		BATCH_MENU_FILTER_REJECT:
+			_set_batch_review_filter(
+				CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_SHOW_REJECT
+			)
+		BATCH_MENU_FILTER_FLAG:
+			_set_batch_review_filter(
+				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
+			)
 		BATCH_MENU_SPLIT_KEEP:
 			var new_keep_card: Variant = _canvas._split_batch_marked(
 				_batch_menu_card_id,
@@ -456,6 +487,13 @@ func _mark_batch_review_state(review_state: String, status_format: String) -> vo
 		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
 		return
 	_status_label.text = status_format % marked_count
+
+
+func _set_batch_review_filter(review_filter: String, status_text: String) -> void:
+	if not _canvas._set_batch_review_filter(_batch_menu_card_id, review_filter, true):
+		_status_label.text = Strings.STATUS_BATCH_FILTER_FAILED
+		return
+	_status_label.text = status_text
 
 
 func _emit_batch_export(asset_ids: Array) -> void:

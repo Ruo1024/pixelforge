@@ -49,20 +49,26 @@ static func replace_asset_ids(
 		return
 	var before: Array = item.asset_ids.duplicate()
 	var before_review_states: Dictionary = item.get_review_states()
+	var before_review_filter: String = item.get_review_filter()
 	var after := new_asset_ids.duplicate()
 	var after_review_states := {}
+	var after_review_filter := CanvasBatchCardScript.FILTER_ALL
 	var do_replace := func() -> void:
 		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
 		_apply_review_states(item, after_review_states)
+		_apply_review_filter(item, after_review_filter)
 		GraphItemBridge.sync_batch_node_asset_ids(item, after)
 		GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
+		GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
 		select_only.call([card_id])
 		emit_changed.call()
 	var undo_replace := func() -> void:
 		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
 		_apply_review_states(item, before_review_states)
+		_apply_review_filter(item, before_review_filter)
 		GraphItemBridge.sync_batch_node_asset_ids(item, before)
 		GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
+		GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
 		select_only.call([card_id])
 		emit_changed.call()
 	if record_undo:
@@ -114,6 +120,40 @@ static func set_review_state(
 	return target_ids.size()
 
 
+static func set_review_filter(
+	items_by_id: Dictionary,
+	card_id: String,
+	review_filter: String,
+	record_undo: bool,
+	select_only: Callable,
+	emit_changed: Callable
+) -> bool:
+	var item := _batch_item(items_by_id, card_id)
+	if item == null:
+		return false
+	var before: String = item.get_review_filter()
+	var after := _normalize_review_filter(review_filter)
+	if before == after:
+		return true
+
+	var do_filter := func() -> void:
+		_apply_review_filter(item, after)
+		GraphItemBridge.sync_batch_node_review_filter(item, after)
+		select_only.call([card_id])
+		emit_changed.call()
+	var undo_filter := func() -> void:
+		_apply_review_filter(item, before)
+		GraphItemBridge.sync_batch_node_review_filter(item, before)
+		select_only.call([card_id])
+		emit_changed.call()
+
+	if record_undo:
+		UndoService.perform_action("Set batch review filter", do_filter, undo_filter)
+	else:
+		do_filter.call()
+	return true
+
+
 static func split_selection_spec(items_by_id: Dictionary, card_id: String) -> Dictionary:
 	var item := _batch_item(items_by_id, card_id)
 	if item == null:
@@ -162,6 +202,10 @@ static func _apply_review_states(item: Node, review_states: Dictionary) -> void:
 	item.set_review_states(review_states)
 
 
+static func _apply_review_filter(item: Node, review_filter: String) -> void:
+	item.set_review_filter(review_filter)
+
+
 static func _normalize_review_state(review_state: String) -> String:
 	if (
 		review_state
@@ -173,3 +217,18 @@ static func _normalize_review_state(review_state: String) -> String:
 	):
 		return review_state
 	return CanvasBatchCardScript.REVIEW_NONE
+
+
+static func _normalize_review_filter(review_filter: String) -> String:
+	if (
+		review_filter
+		in [
+			CanvasBatchCardScript.FILTER_ALL,
+			CanvasBatchCardScript.FILTER_PENDING,
+			CanvasBatchCardScript.REVIEW_KEEP,
+			CanvasBatchCardScript.REVIEW_REJECT,
+			CanvasBatchCardScript.REVIEW_FLAG,
+		]
+	):
+		return review_filter
+	return CanvasBatchCardScript.FILTER_ALL
