@@ -4717,5 +4717,723 @@ index b61aee0..0aa0545 100644
 +	return ""
  
  
- func _set_batch_review_filter(review_filter: String, status_text: String) -> void:
+func _set_batch_review_filter(review_filter: String, status_text: String) -> void:
+```
+
+## 2026-06-18 M3 UX-5 批次审阅焦点快捷键
+
+### 本轮实现说明
+
+- 在 batch 审阅状态中补入 `focus_asset_id`，用于记录当前键盘审阅焦点；正式 graph batch 写入 batch node params，旧 `batch_card` 写入 canvas 数据。
+- Batch 卡新增焦点描边，点击缩略图会同步焦点；方向键会在当前可见缩略图集合内移动焦点并将焦点图设为唯一选中缩略图。
+- `Right/Down` 移到下一张，`Left/Up` 移到上一张；焦点移动走 `UndoService`，并随 review filter / asset replacement 清理不可见或失效焦点。
+- 契约补充 `focus_asset_id`；测试覆盖普通 batch、graph batch params 持久化，以及主窗口 mock batch 方向键路径。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh`：通过，105 files would be left unchanged，gdlint 无问题。
+- `./pixel/scripts/run_tests.sh`：通过，143/143 tests passed，1180 asserts。
+- `./pixel/scripts/verify_m3_ux5.sh`：通过，含 lint、完整测试、`check_ui_scaling: ok` 与 headless startup gate。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 单击选中 Mock Batch 卡本身。
+3. 按 `Right` 或 `Down`，确认第一张缩略图被选中并出现浅色焦点描边，状态栏显示 `Focused thumbnail 1 of 10`。
+4. 再按 `Right` 或 `Down`，确认焦点移动到下一张，且只有当前焦点缩略图保持选中。
+5. 按 `Left` 或 `Up`，确认焦点回到上一张。
+6. 在焦点图上继续按 `K/R/F/C`，确认快捷标记作用于当前焦点缩略图。
+7. 用右键过滤 Show Keep / Show Pending 等视图后重复方向键，确认焦点只在当前可见缩略图中移动。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 26565e3..9c70e83 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -292,6 +292,43 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
+ 	assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
+ 
+ 
++func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
++	ProjectService.new_project("Batch Focus UI")
++	var main: Control = MainScript.new()
++	main.size = Vector2(1280, 800)
++	add_child_autofree(main)
++	await wait_process_frames(2)
++
++	var controller: Node = main.get_node("M21UiController")
++	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
++	controller.generate_mock_batch()
++	await wait_process_frames(2)
++
++	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
++	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
++	var batch_node: Dictionary = graph_data["nodes"][3]
++	var asset_ids: Array = batch_node["params"]["asset_ids"]
++	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
++
++	canvas.select_ids([batch_item_id])
++	assert_true(_send_key(controller, KEY_RIGHT))
++	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
++
++	graph_data = ProjectService.current_project.graphs[graph_id]
++	batch_node = graph_data["nodes"][3]
++	assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[0])
++
++	assert_true(_send_key(controller, KEY_RIGHT))
++	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[1]])
++
++	graph_data = ProjectService.current_project.graphs[graph_id]
++	batch_node = graph_data["nodes"][3]
++	assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[1])
++
++	assert_true(_send_key(controller, KEY_LEFT))
++	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
++
++
+ func _node_ids_from_canvas_items(items: Array) -> Array:
+ 	var node_ids := []
+ 	for item in items:
+diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
+index 5103402..c97601c 100644
+--- a/pixel/tests/unit/test_canvas_batch_card.gd
++++ b/pixel/tests/unit/test_canvas_batch_card.gd
+@@ -105,6 +105,50 @@ func test_canvas_batch_card_filters_visible_review_subset() -> void:
+ 	assert_eq(item["review_filter"], CanvasBatchCardScript.FILTER_PENDING)
+ 
+ 
++func test_canvas_batch_card_focuses_visible_review_thumbnails() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids := [
++		_register_asset(Color.RED, "red"),
++		_register_asset(Color.BLUE, "blue"),
++		_register_asset(Color.GREEN, "green"),
++	]
++	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++
++	var focus: Dictionary = canvas._focus_batch_relative("batch_1", 1, false)
++	assert_eq(focus["asset_id"], ids[0])
++	assert_eq(focus["index"], 1)
++	assert_eq(focus["total"], 3)
++	assert_eq(card._get_focus_asset_id(), ids[0])
++	assert_eq(card.get_selected_asset_ids(), [ids[0]])
++
++	focus = canvas._focus_batch_relative("batch_1", 1, false)
++	assert_eq(focus["asset_id"], ids[1])
++	assert_eq(card.get_selected_asset_ids(), [ids[1]])
++
++	focus = canvas._focus_batch_relative("batch_1", -1, false)
++	assert_eq(focus["asset_id"], ids[0])
++	assert_eq(card.get_selected_asset_ids(), [ids[0]])
++
++	canvas._set_batch_review_state("batch_1", [ids[0]], CanvasBatchCardScript.REVIEW_REJECT, false)
++	assert_true(
++		canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.FILTER_PENDING, false)
++	)
++	assert_eq(card._get_focus_asset_id(), "")
++
++	focus = canvas._focus_batch_relative("batch_1", 1, false)
++	assert_eq(focus["asset_id"], ids[1])
++	assert_eq(focus["index"], 1)
++	assert_eq(focus["total"], 2)
++
++	var data: Dictionary = canvas.export_canvas_data()
++	var item: Dictionary = data["items"][0]
++	assert_eq(item["focus_asset_id"], ids[1])
++
++
+ func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+@@ -234,6 +278,44 @@ func test_graph_batch_card_persists_review_filter_in_graph_params() -> void:
+ 	assert_eq(reloaded_card.get_visible_asset_ids(), [ids[1]])
+ 
+ 
++func test_graph_batch_card_persists_focus_asset_id_in_graph_params() -> void:
++	var canvas: Control = CanvasScript.new()
++	canvas.size = Vector2(512, 512)
++	add_child_autofree(canvas)
++	await wait_process_frames(2)
++
++	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++	var graph := GraphScript.new()
++	graph.id = "graph_batch_focus_test"
++	graph.add_node(
++		BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
++	)
++	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++
++	var card: Node = canvas._add_batch_card(
++		ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
++	)
++	var focus: Dictionary = canvas._focus_batch_relative("node_item_1", 1, false)
++	assert_eq(focus["asset_id"], ids[0])
++	assert_eq(card._get_focus_asset_id(), ids[0])
++
++	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
++	var batch_node: Dictionary = graph_data["nodes"][0]
++	assert_eq(batch_node["params"]["focus_asset_id"], ids[0])
++
++	var canvas_data: Dictionary = canvas.export_canvas_data()
++	assert_false(Dictionary(canvas_data["items"][0]).has("focus_asset_id"))
++
++	var reloaded_canvas: Control = CanvasScript.new()
++	reloaded_canvas.size = Vector2(512, 512)
++	add_child_autofree(reloaded_canvas)
++	await wait_process_frames(2)
++	reloaded_canvas.load_canvas_data(canvas_data)
++	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
++
++	assert_eq(reloaded_card._get_focus_asset_id(), ids[0])
++
++
+ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
+ 	var canvas: Control = CanvasScript.new()
+ 	canvas.size = Vector2(512, 512)
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
+index 793f7d4..0d4f595 100644
+--- a/pixel/ui/canvas/canvas_batch_card.gd
++++ b/pixel/ui/canvas/canvas_batch_card.gd
+@@ -28,6 +28,7 @@ const FILTER_PENDING := "pending"
+ const KEEP_MARK := Color(0.2, 0.88, 0.46, 1.0)
+ const REJECT_MARK := Color(0.95, 0.22, 0.24, 0.95)
+ const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
++const FOCUS_BORDER := Color(0.96, 0.96, 0.9, 1.0)
+ const INPUT_PORTS: Array[String] = ["in"]
+ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
+ 
+@@ -38,6 +39,7 @@ var asset_ids: Array[String] = []
+ var selected_asset_ids: Array[String] = []
+ var review_states := {}
+ var review_filter := FILTER_ALL
++var focus_asset_id := ""
+ var label := ""
+ var locked := false
+ 
+@@ -60,7 +62,11 @@ func setup_from_data(data: Dictionary) -> void:
+ 	review_filter = _normalize_review_filter(
+ 		String(graph_params.get("review_filter", data.get("review_filter", FILTER_ALL)))
+ 	)
++	focus_asset_id = _normalize_focus_asset_id(
++		String(graph_params.get("focus_asset_id", data.get("focus_asset_id", "")))
++	)
+ 	_prune_selected_to_visible()
++	_prune_focus_to_visible()
+ 	locked = bool(data.get("locked", false))
+ 	z_index = int(data.get("z_index", 0))
+ 	var raw_position: Variant = data.get("position", [0, 0])
+@@ -89,6 +95,7 @@ func to_canvas_data() -> Dictionary:
+ 		"selected_asset_ids": selected_asset_ids.duplicate(),
+ 		"review_states": review_states.duplicate(true),
+ 		"review_filter": review_filter,
++		"focus_asset_id": focus_asset_id,
+ 		"label": label,
+ 		"position": [int(round(position.x)), int(round(position.y))],
+ 		"z_index": z_index,
+@@ -126,6 +133,7 @@ func set_asset_ids(new_asset_ids: Array) -> void:
+ 			selected_asset_ids.erase(selected_id)
+ 	review_states = _review_state_map(review_states, asset_ids)
+ 	_prune_selected_to_visible()
++	_prune_focus_to_visible()
+ 	_rebuild_thumbnails()
+ 	queue_redraw()
+ 
+@@ -183,6 +191,7 @@ func get_review_states() -> Dictionary:
+ func set_review_states(new_review_states: Dictionary) -> void:
+ 	review_states = _review_state_map(new_review_states, asset_ids)
+ 	_prune_selected_to_visible()
++	_prune_focus_to_visible()
+ 	queue_redraw()
+ 
+ 
+@@ -193,9 +202,39 @@ func get_review_filter() -> String:
+ func set_review_filter(new_review_filter: String) -> void:
+ 	review_filter = _normalize_review_filter(new_review_filter)
+ 	_prune_selected_to_visible()
++	_prune_focus_to_visible()
+ 	queue_redraw()
+ 
+ 
++func _get_focus_asset_id() -> String:
++	return focus_asset_id
++
++
++func _set_focus_asset_id(new_focus_asset_id: String, select_focused: bool = false) -> void:
++	focus_asset_id = _normalize_focus_asset_id(new_focus_asset_id)
++	_prune_focus_to_visible()
++	if select_focused and not focus_asset_id.is_empty():
++		selected_asset_ids = [focus_asset_id]
++	queue_redraw()
++
++
++func _set_selected_asset_ids(new_selected_asset_ids: Array) -> void:
++	selected_asset_ids = _visible_selected_array(new_selected_asset_ids)
++	queue_redraw()
++
++
++func _focus_asset_id_relative(step: int) -> String:
++	var visible_ids := get_visible_asset_ids()
++	if visible_ids.is_empty():
++		return ""
++	if step == 0:
++		return focus_asset_id if visible_ids.has(focus_asset_id) else ""
++	var anchor_index := _focus_anchor_index(visible_ids)
++	if anchor_index < 0:
++		anchor_index = -1 if step > 0 else visible_ids.size()
++	return visible_ids[posmod(anchor_index + step, visible_ids.size())]
++
++
+ func toggle_asset_at_world(world_position: Vector2) -> bool:
+ 	var index := asset_index_at_world(world_position)
+ 	var visible_ids := get_visible_asset_ids()
+@@ -204,8 +243,13 @@ func toggle_asset_at_world(world_position: Vector2) -> bool:
+ 	var asset_id := visible_ids[index]
+ 	if selected_asset_ids.has(asset_id):
+ 		selected_asset_ids.erase(asset_id)
++		if focus_asset_id == asset_id:
++			focus_asset_id = ""
++			if not selected_asset_ids.is_empty():
++				focus_asset_id = selected_asset_ids[selected_asset_ids.size() - 1]
+ 	else:
+ 		selected_asset_ids.append(asset_id)
++		focus_asset_id = asset_id
+ 	queue_redraw()
+ 	return true
+ 
+@@ -266,6 +310,8 @@ func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
+ 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
+ 	draw_rect(rect, border_color, false, 1.5)
+ 	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
++	if focus_asset_id == asset_id:
++		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
+ 
+ 
+ func _draw_review_marker(rect: Rect2, review_state: String) -> void:
+@@ -410,6 +456,10 @@ func _normalize_review_filter(value: String) -> String:
+ 			return FILTER_ALL
+ 
+ 
++func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
++	return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
++
++
+ func _prune_selected_to_visible() -> void:
+ 	var visible_lookup := _visible_lookup()
+ 	for selected_id in selected_asset_ids.duplicate():
+@@ -417,6 +467,34 @@ func _prune_selected_to_visible() -> void:
+ 			selected_asset_ids.erase(selected_id)
+ 
+ 
++func _prune_focus_to_visible() -> void:
++	if focus_asset_id.is_empty():
++		return
++	if not _visible_lookup().has(focus_asset_id):
++		focus_asset_id = ""
++
++
++func _focus_anchor_index(visible_ids: Array[String]) -> int:
++	var focus_index := visible_ids.find(focus_asset_id)
++	if focus_index >= 0:
++		return focus_index
++	for selected_id in selected_asset_ids:
++		var selected_index := visible_ids.find(selected_id)
++		if selected_index >= 0:
++			return selected_index
++	return -1
++
++
++func _visible_selected_array(value: Array) -> Array[String]:
++	var visible_lookup := _visible_lookup()
++	var result: Array[String] = []
++	for raw_id in value:
++		var asset_id := String(raw_id)
++		if visible_lookup.has(asset_id) and not result.has(asset_id):
++			result.append(asset_id)
++	return result
++
++
+ func _visible_lookup() -> Dictionary:
+ 	return _lookup(get_visible_asset_ids())
+ 
+diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
+index a174ed5..f6e3959 100644
+--- a/pixel/ui/canvas/canvas_batch_ops.gd
++++ b/pixel/ui/canvas/canvas_batch_ops.gd
+@@ -50,25 +50,31 @@ static func replace_asset_ids(
+ 	var before: Array = item.asset_ids.duplicate()
+ 	var before_review_states: Dictionary = item.get_review_states()
+ 	var before_review_filter: String = item.get_review_filter()
++	var before_focus_asset_id: String = item._get_focus_asset_id()
+ 	var after := new_asset_ids.duplicate()
+ 	var after_review_states := {}
+ 	var after_review_filter := CanvasBatchCardScript.FILTER_ALL
++	var after_focus_asset_id := ""
+ 	var do_replace := func() -> void:
+ 		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
+ 		_apply_review_states(item, after_review_states)
+ 		_apply_review_filter(item, after_review_filter)
++		_apply_focus_asset_id(item, after_focus_asset_id)
+ 		GraphItemBridge.sync_batch_node_asset_ids(item, after)
+ 		GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
+ 		GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
++		GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
+ 		select_only.call([card_id])
+ 		emit_changed.call()
+ 	var undo_replace := func() -> void:
+ 		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
+ 		_apply_review_states(item, before_review_states)
+ 		_apply_review_filter(item, before_review_filter)
++		_apply_focus_asset_id(item, before_focus_asset_id)
+ 		GraphItemBridge.sync_batch_node_asset_ids(item, before)
+ 		GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
+ 		GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
++		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
+ 		select_only.call([card_id])
+ 		emit_changed.call()
+ 	if record_undo:
+@@ -94,6 +100,7 @@ static func set_review_state(
+ 		return 0
+ 
+ 	var before: Dictionary = item.get_review_states()
++	var before_focus_asset_id: String = item._get_focus_asset_id()
+ 	var after := before.duplicate(true)
+ 	var normalized_state := _normalize_review_state(review_state)
+ 	for asset_id in target_ids:
+@@ -104,12 +111,16 @@ static func set_review_state(
+ 
+ 	var do_mark := func() -> void:
+ 		_apply_review_states(item, after)
++		_apply_focus_asset_id(item, _focus_after_current_filter(item, before_focus_asset_id))
+ 		GraphItemBridge.sync_batch_node_review_states(item, after)
++		GraphItemBridge.sync_batch_node_focus_asset_id(item, item._get_focus_asset_id())
+ 		select_only.call([card_id])
+ 		emit_changed.call()
+ 	var undo_mark := func() -> void:
+ 		_apply_review_states(item, before)
++		_apply_focus_asset_id(item, before_focus_asset_id)
+ 		GraphItemBridge.sync_batch_node_review_states(item, before)
++		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
+ 		select_only.call([card_id])
+ 		emit_changed.call()
+ 
+@@ -132,18 +143,24 @@ static func set_review_filter(
+ 	if item == null:
+ 		return false
+ 	var before: String = item.get_review_filter()
++	var before_focus_asset_id: String = item._get_focus_asset_id()
+ 	var after := _normalize_review_filter(review_filter)
+ 	if before == after:
+ 		return true
++	var after_focus_asset_id := _focus_after_filter(item, before_focus_asset_id, after)
+ 
+ 	var do_filter := func() -> void:
+ 		_apply_review_filter(item, after)
++		_apply_focus_asset_id(item, after_focus_asset_id)
+ 		GraphItemBridge.sync_batch_node_review_filter(item, after)
++		GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
+ 		select_only.call([card_id])
+ 		emit_changed.call()
+ 	var undo_filter := func() -> void:
+ 		_apply_review_filter(item, before)
++		_apply_focus_asset_id(item, before_focus_asset_id)
+ 		GraphItemBridge.sync_batch_node_review_filter(item, before)
++		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
+ 		select_only.call([card_id])
+ 		emit_changed.call()
+ 
+@@ -154,6 +171,45 @@ static func set_review_filter(
+ 	return true
+ 
+ 
++static func focus_relative(
++	items_by_id: Dictionary,
++	card_id: String,
++	step: int,
++	record_undo: bool,
++	select_only: Callable,
++	emit_changed: Callable
++) -> Dictionary:
++	var item := _batch_item(items_by_id, card_id)
++	if item == null:
++		return {}
++	var target_asset_id: String = item._focus_asset_id_relative(step)
++	if target_asset_id.is_empty():
++		return {}
++
++	var before_focus_asset_id: String = item._get_focus_asset_id()
++	var before_selected_asset_ids: Array = item.selected_asset_ids.duplicate()
++	var after_selected_asset_ids := [target_asset_id]
++	var focus_result := _focus_result(item, target_asset_id)
++	var do_focus := func() -> void:
++		_apply_selected_asset_ids(item, after_selected_asset_ids)
++		_apply_focus_asset_id(item, target_asset_id)
++		GraphItemBridge.sync_batch_node_focus_asset_id(item, target_asset_id)
++		select_only.call([card_id])
++		emit_changed.call()
++	var undo_focus := func() -> void:
++		_apply_selected_asset_ids(item, before_selected_asset_ids)
++		_apply_focus_asset_id(item, before_focus_asset_id)
++		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
++		select_only.call([card_id])
++		emit_changed.call()
++
++	if record_undo:
++		UndoService.perform_action("Focus batch thumbnail", do_focus, undo_focus)
++	else:
++		do_focus.call()
++	return focus_result
++
++
+ static func split_selection_spec(items_by_id: Dictionary, card_id: String) -> Dictionary:
+ 	var item := _batch_item(items_by_id, card_id)
+ 	if item == null:
+@@ -206,6 +262,14 @@ static func _apply_review_filter(item: Node, review_filter: String) -> void:
+ 	item.set_review_filter(review_filter)
+ 
+ 
++static func _apply_focus_asset_id(item: Node, focus_asset_id: String) -> void:
++	item._set_focus_asset_id(focus_asset_id, false)
++
++
++static func _apply_selected_asset_ids(item: Node, selected_asset_ids: Array) -> void:
++	item._set_selected_asset_ids(selected_asset_ids)
++
++
+ static func _normalize_review_state(review_state: String) -> String:
+ 	if (
+ 		review_state
+@@ -232,3 +296,40 @@ static func _normalize_review_filter(review_filter: String) -> String:
+ 	):
+ 		return review_filter
+ 	return CanvasBatchCardScript.FILTER_ALL
++
++
++static func _focus_result(item: Node, focus_asset_id: String) -> Dictionary:
++	var visible_ids: Array = item.get_visible_asset_ids()
++	return {
++		"asset_id": focus_asset_id,
++		"index": visible_ids.find(focus_asset_id) + 1,
++		"total": visible_ids.size(),
++	}
++
++
++static func _focus_after_current_filter(item: Node, focus_asset_id: String) -> String:
++	return focus_asset_id if item.get_visible_asset_ids().has(focus_asset_id) else ""
++
++
++static func _focus_after_filter(
++	item: Node, focus_asset_id: String, review_filter: String
++) -> String:
++	if focus_asset_id.is_empty():
++		return ""
++	var normalized_filter := _normalize_review_filter(review_filter)
++	match normalized_filter:
++		CanvasBatchCardScript.FILTER_ALL:
++			return focus_asset_id if item.asset_ids.has(focus_asset_id) else ""
++		CanvasBatchCardScript.FILTER_PENDING:
++			if item.asset_ids.has(focus_asset_id) and not item.review_states.has(focus_asset_id):
++				return focus_asset_id
++		CanvasBatchCardScript.REVIEW_KEEP:
++			if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
++				return focus_asset_id
++		CanvasBatchCardScript.REVIEW_REJECT:
++			if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
++				return focus_asset_id
++		CanvasBatchCardScript.REVIEW_FLAG:
++			if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
++				return focus_asset_id
++	return ""
+diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+index 1c43497..f5c3980 100644
+--- a/pixel/ui/canvas/canvas_graph_item_bridge.gd
++++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+@@ -56,6 +56,7 @@ static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
+ 			params["asset_ids"] = _string_array(asset_ids)
+ 			params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
+ 			params["review_filter"] = _review_filter(params.get("review_filter", "all"))
++			params["focus_asset_id"] = _focus_asset_id(params.get("focus_asset_id", ""), asset_ids)
+ 			node_data["params"] = params
+ 			changed = true
+ 		nodes.append(node_data)
+@@ -125,6 +126,36 @@ static func sync_batch_node_review_filter(item: Node, review_filter: String) ->
+ 		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+ 
+ 
++static func sync_batch_node_focus_asset_id(item: Node, focus_asset_id: String) -> void:
++	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
++		return
++
++	var graph_data := ProjectService.get_graph_data(item.graph_id)
++	if graph_data.is_empty():
++		return
++
++	var nodes := []
++	var changed := false
++	for raw_node in graph_data.get("nodes", []):
++		if not (raw_node is Dictionary):
++			nodes.append(raw_node)
++			continue
++		var node_data: Dictionary = raw_node
++		if (
++			String(node_data.get("id", "")) == item.node_id
++			and String(node_data.get("type", "")) == "batch"
++		):
++			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
++			params["focus_asset_id"] = _focus_asset_id(focus_asset_id, params.get("asset_ids", []))
++			node_data["params"] = params
++			changed = true
++		nodes.append(node_data)
++
++	if changed:
++		graph_data["nodes"] = nodes
++		ProjectService.set_graph_data(item.graph_id, graph_data, true)
++
++
+ static func _string_array(value: Variant) -> Array[String]:
+ 	var result: Array[String] = []
+ 	if value is Array:
+@@ -167,3 +198,8 @@ static func _review_filter(value: Variant) -> String:
+ 	):
+ 		return filter
+ 	return CanvasBatchCardScript.FILTER_ALL
++
++
++static func _focus_asset_id(value: Variant, valid_asset_ids: Variant) -> String:
++	var asset_id := String(value)
++	return asset_id if _string_array(valid_asset_ids).has(asset_id) else ""
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index b81dd3f..4749072 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -522,6 +522,12 @@ func _set_batch_review_state(
+ 	)
+ 
+ 
++func _focus_batch_relative(card_id: String, step: int, record_undo: bool = true) -> Dictionary:
++	return BatchOps.focus_relative(
++		_items_by_id, card_id, step, record_undo, _select_only, _emit_canvas_changed
++	)
++
++
+ func _split_batch_selection(card_id: String) -> Node:
+ 	var spec: Dictionary = BatchOps.split_selection_spec(_items_by_id, card_id)
+ 	if spec.is_empty():
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index 0aa0545..f66c064 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -501,31 +501,53 @@ func _mark_batch_review_state_for_card(
+ func _handle_batch_review_shortcut(event: InputEventKey) -> bool:
+ 	if event.is_command_or_control_pressed() or event.alt_pressed:
+ 		return false
++	if _handle_batch_focus_shortcut(event):
++		return true
+ 	var card_id := _selected_batch_card_id()
++	var review_state := ""
++	var status_format := ""
+ 	match event.keycode:
+ 		KEY_K:
+-			_mark_batch_review_state_for_card(
+-				card_id, CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
+-			)
+-			return true
++			review_state = CanvasBatchCardScript.REVIEW_KEEP
++			status_format = Strings.STATUS_BATCH_MARK_KEEP
+ 		KEY_R:
+-			_mark_batch_review_state_for_card(
+-				card_id, CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
+-			)
+-			return true
++			review_state = CanvasBatchCardScript.REVIEW_REJECT
++			status_format = Strings.STATUS_BATCH_MARK_REJECT
+ 		KEY_F:
+-			_mark_batch_review_state_for_card(
+-				card_id, CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
+-			)
+-			return true
++			review_state = CanvasBatchCardScript.REVIEW_FLAG
++			status_format = Strings.STATUS_BATCH_MARK_FLAG
+ 		KEY_C:
+-			_mark_batch_review_state_for_card(
+-				card_id, CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
+-			)
+-			return true
++			review_state = CanvasBatchCardScript.REVIEW_NONE
++			status_format = Strings.STATUS_BATCH_MARK_CLEAR
++		_:
++			return false
++	_mark_batch_review_state_for_card(card_id, review_state, status_format)
++	return true
++
++
++func _handle_batch_focus_shortcut(event: InputEventKey) -> bool:
++	match event.keycode:
++		KEY_RIGHT, KEY_DOWN:
++			return _focus_selected_batch_relative(1)
++		KEY_LEFT, KEY_UP:
++			return _focus_selected_batch_relative(-1)
+ 	return false
+ 
+ 
++func _focus_selected_batch_relative(step: int) -> bool:
++	var card_id := _selected_batch_card_id()
++	if card_id.is_empty():
++		return false
++	var focus_result: Dictionary = _canvas._focus_batch_relative(card_id, step, true)
++	if focus_result.is_empty():
++		_status_label.text = Strings.STATUS_BATCH_FOCUS_EMPTY
++		return true
++	_status_label.text = (
++		Strings.STATUS_BATCH_FOCUS_FORMAT % [focus_result["index"], focus_result["total"]]
++	)
++	return true
++
++
+ func _selected_batch_card_id() -> String:
+ 	var selected_ids: Array = _canvas.get_selected_ids()
+ 	if selected_ids.is_empty():
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index 6b00e04..ba97d1e 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -56,6 +56,8 @@ const STATUS_BATCH_SHOW_PENDING := "Showing pending thumbnails"
+ const STATUS_BATCH_SHOW_REJECT := "Showing rejected thumbnails"
+ const STATUS_BATCH_SHOW_FLAG := "Showing flagged thumbnails"
+ const STATUS_BATCH_FILTER_FAILED := "Batch filter failed"
++const STATUS_BATCH_FOCUS_EMPTY := "No visible thumbnails in batch"
++const STATUS_BATCH_FOCUS_FORMAT := "Focused thumbnail %d of %d"
+ const STATUS_MOCK_GENERATE_DONE := "Mock batch generated: %d sprites"
+ const STATUS_MOCK_GENERATE_FAILED := "Mock batch generation failed"
+ const STATUS_GRAPH_RUN_DONE := "Graph run complete: %d sprites"
+diff --git a/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
+index 5f675ae..1239323 100644
+--- a/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
++++ b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
+@@ -127,7 +127,7 @@ func get_canvas_actions() -> Array[Dictionary]
+ 新概念，本模型的核心。装一个批次的图片队列，是「AI 输出自由」与「批量加工」的落脚点。
+ 
+ - **双身份**：① 图节点（`type=batch`，`category=container`，`is_canvas_resident()=true`）；② 画布卡（PROJECT-FORMAT canvas.json 的 `node` 引用，特化渲染为容器卡）。
+-- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），二者均随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
++- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），可选 `focus_asset_id` 记录当前键盘审阅焦点，三者均随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
+ - **整批菜单**（`get_canvas_actions()` 声明，边框弹出）：整批清洗 / 整批抠图 / 整批描边 / 整批量化 / 导出整批 / 拆小批次 / 逐张发送到编辑器。均调 core，记 undo + provenance（§4.7）。
+ - **拆小批次**：勾选子集 → 生成子 `batch`（新卡，引用子集 asset_id），可独立处理；复用 `select` 语义。
+ - **分离单图**：把某张拖出批次卡 → 成为独立 sprite 卡（仍在同一画布，见 PROJECT-FORMAT §4 `sprite`）。
+diff --git a/pixelforge-plan/02-contracts/PROJECT-FORMAT.md b/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
+index 2a78aa8..0ba739c 100644
+--- a/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
++++ b/pixelforge-plan/02-contracts/PROJECT-FORMAT.md
+@@ -110,6 +110,7 @@ my_project.pxproj (ZIP)
+       "selected_asset_ids": [],
+       "review_states": { "uuid-a": "keep" },
+       "review_filter": "all",
++      "focus_asset_id": "uuid-a",
+       "label": "Batch",
+       "position": [320, 64],
+       "z_index": 1,
 ```

@@ -110,6 +110,7 @@ my_project.pxproj (ZIP)
       "selected_asset_ids": [],
       "review_states": { "uuid-a": "keep" },
       "review_filter": "all",
+      "focus_asset_id": "uuid-a",
       "label": "Batch",
       "position": [320, 64],
       "z_index": 1,

@@ -50,25 +50,31 @@ static func replace_asset_ids(
 	var before: Array = item.asset_ids.duplicate()
 	var before_review_states: Dictionary = item.get_review_states()
 	var before_review_filter: String = item.get_review_filter()
+	var before_focus_asset_id: String = item._get_focus_asset_id()
 	var after := new_asset_ids.duplicate()
 	var after_review_states := {}
 	var after_review_filter := CanvasBatchCardScript.FILTER_ALL
+	var after_focus_asset_id := ""
 	var do_replace := func() -> void:
 		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
 		_apply_review_states(item, after_review_states)
 		_apply_review_filter(item, after_review_filter)
+		_apply_focus_asset_id(item, after_focus_asset_id)
 		GraphItemBridge.sync_batch_node_asset_ids(item, after)
 		GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
 		GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
+		GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
 		select_only.call([card_id])
 		emit_changed.call()
 	var undo_replace := func() -> void:
 		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
 		_apply_review_states(item, before_review_states)
 		_apply_review_filter(item, before_review_filter)
+		_apply_focus_asset_id(item, before_focus_asset_id)
 		GraphItemBridge.sync_batch_node_asset_ids(item, before)
 		GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
 		GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
+		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
 		select_only.call([card_id])
 		emit_changed.call()
 	if record_undo:
@@ -94,6 +100,7 @@ static func set_review_state(
 		return 0
 
 	var before: Dictionary = item.get_review_states()
+	var before_focus_asset_id: String = item._get_focus_asset_id()
 	var after := before.duplicate(true)
 	var normalized_state := _normalize_review_state(review_state)
 	for asset_id in target_ids:
@@ -104,12 +111,16 @@ static func set_review_state(
 
 	var do_mark := func() -> void:
 		_apply_review_states(item, after)
+		_apply_focus_asset_id(item, _focus_after_current_filter(item, before_focus_asset_id))
 		GraphItemBridge.sync_batch_node_review_states(item, after)
+		GraphItemBridge.sync_batch_node_focus_asset_id(item, item._get_focus_asset_id())
 		select_only.call([card_id])
 		emit_changed.call()
 	var undo_mark := func() -> void:
 		_apply_review_states(item, before)
+		_apply_focus_asset_id(item, before_focus_asset_id)
 		GraphItemBridge.sync_batch_node_review_states(item, before)
+		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
 		select_only.call([card_id])
 		emit_changed.call()
 
@@ -132,18 +143,24 @@ static func set_review_filter(
 	if item == null:
 		return false
 	var before: String = item.get_review_filter()
+	var before_focus_asset_id: String = item._get_focus_asset_id()
 	var after := _normalize_review_filter(review_filter)
 	if before == after:
 		return true
+	var after_focus_asset_id := _focus_after_filter(item, before_focus_asset_id, after)
 
 	var do_filter := func() -> void:
 		_apply_review_filter(item, after)
+		_apply_focus_asset_id(item, after_focus_asset_id)
 		GraphItemBridge.sync_batch_node_review_filter(item, after)
+		GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
 		select_only.call([card_id])
 		emit_changed.call()
 	var undo_filter := func() -> void:
 		_apply_review_filter(item, before)
+		_apply_focus_asset_id(item, before_focus_asset_id)
 		GraphItemBridge.sync_batch_node_review_filter(item, before)
+		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
 		select_only.call([card_id])
 		emit_changed.call()
 
@@ -152,6 +169,45 @@ static func set_review_filter(
 	else:
 		do_filter.call()
 	return true
+
+
+static func focus_relative(
+	items_by_id: Dictionary,
+	card_id: String,
+	step: int,
+	record_undo: bool,
+	select_only: Callable,
+	emit_changed: Callable
+) -> Dictionary:
+	var item := _batch_item(items_by_id, card_id)
+	if item == null:
+		return {}
+	var target_asset_id: String = item._focus_asset_id_relative(step)
+	if target_asset_id.is_empty():
+		return {}
+
+	var before_focus_asset_id: String = item._get_focus_asset_id()
+	var before_selected_asset_ids: Array = item.selected_asset_ids.duplicate()
+	var after_selected_asset_ids := [target_asset_id]
+	var focus_result := _focus_result(item, target_asset_id)
+	var do_focus := func() -> void:
+		_apply_selected_asset_ids(item, after_selected_asset_ids)
+		_apply_focus_asset_id(item, target_asset_id)
+		GraphItemBridge.sync_batch_node_focus_asset_id(item, target_asset_id)
+		select_only.call([card_id])
+		emit_changed.call()
+	var undo_focus := func() -> void:
+		_apply_selected_asset_ids(item, before_selected_asset_ids)
+		_apply_focus_asset_id(item, before_focus_asset_id)
+		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
+		select_only.call([card_id])
+		emit_changed.call()
+
+	if record_undo:
+		UndoService.perform_action("Focus batch thumbnail", do_focus, undo_focus)
+	else:
+		do_focus.call()
+	return focus_result
 
 
 static func split_selection_spec(items_by_id: Dictionary, card_id: String) -> Dictionary:
@@ -206,6 +262,14 @@ static func _apply_review_filter(item: Node, review_filter: String) -> void:
 	item.set_review_filter(review_filter)
 
 
+static func _apply_focus_asset_id(item: Node, focus_asset_id: String) -> void:
+	item._set_focus_asset_id(focus_asset_id, false)
+
+
+static func _apply_selected_asset_ids(item: Node, selected_asset_ids: Array) -> void:
+	item._set_selected_asset_ids(selected_asset_ids)
+
+
 static func _normalize_review_state(review_state: String) -> String:
 	if (
 		review_state
@@ -232,3 +296,40 @@ static func _normalize_review_filter(review_filter: String) -> String:
 	):
 		return review_filter
 	return CanvasBatchCardScript.FILTER_ALL
+
+
+static func _focus_result(item: Node, focus_asset_id: String) -> Dictionary:
+	var visible_ids: Array = item.get_visible_asset_ids()
+	return {
+		"asset_id": focus_asset_id,
+		"index": visible_ids.find(focus_asset_id) + 1,
+		"total": visible_ids.size(),
+	}
+
+
+static func _focus_after_current_filter(item: Node, focus_asset_id: String) -> String:
+	return focus_asset_id if item.get_visible_asset_ids().has(focus_asset_id) else ""
+
+
+static func _focus_after_filter(
+	item: Node, focus_asset_id: String, review_filter: String
+) -> String:
+	if focus_asset_id.is_empty():
+		return ""
+	var normalized_filter := _normalize_review_filter(review_filter)
+	match normalized_filter:
+		CanvasBatchCardScript.FILTER_ALL:
+			return focus_asset_id if item.asset_ids.has(focus_asset_id) else ""
+		CanvasBatchCardScript.FILTER_PENDING:
+			if item.asset_ids.has(focus_asset_id) and not item.review_states.has(focus_asset_id):
+				return focus_asset_id
+		CanvasBatchCardScript.REVIEW_KEEP:
+			if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
+				return focus_asset_id
+		CanvasBatchCardScript.REVIEW_REJECT:
+			if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
+				return focus_asset_id
+		CanvasBatchCardScript.REVIEW_FLAG:
+			if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
+				return focus_asset_id
+	return ""

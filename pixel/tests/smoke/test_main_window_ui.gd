@@ -292,6 +292,43 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
 	assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
 
 
+func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
+	ProjectService.new_project("Batch Focus UI")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+	var batch_node: Dictionary = graph_data["nodes"][3]
+	var asset_ids: Array = batch_node["params"]["asset_ids"]
+	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
+
+	canvas.select_ids([batch_item_id])
+	assert_true(_send_key(controller, KEY_RIGHT))
+	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
+
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[0])
+
+	assert_true(_send_key(controller, KEY_RIGHT))
+	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[1]])
+
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[1])
+
+	assert_true(_send_key(controller, KEY_LEFT))
+	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
+
+
 func _node_ids_from_canvas_items(items: Array) -> Array:
 	var node_ids := []
 	for item in items:

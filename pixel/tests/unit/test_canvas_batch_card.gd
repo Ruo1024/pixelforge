@@ -105,6 +105,50 @@ func test_canvas_batch_card_filters_visible_review_subset() -> void:
 	assert_eq(item["review_filter"], CanvasBatchCardScript.FILTER_PENDING)
 
 
+func test_canvas_batch_card_focuses_visible_review_thumbnails() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var ids := [
+		_register_asset(Color.RED, "red"),
+		_register_asset(Color.BLUE, "blue"),
+		_register_asset(Color.GREEN, "green"),
+	]
+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
+
+	var focus: Dictionary = canvas._focus_batch_relative("batch_1", 1, false)
+	assert_eq(focus["asset_id"], ids[0])
+	assert_eq(focus["index"], 1)
+	assert_eq(focus["total"], 3)
+	assert_eq(card._get_focus_asset_id(), ids[0])
+	assert_eq(card.get_selected_asset_ids(), [ids[0]])
+
+	focus = canvas._focus_batch_relative("batch_1", 1, false)
+	assert_eq(focus["asset_id"], ids[1])
+	assert_eq(card.get_selected_asset_ids(), [ids[1]])
+
+	focus = canvas._focus_batch_relative("batch_1", -1, false)
+	assert_eq(focus["asset_id"], ids[0])
+	assert_eq(card.get_selected_asset_ids(), [ids[0]])
+
+	canvas._set_batch_review_state("batch_1", [ids[0]], CanvasBatchCardScript.REVIEW_REJECT, false)
+	assert_true(
+		canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.FILTER_PENDING, false)
+	)
+	assert_eq(card._get_focus_asset_id(), "")
+
+	focus = canvas._focus_batch_relative("batch_1", 1, false)
+	assert_eq(focus["asset_id"], ids[1])
+	assert_eq(focus["index"], 1)
+	assert_eq(focus["total"], 2)
+
+	var data: Dictionary = canvas.export_canvas_data()
+	var item: Dictionary = data["items"][0]
+	assert_eq(item["focus_asset_id"], ids[1])
+
+
 func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(512, 512)
@@ -232,6 +276,44 @@ func test_graph_batch_card_persists_review_filter_in_graph_params() -> void:
 
 	assert_eq(reloaded_card.get_review_filter(), CanvasBatchCardScript.REVIEW_FLAG)
 	assert_eq(reloaded_card.get_visible_asset_ids(), [ids[1]])
+
+
+func test_graph_batch_card_persists_focus_asset_id_in_graph_params() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
+	var graph := GraphScript.new()
+	graph.id = "graph_batch_focus_test"
+	graph.add_node(
+		BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
+	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+
+	var card: Node = canvas._add_batch_card(
+		ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
+	)
+	var focus: Dictionary = canvas._focus_batch_relative("node_item_1", 1, false)
+	assert_eq(focus["asset_id"], ids[0])
+	assert_eq(card._get_focus_asset_id(), ids[0])
+
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
+	var batch_node: Dictionary = graph_data["nodes"][0]
+	assert_eq(batch_node["params"]["focus_asset_id"], ids[0])
+
+	var canvas_data: Dictionary = canvas.export_canvas_data()
+	assert_false(Dictionary(canvas_data["items"][0]).has("focus_asset_id"))
+
+	var reloaded_canvas: Control = CanvasScript.new()
+	reloaded_canvas.size = Vector2(512, 512)
+	add_child_autofree(reloaded_canvas)
+	await wait_process_frames(2)
+	reloaded_canvas.load_canvas_data(canvas_data)
+	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
+
+	assert_eq(reloaded_card._get_focus_asset_id(), ids[0])
 
 
 func test_graph_node_card_exports_node_reference_and_survives_load() -> void:

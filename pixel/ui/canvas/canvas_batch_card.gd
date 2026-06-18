@@ -28,6 +28,7 @@ const FILTER_PENDING := "pending"
 const KEEP_MARK := Color(0.2, 0.88, 0.46, 1.0)
 const REJECT_MARK := Color(0.95, 0.22, 0.24, 0.95)
 const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
+const FOCUS_BORDER := Color(0.96, 0.96, 0.9, 1.0)
 const INPUT_PORTS: Array[String] = ["in"]
 const OUTPUT_PORTS: Array[String] = ["images", "assets"]
 
@@ -38,6 +39,7 @@ var asset_ids: Array[String] = []
 var selected_asset_ids: Array[String] = []
 var review_states := {}
 var review_filter := FILTER_ALL
+var focus_asset_id := ""
 var label := ""
 var locked := false
 
@@ -60,7 +62,11 @@ func setup_from_data(data: Dictionary) -> void:
 	review_filter = _normalize_review_filter(
 		String(graph_params.get("review_filter", data.get("review_filter", FILTER_ALL)))
 	)
+	focus_asset_id = _normalize_focus_asset_id(
+		String(graph_params.get("focus_asset_id", data.get("focus_asset_id", "")))
+	)
 	_prune_selected_to_visible()
+	_prune_focus_to_visible()
 	locked = bool(data.get("locked", false))
 	z_index = int(data.get("z_index", 0))
 	var raw_position: Variant = data.get("position", [0, 0])
@@ -89,6 +95,7 @@ func to_canvas_data() -> Dictionary:
 		"selected_asset_ids": selected_asset_ids.duplicate(),
 		"review_states": review_states.duplicate(true),
 		"review_filter": review_filter,
+		"focus_asset_id": focus_asset_id,
 		"label": label,
 		"position": [int(round(position.x)), int(round(position.y))],
 		"z_index": z_index,
@@ -126,6 +133,7 @@ func set_asset_ids(new_asset_ids: Array) -> void:
 			selected_asset_ids.erase(selected_id)
 	review_states = _review_state_map(review_states, asset_ids)
 	_prune_selected_to_visible()
+	_prune_focus_to_visible()
 	_rebuild_thumbnails()
 	queue_redraw()
 
@@ -183,6 +191,7 @@ func get_review_states() -> Dictionary:
 func set_review_states(new_review_states: Dictionary) -> void:
 	review_states = _review_state_map(new_review_states, asset_ids)
 	_prune_selected_to_visible()
+	_prune_focus_to_visible()
 	queue_redraw()
 
 
@@ -193,7 +202,37 @@ func get_review_filter() -> String:
 func set_review_filter(new_review_filter: String) -> void:
 	review_filter = _normalize_review_filter(new_review_filter)
 	_prune_selected_to_visible()
+	_prune_focus_to_visible()
 	queue_redraw()
+
+
+func _get_focus_asset_id() -> String:
+	return focus_asset_id
+
+
+func _set_focus_asset_id(new_focus_asset_id: String, select_focused: bool = false) -> void:
+	focus_asset_id = _normalize_focus_asset_id(new_focus_asset_id)
+	_prune_focus_to_visible()
+	if select_focused and not focus_asset_id.is_empty():
+		selected_asset_ids = [focus_asset_id]
+	queue_redraw()
+
+
+func _set_selected_asset_ids(new_selected_asset_ids: Array) -> void:
+	selected_asset_ids = _visible_selected_array(new_selected_asset_ids)
+	queue_redraw()
+
+
+func _focus_asset_id_relative(step: int) -> String:
+	var visible_ids := get_visible_asset_ids()
+	if visible_ids.is_empty():
+		return ""
+	if step == 0:
+		return focus_asset_id if visible_ids.has(focus_asset_id) else ""
+	var anchor_index := _focus_anchor_index(visible_ids)
+	if anchor_index < 0:
+		anchor_index = -1 if step > 0 else visible_ids.size()
+	return visible_ids[posmod(anchor_index + step, visible_ids.size())]
 
 
 func toggle_asset_at_world(world_position: Vector2) -> bool:
@@ -204,8 +243,13 @@ func toggle_asset_at_world(world_position: Vector2) -> bool:
 	var asset_id := visible_ids[index]
 	if selected_asset_ids.has(asset_id):
 		selected_asset_ids.erase(asset_id)
+		if focus_asset_id == asset_id:
+			focus_asset_id = ""
+			if not selected_asset_ids.is_empty():
+				focus_asset_id = selected_asset_ids[selected_asset_ids.size() - 1]
 	else:
 		selected_asset_ids.append(asset_id)
+		focus_asset_id = asset_id
 	queue_redraw()
 	return true
 
@@ -266,6 +310,8 @@ func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
 	draw_rect(rect, border_color, false, 1.5)
 	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
+	if focus_asset_id == asset_id:
+		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
 
 
 func _draw_review_marker(rect: Rect2, review_state: String) -> void:
@@ -410,11 +456,43 @@ func _normalize_review_filter(value: String) -> String:
 			return FILTER_ALL
 
 
+func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
+	return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
+
+
 func _prune_selected_to_visible() -> void:
 	var visible_lookup := _visible_lookup()
 	for selected_id in selected_asset_ids.duplicate():
 		if not visible_lookup.has(selected_id):
 			selected_asset_ids.erase(selected_id)
+
+
+func _prune_focus_to_visible() -> void:
+	if focus_asset_id.is_empty():
+		return
+	if not _visible_lookup().has(focus_asset_id):
+		focus_asset_id = ""
+
+
+func _focus_anchor_index(visible_ids: Array[String]) -> int:
+	var focus_index := visible_ids.find(focus_asset_id)
+	if focus_index >= 0:
+		return focus_index
+	for selected_id in selected_asset_ids:
+		var selected_index := visible_ids.find(selected_id)
+		if selected_index >= 0:
+			return selected_index
+	return -1
+
+
+func _visible_selected_array(value: Array) -> Array[String]:
+	var visible_lookup := _visible_lookup()
+	var result: Array[String] = []
+	for raw_id in value:
+		var asset_id := String(raw_id)
+		if visible_lookup.has(asset_id) and not result.has(asset_id):
+			result.append(asset_id)
+	return result
 
 
 func _visible_lookup() -> Dictionary:

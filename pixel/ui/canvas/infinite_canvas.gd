@@ -522,6 +522,12 @@ func _set_batch_review_state(
 	)
 
 
+func _focus_batch_relative(card_id: String, step: int, record_undo: bool = true) -> Dictionary:
+	return BatchOps.focus_relative(
+		_items_by_id, card_id, step, record_undo, _select_only, _emit_canvas_changed
+	)
+
+
 func _split_batch_selection(card_id: String) -> Node:
 	var spec: Dictionary = BatchOps.split_selection_spec(_items_by_id, card_id)
 	if spec.is_empty():

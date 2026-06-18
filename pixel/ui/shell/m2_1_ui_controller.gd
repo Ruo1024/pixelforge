@@ -501,29 +501,51 @@ func _mark_batch_review_state_for_card(
 func _handle_batch_review_shortcut(event: InputEventKey) -> bool:
 	if event.is_command_or_control_pressed() or event.alt_pressed:
 		return false
+	if _handle_batch_focus_shortcut(event):
+		return true
 	var card_id := _selected_batch_card_id()
+	var review_state := ""
+	var status_format := ""
 	match event.keycode:
 		KEY_K:
-			_mark_batch_review_state_for_card(
-				card_id, CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
-			)
-			return true
+			review_state = CanvasBatchCardScript.REVIEW_KEEP
+			status_format = Strings.STATUS_BATCH_MARK_KEEP
 		KEY_R:
-			_mark_batch_review_state_for_card(
-				card_id, CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
-			)
-			return true
+			review_state = CanvasBatchCardScript.REVIEW_REJECT
+			status_format = Strings.STATUS_BATCH_MARK_REJECT
 		KEY_F:
-			_mark_batch_review_state_for_card(
-				card_id, CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
-			)
-			return true
+			review_state = CanvasBatchCardScript.REVIEW_FLAG
+			status_format = Strings.STATUS_BATCH_MARK_FLAG
 		KEY_C:
-			_mark_batch_review_state_for_card(
-				card_id, CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
-			)
-			return true
+			review_state = CanvasBatchCardScript.REVIEW_NONE
+			status_format = Strings.STATUS_BATCH_MARK_CLEAR
+		_:
+			return false
+	_mark_batch_review_state_for_card(card_id, review_state, status_format)
+	return true
+
+
+func _handle_batch_focus_shortcut(event: InputEventKey) -> bool:
+	match event.keycode:
+		KEY_RIGHT, KEY_DOWN:
+			return _focus_selected_batch_relative(1)
+		KEY_LEFT, KEY_UP:
+			return _focus_selected_batch_relative(-1)
 	return false
+
+
+func _focus_selected_batch_relative(step: int) -> bool:
+	var card_id := _selected_batch_card_id()
+	if card_id.is_empty():
+		return false
+	var focus_result: Dictionary = _canvas._focus_batch_relative(card_id, step, true)
+	if focus_result.is_empty():
+		_status_label.text = Strings.STATUS_BATCH_FOCUS_EMPTY
+		return true
+	_status_label.text = (
+		Strings.STATUS_BATCH_FOCUS_FORMAT % [focus_result["index"], focus_result["total"]]
+	)
+	return true
 
 
 func _selected_batch_card_id() -> String:
