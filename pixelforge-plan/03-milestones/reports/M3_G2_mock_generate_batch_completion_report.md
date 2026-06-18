@@ -2660,6 +2660,388 @@ index 382cf04..256e81f 100644
 +
 +
  func _port_names(port_specs: Array[Dictionary]) -> Array[String]:
- 	var result: Array[String] = []
- 	for port_spec in port_specs:
+	var result: Array[String] = []
+	for port_spec in port_specs:
+```
+
+## 追加开发：G-5 最小重跑入口
+
+追加目标：让 G-4 已经可见的最小 mock 节点链不再只是一次性生成结果，而是能在画布中选中任一 graph 节点后通过菜单重跑并刷新正式 batch 队列。本轮仍不做完整 executor、参数检查器、异步 Run/Cancel 状态机，只铺“可直接使用”的最小 Run 入口。
+
+### G-5 实现
+
+- `pixel/ui/shell/m2_1_ui_controller.gd`
+  - File 菜单新增 `Run Selected Graph`。
+  - 选中任一 graph node / graph batch 卡后，读取其 `graph_id`，用现有 `PFGraphMockRunner` 重跑 mock 链。
+  - 重跑结果替换当前 batch 队列，并同步 graph batch 节点 `params.asset_ids` 与画布卡缩略图。
+- `pixel/services/graph_mock_runner.gd`
+  - `run_to_batch()` 增加 `replace_batch_assets` 参数。
+  - 默认保持原有追加行为；菜单重跑时使用替换模式，避免一次次重复追加旧候选。
+- `pixel/ui/shell/strings.gd`
+  - 新增 Run 菜单文案与状态栏提示。
+- `pixel/scripts/verify_m3_g5.sh`
+  - 新增 G5 本地出口脚本。
+
+### G-5 修改文件
+
+- `pixel/CHANGELOG.md`
+- `pixel/scripts/verify_m3_g5.sh`
+- `pixel/services/graph_mock_runner.gd`
+- `pixel/ui/shell/m2_1_ui_controller.gd`
+- `pixel/ui/shell/strings.gd`
+- `pixel/tests/integration/test_graph_mock_runner.gd`
+- `pixel/tests/smoke/test_main_window_ui.gd`
+
+### G-5 验证
+
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：通过，`135/135` tests，`1121` asserts。
+- `./pixel/scripts/verify_m3_g5.sh`：通过，`verify_m3_g5: ok`。
+
+### G-5 人工测试步骤
+
+1. 打开 `/Users/ruo/Desktop/pixelforge/pixel/project.godot` 并运行主场景。
+2. 点击 `File > Generate Mock Batch`。
+3. 选中 `Object List`、`Size Spec`、`AI Generate` 或 `Mock Batch` 中任意一个节点/卡。
+4. 点击 `File > Run Selected Graph`。
+5. 预期：状态栏显示 `Graph run complete: 10 sprites`，Mock Batch 内仍为 10 张图，不会追加成 20 张。
+6. 可重复执行第 4 步，确认每次都是刷新同一 batch 队列；保存重开后 batch 队列仍对应 graph batch 节点。
+
+G-5 追加 diff：
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 20427b6..bce660e 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -28,3 +28,4 @@
+ - M3 G-4: 新增画布轻节点卡与 graph edge 渲染，File > Generate Mock Batch 现在生成可见最小 mock 节点链并落入正式 batch 卡。
+ - M3 G-4 follow-up: graph 连线改用命名端口锚点，修正轻节点端口点、batch 输入点与连线端点错位。
+ - M3 G-4 follow-up: AI Generate 画布卡将多个逻辑输入折叠为单个视觉输入点，降低基础节点链噪声。
++- M3 G-5: 新增 File > Run Selected Graph 最小重跑入口，选中 mock 节点链任一节点后可替换刷新正式 batch 队列。
+diff --git a/pixel/scripts/verify_m3_g5.sh b/pixel/scripts/verify_m3_g5.sh
+new file mode 100755
+index 0000000..1f953e0
+--- /dev/null
++++ b/pixel/scripts/verify_m3_g5.sh
+@@ -0,0 +1,17 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/../.."
++
++./pixel/scripts/configure_editor_game_view.sh
++./pixel/scripts/lint.sh
++./pixel/scripts/run_tests.sh
++./pixel/scripts/check_ui_scaling.sh
++./pixel/scripts/check_export_templates.sh
++
++if git diff --cached --name-only | grep -iE '\.(png|jpe?g)$' >/dev/null; then
++  echo "Staged image files are not allowed for M3 G-5 commits." >&2
++  exit 1
++fi
++
++echo "verify_m3_g5: ok"
+diff --git a/pixel/services/graph_mock_runner.gd b/pixel/services/graph_mock_runner.gd
+index bdd4954..b3f9621 100644
+--- a/pixel/services/graph_mock_runner.gd
++++ b/pixel/services/graph_mock_runner.gd
+@@ -7,7 +7,12 @@ extends RefCounted
+ const IdUtil := preload("res://core/util/id_util.gd")
+ 
+ 
+-func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "") -> Dictionary:
++func run_to_batch(
++	graph: PFGraph,
++	asset_library: Node,
++	batch_node_id: String = "",
++	replace_batch_assets: bool = false
++) -> Dictionary:
+ 	if graph == null:
+ 		return _error("missing_graph", "Graph is required")
+ 	if asset_library == null or not asset_library.has_method("register_image"):
+@@ -22,7 +27,13 @@ func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "
+ 	var materialized_asset_ids := []
+ 	for node_id in order_result["order"]:
+ 		var run_result := _run_node(
+-			graph, String(node_id), inputs_by_node, outputs_by_node, asset_library, batch_node_id
++			graph,
++			String(node_id),
++			inputs_by_node,
++			outputs_by_node,
++			asset_library,
++			batch_node_id,
++			replace_batch_assets
+ 		)
+ 		if not bool(run_result["ok"]):
+ 			return run_result
+@@ -40,7 +51,8 @@ func _run_node(
+ 	inputs_by_node: Dictionary,
+ 	outputs_by_node: Dictionary,
+ 	asset_library: Node,
+-	batch_node_id: String
++	batch_node_id: String,
++	replace_batch_assets: bool
+ ) -> Dictionary:
+ 	var node := graph.get_node(node_id)
+ 	if node == null:
+@@ -54,7 +66,12 @@ func _run_node(
+ 	if node.get_type() == "batch":
+ 		if batch_node_id.is_empty() or batch_node_id == node_id:
+ 			var materialized := _materialize_batch(
+-				graph, node_id, inputs.get("in", []), inputs.get("__metadata", []), asset_library
++				graph,
++				node_id,
++				inputs.get("in", []),
++				inputs.get("__metadata", []),
++				asset_library,
++				replace_batch_assets
+ 			)
+ 			if not bool(materialized["ok"]):
+ 				return materialized
+@@ -71,7 +88,12 @@ func _run_node(
+ 
+ 
+ func _materialize_batch(
+-	graph: PFGraph, node_id: String, value: Variant, metadata: Variant, asset_library: Node
++	graph: PFGraph,
++	node_id: String,
++	value: Variant,
++	metadata: Variant,
++	asset_library: Node,
++	replace_batch_assets: bool
+ ) -> Dictionary:
+ 	var images := _image_array(value)
+ 	if images.is_empty():
+@@ -89,7 +111,7 @@ func _materialize_batch(
+ 		asset_ids.append(asset_id)
+ 
+ 	var params := graph.get_node_params(node_id)
+-	var existing: Array = params.get("asset_ids", [])
++	var existing: Array = [] if replace_batch_assets else _string_array(params.get("asset_ids", []))
+ 	for asset_id in asset_ids:
+ 		existing.append(asset_id)
+ 	params["asset_ids"] = existing
+@@ -209,6 +231,16 @@ func _metadata_array(value: Variant) -> Array:
+ 	return result
+ 
+ 
++func _string_array(value: Variant) -> Array:
++	var result := []
++	if value is Array:
++		for item in value:
++			var id := String(item)
++			if not id.is_empty():
++				result.append(id)
++	return result
++
++
+ func _edge_node(edge: Dictionary, key: String) -> String:
+ 	var data: Array = edge.get(key, ["", ""])
+ 	return String(data[0])
+diff --git a/pixel/tests/integration/test_graph_mock_runner.gd b/pixel/tests/integration/test_graph_mock_runner.gd
+index a29d0f7..ca71790 100644
+--- a/pixel/tests/integration/test_graph_mock_runner.gd
++++ b/pixel/tests/integration/test_graph_mock_runner.gd
+@@ -33,6 +33,25 @@ func test_mock_generate_chain_materializes_images_into_batch_node() -> void:
+ 	assert_eq(meta["provenance"]["seed"], 700)
+ 
+ 
++func test_mock_generate_chain_can_replace_existing_batch_assets() -> void:
++	var graph := _make_mock_graph()
++	var asset_library := get_tree().root.get_node("AssetLibrary")
++	var runner := MockRunnerScript.new()
++
++	var first_result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
++	assert_true(bool(first_result["ok"]))
++	var first_ids: Array = graph.get_node_params("batch_1")["asset_ids"].duplicate()
++	assert_eq(first_ids.size(), 10)
++
++	var second_result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
++	assert_true(bool(second_result["ok"]))
++	var second_ids: Array = graph.get_node_params("batch_1")["asset_ids"]
++
++	assert_eq(second_result["asset_ids"].size(), 10)
++	assert_eq(second_ids.size(), 10)
++	assert_ne(second_ids, first_ids)
++
++
+ func test_mock_generate_chain_survives_project_roundtrip_after_materialization() -> void:
+ 	var project_service := get_tree().root.get_node("ProjectService")
+ 	var asset_library := get_tree().root.get_node("AssetLibrary")
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 2e30fa2..16b1d28 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -245,9 +245,30 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
+ 		assert_eq(canvas_item["type"], "node")
+ 		assert_eq(canvas_item["graph_id"], graph_id)
+ 
++	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
++	var first_asset_ids: Array = batch_node["params"]["asset_ids"].duplicate()
++	canvas.select_ids([batch_item_id])
++	controller.run_selected_mock_graph()
++	await wait_process_frames(2)
++
++	graph_data = ProjectService.current_project.graphs[graph_id]
++	batch_node = graph_data["nodes"][3]
++	var rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
++	assert_eq(rerun_asset_ids.size(), 10)
++	assert_ne(rerun_asset_ids, first_asset_ids)
++	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
++
+ 
+ func _node_ids_from_canvas_items(items: Array) -> Array:
+ 	var node_ids := []
+ 	for item in items:
+ 		node_ids.append(String(Dictionary(item).get("node_id", "")))
+ 	return node_ids
++
++
++func _item_id_for_node(items: Array, node_id: String) -> String:
++	for item in items:
++		var data: Dictionary = item
++		if String(data.get("node_id", "")) == node_id:
++			return String(data.get("id", ""))
++	return ""
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index 58e6b2d..b39fd18 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -33,9 +33,10 @@ const FILE_MENU_BUTTON_WIDTH := 84
+ const TOOL_BUTTON_SIZE := 84
+ const FILE_MENU_IMPORT_IMAGES := 0
+ const FILE_MENU_GENERATE_MOCK_BATCH := 1
+-const FILE_MENU_NEW := 2
+-const FILE_MENU_OPEN := 3
+-const FILE_MENU_SAVE := 4
++const FILE_MENU_RUN_SELECTED_GRAPH := 2
++const FILE_MENU_NEW := 3
++const FILE_MENU_OPEN := 4
++const FILE_MENU_SAVE := 5
+ const BATCH_MENU_CLEANUP := 0
+ const BATCH_MENU_MATTE := 1
+ const BATCH_MENU_OUTLINE := 2
+@@ -92,6 +93,7 @@ func add_file_menu(parent: Control) -> void:
+ 	var popup := file_menu_button.get_popup()
+ 	popup.add_item(Strings.MENU_IMPORT_IMAGES, FILE_MENU_IMPORT_IMAGES)
+ 	popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
++	popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
+ 	popup.add_separator()
+ 	popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
+ 	popup.add_item(Strings.ACTION_OPEN, FILE_MENU_OPEN)
+@@ -215,6 +217,42 @@ func generate_mock_batch() -> void:
+ 	_status_label.text = Strings.STATUS_MOCK_GENERATE_DONE % asset_ids.size()
+ 
+ 
++func run_selected_mock_graph() -> void:
++	var binding := _selected_graph_binding()
++	if binding.is_empty():
++		_status_label.text = Strings.STATUS_GRAPH_RUN_NEEDS_SELECTION
++		return
++
++	var graph_id := String(binding["graph_id"])
++	var graph_data := ProjectService.get_graph_data(graph_id)
++	if graph_data.is_empty():
++		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++		return
++
++	var graph := GraphScript.from_json(graph_data)
++	var batch_node_id := _first_batch_node_id(graph)
++	if batch_node_id.is_empty():
++		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++		return
++
++	var runner := GraphMockRunnerScript.new()
++	var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, batch_node_id, true)
++	if not bool(result.get("ok", false)):
++		var error: Dictionary = result.get("error", {})
++		Log.warn("Selected mock graph run failed", error)
++		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++		return
++
++	var asset_ids: Array = result["asset_ids"]
++	var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
++	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
++	if batch_card_id.is_empty():
++		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++		return
++	_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
++	_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
++
++
+ func show_onboarding_if_needed() -> void:
+ 	if DisplayServer.get_name() == "headless":
+ 		return
+@@ -276,6 +314,8 @@ func _on_file_menu_pressed(id: int) -> void:
+ 			_import_dialog.popup_centered_ratio(0.7)
+ 		FILE_MENU_GENERATE_MOCK_BATCH:
+ 			generate_mock_batch()
++		FILE_MENU_RUN_SELECTED_GRAPH:
++			run_selected_mock_graph()
+ 		FILE_MENU_NEW:
+ 			_new_project_callback.call()
+ 		FILE_MENU_OPEN:
+@@ -495,6 +535,39 @@ func _graph_node_position(graph: PFGraph, node_id: String) -> Vector2:
+ 	return Vector2(float(raw_position[0]), float(raw_position[1])).round()
+ 
+ 
++func _first_batch_node_id(graph: PFGraph) -> String:
++	for node_id in graph.nodes.keys():
++		var node: PFNode = graph.get_node(String(node_id))
++		if node != null and node.get_type() == "batch":
++			return String(node_id)
++	return ""
++
++
++func _selected_graph_binding() -> Dictionary:
++	var selected_ids: Array = _canvas.get_selected_ids()
++	for item in _canvas.export_canvas_data()["items"]:
++		var item_data: Dictionary = item
++		if not selected_ids.has(String(item_data.get("id", ""))):
++			continue
++		var graph_id := String(item_data.get("graph_id", ""))
++		var node_id := String(item_data.get("node_id", ""))
++		if graph_id.is_empty() or node_id.is_empty():
++			continue
++		return {"item_id": String(item_data["id"]), "graph_id": graph_id, "node_id": node_id}
++	return {}
++
++
++func _graph_batch_card_id(graph_id: String, batch_node_id: String) -> String:
++	for item in _canvas.export_canvas_data()["items"]:
++		var item_data: Dictionary = item
++		if (
++			String(item_data.get("graph_id", "")) == graph_id
++			and String(item_data.get("node_id", "")) == batch_node_id
++		):
++			return String(item_data.get("id", ""))
++	return ""
++
++
+ func _show_onboarding_dialog() -> void:
+ 	var dialog: AcceptDialog = OnboardingScript.show_first_run_tips(self)
+ 	if dialog == null:
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index 25d32a0..fa7475e 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -16,6 +16,7 @@ const ACTION_EXPORT_PNG := "Export PNG"
+ const MENU_FILE := "File"
+ const MENU_IMPORT_IMAGES := "Import Images..."
+ const MENU_GENERATE_MOCK_BATCH := "Generate Mock Batch"
++const MENU_RUN_SELECTED_GRAPH := "Run Selected Graph"
+ const STATUS_READY := "Ready"
+ const STATUS_SAVED := "Saved"
+ const STATUS_DIRTY := "Unsaved changes"
+@@ -44,6 +45,9 @@ const STATUS_BATCH_SPLIT := "Batch subset created"
+ const STATUS_BATCH_SPLIT_EMPTY := "Select thumbnails inside a batch before splitting"
+ const STATUS_MOCK_GENERATE_DONE := "Mock batch generated: %d sprites"
+ const STATUS_MOCK_GENERATE_FAILED := "Mock batch generation failed"
++const STATUS_GRAPH_RUN_DONE := "Graph run complete: %d sprites"
++const STATUS_GRAPH_RUN_FAILED := "Graph run failed"
++const STATUS_GRAPH_RUN_NEEDS_SELECTION := "Select a graph node or batch before running"
+ const CLEANUP_TITLE := "Pixel Cleanup"
+ const CLEANUP_SELECTED_FORMAT := "%d selected"
+ const CLEANUP_PRESET_PRIOR_FORMAT := "Preset prior: %dpx"
 ```

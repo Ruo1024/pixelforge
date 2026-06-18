@@ -245,9 +245,30 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 		assert_eq(canvas_item["type"], "node")
 		assert_eq(canvas_item["graph_id"], graph_id)
 
+	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
+	var first_asset_ids: Array = batch_node["params"]["asset_ids"].duplicate()
+	canvas.select_ids([batch_item_id])
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	var rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
+	assert_eq(rerun_asset_ids.size(), 10)
+	assert_ne(rerun_asset_ids, first_asset_ids)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
+
 
 func _node_ids_from_canvas_items(items: Array) -> Array:
 	var node_ids := []
 	for item in items:
 		node_ids.append(String(Dictionary(item).get("node_id", "")))
 	return node_ids
+
+
+func _item_id_for_node(items: Array, node_id: String) -> String:
+	for item in items:
+		var data: Dictionary = item
+		if String(data.get("node_id", "")) == node_id:
+			return String(data.get("id", ""))
+	return ""

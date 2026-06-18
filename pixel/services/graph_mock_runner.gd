@@ -7,7 +7,12 @@ extends RefCounted
 const IdUtil := preload("res://core/util/id_util.gd")
 
 
-func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "") -> Dictionary:
+func run_to_batch(
+	graph: PFGraph,
+	asset_library: Node,
+	batch_node_id: String = "",
+	replace_batch_assets: bool = false
+) -> Dictionary:
 	if graph == null:
 		return _error("missing_graph", "Graph is required")
 	if asset_library == null or not asset_library.has_method("register_image"):
@@ -22,7 +27,13 @@ func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "
 	var materialized_asset_ids := []
 	for node_id in order_result["order"]:
 		var run_result := _run_node(
-			graph, String(node_id), inputs_by_node, outputs_by_node, asset_library, batch_node_id
+			graph,
+			String(node_id),
+			inputs_by_node,
+			outputs_by_node,
+			asset_library,
+			batch_node_id,
+			replace_batch_assets
 		)
 		if not bool(run_result["ok"]):
 			return run_result
@@ -40,7 +51,8 @@ func _run_node(
 	inputs_by_node: Dictionary,
 	outputs_by_node: Dictionary,
 	asset_library: Node,
-	batch_node_id: String
+	batch_node_id: String,
+	replace_batch_assets: bool
 ) -> Dictionary:
 	var node := graph.get_node(node_id)
 	if node == null:
@@ -54,7 +66,12 @@ func _run_node(
 	if node.get_type() == "batch":
 		if batch_node_id.is_empty() or batch_node_id == node_id:
 			var materialized := _materialize_batch(
-				graph, node_id, inputs.get("in", []), inputs.get("__metadata", []), asset_library
+				graph,
+				node_id,
+				inputs.get("in", []),
+				inputs.get("__metadata", []),
+				asset_library,
+				replace_batch_assets
 			)
 			if not bool(materialized["ok"]):
 				return materialized
@@ -71,7 +88,12 @@ func _run_node(
 
 
 func _materialize_batch(
-	graph: PFGraph, node_id: String, value: Variant, metadata: Variant, asset_library: Node
+	graph: PFGraph,
+	node_id: String,
+	value: Variant,
+	metadata: Variant,
+	asset_library: Node,
+	replace_batch_assets: bool
 ) -> Dictionary:
 	var images := _image_array(value)
 	if images.is_empty():
@@ -89,7 +111,7 @@ func _materialize_batch(
 		asset_ids.append(asset_id)
 
 	var params := graph.get_node_params(node_id)
-	var existing: Array = params.get("asset_ids", [])
+	var existing: Array = [] if replace_batch_assets else _string_array(params.get("asset_ids", []))
 	for asset_id in asset_ids:
 		existing.append(asset_id)
 	params["asset_ids"] = existing
@@ -206,6 +228,16 @@ func _metadata_array(value: Variant) -> Array:
 		for item in value:
 			if item is Dictionary:
 				result.append(item)
+	return result
+
+
+func _string_array(value: Variant) -> Array:
+	var result := []
+	if value is Array:
+		for item in value:
+			var id := String(item)
+			if not id.is_empty():
+				result.append(id)
 	return result
 
 

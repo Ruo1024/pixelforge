@@ -33,9 +33,10 @@ const FILE_MENU_BUTTON_WIDTH := 84
 const TOOL_BUTTON_SIZE := 84
 const FILE_MENU_IMPORT_IMAGES := 0
 const FILE_MENU_GENERATE_MOCK_BATCH := 1
-const FILE_MENU_NEW := 2
-const FILE_MENU_OPEN := 3
-const FILE_MENU_SAVE := 4
+const FILE_MENU_RUN_SELECTED_GRAPH := 2
+const FILE_MENU_NEW := 3
+const FILE_MENU_OPEN := 4
+const FILE_MENU_SAVE := 5
 const BATCH_MENU_CLEANUP := 0
 const BATCH_MENU_MATTE := 1
 const BATCH_MENU_OUTLINE := 2
@@ -92,6 +93,7 @@ func add_file_menu(parent: Control) -> void:
 	var popup := file_menu_button.get_popup()
 	popup.add_item(Strings.MENU_IMPORT_IMAGES, FILE_MENU_IMPORT_IMAGES)
 	popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
+	popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
 	popup.add_separator()
 	popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
 	popup.add_item(Strings.ACTION_OPEN, FILE_MENU_OPEN)
@@ -215,6 +217,42 @@ func generate_mock_batch() -> void:
 	_status_label.text = Strings.STATUS_MOCK_GENERATE_DONE % asset_ids.size()
 
 
+func run_selected_mock_graph() -> void:
+	var binding := _selected_graph_binding()
+	if binding.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_RUN_NEEDS_SELECTION
+		return
+
+	var graph_id := String(binding["graph_id"])
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	if graph_data.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
+		return
+
+	var graph := GraphScript.from_json(graph_data)
+	var batch_node_id := _first_batch_node_id(graph)
+	if batch_node_id.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
+		return
+
+	var runner := GraphMockRunnerScript.new()
+	var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, batch_node_id, true)
+	if not bool(result.get("ok", false)):
+		var error: Dictionary = result.get("error", {})
+		Log.warn("Selected mock graph run failed", error)
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
+		return
+
+	var asset_ids: Array = result["asset_ids"]
+	var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+	if batch_card_id.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
+		return
+	_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
+	_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
+
+
 func show_onboarding_if_needed() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
@@ -276,6 +314,8 @@ func _on_file_menu_pressed(id: int) -> void:
 			_import_dialog.popup_centered_ratio(0.7)
 		FILE_MENU_GENERATE_MOCK_BATCH:
 			generate_mock_batch()
+		FILE_MENU_RUN_SELECTED_GRAPH:
+			run_selected_mock_graph()
 		FILE_MENU_NEW:
 			_new_project_callback.call()
 		FILE_MENU_OPEN:
@@ -493,6 +533,39 @@ func _graph_node_position(graph: PFGraph, node_id: String) -> Vector2:
 	var node_data: Dictionary = graph.nodes.get(node_id, {})
 	var raw_position: Variant = node_data.get("position", [0, 0])
 	return Vector2(float(raw_position[0]), float(raw_position[1])).round()
+
+
+func _first_batch_node_id(graph: PFGraph) -> String:
+	for node_id in graph.nodes.keys():
+		var node: PFNode = graph.get_node(String(node_id))
+		if node != null and node.get_type() == "batch":
+			return String(node_id)
+	return ""
+
+
+func _selected_graph_binding() -> Dictionary:
+	var selected_ids: Array = _canvas.get_selected_ids()
+	for item in _canvas.export_canvas_data()["items"]:
+		var item_data: Dictionary = item
+		if not selected_ids.has(String(item_data.get("id", ""))):
+			continue
+		var graph_id := String(item_data.get("graph_id", ""))
+		var node_id := String(item_data.get("node_id", ""))
+		if graph_id.is_empty() or node_id.is_empty():
+			continue
+		return {"item_id": String(item_data["id"]), "graph_id": graph_id, "node_id": node_id}
+	return {}
+
+
+func _graph_batch_card_id(graph_id: String, batch_node_id: String) -> String:
+	for item in _canvas.export_canvas_data()["items"]:
+		var item_data: Dictionary = item
+		if (
+			String(item_data.get("graph_id", "")) == graph_id
+			and String(item_data.get("node_id", "")) == batch_node_id
+		):
+			return String(item_data.get("id", ""))
+	return ""
 
 
 func _show_onboarding_dialog() -> void:

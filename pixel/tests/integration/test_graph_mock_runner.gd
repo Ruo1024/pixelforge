@@ -33,6 +33,25 @@ func test_mock_generate_chain_materializes_images_into_batch_node() -> void:
 	assert_eq(meta["provenance"]["seed"], 700)
 
 
+func test_mock_generate_chain_can_replace_existing_batch_assets() -> void:
+	var graph := _make_mock_graph()
+	var asset_library := get_tree().root.get_node("AssetLibrary")
+	var runner := MockRunnerScript.new()
+
+	var first_result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
+	assert_true(bool(first_result["ok"]))
+	var first_ids: Array = graph.get_node_params("batch_1")["asset_ids"].duplicate()
+	assert_eq(first_ids.size(), 10)
+
+	var second_result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
+	assert_true(bool(second_result["ok"]))
+	var second_ids: Array = graph.get_node_params("batch_1")["asset_ids"]
+
+	assert_eq(second_result["asset_ids"].size(), 10)
+	assert_eq(second_ids.size(), 10)
+	assert_ne(second_ids, first_ids)
+
+
 func test_mock_generate_chain_survives_project_roundtrip_after_materialization() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var asset_library := get_tree().root.get_node("AssetLibrary")
