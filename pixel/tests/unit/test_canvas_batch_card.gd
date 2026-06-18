@@ -2,7 +2,6 @@ extends "res://addons/gut/test.gd"
 
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
-const CanvasLODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
@@ -175,70 +174,6 @@ func test_canvas_batch_card_switches_review_layout_for_focus_view() -> void:
 	var data: Dictionary = canvas.export_canvas_data()
 	var item: Dictionary = data["items"][0]
 	assert_eq(item["review_layout"], CanvasBatchCardScript.LAYOUT_FOCUS)
-
-
-func test_canvas_lod_profile_groups_art_scale_into_semantic_modes() -> void:
-	assert_eq(CanvasLODProfile.profile_for_art_scale(0.125), CanvasLODProfile.PROFILE_OVERVIEW)
-	assert_eq(CanvasLODProfile.profile_for_art_scale(1.0), CanvasLODProfile.PROFILE_REVIEW)
-	assert_eq(CanvasLODProfile.profile_for_art_scale(4.0), CanvasLODProfile.PROFILE_INSPECT)
-	assert_true(
-		CanvasLODProfile.should_draw_pixel_grid(
-			CanvasLODProfile.PROFILE_INSPECT, Vector2i(4, 4), Rect2(Vector2.ZERO, Vector2(64, 64))
-		)
-	)
-	assert_false(
-		CanvasLODProfile.should_draw_pixel_grid(
-			CanvasLODProfile.PROFILE_REVIEW, Vector2i(4, 4), Rect2(Vector2.ZERO, Vector2(64, 64))
-		)
-	)
-
-
-func test_canvas_batch_card_overview_lod_keeps_bounds_and_thumbnail_geometry() -> void:
-	var canvas: Control = CanvasScript.new()
-	canvas.size = Vector2(512, 512)
-	add_child_autofree(canvas)
-	await wait_process_frames(2)
-
-	var ids := [
-		_register_asset(Color.RED, "red"),
-		_register_asset(Color.BLUE, "blue"),
-		_register_asset(Color.GREEN, "green"),
-	]
-	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
-	var review_bounds: Rect2 = card.get_canvas_bounds()
-
-	card._set_lod_profile_override_for_test(CanvasLODProfile.PROFILE_OVERVIEW)
-	assert_eq(card._get_lod_profile(), CanvasLODProfile.PROFILE_OVERVIEW)
-	assert_eq(card.get_canvas_bounds(), review_bounds)
-	assert_eq(card.asset_index_at_world(card.position + Vector2(20, 60)), 0)
-	assert_true(card.toggle_asset_at_world(card.position + Vector2(20, 60)))
-	assert_eq(card.get_selected_asset_ids(), [ids[0]])
-
-	card._set_lod_profile_override_for_test(CanvasLODProfile.PROFILE_INSPECT)
-	assert_eq(card._get_lod_profile(), CanvasLODProfile.PROFILE_INSPECT)
-	assert_eq(card.asset_index_at_world(card.position + Vector2(20, 60)), 0)
-
-
-func test_canvas_batch_card_tracks_parent_transform_for_lod_redraw() -> void:
-	var parent := Node2D.new()
-	add_child_autofree(parent)
-	var ids := [_register_asset(Color.RED, "red")]
-	var card: Node = CanvasBatchCardScript.new()
-	var data := {
-		"id": "batch_lod_redraw",
-		"type": "batch_card",
-		"asset_ids": ids,
-		"position": [0, 0],
-		"label": "Batch",
-	}
-	card.setup_from_data(data)
-	parent.add_child(card)
-	await wait_process_frames(2)
-
-	assert_true(card.is_transform_notification_enabled())
-	assert_eq(card._get_lod_profile(), CanvasLODProfile.PROFILE_REVIEW)
-	parent.scale = Vector2(0.125, 0.125)
-	assert_eq(card._get_lod_profile(), CanvasLODProfile.PROFILE_OVERVIEW)
 
 
 func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:

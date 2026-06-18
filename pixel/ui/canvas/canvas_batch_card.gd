@@ -5,7 +5,6 @@ extends Node2D
 ## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
 
 const IdUtil := preload("res://core/util/id_util.gd")
-const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 
 const CARD_WIDTH := 600
@@ -19,11 +18,6 @@ const BACKGROUND := Color(0.16, 0.17, 0.18, 0.96)
 const BORDER := Color(0.52, 0.62, 0.72, 1.0)
 const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
 const THUMB_BACKGROUND := Color(0.08, 0.085, 0.09, 1.0)
-const OVERVIEW_BACKGROUND := Color(0.095, 0.105, 0.115, 1.0)
-const OVERVIEW_PENDING := Color(0.48, 0.54, 0.56, 0.9)
-const INSPECT_CHECKER_A := Color(0.18, 0.18, 0.18, 1.0)
-const INSPECT_CHECKER_B := Color(0.28, 0.28, 0.28, 1.0)
-const INSPECT_GRID := Color(1.0, 1.0, 1.0, 0.22)
 const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
 const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
 const REVIEW_NONE := ""
@@ -47,7 +41,6 @@ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
 const FOCUS_IMAGE_HEIGHT := 320
 const FOCUS_FILMSTRIP_THUMB_SIZE := 72
 const FOCUS_FILMSTRIP_VISIBLE := 7
-const CHECKER_SIZE := 8.0
 
 var item_id := ""
 var graph_id := ""
@@ -65,16 +58,6 @@ var locked := false
 
 var _thumbnail_textures := {}
 var _font: Font = null
-var _lod_profile_override := ""
-
-
-func _ready() -> void:
-	set_notify_transform(true)
-
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_TRANSFORM_CHANGED:
-		queue_redraw()
 
 
 func setup_from_data(data: Dictionary) -> void:
@@ -253,19 +236,6 @@ func get_review_layout() -> String:
 	return review_layout
 
 
-func _get_lod_profile() -> String:
-	if not _lod_profile_override.is_empty():
-		return LODProfile.normalize_profile(_lod_profile_override)
-	return LODProfile.profile_for_art_scale(_current_art_scale())
-
-
-func _set_lod_profile_override_for_test(lod_profile: String) -> void:
-	_lod_profile_override = (
-		"" if lod_profile.is_empty() else LODProfile.normalize_profile(lod_profile)
-	)
-	queue_redraw()
-
-
 func set_review_layout(new_review_layout: String) -> void:
 	review_layout = _normalize_review_layout(new_review_layout)
 	if review_layout == LAYOUT_FOCUS and focus_asset_id.is_empty():
@@ -385,88 +355,34 @@ func _draw() -> void:
 
 	var columns := _columns()
 	var visible_ids := get_visible_asset_ids()
-	var lod_profile := _get_lod_profile()
-	if lod_profile == LODProfile.PROFILE_OVERVIEW:
-		_draw_overview_layout(visible_ids)
-	elif review_layout == LAYOUT_FOCUS:
-		_draw_focus_layout(visible_ids, lod_profile)
+	if review_layout == LAYOUT_FOCUS:
+		_draw_focus_layout(visible_ids)
 	else:
 		for index in range(visible_ids.size()):
-			_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns), lod_profile)
+			_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
 	if has_graph_binding():
 		_draw_graph_ports()
 
 
-func _draw_overview_layout(visible_ids: Array[String]) -> void:
-	var body := Rect2(
-		Vector2(PADDING, HEADER_HEIGHT + PADDING),
-		Vector2(
-			CARD_WIDTH - PADDING * 2, maxf(0.0, float(_card_height() - HEADER_HEIGHT - PADDING * 2))
-		)
-	)
-	if body.size.y <= 0.0:
-		return
-	draw_rect(body, OVERVIEW_BACKGROUND, true)
-	if asset_ids.is_empty():
-		return
-	var bar := Rect2(body.position + Vector2(0.0, 8.0), Vector2(body.size.x, 10.0))
-	_draw_overview_segments(bar, _overview_counts(asset_ids), asset_ids.size())
-	if _font != null:
-		draw_string(
-			_font,
-			body.position + Vector2(0.0, 48.0),
-			"%d / %d" % [visible_ids.size(), asset_ids.size()],
-			HORIZONTAL_ALIGNMENT_LEFT,
-			body.size.x,
-			32,
-			Color(0.86, 0.9, 0.9, 1.0)
-		)
-
-
-func _draw_overview_segments(bar: Rect2, counts: Dictionary, total: int) -> void:
-	if total <= 0:
-		return
-	var specs := [
-		{"count": int(counts.get(REVIEW_KEEP, 0)), "color": KEEP_MARK},
-		{"count": int(counts.get(REVIEW_FLAG, 0)), "color": FLAG_MARK},
-		{"count": int(counts.get(REVIEW_REJECT, 0)), "color": REJECT_MARK},
-		{"count": int(counts.get(FILTER_PENDING, 0)), "color": OVERVIEW_PENDING},
-	]
-	var cursor_x := bar.position.x
-	var remaining_width := bar.size.x
-	for spec in specs:
-		var count := int(spec["count"])
-		if count <= 0:
-			continue
-		var width := minf(remaining_width, maxf(1.0, bar.size.x * float(count) / float(total)))
-		draw_rect(
-			Rect2(Vector2(cursor_x, bar.position.y), Vector2(width, bar.size.y)), spec["color"]
-		)
-		cursor_x += width
-		remaining_width = maxf(0.0, bar.end.x - cursor_x)
-
-
-func _draw_focus_layout(visible_ids: Array[String], lod_profile: String) -> void:
+func _draw_focus_layout(visible_ids: Array[String]) -> void:
 	if visible_ids.is_empty():
 		return
 	var focused_asset_id := _focused_visible_asset_id()
 	if focused_asset_id.is_empty():
 		return
-	_draw_thumbnail(focused_asset_id, _focus_rect(), lod_profile)
+	_draw_thumbnail(focused_asset_id, _focus_rect())
 	var start_index := _filmstrip_start_index(visible_ids)
 	var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
 	for index in range(start_index, end_index):
-		_draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index), lod_profile)
+		_draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
 
 
-func _draw_thumbnail(asset_id: String, rect: Rect2, lod_profile: String) -> void:
+func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
 	draw_rect(rect, THUMB_BACKGROUND, true)
-	if lod_profile == LODProfile.PROFILE_INSPECT:
-		_draw_checker_background(rect)
 	if compare_mode == COMPARE_SPLIT:
-		_draw_split_compare_thumbnail(asset_id, rect, lod_profile)
+		_draw_split_compare_thumbnail(asset_id, rect)
 	else:
-		_draw_thumbnail_texture(_texture_asset_id_for(asset_id), rect, lod_profile)
+		_draw_thumbnail_texture(_texture_asset_id_for(asset_id), rect)
 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
 	draw_rect(rect, border_color, false, 1.5)
 	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
@@ -474,25 +390,25 @@ func _draw_thumbnail(asset_id: String, rect: Rect2, lod_profile: String) -> void
 		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
 
 
-func _draw_split_compare_thumbnail(asset_id: String, rect: Rect2, lod_profile: String) -> void:
+func _draw_split_compare_thumbnail(asset_id: String, rect: Rect2) -> void:
 	var compare_asset_id := _compare_asset_id_for(asset_id)
 	if compare_asset_id.is_empty():
-		_draw_thumbnail_texture(asset_id, rect, lod_profile)
+		_draw_thumbnail_texture(asset_id, rect)
 		return
 	var left_rect := Rect2(rect.position, Vector2(floor(rect.size.x * 0.5), rect.size.y))
 	var right_rect := Rect2(
 		Vector2(rect.position.x + left_rect.size.x, rect.position.y),
 		Vector2(rect.size.x - left_rect.size.x, rect.size.y)
 	)
-	_draw_thumbnail_texture(compare_asset_id, left_rect, lod_profile)
-	_draw_thumbnail_texture(asset_id, right_rect, lod_profile)
+	_draw_thumbnail_texture(compare_asset_id, left_rect)
+	_draw_thumbnail_texture(asset_id, right_rect)
 	var divider_x := rect.position.x + left_rect.size.x
 	draw_line(
 		Vector2(divider_x, rect.position.y), Vector2(divider_x, rect.end.y), COMPARE_DIVIDER, 2.0
 	)
 
 
-func _draw_thumbnail_texture(asset_id: String, rect: Rect2, lod_profile: String) -> void:
+func _draw_thumbnail_texture(asset_id: String, rect: Rect2) -> void:
 	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
 	if texture != null:
 		var image_size := texture.get_size()
@@ -500,41 +416,6 @@ func _draw_thumbnail_texture(asset_id: String, rect: Rect2, lod_profile: String)
 		var draw_size := image_size * scale
 		var draw_pos := rect.position + (rect.size - draw_size) * 0.5
 		draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
-		var pixel_size := Vector2i(int(image_size.x), int(image_size.y))
-		var draw_rect := Rect2(draw_pos, draw_size)
-		if LODProfile.should_draw_pixel_grid(lod_profile, pixel_size, draw_rect):
-			_draw_inspect_pixel_grid(draw_rect, pixel_size)
-
-
-func _draw_checker_background(rect: Rect2) -> void:
-	var columns := int(ceil(rect.size.x / CHECKER_SIZE))
-	var rows := int(ceil(rect.size.y / CHECKER_SIZE))
-	for row in range(rows):
-		for column in range(columns):
-			var color := INSPECT_CHECKER_A if (row + column) % 2 == 0 else INSPECT_CHECKER_B
-			draw_rect(
-				Rect2(
-					rect.position + Vector2(float(column), float(row)) * CHECKER_SIZE,
-					Vector2(CHECKER_SIZE, CHECKER_SIZE)
-				),
-				color,
-				true
-			)
-
-
-func _draw_inspect_pixel_grid(draw_rect: Rect2, pixel_size: Vector2i) -> void:
-	var cell_width := draw_rect.size.x / float(pixel_size.x)
-	var cell_height := draw_rect.size.y / float(pixel_size.y)
-	for column in range(1, pixel_size.x):
-		var line_x := draw_rect.position.x + float(column) * cell_width
-		draw_line(
-			Vector2(line_x, draw_rect.position.y), Vector2(line_x, draw_rect.end.y), INSPECT_GRID
-		)
-	for row in range(1, pixel_size.y):
-		var line_y := draw_rect.position.y + float(row) * cell_height
-		draw_line(
-			Vector2(draw_rect.position.x, line_y), Vector2(draw_rect.end.x, line_y), INSPECT_GRID
-		)
 
 
 func _draw_review_marker(rect: Rect2, review_state: String) -> void:
@@ -797,24 +678,6 @@ func _filmstrip_start_index(visible_ids: Array[String]) -> int:
 		anchor_index = 0
 	var half_window := int(floor(float(FOCUS_FILMSTRIP_VISIBLE) * 0.5))
 	return clampi(anchor_index - half_window, 0, visible_ids.size() - FOCUS_FILMSTRIP_VISIBLE)
-
-
-func _overview_counts(ids: Array[String]) -> Dictionary:
-	var result := {REVIEW_KEEP: 0, REVIEW_REJECT: 0, REVIEW_FLAG: 0, FILTER_PENDING: 0}
-	for asset_id in ids:
-		var review_state := String(review_states.get(asset_id, REVIEW_NONE))
-		if review_state.is_empty():
-			result[FILTER_PENDING] = int(result[FILTER_PENDING]) + 1
-		elif result.has(review_state):
-			result[review_state] = int(result[review_state]) + 1
-	return result
-
-
-func _current_art_scale() -> float:
-	var parent_node := get_parent()
-	if parent_node is Node2D:
-		return absf((parent_node as Node2D).scale.x)
-	return absf(scale.x)
 
 
 func _visible_selected_array(value: Array) -> Array[String]:
