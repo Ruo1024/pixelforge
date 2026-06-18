@@ -259,6 +259,39 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
 
 
+func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
+	ProjectService.new_project("Batch Shortcut UI")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+	var batch_node: Dictionary = graph_data["nodes"][3]
+	var first_asset_id := String(batch_node["params"]["asset_ids"][0])
+	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
+	var batch_card: Node = canvas._items_by_id[batch_item_id]
+
+	canvas.select_ids([batch_item_id])
+	assert_true(batch_card.toggle_asset_at_world(batch_card.position + Vector2(20, 60)))
+	assert_true(_send_key(controller, KEY_K))
+
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	assert_eq(batch_node["params"]["review_states"][first_asset_id], "keep")
+
+	assert_true(_send_key(controller, KEY_R))
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
+
+
 func _node_ids_from_canvas_items(items: Array) -> Array:
 	var node_ids := []
 	for item in items:
@@ -272,3 +305,10 @@ func _item_id_for_node(items: Array, node_id: String) -> String:
 		if String(data.get("node_id", "")) == node_id:
 			return String(data.get("id", ""))
 	return ""
+
+
+func _send_key(controller: Node, keycode: Key) -> bool:
+	var event := InputEventKey.new()
+	event.keycode = keycode
+	event.pressed = true
+	return controller.handle_shortcut(event)

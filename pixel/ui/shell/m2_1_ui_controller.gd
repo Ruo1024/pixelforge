@@ -146,6 +146,8 @@ func handle_shortcut(event: InputEventKey) -> bool:
 	if event.keycode == KEY_ESCAPE and not _tool_manager.get_active_tool_id().is_empty():
 		_tool_manager.clear_active_tool()
 		return true
+	if _handle_batch_review_shortcut(event):
+		return true
 	if not SELECTION_TOOLS_VISIBLE:
 		return false
 	return _tool_manager.handle_shortcut(event.keycode)
@@ -476,17 +478,64 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 
 
 func _mark_batch_review_state(review_state: String, status_format: String) -> void:
-	var selected_ids: Array = _canvas._get_batch_selected_asset_ids(_batch_menu_card_id)
+	_mark_batch_review_state_for_card(_batch_menu_card_id, review_state, status_format)
+
+
+func _mark_batch_review_state_for_card(
+	card_id: String, review_state: String, status_format: String
+) -> bool:
+	var selected_ids: Array = _canvas._get_batch_selected_asset_ids(card_id)
 	if selected_ids.is_empty():
 		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
-		return
+		return false
 	var marked_count: int = _canvas._set_batch_review_state(
-		_batch_menu_card_id, selected_ids, review_state, true
+		card_id, selected_ids, review_state, true
 	)
 	if marked_count <= 0:
 		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
-		return
+		return false
 	_status_label.text = status_format % marked_count
+	return true
+
+
+func _handle_batch_review_shortcut(event: InputEventKey) -> bool:
+	if event.is_command_or_control_pressed() or event.alt_pressed:
+		return false
+	var card_id := _selected_batch_card_id()
+	match event.keycode:
+		KEY_K:
+			_mark_batch_review_state_for_card(
+				card_id, CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
+			)
+			return true
+		KEY_R:
+			_mark_batch_review_state_for_card(
+				card_id, CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
+			)
+			return true
+		KEY_F:
+			_mark_batch_review_state_for_card(
+				card_id, CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
+			)
+			return true
+		KEY_C:
+			_mark_batch_review_state_for_card(
+				card_id, CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
+			)
+			return true
+	return false
+
+
+func _selected_batch_card_id() -> String:
+	var selected_ids: Array = _canvas.get_selected_ids()
+	if selected_ids.is_empty():
+		return ""
+	for item in _canvas.export_canvas_data()["items"]:
+		var item_data: Dictionary = item
+		var item_id := String(item_data.get("id", ""))
+		if selected_ids.has(item_id) and not _canvas._get_batch_asset_ids(item_id).is_empty():
+			return item_id
+	return ""
 
 
 func _set_batch_review_filter(review_filter: String, status_text: String) -> void:

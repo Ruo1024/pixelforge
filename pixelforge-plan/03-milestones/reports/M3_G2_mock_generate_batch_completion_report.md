@@ -4549,7 +4549,173 @@ index 9bf2899..2a78aa8 100644
        "selected_asset_ids": [],
 +      "review_states": { "uuid-a": "keep" },
 +      "review_filter": "all",
-       "label": "Batch",
-       "position": [320, 64],
-       "z_index": 1,
+      "label": "Batch",
+      "position": [320, 64],
+      "z_index": 1,
+```
+
+## 2026-06-18 M3 UX-5 批次审阅快捷键
+
+### 本轮实现说明
+
+- 在 `PFM21UiController.handle_shortcut()` 中接入批次审阅快捷键：选中批次卡内缩略图后，`K` 标记 keep，`R` 标记 reject，`F` 标记 flag，`C` 清除标记。
+- 右键菜单与键盘入口复用同一个 `_mark_batch_review_state_for_card()` 写入路径，继续通过 canvas batch ops 同步到 graph batch node params 的 `review_states`。
+- 新增 smoke 测试覆盖 mock batch 生成、选择缩略图、按 `K/R` 快捷键、验证 graph params 写回。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh`：通过，105 files would be left unchanged，gdlint 无问题。
+- `./pixel/scripts/run_tests.sh`：通过，140/140 tests passed，1152 asserts。
+- `./pixel/scripts/verify_m3_ux5.sh`：通过，含 lint、完整测试、`check_ui_scaling: ok` 与 headless startup gate。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 在 Mock Batch 卡中单击一个或多个缩略图，确认缩略图出现选中边框。
+3. 按 `K`，确认选中缩略图出现 keep 绿色标记，状态栏显示 marked keep。
+4. 对同一缩略图按 `R`，确认标记切换为 reject 红色叉。
+5. 按 `F`，确认标记切换为 flag 黄色角标。
+6. 按 `C`，确认标记被清除。
+7. 可继续用右键菜单的 Show Keep / Show Reject / Show Flagged 检查快捷键写入的标记可被过滤器识别。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 16b1d28..26565e3 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -259,6 +259,39 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
+ 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
+ 
+ 
++func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
++	ProjectService.new_project("Batch Shortcut UI")
++	var main: Control = MainScript.new()
++	main.size = Vector2(1280, 800)
++	add_child_autofree(main)
++	await wait_process_frames(2)
++
++	var controller: Node = main.get_node("M21UiController")
++	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
++	controller.generate_mock_batch()
++	await wait_process_frames(2)
++
++	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
++	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
++	var batch_node: Dictionary = graph_data["nodes"][3]
++	var first_asset_id := String(batch_node["params"]["asset_ids"][0])
++	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
++	var batch_card: Node = canvas._items_by_id[batch_item_id]
++
++	canvas.select_ids([batch_item_id])
++	assert_true(batch_card.toggle_asset_at_world(batch_card.position + Vector2(20, 60)))
++	assert_true(_send_key(controller, KEY_K))
++
++	graph_data = ProjectService.current_project.graphs[graph_id]
++	batch_node = graph_data["nodes"][3]
++	assert_eq(batch_node["params"]["review_states"][first_asset_id], "keep")
++
++	assert_true(_send_key(controller, KEY_R))
++	graph_data = ProjectService.current_project.graphs[graph_id]
++	batch_node = graph_data["nodes"][3]
++	assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
++
++
+ func _node_ids_from_canvas_items(items: Array) -> Array:
+ 	var node_ids := []
+ 	for item in items:
+@@ -272,3 +305,10 @@ func _item_id_for_node(items: Array, node_id: String) -> String:
+ 		if String(data.get("node_id", "")) == node_id:
+ 			return String(data.get("id", ""))
+ 	return ""
++
++
++func _send_key(controller: Node, keycode: Key) -> bool:
++	var event := InputEventKey.new()
++	event.keycode = keycode
++	event.pressed = true
++	return controller.handle_shortcut(event)
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index b61aee0..0aa0545 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -146,6 +146,8 @@ func handle_shortcut(event: InputEventKey) -> bool:
+ 	if event.keycode == KEY_ESCAPE and not _tool_manager.get_active_tool_id().is_empty():
+ 		_tool_manager.clear_active_tool()
+ 		return true
++	if _handle_batch_review_shortcut(event):
++		return true
+ 	if not SELECTION_TOOLS_VISIBLE:
+ 		return false
+ 	return _tool_manager.handle_shortcut(event.keycode)
+@@ -476,17 +478,64 @@ func _on_batch_menu_id_pressed(id: int) -> void:
+ 
+ 
+ func _mark_batch_review_state(review_state: String, status_format: String) -> void:
+-	var selected_ids: Array = _canvas._get_batch_selected_asset_ids(_batch_menu_card_id)
++	_mark_batch_review_state_for_card(_batch_menu_card_id, review_state, status_format)
++
++
++func _mark_batch_review_state_for_card(
++	card_id: String, review_state: String, status_format: String
++) -> bool:
++	var selected_ids: Array = _canvas._get_batch_selected_asset_ids(card_id)
+ 	if selected_ids.is_empty():
+ 		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
+-		return
++		return false
+ 	var marked_count: int = _canvas._set_batch_review_state(
+-		_batch_menu_card_id, selected_ids, review_state, true
++		card_id, selected_ids, review_state, true
+ 	)
+ 	if marked_count <= 0:
+ 		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
+-		return
++		return false
+ 	_status_label.text = status_format % marked_count
++	return true
++
++
++func _handle_batch_review_shortcut(event: InputEventKey) -> bool:
++	if event.is_command_or_control_pressed() or event.alt_pressed:
++		return false
++	var card_id := _selected_batch_card_id()
++	match event.keycode:
++		KEY_K:
++			_mark_batch_review_state_for_card(
++				card_id, CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
++			)
++			return true
++		KEY_R:
++			_mark_batch_review_state_for_card(
++				card_id, CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
++			)
++			return true
++		KEY_F:
++			_mark_batch_review_state_for_card(
++				card_id, CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
++			)
++			return true
++		KEY_C:
++			_mark_batch_review_state_for_card(
++				card_id, CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
++			)
++			return true
++	return false
++
++
++func _selected_batch_card_id() -> String:
++	var selected_ids: Array = _canvas.get_selected_ids()
++	if selected_ids.is_empty():
++		return ""
++	for item in _canvas.export_canvas_data()["items"]:
++		var item_data: Dictionary = item
++		var item_id := String(item_data.get("id", ""))
++		if selected_ids.has(item_id) and not _canvas._get_batch_asset_ids(item_id).is_empty():
++			return item_id
++	return ""
+ 
+ 
+ func _set_batch_review_filter(review_filter: String, status_text: String) -> void:
 ```
