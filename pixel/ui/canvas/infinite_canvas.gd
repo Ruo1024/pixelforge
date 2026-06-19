@@ -36,6 +36,7 @@ const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
 const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
 const PixelGridRenderer := preload("res://ui/canvas/canvas_pixel_grid_renderer.gd")
 const ToolInputPolicy := preload("res://ui/canvas/canvas_tool_input_policy.gd")
+const ToolTarget := preload("res://ui/canvas/canvas_tool_target.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const Log := preload("res://core/util/log_util.gd")
@@ -61,6 +62,7 @@ var _suppress_change_signal := false
 var _last_wheel_zoom_msec := -1000000
 var _graph_edge_drag := {}
 var _graph_edge_drag_world := Vector2.ZERO
+var _selected_graph_edge := {}
 
 
 func _ready() -> void:
@@ -121,7 +123,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 
 	if event.keycode == KEY_DELETE or event.keycode == KEY_BACKSPACE:
-		delete_selected()
+		if not _selected_graph_edge.is_empty():
+			GraphEdgeInteraction.delete_edge(_selected_graph_edge, _emit_canvas_changed)
+			_selected_graph_edge = {}
+			queue_redraw()
+		else:
+			delete_selected()
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_Z and event.ctrl_pressed:
 		if event.shift_pressed:
@@ -139,7 +146,12 @@ func _draw() -> void:
 	):
 		PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
 	GraphEdgeRenderer.draw(
-		self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
+		self,
+		_items_by_id,
+		CanvasBatchCardScript,
+		CanvasNodeCardScript,
+		EDGE_COLOR,
+		_selected_graph_edge
 	)
 
 	for item_id in _selection.selected_ids:
@@ -477,23 +489,7 @@ func get_selected_sprite_snapshots() -> Array:
 
 
 func _get_active_tool_target() -> Dictionary:
-	var selected_ids: Array = _selection.get_selected_ids()
-	if selected_ids.size() != 1 or not _items_by_id.has(selected_ids[0]):
-		return {}
-	var item: Node = _items_by_id[selected_ids[0]]
-	if item.get_script() != CanvasItemSpriteScript:
-		return {}
-	var image: Image = item.duplicate_image()
-	if image == null:
-		return {}
-	return {
-		"item_id": item.item_id,
-		"asset_id": item.asset_id,
-		"image": image,
-		"image_size": image.get_size(),
-		"world_position": item.position,
-		"scale_factor": item.scale_factor,
-	}
+	return ToolTarget.active_target(_items_by_id, _selection, CanvasItemSpriteScript)
 
 
 func _get_batch_asset_ids(card_id: String, selected_only: bool = false) -> Array:
@@ -689,7 +685,9 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 				_selection.toggle(hit_item.item_id, _items_by_id.keys())
 			else:
 				_select_only([hit_item.item_id])
-			_begin_graph_edge_drag(hit, world_position)
+			_graph_edge_drag = GraphEdgeInteraction.begin_drag(hit)
+			_graph_edge_drag_world = world_position
+			queue_redraw()
 			return
 		if (
 			String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
@@ -708,6 +706,14 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 				world_position, SelectionSnapshot.selected_positions(_items_by_id, _selection)
 			)
 	else:
+		var edge_hit := GraphEdgeRenderer.hit_edge_at_screen(
+			self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, screen_position
+		)
+		if not edge_hit.is_empty():
+			_selection.clear()
+			_selected_graph_edge = edge_hit
+			queue_redraw()
+			return
 		if not additive:
 			_clear_selection()
 		_selection.start_box(screen_position, additive)
@@ -716,7 +722,11 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 
 func _finish_left_interaction(screen_position: Vector2) -> void:
 	if not _graph_edge_drag.is_empty():
-		_finish_graph_edge_drag(screen_to_world(screen_position))
+		var start := _graph_edge_drag.duplicate(true)
+		_graph_edge_drag = {}
+		var hit := _hit_at_world(screen_to_world(screen_position))
+		if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
+			GraphEdgeInteraction.try_connect(start, hit, _emit_canvas_changed)
 	elif _selection.is_dragging_items:
 		_commit_drag_if_needed()
 		_selection.stop_drag()
@@ -725,21 +735,6 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
 		_finish_box_selection()
 		_selection.stop_box()
 
-	queue_redraw()
-
-
-func _begin_graph_edge_drag(port_hit: Dictionary, world_position: Vector2) -> void:
-	_graph_edge_drag = GraphEdgeInteraction.begin_drag(port_hit)
-	_graph_edge_drag_world = world_position
-	queue_redraw()
-
-
-func _finish_graph_edge_drag(world_position: Vector2) -> void:
-	var start := _graph_edge_drag.duplicate(true)
-	_graph_edge_drag = {}
-	var hit := _hit_at_world(world_position)
-	if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
-		GraphEdgeInteraction.try_connect(start, hit, _emit_canvas_changed)
 	queue_redraw()
 
 
@@ -862,10 +857,12 @@ func _apply_positions(positions: Dictionary) -> void:
 
 
 func _select_only(ids: Array) -> void:
+	_selected_graph_edge = {}
 	_selection.select_only(ids, _items_by_id.keys())
 
 
 func _clear_selection() -> void:
+	_selected_graph_edge = {}
 	_selection.clear()
 
 

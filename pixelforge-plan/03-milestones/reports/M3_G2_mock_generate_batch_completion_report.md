@@ -9503,3 +9503,452 @@ index 09731f6..77f3fd3 100644
             String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
             and hit_item.toggle_asset_at_world(world_position)
 ```
+
+
+## 2026-06-20 M3 G-4 follow-up: graph edge selection/delete
+
+### 本轮实现说明
+
+- 补齐已有 graph 连线的最小删除闭环：点击连线可选中并高亮，按 `Delete` / `Backspace` 删除对应 graph edge。
+- 删除操作写回 `graphs/{graph_id}.json` 的 `edges`，并通过 `UndoService` 支持撤销/重做。
+- `PFCanvasGraphEdgeRenderer` 复用实际贝塞尔采样点做连线 hit-test，避免渲染和命中使用两套几何规则。
+- 新增 `PFCanvasToolTarget`，把 active tool target 解析从 `infinite_canvas.gd` 拆出，让主画布文件保持在 gdlint 行数门槛内。
+- 新增单元回归：点击已有连线后按 Delete 删除；Undo 可恢复。
+
+### 验证结果
+
+| 命令 | 结果 |
+|---|---|
+| `./pixel/scripts/lint.sh` | 通过：`Success: no problems found` |
+| `./pixel/scripts/run_tests.sh` | 通过：160/160 tests；仍有既有 GUT orphan 提示 `test_cleanup_batch_performance.gd` 外部 `error_tracker.gd` |
+| `./pixel/scripts/verify_m3_ux7.sh` | 通过：`verify_m3_ux7: ok` |
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`，确认默认节点链已有连线。
+2. 单击一条已有连线，连线应高亮。
+3. 按 `Delete` 或 `Backspace`，该连线应消失。
+4. 按 `Ctrl+Z`，连线应恢复；按 `Ctrl+Shift+Z`，连线应再次删除。
+5. 再试点击端口、缩略图和拖动节点/批次卡，确认端口命中、批次审阅和整卡拖动没有退化。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd b/pixel/tests/unit/test_canvas_hit_policy.gd
+index 1630032..be91f24 100644
+--- a/pixel/tests/unit/test_canvas_hit_policy.gd
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd
+@@ -140,6 +140,32 @@ func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> vo
+     assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
+
+
++func test_canvas_delete_key_removes_selected_graph_edge() -> void:
++    var canvas: Control = _canvas()
++    var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
++    _set_graph(
++        "graph_hit",
++        [_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")],
++        [edge]
++    )
++    var objects: Node = canvas._add_node_direct(
++        _node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
++    )
++    var generate: Node = canvas._add_node_direct(
++        _node_item("generate_item", "graph_hit", "generate", Vector2(380, 100))
++    )
++    var edge_midpoint: Vector2 = objects.get_graph_port_anchor("items", false).lerp(
++        generate.get_graph_port_anchor("items", true), 0.5
++    )
++
++    canvas._begin_left_interaction(canvas.world_to_screen(edge_midpoint), false)
++    canvas._unhandled_key_input(_delete_key_event())
++
++    assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
++    UndoService.undo()
++    assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [edge])
++
++
+ func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
+     var canvas: Control = _canvas()
+     var ids := [_register_asset(Color.RED, "red")]
+@@ -182,10 +208,10 @@ func _register_asset(color: Color, name: String) -> String:
+     return AssetLibrary.register_image(_image(color), name, {"origin": "imported"})
+
+
+-func _set_graph(graph_id: String, nodes: Array) -> void:
++func _set_graph(graph_id: String, nodes: Array, edges: Array = []) -> void:
+     ProjectService.set_graph_data(
+         graph_id,
+-        {"graph_version": 1, "id": graph_id, "name": "Hit Policy", "nodes": nodes, "edges": []}
++        {"graph_version": 1, "id": graph_id, "name": "Hit Policy", "nodes": nodes, "edges": edges}
+     )
+
+
+@@ -220,3 +246,10 @@ func _image(color: Color) -> Image:
+     var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+     image.fill(color)
+     return image
++
++
++func _delete_key_event() -> InputEventKey:
++    var event := InputEventKey.new()
++    event.keycode = KEY_DELETE
++    event.pressed = true
++    return event
+diff --git a/pixel/ui/canvas/canvas_graph_edge_interaction.gd b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+index aa2734b..2d801f5 100644
+--- a/pixel/ui/canvas/canvas_graph_edge_interaction.gd
++++ b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+@@ -63,6 +63,37 @@ static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -
+     return true
+
+
++static func delete_edge(selection: Dictionary, changed: Callable) -> bool:
++    var graph_id := String(selection.get("graph_id", ""))
++    var edge: Dictionary = selection.get("edge", {})
++    if graph_id.is_empty() or edge.is_empty():
++        return false
++    var before := ProjectService.get_graph_data(graph_id)
++    if before.is_empty():
++        return false
++    var after := before.duplicate(true)
++    var edges := []
++    var removed := false
++    for raw_edge in before.get("edges", []):
++        if raw_edge is Dictionary and Dictionary(raw_edge) == edge and not removed:
++            removed = true
++            continue
++        edges.append(raw_edge)
++    if not removed:
++        return false
++    after["edges"] = edges
++    UndoService.perform_action(
++        "Delete graph edge",
++        func() -> void:
++            ProjectService.set_graph_data(graph_id, after)
++            changed.call(),
++        func() -> void:
++            ProjectService.set_graph_data(graph_id, before)
++            changed.call()
++    )
++    return true
++
++
+ static func draw_preview(
+     canvas: Control, edge_renderer: Script, drag_state: Dictionary, drag_world: Vector2
+ ) -> void:
+diff --git a/pixel/ui/canvas/canvas_graph_edge_renderer.gd b/pixel/ui/canvas/canvas_graph_edge_renderer.gd
+index e24bbf2..c069976 100644
+--- a/pixel/ui/canvas/canvas_graph_edge_renderer.gd
++++ b/pixel/ui/canvas/canvas_graph_edge_renderer.gd
+@@ -4,13 +4,16 @@ extends RefCounted
+ ## Graph 连线渲染 helper。
+ ## contract: 02-contracts/GRAPH-SCHEMA.md §1；连线来自 graphs，不写入 canvas.json。
+
++const EDGE_HIT_DISTANCE := 8.0
++
+
+ static func draw(
+     canvas: Control,
+     items_by_id: Dictionary,
+     batch_script: Script,
+     node_script: Script,
+-    color: Color
++    color: Color,
++    selected_edge: Dictionary = {}
+ ) -> void:
+     var graph_items := _graph_items_by_node(items_by_id, batch_script, node_script)
+     for graph_id in graph_items.keys():
+@@ -18,7 +21,35 @@ static func draw(
+         var items_by_node: Dictionary = graph_items[graph_id]
+         for edge in graph_data.get("edges", []):
+             if edge is Dictionary:
+-                _draw_edge_if_visible(canvas, Dictionary(edge), items_by_node, color)
++                var edge_data := Dictionary(edge)
++                var edge_color := color
++                if _edge_matches(String(graph_id), edge_data, selected_edge):
++                    edge_color = Color(0.95, 0.86, 0.32, 1.0)
++                _draw_edge_if_visible(canvas, edge_data, items_by_node, edge_color)
++
++
++static func hit_edge_at_screen(
++    canvas: Control,
++    items_by_id: Dictionary,
++    batch_script: Script,
++    node_script: Script,
++    screen_position: Vector2
++) -> Dictionary:
++    var graph_items := _graph_items_by_node(items_by_id, batch_script, node_script)
++    for graph_id in graph_items.keys():
++        var graph_data := ProjectService.get_graph_data(String(graph_id))
++        var items_by_node: Dictionary = graph_items[graph_id]
++        for edge in graph_data.get("edges", []):
++            if not (edge is Dictionary):
++                continue
++            var edge_data := Dictionary(edge)
++            var points := _edge_points(canvas, edge_data, items_by_node)
++            if (
++                points.size() > 1
++                and _polyline_distance(points, screen_position) <= EDGE_HIT_DISTANCE
++            ):
++                return {"graph_id": String(graph_id), "edge": edge_data}
++    return {}
+
+
+ static func _draw_edge_if_visible(
+@@ -54,6 +85,29 @@ static func _draw_graph_edge(
+         return
+     var start: Vector2 = canvas.world_to_screen(start_world)
+     var end: Vector2 = canvas.world_to_screen(end_world)
++    var points := _bezier_points(start, end)
++    canvas.draw_polyline(points, color, 2.0, true)
++
++
++static func _edge_points(
++    canvas: Control, edge: Dictionary, items_by_node: Dictionary
++) -> PackedVector2Array:
++    var from_data: Array = edge.get("from", ["", ""])
++    var to_data: Array = edge.get("to", ["", ""])
++    var from_node := String(from_data[0])
++    var to_node := String(to_data[0])
++    if not items_by_node.has(from_node) or not items_by_node.has(to_node):
++        return PackedVector2Array()
++    var start_world: Variant = _edge_anchor_world(
++        items_by_node[from_node], String(from_data[1]), false
++    )
++    var end_world: Variant = _edge_anchor_world(items_by_node[to_node], String(to_data[1]), true)
++    if not (start_world is Vector2) or not (end_world is Vector2):
++        return PackedVector2Array()
++    return _bezier_points(canvas.world_to_screen(start_world), canvas.world_to_screen(end_world))
++
++
++static func _bezier_points(start: Vector2, end: Vector2) -> PackedVector2Array:
+     var bend := maxf(48.0, absf(end.x - start.x) * 0.35)
+     var control_a := start + Vector2(bend, 0.0)
+     var control_b := end - Vector2(bend, 0.0)
+@@ -61,7 +115,7 @@ static func _draw_graph_edge(
+     for index in range(17):
+         var t := float(index) / 16.0
+         points.append(_cubic_bezier(start, control_a, control_b, end, t))
+-    canvas.draw_polyline(points, color, 2.0, true)
++    return points
+
+
+ static func _edge_anchor_world(item: Node, port_name: String, is_input: bool) -> Variant:
+@@ -90,6 +144,29 @@ static func _is_canvas_graph_item(item: Node, batch_script: Script, node_script:
+     return item.get_script() == batch_script or item.get_script() == node_script
+
+
++static func _polyline_distance(points: PackedVector2Array, position: Vector2) -> float:
++    var distance := INF
++    for index in range(points.size() - 1):
++        distance = minf(distance, _segment_distance(position, points[index], points[index + 1]))
++    return distance
++
++
++static func _segment_distance(position: Vector2, start: Vector2, end: Vector2) -> float:
++    var segment := end - start
++    var length_squared := segment.length_squared()
++    if is_zero_approx(length_squared):
++        return position.distance_to(start)
++    var t := clampf((position - start).dot(segment) / length_squared, 0.0, 1.0)
++    return position.distance_to(start + segment * t)
++
++
++static func _edge_matches(graph_id: String, edge: Dictionary, selected_edge: Dictionary) -> bool:
++    return (
++        graph_id == String(selected_edge.get("graph_id", ""))
++        and edge == selected_edge.get("edge", {})
++    )
++
++
+ static func _cubic_bezier(a: Vector2, b: Vector2, c: Vector2, d: Vector2, t: float) -> Vector2:
+     var ab := a.lerp(b, t)
+     var bc := b.lerp(c, t)
+diff --git a/pixel/ui/canvas/canvas_tool_target.gd b/pixel/ui/canvas/canvas_tool_target.gd
+new file mode 100644
+index 0000000..091515a
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_tool_target.gd
+@@ -0,0 +1,26 @@
++class_name PFCanvasToolTarget
++extends RefCounted
++
++## Resolves the active sprite target for canvas tools.
++
++
++static func active_target(
++    items_by_id: Dictionary, selection: Variant, sprite_script: Script
++) -> Dictionary:
++    var selected_ids: Array = selection.get_selected_ids()
++    if selected_ids.size() != 1 or not items_by_id.has(selected_ids[0]):
++        return {}
++    var item: Node = items_by_id[selected_ids[0]]
++    if item.get_script() != sprite_script:
++        return {}
++    var image: Image = item.duplicate_image()
++    if image == null:
++        return {}
++    return {
++        "item_id": item.item_id,
++        "asset_id": item.asset_id,
++        "image": image,
++        "image_size": image.get_size(),
++        "world_position": item.position,
++        "scale_factor": item.scale_factor,
++    }
+diff --git a/pixel/ui/canvas/canvas_tool_target.gd.uid b/pixel/ui/canvas/canvas_tool_target.gd.uid
+new file mode 100644
+index 0000000..4fdbf8a
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_tool_target.gd.uid
+@@ -0,0 +1 @@
++uid://c8w2q2ocvxkvu
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index be5d8eb..55cee4f 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -36,6 +36,7 @@ const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
+ const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
+ const PixelGridRenderer := preload("res://ui/canvas/canvas_pixel_grid_renderer.gd")
+ const ToolInputPolicy := preload("res://ui/canvas/canvas_tool_input_policy.gd")
++const ToolTarget := preload("res://ui/canvas/canvas_tool_target.gd")
+ const IdUtil := preload("res://core/util/id_util.gd")
+ const ImageMath := preload("res://core/util/image_math.gd")
+ const Log := preload("res://core/util/log_util.gd")
+@@ -61,6 +62,7 @@ var _suppress_change_signal := false
+ var _last_wheel_zoom_msec := -1000000
+ var _graph_edge_drag := {}
+ var _graph_edge_drag_world := Vector2.ZERO
++var _selected_graph_edge := {}
+
+
+ func _ready() -> void:
+@@ -121,7 +123,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
+         return
+
+     if event.keycode == KEY_DELETE or event.keycode == KEY_BACKSPACE:
+-        delete_selected()
++        if not _selected_graph_edge.is_empty():
++            GraphEdgeInteraction.delete_edge(_selected_graph_edge, _emit_canvas_changed)
++            _selected_graph_edge = {}
++            queue_redraw()
++        else:
++            delete_selected()
+         get_viewport().set_input_as_handled()
+     elif event.keycode == KEY_Z and event.ctrl_pressed:
+         if event.shift_pressed:
+@@ -139,7 +146,12 @@ func _draw() -> void:
+     ):
+         PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+     GraphEdgeRenderer.draw(
+-        self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
++        self,
++        _items_by_id,
++        CanvasBatchCardScript,
++        CanvasNodeCardScript,
++        EDGE_COLOR,
++        _selected_graph_edge
+     )
+
+     for item_id in _selection.selected_ids:
+@@ -477,23 +489,7 @@ func get_selected_sprite_snapshots() -> Array:
+
+
+ func _get_active_tool_target() -> Dictionary:
+-    var selected_ids: Array = _selection.get_selected_ids()
+-    if selected_ids.size() != 1 or not _items_by_id.has(selected_ids[0]):
+-        return {}
+-    var item: Node = _items_by_id[selected_ids[0]]
+-    if item.get_script() != CanvasItemSpriteScript:
+-        return {}
+-    var image: Image = item.duplicate_image()
+-    if image == null:
+-        return {}
+-    return {
+-        "item_id": item.item_id,
+-        "asset_id": item.asset_id,
+-        "image": image,
+-        "image_size": image.get_size(),
+-        "world_position": item.position,
+-        "scale_factor": item.scale_factor,
+-    }
++    return ToolTarget.active_target(_items_by_id, _selection, CanvasItemSpriteScript)
+
+
+ func _get_batch_asset_ids(card_id: String, selected_only: bool = false) -> Array:
+@@ -689,7 +685,9 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
+                 _selection.toggle(hit_item.item_id, _items_by_id.keys())
+             else:
+                 _select_only([hit_item.item_id])
+-            _begin_graph_edge_drag(hit, world_position)
++            _graph_edge_drag = GraphEdgeInteraction.begin_drag(hit)
++            _graph_edge_drag_world = world_position
++            queue_redraw()
+             return
+         if (
+             String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
+@@ -708,6 +706,14 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
+                 world_position, SelectionSnapshot.selected_positions(_items_by_id, _selection)
+             )
+     else:
++        var edge_hit := GraphEdgeRenderer.hit_edge_at_screen(
++            self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, screen_position
++        )
++        if not edge_hit.is_empty():
++            _selection.clear()
++            _selected_graph_edge = edge_hit
++            queue_redraw()
++            return
+         if not additive:
+             _clear_selection()
+         _selection.start_box(screen_position, additive)
+@@ -716,7 +722,11 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
+
+ func _finish_left_interaction(screen_position: Vector2) -> void:
+     if not _graph_edge_drag.is_empty():
+-        _finish_graph_edge_drag(screen_to_world(screen_position))
++        var start := _graph_edge_drag.duplicate(true)
++        _graph_edge_drag = {}
++        var hit := _hit_at_world(screen_to_world(screen_position))
++        if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
++            GraphEdgeInteraction.try_connect(start, hit, _emit_canvas_changed)
+     elif _selection.is_dragging_items:
+         _commit_drag_if_needed()
+         _selection.stop_drag()
+@@ -728,21 +738,6 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
+     queue_redraw()
+
+
+-func _begin_graph_edge_drag(port_hit: Dictionary, world_position: Vector2) -> void:
+-    _graph_edge_drag = GraphEdgeInteraction.begin_drag(port_hit)
+-    _graph_edge_drag_world = world_position
+-    queue_redraw()
+-
+-
+-func _finish_graph_edge_drag(world_position: Vector2) -> void:
+-    var start := _graph_edge_drag.duplicate(true)
+-    _graph_edge_drag = {}
+-    var hit := _hit_at_world(world_position)
+-    if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
+-        GraphEdgeInteraction.try_connect(start, hit, _emit_canvas_changed)
+-    queue_redraw()
+-
+-
+ func _drag_selected_to(world_position: Vector2) -> void:
+     var delta: Vector2 = (world_position - _selection.drag_start_world).round()
+     for item_id in _selection.get_selected_ids():
+@@ -862,10 +857,12 @@ func _apply_positions(positions: Dictionary) -> void:
+
+
+ func _select_only(ids: Array) -> void:
++    _selected_graph_edge = {}
+     _selection.select_only(ids, _items_by_id.keys())
+
+
+ func _clear_selection() -> void:
++    _selected_graph_edge = {}
+     _selection.clear()
+
+
+```

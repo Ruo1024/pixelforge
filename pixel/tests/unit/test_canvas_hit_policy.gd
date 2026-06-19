@@ -140,6 +140,32 @@ func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> vo
 	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
 
 
+func test_canvas_delete_key_removes_selected_graph_edge() -> void:
+	var canvas: Control = _canvas()
+	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
+	_set_graph(
+		"graph_hit",
+		[_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")],
+		[edge]
+	)
+	var objects: Node = canvas._add_node_direct(
+		_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
+	)
+	var generate: Node = canvas._add_node_direct(
+		_node_item("generate_item", "graph_hit", "generate", Vector2(380, 100))
+	)
+	var edge_midpoint: Vector2 = objects.get_graph_port_anchor("items", false).lerp(
+		generate.get_graph_port_anchor("items", true), 0.5
+	)
+
+	canvas._begin_left_interaction(canvas.world_to_screen(edge_midpoint), false)
+	canvas._unhandled_key_input(_delete_key_event())
+
+	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
+	UndoService.undo()
+	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [edge])
+
+
 func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]
@@ -182,10 +208,10 @@ func _register_asset(color: Color, name: String) -> String:
 	return AssetLibrary.register_image(_image(color), name, {"origin": "imported"})
 
 
-func _set_graph(graph_id: String, nodes: Array) -> void:
+func _set_graph(graph_id: String, nodes: Array, edges: Array = []) -> void:
 	ProjectService.set_graph_data(
 		graph_id,
-		{"graph_version": 1, "id": graph_id, "name": "Hit Policy", "nodes": nodes, "edges": []}
+		{"graph_version": 1, "id": graph_id, "name": "Hit Policy", "nodes": nodes, "edges": edges}
 	)
 
 
@@ -220,3 +246,10 @@ func _image(color: Color) -> Image:
 	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
 	image.fill(color)
 	return image
+
+
+func _delete_key_event() -> InputEventKey:
+	var event := InputEventKey.new()
+	event.keycode = KEY_DELETE
+	event.pressed = true
+	return event

@@ -63,6 +63,37 @@ static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -
 	return true
 
 
+static func delete_edge(selection: Dictionary, changed: Callable) -> bool:
+	var graph_id := String(selection.get("graph_id", ""))
+	var edge: Dictionary = selection.get("edge", {})
+	if graph_id.is_empty() or edge.is_empty():
+		return false
+	var before := ProjectService.get_graph_data(graph_id)
+	if before.is_empty():
+		return false
+	var after := before.duplicate(true)
+	var edges := []
+	var removed := false
+	for raw_edge in before.get("edges", []):
+		if raw_edge is Dictionary and Dictionary(raw_edge) == edge and not removed:
+			removed = true
+			continue
+		edges.append(raw_edge)
+	if not removed:
+		return false
+	after["edges"] = edges
+	UndoService.perform_action(
+		"Delete graph edge",
+		func() -> void:
+			ProjectService.set_graph_data(graph_id, after)
+			changed.call(),
+		func() -> void:
+			ProjectService.set_graph_data(graph_id, before)
+			changed.call()
+	)
+	return true
+
+
 static func draw_preview(
 	canvas: Control, edge_renderer: Script, drag_state: Dictionary, drag_world: Vector2
 ) -> void:
