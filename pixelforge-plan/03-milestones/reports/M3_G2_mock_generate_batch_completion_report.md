@@ -270,6 +270,507 @@ const BATCH_ACTION_MATTE := "Matte Batch"
 const BATCH_ACTION_OUTLINE := "Outline Batch"
 ```
 
+## 2026-06-20 M3 G-4 follow-up: graph port drag-to-connect
+
+### 本轮实现说明
+
+- 在 UX-7 已有 graph port 命中仲裁基础上，补齐最小“从端口拖线创建 graph edge”交互：按下端口进入拖线预览，拖到同一 graph 内的反向端口释放后写入 `graphs/{graph_id}.json` 的 `edges`。
+- 新增 `PFCanvasGraphEdgeInteraction`，集中处理拖线状态、预览线绘制、真实端口解析与 `PFGraph.can_connect()` 校验；UI 不复制类型规则。
+- 兼容 AI Generate 的单视觉输入点：画布 hit-test 返回视觉端口 `in` 时，连接 helper 会从真实输入端口中选择第一个 `PFGraph.can_connect()` 允许的端口。
+- 新增 `PFCanvasSelectionSnapshot`，把选择位置快照/比较/恢复的小工具从 `infinite_canvas.gd` 拆出，保持主画布文件在 gdlint `max-file-lines` 门槛内。
+- 新增 2 条单元回归：兼容端口拖拽会新增 edge；不兼容端口拖拽不会污染 graph。
+
+### 验证结果
+
+| 命令 | 结果 |
+|---|---|
+| `./pixel/scripts/lint.sh` | 通过：`Success: no problems found` |
+| `./pixel/scripts/run_tests.sh` | 通过：159/159 tests，通过；仍有既有 GUT orphan 提示 `test_cleanup_batch_performance.gd` 外部 `error_tracker.gd` |
+| `./pixel/scripts/verify_m3_ux7.sh` | 通过：`verify_m3_ux7: ok` |
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`，确认画布出现 Object List / Size Spec / AI Generate / Mock Batch 节点链。
+2. 从 Object List 右侧输出端口拖到 AI Generate 左侧单视觉输入点，松手后应出现一条连线；从 Size Spec 右侧输出端口拖到 AI Generate 左侧单视觉输入点，也应能连到兼容真实端口。
+3. 尝试从 Object List 输出端口拖到 Mock Batch 输入端口；由于 `text_list -> image_list` 不兼容，不应新增连线。
+4. 连接成功后执行撤销/重做，确认 graph 连线随 Undo/Redo 消失和恢复。
+5. 继续点击端口、缩略图、拖动卡片，确认端口优先级没有导致批次缩略图审阅和整卡拖动退化。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd b/pixel/tests/unit/test_canvas_hit_policy.gd
+index a9745c5..1630032 100644
+--- a/pixel/tests/unit/test_canvas_hit_policy.gd
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd
+@@ -96,6 +96,50 @@ func test_canvas_left_click_on_graph_port_selects_without_dragging_card() -> voi
+     assert_false(canvas._selection.is_dragging_items)
+
+
++func test_canvas_drag_between_compatible_graph_ports_adds_edge() -> void:
++    var canvas: Control = _canvas()
++    _set_graph(
++        "graph_hit", [_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")]
++    )
++    var objects: Node = canvas._add_node_direct(
++        _node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
++    )
++    var generate: Node = canvas._add_node_direct(
++        _node_item("generate_item", "graph_hit", "generate", Vector2(380, 100))
++    )
++
++    canvas._begin_left_interaction(
++        canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
++    )
++    canvas._finish_left_interaction(
++        canvas.world_to_screen(generate.get_graph_port_anchor("items", true))
++    )
++
++    var graph_data := ProjectService.get_graph_data("graph_hit")
++    assert_eq(
++        graph_data.get("edges", []), [{"from": ["objects", "items"], "to": ["generate", "items"]}]
++    )
++
++
++func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> void:
++    var canvas: Control = _canvas()
++    var ids := [_register_asset(Color.RED, "red")]
++    _set_graph("graph_hit", [_graph_node("objects", "object_list"), _batch_node("batch_1", ids)])
++    var objects: Node = canvas._add_node_direct(
++        _node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
++    )
++    var batch: Node = canvas._add_batch_card(
++        ids, Vector2(380, 100), "Batch", "batch_item", false, "graph_hit", "batch_1"
++    )
++
++    canvas._begin_left_interaction(
++        canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
++    )
++    canvas._finish_left_interaction(canvas.world_to_screen(batch.get_graph_port_anchor("in", true)))
++
++    assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
++
++
+ func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
+     var canvas: Control = _canvas()
+     var ids := [_register_asset(Color.RED, "red")]
+diff --git a/pixel/ui/canvas/canvas_graph_edge_interaction.gd b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+new file mode 100644
+index 0000000..aa2734b
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+@@ -0,0 +1,139 @@
++class_name PFCanvasGraphEdgeInteraction
++extends RefCounted
++
++## Graph port drag/connect helper for PFInfiniteCanvas.
++## contract: 02-contracts/GRAPH-SCHEMA.md §2；连接校验只委托 PFGraph。
++
++const GraphScript := preload("res://core/graph/pf_graph.gd")
++
++
++static func begin_drag(port_hit: Dictionary) -> Dictionary:
++    var item: Node = port_hit.get("item", null)
++    if item == null or item.graph_id.is_empty() or item.node_id.is_empty():
++        return {}
++    var port_name := String(port_hit.get("port_name", ""))
++    if port_name.is_empty():
++        return {}
++    var is_input := bool(port_hit.get("is_input", false))
++    return {
++        "graph_id": item.graph_id,
++        "node_id": item.node_id,
++        "port_name": port_name,
++        "is_input": is_input,
++        "anchor": item.get_graph_port_anchor(port_name, is_input),
++    }
++
++
++static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -> bool:
++    var end_item: Node = end.get("item", null)
++    if end_item == null:
++        return false
++    if String(start.get("graph_id", "")) != end_item.graph_id:
++        return false
++    if bool(start.get("is_input", false)) == bool(end.get("is_input", false)):
++        return false
++
++    var graph_id := String(start.get("graph_id", ""))
++    var before := ProjectService.get_graph_data(graph_id)
++    if before.is_empty():
++        return false
++    var graph: PFGraph = GraphScript.from_json(before)
++    var endpoints := _resolve_endpoints(graph, start, end, end_item)
++    if endpoints.is_empty():
++        return false
++    var result := graph.add_edge(
++        endpoints["source_node"],
++        endpoints["source_port"],
++        endpoints["target_node"],
++        endpoints["target_port"]
++    )
++    if not bool(result.get("ok", false)):
++        return false
++
++    var after := graph.to_json()
++    UndoService.perform_action(
++        "Connect graph ports",
++        func() -> void:
++            ProjectService.set_graph_data(graph_id, after)
++            changed.call(),
++        func() -> void:
++            ProjectService.set_graph_data(graph_id, before)
++            changed.call()
++    )
++    return true
++
++
++static func draw_preview(
++    canvas: Control, edge_renderer: Script, drag_state: Dictionary, drag_world: Vector2
++) -> void:
++    var start_world: Vector2 = drag_state.get("anchor", drag_world)
++    var start: Vector2 = canvas.world_to_screen(start_world)
++    var end: Vector2 = canvas.world_to_screen(drag_world)
++    var bend := maxf(48.0, absf(end.x - start.x) * 0.35)
++    var direction := -1.0 if bool(drag_state.get("is_input", false)) else 1.0
++    var control_a: Vector2 = start + Vector2(bend * direction, 0.0)
++    var control_b: Vector2 = end - Vector2(bend * direction, 0.0)
++    var points := PackedVector2Array()
++    for index in range(17):
++        var t := float(index) / 16.0
++        points.append(edge_renderer._cubic_bezier(start, control_a, control_b, end, t))
++    canvas.draw_polyline(points, Color(0.72, 0.9, 0.95, 0.72), 2.0, true)
++
++
++static func _resolve_endpoints(
++    graph: PFGraph, start: Dictionary, end: Dictionary, end_item: Node
++) -> Dictionary:
++    if bool(start.get("is_input", false)):
++        return _first_valid_connection(
++            graph,
++            end_item.node_id,
++            [String(end.get("port_name", ""))],
++            String(start.get("node_id", "")),
++            _input_port_candidates(
++                graph, String(start.get("node_id", "")), String(start.get("port_name", ""))
++            )
++        )
++    return _first_valid_connection(
++        graph,
++        String(start.get("node_id", "")),
++        [String(start.get("port_name", ""))],
++        end_item.node_id,
++        _input_port_candidates(graph, end_item.node_id, String(end.get("port_name", "")))
++    )
++
++
++static func _first_valid_connection(
++    graph: PFGraph,
++    source_node: String,
++    source_ports: Array,
++    target_node: String,
++    target_ports: Array
++) -> Dictionary:
++    for source_port in source_ports:
++        for target_port in target_ports:
++            var result := graph.can_connect(
++                source_node, String(source_port), target_node, String(target_port)
++            )
++            if bool(result.get("ok", false)):
++                return {
++                    "source_node": source_node,
++                    "source_port": String(source_port),
++                    "target_node": target_node,
++                    "target_port": String(target_port),
++                }
++    return {}
++
++
++static func _input_port_candidates(graph: PFGraph, node_id: String, port_name: String) -> Array:
++    var node := graph.get_node(node_id)
++    if node == null:
++        return []
++    var exact := node.get_input_port(port_name)
++    if not exact.is_empty():
++        return [port_name]
++    if port_name != "in":
++        return [port_name]
++    var ports := []
++    for port in node.get_input_ports():
++        ports.append(String(port.get("name", "")))
++    return ports
+diff --git a/pixel/ui/canvas/canvas_graph_edge_interaction.gd.uid b/pixel/ui/canvas/canvas_graph_edge_interaction.gd.uid
+new file mode 100644
+index 0000000..76d5d1e
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_graph_edge_interaction.gd.uid
+@@ -0,0 +1 @@
++uid://bf7f24p4n84y4
+diff --git a/pixel/ui/canvas/canvas_selection_snapshot.gd b/pixel/ui/canvas/canvas_selection_snapshot.gd
+new file mode 100644
+index 0000000..7c884d8
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_selection_snapshot.gd
+@@ -0,0 +1,36 @@
++class_name PFCanvasSelectionSnapshot
++extends RefCounted
++
++## Small helpers for canvas selection snapshots used by undoable interactions.
++
++
++static func selected_positions(items_by_id: Dictionary, selection: Variant) -> Dictionary:
++    var positions := {}
++    for item_id in selection.get_selected_ids():
++        if items_by_id.has(item_id):
++            positions[item_id] = items_by_id[item_id].position
++    return positions
++
++
++static func apply_positions(items_by_id: Dictionary, positions: Dictionary) -> void:
++    for item_id in positions.keys():
++        if items_by_id.has(item_id):
++            items_by_id[item_id].position = Vector2(positions[item_id]).round()
++
++
++static func positions_equal(left: Dictionary, right: Dictionary) -> bool:
++    if left.size() != right.size():
++        return false
++    for item_id in left.keys():
++        if not right.has(item_id):
++            return false
++        if Vector2(left[item_id]) != Vector2(right[item_id]):
++            return false
++    return true
++
++
++static func ids_from_snapshots(snapshots: Array) -> Array:
++    var ids := []
++    for snapshot in snapshots:
++        ids.append(String(snapshot["data"]["id"]))
++    return ids
+diff --git a/pixel/ui/canvas/canvas_selection_snapshot.gd.uid b/pixel/ui/canvas/canvas_selection_snapshot.gd.uid
+new file mode 100644
+index 0000000..52c8c8d
+--- /dev/null
++++ b/pixel/ui/canvas/canvas_selection_snapshot.gd.uid
+@@ -0,0 +1 @@
++uid://beywkrfgng2wn
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 77f3fd3..be5d8eb 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -24,12 +24,14 @@ const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
+ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+ const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
+ const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
++const GraphEdgeInteraction := preload("res://ui/canvas/canvas_graph_edge_interaction.gd")
+ const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
+ const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
+ const LODCoordinator := preload("res://ui/canvas/canvas_lod_coordinator.gd")
+ const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
+ const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
+ const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
++const SelectionSnapshot := preload("res://ui/canvas/canvas_selection_snapshot.gd")
+ const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
+ const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
+ const PixelGridRenderer := preload("res://ui/canvas/canvas_pixel_grid_renderer.gd")
+@@ -57,6 +59,8 @@ var _is_panning := false
+ var _cull_elapsed := 0.0
+ var _suppress_change_signal := false
+ var _last_wheel_zoom_msec := -1000000
++var _graph_edge_drag := {}
++var _graph_edge_drag_world := Vector2.ZERO
+
+
+ func _ready() -> void:
+@@ -134,7 +138,9 @@ func _draw() -> void:
+         >= GRID_MIN_ZOOM
+     ):
+         PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+-    _draw_graph_edges()
++    GraphEdgeRenderer.draw(
++        self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
++    )
+
+     for item_id in _selection.selected_ids:
+         if not _items_by_id.has(item_id):
+@@ -149,6 +155,11 @@ func _draw() -> void:
+         draw_rect(box, BOX_COLOR, true)
+         draw_rect(box, Color(1.0, 0.85, 0.25, 1.0), false, 1.0)
+
++    if not _graph_edge_drag.is_empty():
++        GraphEdgeInteraction.draw_preview(
++            self, GraphEdgeRenderer, _graph_edge_drag, _graph_edge_drag_world
++        )
++
+     if tool_manager != null:
+         tool_manager.draw_overlay(self, _get_active_tool_target())
+
+@@ -303,7 +314,7 @@ func delete_selected(record_undo: bool = true) -> void:
+                 _add_batch_direct(data)
+             elif String(data.get("type", "")) == "node":
+                 _add_node_direct(data)
+-        _select_only(_ids_from_snapshots(snapshots))
++        _select_only(SelectionSnapshot.ids_from_snapshots(snapshots))
+         _emit_canvas_changed()
+
+     var memory_cost := 0
+@@ -593,13 +604,13 @@ func move_selected_by(delta: Vector2, record_undo: bool = true) -> void:
+     if _selection.is_empty():
+         return
+
+-    var before := _selected_positions()
++    var before := SelectionSnapshot.selected_positions(_items_by_id, _selection)
+     var after := {}
+     var snapped_delta := delta.round()
+     for item_id in before.keys():
+         after[item_id] = (Vector2(before[item_id]) + snapped_delta).round()
+
+-    if _positions_equal(before, after):
++    if SelectionSnapshot.positions_equal(before, after):
+         return
+
+     var ids: Array = _selection.get_selected_ids()
+@@ -652,7 +663,11 @@ func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:
+
+
+ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
+-    if _is_panning:
++    if not _graph_edge_drag.is_empty():
++        _graph_edge_drag_world = screen_to_world(event.position)
++        queue_redraw()
++        accept_event()
++    elif _is_panning:
+         pan_by_pixels(-event.relative)
+         accept_event()
+     elif _selection.is_dragging_items:
+@@ -674,6 +689,7 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
+                 _selection.toggle(hit_item.item_id, _items_by_id.keys())
+             else:
+                 _select_only([hit_item.item_id])
++            _begin_graph_edge_drag(hit, world_position)
+             return
+         if (
+             String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
+@@ -688,7 +704,9 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
+             _select_only([hit_item.item_id])
+
+         if _selection.has(hit_item.item_id):
+-            _selection.start_drag(world_position, _selected_positions())
++            _selection.start_drag(
++                world_position, SelectionSnapshot.selected_positions(_items_by_id, _selection)
++            )
+     else:
+         if not additive:
+             _clear_selection()
+@@ -697,7 +715,9 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
+
+
+ func _finish_left_interaction(screen_position: Vector2) -> void:
+-    if _selection.is_dragging_items:
++    if not _graph_edge_drag.is_empty():
++        _finish_graph_edge_drag(screen_to_world(screen_position))
++    elif _selection.is_dragging_items:
+         _commit_drag_if_needed()
+         _selection.stop_drag()
+     elif _selection.is_box_selecting:
+@@ -708,6 +728,21 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
+     queue_redraw()
+
+
++func _begin_graph_edge_drag(port_hit: Dictionary, world_position: Vector2) -> void:
++    _graph_edge_drag = GraphEdgeInteraction.begin_drag(port_hit)
++    _graph_edge_drag_world = world_position
++    queue_redraw()
++
++
++func _finish_graph_edge_drag(world_position: Vector2) -> void:
++    var start := _graph_edge_drag.duplicate(true)
++    _graph_edge_drag = {}
++    var hit := _hit_at_world(world_position)
++    if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
++        GraphEdgeInteraction.try_connect(start, hit, _emit_canvas_changed)
++    queue_redraw()
++
++
+ func _drag_selected_to(world_position: Vector2) -> void:
+     var delta: Vector2 = (world_position - _selection.drag_start_world).round()
+     for item_id in _selection.get_selected_ids():
+@@ -720,8 +755,8 @@ func _drag_selected_to(world_position: Vector2) -> void:
+
+
+ func _commit_drag_if_needed() -> void:
+-    var after_positions := _selected_positions()
+-    if _positions_equal(_selection.drag_start_positions, after_positions):
++    var after_positions := SelectionSnapshot.selected_positions(_items_by_id, _selection)
++    if SelectionSnapshot.positions_equal(_selection.drag_start_positions, after_positions):
+         return
+
+     var before: Dictionary = _selection.drag_start_positions.duplicate(true)
+@@ -820,33 +855,12 @@ func _hit_at_world(world_position: Vector2) -> Dictionary:
+     )
+
+
+-func _selected_positions() -> Dictionary:
+-    var positions := {}
+-    for item_id in _selection.get_selected_ids():
+-        if _items_by_id.has(item_id):
+-            positions[item_id] = _items_by_id[item_id].position
+-    return positions
+-
+-
+ func _apply_positions(positions: Dictionary) -> void:
+-    for item_id in positions.keys():
+-        if _items_by_id.has(item_id):
+-            _items_by_id[item_id].position = Vector2(positions[item_id]).round()
++    SelectionSnapshot.apply_positions(_items_by_id, positions)
+     _sync_cleanup_grid_overlay()
+     queue_redraw()
+
+
+-func _positions_equal(left: Dictionary, right: Dictionary) -> bool:
+-    if left.size() != right.size():
+-        return false
+-    for item_id in left.keys():
+-        if not right.has(item_id):
+-            return false
+-        if Vector2(left[item_id]) != Vector2(right[item_id]):
+-            return false
+-    return true
+-
+-
+ func _select_only(ids: Array) -> void:
+     _selection.select_only(ids, _items_by_id.keys())
+
+@@ -855,13 +869,6 @@ func _clear_selection() -> void:
+     _selection.clear()
+
+
+-func _ids_from_snapshots(snapshots: Array) -> Array:
+-    var ids := []
+-    for snapshot in snapshots:
+-        ids.append(String(snapshot["data"]["id"]))
+-    return ids
+-
+-
+ func _set_zoom_to_value(value: float) -> void:
+     var nearest_index := 0
+     var nearest_distance := INF
+@@ -932,12 +939,6 @@ func _camera_center_for_snapped_anchor(anchor_world: Vector2, screen_anchor: Vec
+     )
+
+
+-func _draw_graph_edges() -> void:
+-    GraphEdgeRenderer.draw(
+-        self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
+-    )
+-
+-
+ func _emit_canvas_changed() -> void:
+     if _suppress_change_signal:
+         return
+```
+
 ## 追加开发：G-4 最小节点链可视化基础
 
 追加目标：把 G-2/G-3 已经能运行的 mock graph 从隐藏数据升级为画布上可见的最小节点链。此轮只做“从无到有”的基础载体：轻节点卡、连线渲染、保存重开一致；不做完整端口拖拽编辑器、参数检查器或通用 executor。
@@ -371,34 +872,34 @@ index 72a4393..2e30fa2 100644
 --- a/pixel/tests/smoke/test_main_window_ui.gd
 +++ b/pixel/tests/smoke/test_main_window_ui.gd
 @@ -231,14 +231,23 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
- 	controller.generate_mock_batch()
- 	await wait_process_frames(2)
- 
--	assert_eq(canvas.get_item_count(), 1)
-+	assert_eq(canvas.get_item_count(), 4)
- 	assert_eq(ProjectService.current_project.graphs.size(), 1)
- 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
- 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
- 	var batch_node: Dictionary = graph_data["nodes"][3]
- 	assert_eq(batch_node["type"], "batch")
- 	assert_eq(batch_node["params"]["asset_ids"].size(), 10)
--	var canvas_item: Dictionary = canvas.export_canvas_data()["items"][0]
--	assert_eq(canvas_item["type"], "node")
--	assert_eq(canvas_item["graph_id"], graph_id)
--	assert_eq(canvas_item["node_id"], "batch_1")
-+	var canvas_items: Array = canvas.export_canvas_data()["items"]
-+	assert_eq(canvas_items.size(), 4)
-+	assert_eq(_node_ids_from_canvas_items(canvas_items), ["objects", "size", "generate", "batch_1"])
-+	for canvas_item in canvas_items:
-+		assert_eq(canvas_item["type"], "node")
-+		assert_eq(canvas_item["graph_id"], graph_id)
+     controller.generate_mock_batch()
+     await wait_process_frames(2)
+
+-    assert_eq(canvas.get_item_count(), 1)
++    assert_eq(canvas.get_item_count(), 4)
+     assert_eq(ProjectService.current_project.graphs.size(), 1)
+     var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+     var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+     var batch_node: Dictionary = graph_data["nodes"][3]
+     assert_eq(batch_node["type"], "batch")
+     assert_eq(batch_node["params"]["asset_ids"].size(), 10)
+-    var canvas_item: Dictionary = canvas.export_canvas_data()["items"][0]
+-    assert_eq(canvas_item["type"], "node")
+-    assert_eq(canvas_item["graph_id"], graph_id)
+-    assert_eq(canvas_item["node_id"], "batch_1")
++    var canvas_items: Array = canvas.export_canvas_data()["items"]
++    assert_eq(canvas_items.size(), 4)
++    assert_eq(_node_ids_from_canvas_items(canvas_items), ["objects", "size", "generate", "batch_1"])
++    for canvas_item in canvas_items:
++        assert_eq(canvas_item["type"], "node")
++        assert_eq(canvas_item["graph_id"], graph_id)
 +
 +
 +func _node_ids_from_canvas_items(items: Array) -> Array:
-+	var node_ids := []
-+	for item in items:
-+		node_ids.append(String(Dictionary(item).get("node_id", "")))
-+	return node_ids
++    var node_ids := []
++    for item in items:
++        node_ids.append(String(Dictionary(item).get("node_id", "")))
++    return node_ids
 diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
 index aefa8fb..e5e6e96 100644
 --- a/pixel/tests/unit/test_canvas_batch_card.gd
@@ -408,51 +909,51 @@ index aefa8fb..e5e6e96 100644
  const GraphScript := preload("res://core/graph/pf_graph.gd")
  const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 +const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
- 
- 
+
+
  func before_each() -> void:
 @@ -78,6 +79,41 @@ func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement()
- 	assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), [green_id])
- 
- 
+     assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), [green_id])
+
+
 +func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var graph := GraphScript.new()
-+	graph.id = "graph_node_card_test"
-+	graph.add_node(
-+		ObjectListNodeScript.new(), "objects", {"items": "barrel\ncrate"}, Vector2(24, 32)
-+	)
-+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++    var graph := GraphScript.new()
++    graph.id = "graph_node_card_test"
++    graph.add_node(
++        ObjectListNodeScript.new(), "objects", {"items": "barrel\ncrate"}, Vector2(24, 32)
++    )
++    ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 +
-+	var node_card: Node = canvas._add_graph_node_card(
-+		graph.id, "objects", Vector2(24, 32), "node_item_objects", false
-+	)
-+	assert_not_null(node_card)
++    var node_card: Node = canvas._add_graph_node_card(
++        graph.id, "objects", Vector2(24, 32), "node_item_objects", false
++    )
++    assert_not_null(node_card)
 +
-+	var canvas_data: Dictionary = canvas.export_canvas_data()
-+	var item: Dictionary = canvas_data["items"][0]
-+	assert_eq(item["type"], "node")
-+	assert_eq(item["graph_id"], graph.id)
-+	assert_eq(item["node_id"], "objects")
-+	assert_false(item.has("asset_ids"))
++    var canvas_data: Dictionary = canvas.export_canvas_data()
++    var item: Dictionary = canvas_data["items"][0]
++    assert_eq(item["type"], "node")
++    assert_eq(item["graph_id"], graph.id)
++    assert_eq(item["node_id"], "objects")
++    assert_false(item.has("asset_ids"))
 +
-+	var reloaded_canvas: Control = CanvasScript.new()
-+	reloaded_canvas.size = Vector2(512, 512)
-+	add_child_autofree(reloaded_canvas)
-+	await wait_process_frames(2)
-+	reloaded_canvas.load_canvas_data(canvas_data)
++    var reloaded_canvas: Control = CanvasScript.new()
++    reloaded_canvas.size = Vector2(512, 512)
++    add_child_autofree(reloaded_canvas)
++    await wait_process_frames(2)
++    reloaded_canvas.load_canvas_data(canvas_data)
 +
-+	assert_eq(reloaded_canvas.get_item_count(), 1)
-+	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
++    assert_eq(reloaded_canvas.get_item_count(), 1)
++    assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
 +
 +
  func _register_asset(color: Color, name: String) -> String:
- 	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
- 	image.fill(color)
+     var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+     image.fill(color)
 diff --git a/pixel/ui/canvas/canvas_graph_edge_renderer.gd b/pixel/ui/canvas/canvas_graph_edge_renderer.gd
 new file mode 100644
 index 0000000..3ee0fb5
@@ -467,78 +968,78 @@ index 0000000..3ee0fb5
 +
 +
 +static func draw(
-+	canvas: Control,
-+	items_by_id: Dictionary,
-+	batch_script: Script,
-+	node_script: Script,
-+	color: Color
++    canvas: Control,
++    items_by_id: Dictionary,
++    batch_script: Script,
++    node_script: Script,
++    color: Color
 +) -> void:
-+	var graph_items := _graph_items_by_node(items_by_id, batch_script, node_script)
-+	for graph_id in graph_items.keys():
-+		var graph_data := ProjectService.get_graph_data(String(graph_id))
-+		var items_by_node: Dictionary = graph_items[graph_id]
-+		for edge in graph_data.get("edges", []):
-+			if edge is Dictionary:
-+				_draw_edge_if_visible(canvas, Dictionary(edge), items_by_node, color)
++    var graph_items := _graph_items_by_node(items_by_id, batch_script, node_script)
++    for graph_id in graph_items.keys():
++        var graph_data := ProjectService.get_graph_data(String(graph_id))
++        var items_by_node: Dictionary = graph_items[graph_id]
++        for edge in graph_data.get("edges", []):
++            if edge is Dictionary:
++                _draw_edge_if_visible(canvas, Dictionary(edge), items_by_node, color)
 +
 +
 +static func _draw_edge_if_visible(
-+	canvas: Control, edge: Dictionary, items_by_node: Dictionary, color: Color
++    canvas: Control, edge: Dictionary, items_by_node: Dictionary, color: Color
 +) -> void:
-+	var from_data: Array = edge.get("from", ["", ""])
-+	var to_data: Array = edge.get("to", ["", ""])
-+	var from_node := String(from_data[0])
-+	var to_node := String(to_data[0])
-+	if not items_by_node.has(from_node) or not items_by_node.has(to_node):
-+		return
-+	_draw_graph_edge(canvas, items_by_node[from_node], items_by_node[to_node], color)
++    var from_data: Array = edge.get("from", ["", ""])
++    var to_data: Array = edge.get("to", ["", ""])
++    var from_node := String(from_data[0])
++    var to_node := String(to_data[0])
++    if not items_by_node.has(from_node) or not items_by_node.has(to_node):
++        return
++    _draw_graph_edge(canvas, items_by_node[from_node], items_by_node[to_node], color)
 +
 +
 +static func _draw_graph_edge(canvas: Control, from_item: Node, to_item: Node, color: Color) -> void:
-+	var from_bounds: Rect2 = from_item.get_canvas_bounds()
-+	var to_bounds: Rect2 = to_item.get_canvas_bounds()
-+	var start: Vector2 = canvas.world_to_screen(
-+		from_bounds.position + Vector2(from_bounds.size.x, from_bounds.size.y * 0.5)
-+	)
-+	var end: Vector2 = canvas.world_to_screen(
-+		to_bounds.position + Vector2(0.0, to_bounds.size.y * 0.5)
-+	)
-+	var bend := maxf(48.0, absf(end.x - start.x) * 0.35)
-+	var control_a := start + Vector2(bend, 0.0)
-+	var control_b := end - Vector2(bend, 0.0)
-+	var points := PackedVector2Array()
-+	for index in range(17):
-+		var t := float(index) / 16.0
-+		points.append(_cubic_bezier(start, control_a, control_b, end, t))
-+	canvas.draw_polyline(points, color, 2.0, true)
++    var from_bounds: Rect2 = from_item.get_canvas_bounds()
++    var to_bounds: Rect2 = to_item.get_canvas_bounds()
++    var start: Vector2 = canvas.world_to_screen(
++        from_bounds.position + Vector2(from_bounds.size.x, from_bounds.size.y * 0.5)
++    )
++    var end: Vector2 = canvas.world_to_screen(
++        to_bounds.position + Vector2(0.0, to_bounds.size.y * 0.5)
++    )
++    var bend := maxf(48.0, absf(end.x - start.x) * 0.35)
++    var control_a := start + Vector2(bend, 0.0)
++    var control_b := end - Vector2(bend, 0.0)
++    var points := PackedVector2Array()
++    for index in range(17):
++        var t := float(index) / 16.0
++        points.append(_cubic_bezier(start, control_a, control_b, end, t))
++    canvas.draw_polyline(points, color, 2.0, true)
 +
 +
 +static func _graph_items_by_node(
-+	items_by_id: Dictionary, batch_script: Script, node_script: Script
++    items_by_id: Dictionary, batch_script: Script, node_script: Script
 +) -> Dictionary:
-+	var graph_items := {}
-+	for item in items_by_id.values():
-+		if not _is_canvas_graph_item(item, batch_script, node_script):
-+			continue
-+		if item.graph_id.is_empty() or item.node_id.is_empty():
-+			continue
-+		if not graph_items.has(item.graph_id):
-+			graph_items[item.graph_id] = {}
-+		graph_items[item.graph_id][item.node_id] = item
-+	return graph_items
++    var graph_items := {}
++    for item in items_by_id.values():
++        if not _is_canvas_graph_item(item, batch_script, node_script):
++            continue
++        if item.graph_id.is_empty() or item.node_id.is_empty():
++            continue
++        if not graph_items.has(item.graph_id):
++            graph_items[item.graph_id] = {}
++        graph_items[item.graph_id][item.node_id] = item
++    return graph_items
 +
 +
 +static func _is_canvas_graph_item(item: Node, batch_script: Script, node_script: Script) -> bool:
-+	return item.get_script() == batch_script or item.get_script() == node_script
++    return item.get_script() == batch_script or item.get_script() == node_script
 +
 +
 +static func _cubic_bezier(a: Vector2, b: Vector2, c: Vector2, d: Vector2, t: float) -> Vector2:
-+	var ab := a.lerp(b, t)
-+	var bc := b.lerp(c, t)
-+	var cd := c.lerp(d, t)
-+	var abbc := ab.lerp(bc, t)
-+	var bccd := bc.lerp(cd, t)
-+	return abbc.lerp(bccd, t)
++    var ab := a.lerp(b, t)
++    var bc := b.lerp(c, t)
++    var cd := c.lerp(d, t)
++    var abbc := ab.lerp(bc, t)
++    var bccd := bc.lerp(cd, t)
++    return abbc.lerp(bccd, t)
 diff --git a/pixel/ui/canvas/canvas_graph_edge_renderer.gd.uid b/pixel/ui/canvas/canvas_graph_edge_renderer.gd.uid
 new file mode 100644
 index 0000000..b4ad0ec
@@ -560,69 +1061,69 @@ index 0000000..9cbd4de
 +
 +
 +static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
-+	if String(item_data.get("type", "")) != "node":
-+		return false
-+	var graph_id := String(item_data.get("graph_id", ""))
-+	var node_id := String(item_data.get("node_id", ""))
-+	if graph_id.is_empty() or node_id.is_empty():
-+		return false
++    if String(item_data.get("type", "")) != "node":
++        return false
++    var graph_id := String(item_data.get("graph_id", ""))
++    var node_id := String(item_data.get("node_id", ""))
++    if graph_id.is_empty() or node_id.is_empty():
++        return false
 +
-+	var graph_data := ProjectService.get_graph_data(graph_id)
-+	for raw_node in graph_data.get("nodes", []):
-+		if not (raw_node is Dictionary):
-+			continue
-+		var node_data: Dictionary = raw_node
-+		if String(node_data.get("id", "")) == node_id:
-+			return String(node_data.get("type", "")) == "batch"
-+	return false
++    var graph_data := ProjectService.get_graph_data(graph_id)
++    for raw_node in graph_data.get("nodes", []):
++        if not (raw_node is Dictionary):
++            continue
++        var node_data: Dictionary = raw_node
++        if String(node_data.get("id", "")) == node_id:
++            return String(node_data.get("type", "")) == "batch"
++    return false
 +
 +
 +static func apply_batch_asset_ids(item: Node, asset_ids: Array, asset_library: Node) -> void:
-+	for asset_id in item.asset_ids:
-+		asset_library.release_ref(asset_id)
-+	item.set_asset_ids(asset_ids)
-+	for asset_id in item.asset_ids:
-+		asset_library.add_ref(asset_id)
++    for asset_id in item.asset_ids:
++        asset_library.release_ref(asset_id)
++    item.set_asset_ids(asset_ids)
++    for asset_id in item.asset_ids:
++        asset_library.add_ref(asset_id)
 +
 +
 +static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
-+	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-+		return
++    if not item.has_method("has_graph_binding") or not item.has_graph_binding():
++        return
 +
-+	var graph_data := ProjectService.get_graph_data(item.graph_id)
-+	if graph_data.is_empty():
-+		return
++    var graph_data := ProjectService.get_graph_data(item.graph_id)
++    if graph_data.is_empty():
++        return
 +
-+	var nodes := []
-+	var changed := false
-+	for raw_node in graph_data.get("nodes", []):
-+		if not (raw_node is Dictionary):
-+			nodes.append(raw_node)
-+			continue
-+		var node_data: Dictionary = raw_node
-+		if (
-+			String(node_data.get("id", "")) == item.node_id
-+			and String(node_data.get("type", "")) == "batch"
-+		):
-+			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-+			params["asset_ids"] = _string_array(asset_ids)
-+			node_data["params"] = params
-+			changed = true
-+		nodes.append(node_data)
++    var nodes := []
++    var changed := false
++    for raw_node in graph_data.get("nodes", []):
++        if not (raw_node is Dictionary):
++            nodes.append(raw_node)
++            continue
++        var node_data: Dictionary = raw_node
++        if (
++            String(node_data.get("id", "")) == item.node_id
++            and String(node_data.get("type", "")) == "batch"
++        ):
++            var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
++            params["asset_ids"] = _string_array(asset_ids)
++            node_data["params"] = params
++            changed = true
++        nodes.append(node_data)
 +
-+	if changed:
-+		graph_data["nodes"] = nodes
-+		ProjectService.set_graph_data(item.graph_id, graph_data, true)
++    if changed:
++        graph_data["nodes"] = nodes
++        ProjectService.set_graph_data(item.graph_id, graph_data, true)
 +
 +
 +static func _string_array(value: Variant) -> Array[String]:
-+	var result: Array[String] = []
-+	if value is Array:
-+		for item in Array(value):
-+			var id := String(item)
-+			if not id.is_empty():
-+				result.append(id)
-+	return result
++    var result: Array[String] = []
++    if value is Array:
++        for item in Array(value):
++            var id := String(item)
++            if not id.is_empty():
++                result.append(id)
++    return result
 diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd.uid b/pixel/ui/canvas/canvas_graph_item_bridge.gd.uid
 new file mode 100644
 index 0000000..bcbffc3
@@ -670,137 +1171,137 @@ index 0000000..1377b36
 +
 +
 +func setup_from_data(data: Dictionary) -> void:
-+	item_id = String(data.get("id", IdUtil.uuid_v4()))
-+	graph_id = String(data.get("graph_id", ""))
-+	node_id = String(data.get("node_id", ""))
-+	locked = bool(data.get("locked", false))
-+	z_index = int(data.get("z_index", 0))
-+	var raw_position: Variant = data.get("position", [0, 0])
-+	position = Vector2(float(raw_position[0]), float(raw_position[1])).round()
-+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-+	_resolve_graph_node()
-+	queue_redraw()
++    item_id = String(data.get("id", IdUtil.uuid_v4()))
++    graph_id = String(data.get("graph_id", ""))
++    node_id = String(data.get("node_id", ""))
++    locked = bool(data.get("locked", false))
++    z_index = int(data.get("z_index", 0))
++    var raw_position: Variant = data.get("position", [0, 0])
++    position = Vector2(float(raw_position[0]), float(raw_position[1])).round()
++    texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
++    _resolve_graph_node()
++    queue_redraw()
 +
 +
 +func to_canvas_data() -> Dictionary:
-+	return {
-+		"id": item_id,
-+		"type": "node",
-+		"graph_id": graph_id,
-+		"node_id": node_id,
-+		"position": [int(round(position.x)), int(round(position.y))],
-+		"z_index": z_index,
-+		"collapsed": false,
-+		"locked": locked,
-+	}
++    return {
++        "id": item_id,
++        "type": "node",
++        "graph_id": graph_id,
++        "node_id": node_id,
++        "position": [int(round(position.x)), int(round(position.y))],
++        "z_index": z_index,
++        "collapsed": false,
++        "locked": locked,
++    }
 +
 +
 +func get_canvas_bounds() -> Rect2:
-+	return Rect2(position, CARD_SIZE)
++    return Rect2(position, CARD_SIZE)
 +
 +
 +func contains_world_point(world_position: Vector2) -> bool:
-+	return get_canvas_bounds().has_point(world_position)
++    return get_canvas_bounds().has_point(world_position)
 +
 +
 +func is_graph_node() -> bool:
-+	return not graph_id.is_empty() and not node_id.is_empty()
++    return not graph_id.is_empty() and not node_id.is_empty()
 +
 +
 +func _draw() -> void:
-+	_font = ThemeDB.fallback_font if _font == null else _font
-+	var rect := Rect2(Vector2.ZERO, CARD_SIZE)
-+	draw_rect(rect, BACKGROUND, true)
-+	draw_rect(Rect2(Vector2.ZERO, Vector2(CARD_SIZE.x, HEADER_HEIGHT)), HEADER, true)
-+	draw_rect(rect, GHOST_BORDER if _is_ghost else BORDER, false, 1.4)
-+	_draw_ports()
-+	if _font == null:
-+		return
-+	draw_string(
-+		_font,
-+		Vector2(PADDING, 22),
-+		_display_name,
-+		HORIZONTAL_ALIGNMENT_LEFT,
-+		CARD_SIZE.x - PADDING * 2,
-+		16,
-+		Color(0.92, 0.94, 0.94, 1.0)
-+	)
-+	draw_string(
-+		_font,
-+		Vector2(PADDING, 54),
-+		_node_type,
-+		HORIZONTAL_ALIGNMENT_LEFT,
-+		CARD_SIZE.x - PADDING * 2,
-+		13,
-+		Color(0.66, 0.72, 0.74, 1.0)
-+	)
-+	draw_string(
-+		_font,
-+		Vector2(PADDING, 82),
-+		_summary,
-+		HORIZONTAL_ALIGNMENT_LEFT,
-+		CARD_SIZE.x - PADDING * 2,
-+		13,
-+		Color(0.82, 0.84, 0.82, 1.0)
-+	)
++    _font = ThemeDB.fallback_font if _font == null else _font
++    var rect := Rect2(Vector2.ZERO, CARD_SIZE)
++    draw_rect(rect, BACKGROUND, true)
++    draw_rect(Rect2(Vector2.ZERO, Vector2(CARD_SIZE.x, HEADER_HEIGHT)), HEADER, true)
++    draw_rect(rect, GHOST_BORDER if _is_ghost else BORDER, false, 1.4)
++    _draw_ports()
++    if _font == null:
++        return
++    draw_string(
++        _font,
++        Vector2(PADDING, 22),
++        _display_name,
++        HORIZONTAL_ALIGNMENT_LEFT,
++        CARD_SIZE.x - PADDING * 2,
++        16,
++        Color(0.92, 0.94, 0.94, 1.0)
++    )
++    draw_string(
++        _font,
++        Vector2(PADDING, 54),
++        _node_type,
++        HORIZONTAL_ALIGNMENT_LEFT,
++        CARD_SIZE.x - PADDING * 2,
++        13,
++        Color(0.66, 0.72, 0.74, 1.0)
++    )
++    draw_string(
++        _font,
++        Vector2(PADDING, 82),
++        _summary,
++        HORIZONTAL_ALIGNMENT_LEFT,
++        CARD_SIZE.x - PADDING * 2,
++        13,
++        Color(0.82, 0.84, 0.82, 1.0)
++    )
 +
 +
 +func _draw_ports() -> void:
-+	for index in range(_input_count):
-+		draw_circle(_port_position(index, _input_count, true), 5.0, PORT_IN)
-+	for index in range(_output_count):
-+		draw_circle(_port_position(index, _output_count, false), 5.0, PORT_OUT)
++    for index in range(_input_count):
++        draw_circle(_port_position(index, _input_count, true), 5.0, PORT_IN)
++    for index in range(_output_count):
++        draw_circle(_port_position(index, _output_count, false), 5.0, PORT_OUT)
 +
 +
 +func _port_position(index: int, count: int, is_input: bool) -> Vector2:
-+	var usable_height := CARD_SIZE.y - HEADER_HEIGHT - PADDING * 2
-+	var y := HEADER_HEIGHT + PADDING + usable_height * float(index + 1) / float(count + 1)
-+	return Vector2(0.0 if is_input else CARD_SIZE.x, y)
++    var usable_height := CARD_SIZE.y - HEADER_HEIGHT - PADDING * 2
++    var y := HEADER_HEIGHT + PADDING + usable_height * float(index + 1) / float(count + 1)
++    return Vector2(0.0 if is_input else CARD_SIZE.x, y)
 +
 +
 +func _resolve_graph_node() -> void:
-+	var node_data := _find_node_data()
-+	_node_type = String(node_data.get("type", "missing"))
-+	_summary = _summarize_params(node_data.get("params", {}))
++    var node_data := _find_node_data()
++    _node_type = String(node_data.get("type", "missing"))
++    _summary = _summarize_params(node_data.get("params", {}))
 +
-+	var registry := NodeRegistryScript.new()
-+	var node: PFNode = registry.create(_node_type)
-+	if node == null:
-+		_is_ghost = true
-+		_display_name = "Missing: %s" % _node_type
-+		_input_count = 0
-+		_output_count = 0
-+		return
++    var registry := NodeRegistryScript.new()
++    var node: PFNode = registry.create(_node_type)
++    if node == null:
++        _is_ghost = true
++        _display_name = "Missing: %s" % _node_type
++        _input_count = 0
++        _output_count = 0
++        return
 +
-+	_display_name = node.get_display_name()
-+	_input_count = node.get_input_ports().size()
-+	_output_count = node.get_output_ports().size()
-+	_is_ghost = false
++    _display_name = node.get_display_name()
++    _input_count = node.get_input_ports().size()
++    _output_count = node.get_output_ports().size()
++    _is_ghost = false
 +
 +
 +func _find_node_data() -> Dictionary:
-+	var graph_data := ProjectService.get_graph_data(graph_id)
-+	for raw_node in graph_data.get("nodes", []):
-+		if not (raw_node is Dictionary):
-+			continue
-+		var node_data: Dictionary = raw_node
-+		if String(node_data.get("id", "")) == node_id:
-+			return node_data
-+	return {"id": node_id, "type": "missing", "params": {}}
++    var graph_data := ProjectService.get_graph_data(graph_id)
++    for raw_node in graph_data.get("nodes", []):
++        if not (raw_node is Dictionary):
++            continue
++        var node_data: Dictionary = raw_node
++        if String(node_data.get("id", "")) == node_id:
++            return node_data
++    return {"id": node_id, "type": "missing", "params": {}}
 +
 +
 +func _summarize_params(params: Variant) -> String:
-+	if not (params is Dictionary):
-+		return ""
-+	var source: Dictionary = params
-+	if source.has("items"):
-+		var lines := String(source["items"]).split("\n", false)
-+		return "%d objects" % lines.size()
-+	if source.has("width") and source.has("height"):
-+		return "%dx%d px" % [int(source["width"]), int(source["height"])]
-+	if source.has("provider_id"):
-+		return "%s seed %d" % [String(source["provider_id"]), int(source.get("seed", 0))]
-+	return ""
++    if not (params is Dictionary):
++        return ""
++    var source: Dictionary = params
++    if source.has("items"):
++        var lines := String(source["items"]).split("\n", false)
++        return "%d objects" % lines.size()
++    if source.has("width") and source.has("height"):
++        return "%dx%d px" % [int(source["width"]), int(source["height"])]
++    if source.has("provider_id"):
++        return "%s seed %d" % [String(source["provider_id"]), int(source.get("seed", 0))]
++    return ""
 diff --git a/pixel/ui/canvas/canvas_node_card.gd.uid b/pixel/ui/canvas/canvas_node_card.gd.uid
 new file mode 100644
 index 0000000..e2a9d18
@@ -826,330 +1327,330 @@ index d9118fe..10ef29b 100644
  const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
  const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
 @@ -127,6 +131,7 @@ func _draw() -> void:
- 		>= GRID_MIN_ZOOM
- 	):
- 		_draw_pixel_grid()
-+	_draw_graph_edges()
- 
- 	for item_id in _selection.selected_ids:
- 		if not _items_by_id.has(item_id):
+         >= GRID_MIN_ZOOM
+     ):
+         _draw_pixel_grid()
++    _draw_graph_edges()
+
+     for item_id in _selection.selected_ids:
+         if not _items_by_id.has(item_id):
 @@ -224,6 +229,42 @@ func _add_batch_card(
- 	return _items_by_id.get(String(data["id"]), null)
- 
- 
+     return _items_by_id.get(String(data["id"]), null)
+
+
 +func _add_graph_node_card(
-+	graph_id: String,
-+	node_id: String,
-+	world_position: Vector2 = Vector2.ZERO,
-+	item_id: String = "",
-+	record_undo: bool = true
++    graph_id: String,
++    node_id: String,
++    world_position: Vector2 = Vector2.ZERO,
++    item_id: String = "",
++    record_undo: bool = true
 +) -> Node:
-+	var data := {
-+		"id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
-+		"type": "node",
-+		"graph_id": graph_id,
-+		"node_id": node_id,
-+		"position": [int(round(world_position.x)), int(round(world_position.y))],
-+		"z_index": _items_by_id.size(),
-+		"collapsed": false,
-+		"locked": false,
-+	}
++    var data := {
++        "id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
++        "type": "node",
++        "graph_id": graph_id,
++        "node_id": node_id,
++        "position": [int(round(world_position.x)), int(round(world_position.y))],
++        "z_index": _items_by_id.size(),
++        "collapsed": false,
++        "locked": false,
++    }
 +
-+	var do_add := func() -> void:
-+		_add_node_direct(data)
-+		_select_only([String(data["id"])])
-+		_emit_canvas_changed()
++    var do_add := func() -> void:
++        _add_node_direct(data)
++        _select_only([String(data["id"])])
++        _emit_canvas_changed()
 +
-+	var undo_add := func() -> void:
-+		_remove_item_direct(String(data["id"]))
-+		_clear_selection()
-+		_emit_canvas_changed()
++    var undo_add := func() -> void:
++        _remove_item_direct(String(data["id"]))
++        _clear_selection()
++        _emit_canvas_changed()
 +
-+	if record_undo:
-+		UndoService.perform_action("Add node", do_add, undo_add)
-+	else:
-+		do_add.call()
++    if record_undo:
++        UndoService.perform_action("Add node", do_add, undo_add)
++    else:
++        do_add.call()
 +
-+	return _items_by_id.get(String(data["id"]), null)
++    return _items_by_id.get(String(data["id"]), null)
 +
 +
  func delete_selected(record_undo: bool = true) -> void:
- 	if _selection.is_empty():
- 		return
+     if _selection.is_empty():
+         return
 @@ -254,6 +295,8 @@ func delete_selected(record_undo: bool = true) -> void:
- 				_add_sprite_direct(data, snapshot["image"])
- 			elif _is_batch_card_data(data):
- 				_add_batch_direct(data)
-+			elif String(data.get("type", "")) == "node":
-+				_add_node_direct(data)
- 		_select_only(_ids_from_snapshots(snapshots))
- 		_emit_canvas_changed()
- 
+                 _add_sprite_direct(data, snapshot["image"])
+             elif _is_batch_card_data(data):
+                 _add_batch_direct(data)
++            elif String(data.get("type", "")) == "node":
++                _add_node_direct(data)
+         _select_only(_ids_from_snapshots(snapshots))
+         _emit_canvas_changed()
+
 @@ -304,6 +347,8 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
- 			_add_batch_direct(item_data)
- 		elif item_type == "node" and _is_graph_batch_node_data(item_data):
- 			_add_batch_direct(item_data)
-+		elif item_type == "node":
-+			_add_node_direct(item_data)
- 
- 	_suppress_change_signal = false
- 	_update_layer_transform()
+             _add_batch_direct(item_data)
+         elif item_type == "node" and _is_graph_batch_node_data(item_data):
+             _add_batch_direct(item_data)
++        elif item_type == "node":
++            _add_node_direct(item_data)
+
+     _suppress_change_signal = false
+     _update_layer_transform()
 @@ -322,6 +367,8 @@ func export_canvas_data() -> Dictionary:
- 			items.append(node.to_canvas_data())
- 		elif node.get_script() == CanvasBatchCardScript:
- 			items.append(node.to_canvas_data())
-+		elif node.get_script() == CanvasNodeCardScript:
-+			items.append(node.to_canvas_data())
- 
- 	return {
- 		"camera":
+             items.append(node.to_canvas_data())
+         elif node.get_script() == CanvasBatchCardScript:
+             items.append(node.to_canvas_data())
++        elif node.get_script() == CanvasNodeCardScript:
++            items.append(node.to_canvas_data())
+
+     return {
+         "camera":
 @@ -454,13 +501,13 @@ func _replace_batch_asset_ids(
- 	var before: Array = item.asset_ids.duplicate()
- 	var after := new_asset_ids.duplicate()
- 	var do_replace := func() -> void:
--		_apply_batch_asset_ids(item, after)
--		_sync_batch_node_asset_ids(item, after)
-+		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
-+		GraphItemBridge.sync_batch_node_asset_ids(item, after)
- 		_select_only([card_id])
- 		_emit_canvas_changed()
- 	var undo_replace := func() -> void:
--		_apply_batch_asset_ids(item, before)
--		_sync_batch_node_asset_ids(item, before)
-+		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
-+		GraphItemBridge.sync_batch_node_asset_ids(item, before)
- 		_select_only([card_id])
- 		_emit_canvas_changed()
- 	if record_undo:
+     var before: Array = item.asset_ids.duplicate()
+     var after := new_asset_ids.duplicate()
+     var do_replace := func() -> void:
+-        _apply_batch_asset_ids(item, after)
+-        _sync_batch_node_asset_ids(item, after)
++        GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
++        GraphItemBridge.sync_batch_node_asset_ids(item, after)
+         _select_only([card_id])
+         _emit_canvas_changed()
+     var undo_replace := func() -> void:
+-        _apply_batch_asset_ids(item, before)
+-        _sync_batch_node_asset_ids(item, before)
++        GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
++        GraphItemBridge.sync_batch_node_asset_ids(item, before)
+         _select_only([card_id])
+         _emit_canvas_changed()
+     if record_undo:
 @@ -469,44 +516,6 @@ func _replace_batch_asset_ids(
- 		do_replace.call()
- 
- 
+         do_replace.call()
+
+
 -func _apply_batch_asset_ids(item: Node, asset_ids: Array) -> void:
--	for asset_id in item.asset_ids:
--		AssetLibrary.release_ref(asset_id)
--	item.set_asset_ids(asset_ids)
--	for asset_id in item.asset_ids:
--		AssetLibrary.add_ref(asset_id)
+-    for asset_id in item.asset_ids:
+-        AssetLibrary.release_ref(asset_id)
+-    item.set_asset_ids(asset_ids)
+-    for asset_id in item.asset_ids:
+-        AssetLibrary.add_ref(asset_id)
 -
 -
 -func _sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
--	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
--		return
+-    if not item.has_method("has_graph_binding") or not item.has_graph_binding():
+-        return
 -
--	var graph_data := ProjectService.get_graph_data(item.graph_id)
--	if graph_data.is_empty():
--		return
+-    var graph_data := ProjectService.get_graph_data(item.graph_id)
+-    if graph_data.is_empty():
+-        return
 -
--	var nodes := []
--	var changed := false
--	for raw_node in graph_data.get("nodes", []):
--		if not (raw_node is Dictionary):
--			nodes.append(raw_node)
--			continue
--		var node_data: Dictionary = raw_node
--		if (
--			String(node_data.get("id", "")) == item.node_id
--			and String(node_data.get("type", "")) == "batch"
--		):
--			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
--			params["asset_ids"] = _string_array(asset_ids)
--			node_data["params"] = params
--			changed = true
--		nodes.append(node_data)
+-    var nodes := []
+-    var changed := false
+-    for raw_node in graph_data.get("nodes", []):
+-        if not (raw_node is Dictionary):
+-            nodes.append(raw_node)
+-            continue
+-        var node_data: Dictionary = raw_node
+-        if (
+-            String(node_data.get("id", "")) == item.node_id
+-            and String(node_data.get("type", "")) == "batch"
+-        ):
+-            var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+-            params["asset_ids"] = _string_array(asset_ids)
+-            node_data["params"] = params
+-            changed = true
+-        nodes.append(node_data)
 -
--	if changed:
--		graph_data["nodes"] = nodes
--		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+-    if changed:
+-        graph_data["nodes"] = nodes
+-        ProjectService.set_graph_data(item.graph_id, graph_data, true)
 -
 -
  func _split_batch_selection(card_id: String) -> Node:
- 	if not _items_by_id.has(card_id):
- 		return null
+     if not _items_by_id.has(card_id):
+         return null
 @@ -731,6 +740,16 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
- 	return item
- 
- 
+     return item
+
+
 +func _add_node_direct(item_data: Dictionary) -> Node:
-+	var item: Node = CanvasNodeCardScript.new()
-+	item.setup_from_data(item_data)
-+	item_layer.add_child(item)
-+	_items_by_id[item.item_id] = item
-+	_update_item_visibility()
-+	queue_redraw()
-+	return item
++    var item: Node = CanvasNodeCardScript.new()
++    item.setup_from_data(item_data)
++    item_layer.add_child(item)
++    _items_by_id[item.item_id] = item
++    _update_item_visibility()
++    queue_redraw()
++    return item
 +
 +
  func _is_batch_card_data(item_data: Dictionary) -> bool:
- 	var item_type := String(item_data.get("type", ""))
- 	return (
+     var item_type := String(item_data.get("type", ""))
+     return (
 @@ -739,21 +758,7 @@ func _is_batch_card_data(item_data: Dictionary) -> bool:
- 
- 
+
+
  func _is_graph_batch_node_data(item_data: Dictionary) -> bool:
--	if String(item_data.get("type", "")) != "node":
--		return false
--	var graph_id := String(item_data.get("graph_id", ""))
--	var node_id := String(item_data.get("node_id", ""))
--	if graph_id.is_empty() or node_id.is_empty():
--		return false
+-    if String(item_data.get("type", "")) != "node":
+-        return false
+-    var graph_id := String(item_data.get("graph_id", ""))
+-    var node_id := String(item_data.get("node_id", ""))
+-    if graph_id.is_empty() or node_id.is_empty():
+-        return false
 -
--	var graph_data := ProjectService.get_graph_data(graph_id)
--	for raw_node in graph_data.get("nodes", []):
--		if not (raw_node is Dictionary):
--			continue
--		var node_data: Dictionary = raw_node
--		if String(node_data.get("id", "")) == node_id:
--			return String(node_data.get("type", "")) == "batch"
--	return false
-+	return GraphItemBridge.is_graph_batch_node_data(item_data)
- 
- 
+-    var graph_data := ProjectService.get_graph_data(graph_id)
+-    for raw_node in graph_data.get("nodes", []):
+-        if not (raw_node is Dictionary):
+-            continue
+-        var node_data: Dictionary = raw_node
+-        if String(node_data.get("id", "")) == node_id:
+-            return String(node_data.get("type", "")) == "batch"
+-    return false
++    return GraphItemBridge.is_graph_batch_node_data(item_data)
+
+
  func _remove_item_direct(item_id: String) -> void:
 @@ -783,6 +788,7 @@ func _item_at_world(world_position: Vector2) -> Node:
- 			(
- 				item.get_script() == CanvasItemSpriteScript
- 				or item.get_script() == CanvasBatchCardScript
-+				or item.get_script() == CanvasNodeCardScript
- 			)
- 			and item.visible
- 			and item.contains_world_point(world_position)
+             (
+                 item.get_script() == CanvasItemSpriteScript
+                 or item.get_script() == CanvasBatchCardScript
++                or item.get_script() == CanvasNodeCardScript
+             )
+             and item.visible
+             and item.contains_world_point(world_position)
 @@ -833,16 +839,6 @@ func _ids_from_snapshots(snapshots: Array) -> Array:
- 	return ids
- 
- 
+     return ids
+
+
 -func _string_array(value: Variant) -> Array[String]:
--	var result: Array[String] = []
--	if value is Array:
--		for item in Array(value):
--			var id := String(item)
--			if not id.is_empty():
--				result.append(id)
--	return result
+-    var result: Array[String] = []
+-    if value is Array:
+-        for item in Array(value):
+-            var id := String(item)
+-            if not id.is_empty():
+-                result.append(id)
+-    return result
 -
 -
  func _set_zoom_to_value(value: float) -> void:
- 	var nearest_index := 0
- 	var nearest_distance := INF
+     var nearest_index := 0
+     var nearest_distance := INF
 @@ -916,6 +912,12 @@ func _draw_pixel_grid() -> void:
- 	PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
- 
- 
+     PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+
+
 +func _draw_graph_edges() -> void:
-+	GraphEdgeRenderer.draw(
-+		self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
-+	)
++    GraphEdgeRenderer.draw(
++        self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
++    )
 +
 +
  func _emit_canvas_changed() -> void:
- 	if _suppress_change_signal:
- 		return
+     if _suppress_change_signal:
+         return
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index d1ebdc3..851efd4 100644
 --- a/pixel/ui/shell/m2_1_ui_controller.gd
 +++ b/pixel/ui/shell/m2_1_ui_controller.gd
 @@ -209,17 +209,9 @@ func generate_mock_batch() -> void:
- 
- 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
- 	var asset_ids: Array = result["asset_ids"]
--	var card: Node = _canvas._add_batch_card(
--		asset_ids,
--		_canvas.get_mouse_world_position(),
--		Strings.MOCK_BATCH_LABEL,
--		"",
--		true,
--		graph.id,
--		"batch_1"
--	)
--	if card != null:
--		_focus_canvas_on_card(card)
-+	var items := _add_mock_graph_canvas_items(graph, asset_ids, _canvas.get_mouse_world_position())
-+	if not items.is_empty():
-+		_focus_canvas_on_bounds(_bounds_for_items(items))
- 	_status_label.text = Strings.STATUS_MOCK_GENERATE_DONE % asset_ids.size()
- 
- 
+
+     ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+     var asset_ids: Array = result["asset_ids"]
+-    var card: Node = _canvas._add_batch_card(
+-        asset_ids,
+-        _canvas.get_mouse_world_position(),
+-        Strings.MOCK_BATCH_LABEL,
+-        "",
+-        true,
+-        graph.id,
+-        "batch_1"
+-    )
+-    if card != null:
+-        _focus_canvas_on_card(card)
++    var items := _add_mock_graph_canvas_items(graph, asset_ids, _canvas.get_mouse_world_position())
++    if not items.is_empty():
++        _focus_canvas_on_bounds(_bounds_for_items(items))
+     _status_label.text = Strings.STATUS_MOCK_GENERATE_DONE % asset_ids.size()
+
+
 @@ -386,7 +378,10 @@ func _emit_batch_export(asset_ids: Array) -> void:
- 
- 
+
+
  func _focus_canvas_on_card(card: Node) -> void:
--	var bounds: Rect2 = card.get_canvas_bounds()
-+	_focus_canvas_on_bounds(card.get_canvas_bounds())
+-    var bounds: Rect2 = card.get_canvas_bounds()
++    _focus_canvas_on_bounds(card.get_canvas_bounds())
 +
 +
 +func _focus_canvas_on_bounds(bounds: Rect2) -> void:
- 	if (
- 		bounds.size.x <= 0.0
- 		or bounds.size.y <= 0.0
+     if (
+         bounds.size.x <= 0.0
+         or bounds.size.y <= 0.0
 @@ -401,6 +396,13 @@ func _focus_canvas_on_card(card: Node) -> void:
- 	_canvas.pan_by_pixels(_canvas.world_to_screen(bounds.get_center()) - _canvas.size * 0.5)
- 
- 
+     _canvas.pan_by_pixels(_canvas.world_to_screen(bounds.get_center()) - _canvas.size * 0.5)
+
+
 +func _bounds_for_items(items: Array) -> Rect2:
-+	var bounds: Rect2 = items[0].get_canvas_bounds()
-+	for index in range(1, items.size()):
-+		bounds = bounds.merge(items[index].get_canvas_bounds())
-+	return bounds
++    var bounds: Rect2 = items[0].get_canvas_bounds()
++    for index in range(1, items.size()):
++        bounds = bounds.merge(items[index].get_canvas_bounds())
++    return bounds
 +
 +
  func _single_selected_image() -> Image:
- 	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
- 	if snapshots.size() != 1:
+     var snapshots: Array = _canvas.get_selected_sprite_snapshots()
+     if snapshots.size() != 1:
 @@ -448,16 +450,16 @@ func _make_mock_generate_graph() -> PFGraph:
- 		SizeSpecNodeScript.new(),
- 		"size",
- 		{"width": 32, "height": 32, "per_subject": 1},
--		Vector2(220, 0)
-+		Vector2(0, 150)
- 	)
- 	graph.add_node(
- 		AiGenerateNodeScript.new(),
- 		"generate",
- 		{"provider_id": "mock", "batch_size": 2, "seed": 1000},
--		Vector2(440, 0)
-+		Vector2(280, 75)
- 	)
- 	graph.add_node(
--		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(660, 0)
-+		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, -20)
- 	)
- 	graph.add_edge("objects", "items", "generate", "items")
- 	graph.add_edge("size", "spec", "generate", "spec")
+         SizeSpecNodeScript.new(),
+         "size",
+         {"width": 32, "height": 32, "per_subject": 1},
+-        Vector2(220, 0)
++        Vector2(0, 150)
+     )
+     graph.add_node(
+         AiGenerateNodeScript.new(),
+         "generate",
+         {"provider_id": "mock", "batch_size": 2, "seed": 1000},
+-        Vector2(440, 0)
++        Vector2(280, 75)
+     )
+     graph.add_node(
+-        BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(660, 0)
++        BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, -20)
+     )
+     graph.add_edge("objects", "items", "generate", "items")
+     graph.add_edge("size", "spec", "generate", "spec")
 @@ -465,6 +467,34 @@ func _make_mock_generate_graph() -> PFGraph:
- 	return graph
- 
- 
+     return graph
+
+
 +func _add_mock_graph_canvas_items(graph: PFGraph, asset_ids: Array, anchor: Vector2) -> Array:
-+	var items := []
-+	for node_id in ["objects", "size", "generate"]:
-+		var node_item: Node = _canvas._add_graph_node_card(
-+			graph.id, node_id, anchor + _graph_node_position(graph, node_id), "", false
-+		)
-+		if node_item != null:
-+			items.append(node_item)
-+	var batch_card: Node = _canvas._add_batch_card(
-+		asset_ids,
-+		anchor + _graph_node_position(graph, "batch_1"),
-+		Strings.MOCK_BATCH_LABEL,
-+		"",
-+		false,
-+		graph.id,
-+		"batch_1"
-+	)
-+	if batch_card != null:
-+		items.append(batch_card)
-+	return items
++    var items := []
++    for node_id in ["objects", "size", "generate"]:
++        var node_item: Node = _canvas._add_graph_node_card(
++            graph.id, node_id, anchor + _graph_node_position(graph, node_id), "", false
++        )
++        if node_item != null:
++            items.append(node_item)
++    var batch_card: Node = _canvas._add_batch_card(
++        asset_ids,
++        anchor + _graph_node_position(graph, "batch_1"),
++        Strings.MOCK_BATCH_LABEL,
++        "",
++        false,
++        graph.id,
++        "batch_1"
++    )
++    if batch_card != null:
++        items.append(batch_card)
++    return items
 +
 +
 +func _graph_node_position(graph: PFGraph, node_id: String) -> Vector2:
-+	var node_data: Dictionary = graph.nodes.get(node_id, {})
-+	var raw_position: Variant = node_data.get("position", [0, 0])
-+	return Vector2(float(raw_position[0]), float(raw_position[1])).round()
++    var node_data: Dictionary = graph.nodes.get(node_id, {})
++    var raw_position: Variant = node_data.get("position", [0, 0])
++    return Vector2(float(raw_position[0]), float(raw_position[1])).round()
 +
 +
  func _show_onboarding_dialog() -> void:
- 	var dialog: AcceptDialog = OnboardingScript.show_first_run_tips(self)
- 	if dialog == null:
+     var dialog: AcceptDialog = OnboardingScript.show_first_run_tips(self)
+     if dialog == null:
 ```
 
 ## 追加开发：G-3 批次菜单与 PixelOperations
@@ -1268,199 +1769,199 @@ index 0000000..b9c356c
 +
 +
 +static func apply_image(operation: String, source: Image, params: Dictionary = {}) -> Dictionary:
-+	match operation:
-+		OP_CLEANUP:
-+			return _apply_cleanup(source, params)
-+		OP_MATTING:
-+			return _apply_matting(source, params)
-+		OP_OUTLINE:
-+			return _apply_outline(source, params)
-+		_:
-+			return {"ok": false, "error": "unsupported_operation", "operation": operation}
++    match operation:
++        OP_CLEANUP:
++            return _apply_cleanup(source, params)
++        OP_MATTING:
++            return _apply_matting(source, params)
++        OP_OUTLINE:
++            return _apply_outline(source, params)
++        _:
++            return {"ok": false, "error": "unsupported_operation", "operation": operation}
 +
 +
 +static func apply_to_assets(
-+	asset_ids: Array,
-+	asset_library: Node,
-+	operation: String,
-+	params: Dictionary = {},
-+	cancel_check: Callable = Callable(),
-+	progress: Callable = Callable()
++    asset_ids: Array,
++    asset_library: Node,
++    operation: String,
++    params: Dictionary = {},
++    cancel_check: Callable = Callable(),
++    progress: Callable = Callable()
 +) -> Dictionary:
-+	var ids := _string_array(asset_ids)
-+	var results := []
-+	for index in range(ids.size()):
-+		if cancel_check.is_valid() and bool(cancel_check.call()):
-+			return {"canceled": true, "items": results}
++    var ids := _string_array(asset_ids)
++    var results := []
++    for index in range(ids.size()):
++        if cancel_check.is_valid() and bool(cancel_check.call()):
++            return {"canceled": true, "items": results}
 +
-+		var asset_id := String(ids[index])
-+		var image: Image = asset_library.get_image(asset_id)
-+		if image == null:
-+			continue
++        var asset_id := String(ids[index])
++        var image: Image = asset_library.get_image(asset_id)
++        if image == null:
++            continue
 +
-+		var item_result := apply_image(operation, image, params)
-+		if bool(item_result.get("ok", false)):
-+			item_result["parent_asset"] = asset_id
-+			results.append(item_result)
++        var item_result := apply_image(operation, image, params)
++        if bool(item_result.get("ok", false)):
++            item_result["parent_asset"] = asset_id
++            results.append(item_result)
 +
-+		if progress.is_valid():
-+			progress.call(float(index + 1) / float(maxi(1, ids.size())), operation)
-+	return {"canceled": false, "items": results}
++        if progress.is_valid():
++            progress.call(float(index + 1) / float(maxi(1, ids.size())), operation)
++    return {"canceled": false, "items": results}
 +
 +
 +static func register_result_asset(
-+	asset_library: Node, parent_asset_id: String, item_result: Dictionary
++    asset_library: Node, parent_asset_id: String, item_result: Dictionary
 +) -> String:
-+	var parent_id := String(item_result.get("parent_asset", parent_asset_id))
-+	var suffix := String(item_result.get("name_suffix", item_result.get("suffix", "operation")))
-+	return (
-+		asset_library
-+		. register_image(
-+			item_result["image"],
-+			"%s_%s" % [parent_id.left(8), suffix],
-+			{
-+				"origin": String(item_result.get("origin", "edited")),
-+				"tags": item_result.get("tags", []),
-+				"provenance": make_provenance(parent_id, item_result),
-+			}
-+		)
-+	)
++    var parent_id := String(item_result.get("parent_asset", parent_asset_id))
++    var suffix := String(item_result.get("name_suffix", item_result.get("suffix", "operation")))
++    return (
++        asset_library
++        . register_image(
++            item_result["image"],
++            "%s_%s" % [parent_id.left(8), suffix],
++            {
++                "origin": String(item_result.get("origin", "edited")),
++                "tags": item_result.get("tags", []),
++                "provenance": make_provenance(parent_id, item_result),
++            }
++        )
++    )
 +
 +
 +static func make_provenance(parent_asset_id: String, item_result: Dictionary) -> Dictionary:
-+	var provenance_key := String(item_result.get("provenance_key", "operation"))
-+	var operation_report: Variant = json_safe(item_result.get("report", {}))
-+	if operation_report is Dictionary:
-+		var report_dict: Dictionary = operation_report
-+		if not report_dict.has("source_asset"):
-+			report_dict["source_asset"] = parent_asset_id
-+		operation_report = report_dict
++    var provenance_key := String(item_result.get("provenance_key", "operation"))
++    var operation_report: Variant = json_safe(item_result.get("report", {}))
++    if operation_report is Dictionary:
++        var report_dict: Dictionary = operation_report
++        if not report_dict.has("source_asset"):
++            report_dict["source_asset"] = parent_asset_id
++        operation_report = report_dict
 +
-+	var provenance := {
-+		"provider": null,
-+		"model": null,
-+		"prompt": "",
-+		"seed": null,
-+		"parent_asset": parent_asset_id,
-+		"graph_id": null,
-+		"created_at": IdUtil.utc_now_iso(),
-+	}
-+	provenance[provenance_key] = operation_report
-+	return provenance
++    var provenance := {
++        "provider": null,
++        "model": null,
++        "prompt": "",
++        "seed": null,
++        "parent_asset": parent_asset_id,
++        "graph_id": null,
++        "created_at": IdUtil.utc_now_iso(),
++    }
++    provenance[provenance_key] = operation_report
++    return provenance
 +
 +
 +static func normalize_matte_params(params: Dictionary) -> Dictionary:
-+	if params.is_empty():
-+		return {"mode": Matting.MODE_FLOOD, "tolerance": 12.0, "feather": 0}
-+	return {
-+		"mode": String(params.get("mode", Matting.MODE_FLOOD)),
-+		"tolerance": float(params.get("tolerance", 12.0)),
-+		"feather": int(params.get("feather", 0)),
-+	}
++    if params.is_empty():
++        return {"mode": Matting.MODE_FLOOD, "tolerance": 12.0, "feather": 0}
++    return {
++        "mode": String(params.get("mode", Matting.MODE_FLOOD)),
++        "tolerance": float(params.get("tolerance", 12.0)),
++        "feather": int(params.get("feather", 0)),
++    }
 +
 +
 +static func normalize_outline_params(params: Dictionary) -> Dictionary:
-+	if params.is_empty():
-+		return {"type": Outliner.TYPE_OUTER, "color": Color.BLACK, "corner": Outliner.CORNER_CROSS}
-+	return {
-+		"type": String(params.get("type", Outliner.TYPE_OUTER)),
-+		"color": params.get("color", Color.BLACK),
-+		"corner": String(params.get("corner", Outliner.CORNER_CROSS)),
-+		"colored": bool(params.get("colored", false)),
-+	}
++    if params.is_empty():
++        return {"type": Outliner.TYPE_OUTER, "color": Color.BLACK, "corner": Outliner.CORNER_CROSS}
++    return {
++        "type": String(params.get("type", Outliner.TYPE_OUTER)),
++        "color": params.get("color", Color.BLACK),
++        "corner": String(params.get("corner", Outliner.CORNER_CROSS)),
++        "colored": bool(params.get("colored", false)),
++    }
 +
 +
 +static func json_safe(value: Variant) -> Variant:
-+	match typeof(value):
-+		TYPE_DICTIONARY:
-+			var output := {}
-+			for key in Dictionary(value).keys():
-+				output[String(key)] = json_safe(Dictionary(value)[key])
-+			return output
-+		TYPE_ARRAY:
-+			var output := []
-+			for item in Array(value):
-+				output.append(json_safe(item))
-+			return output
-+		TYPE_VECTOR2:
-+			var vector := Vector2(value)
-+			return [vector.x, vector.y]
-+		TYPE_VECTOR2I:
-+			var vector_i := Vector2i(value)
-+			return [vector_i.x, vector_i.y]
-+		TYPE_RECT2I:
-+			var rect := Rect2i(value)
-+			return [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
-+		TYPE_COLOR:
-+			return Color(value).to_html(true)
-+		_:
-+			return value
++    match typeof(value):
++        TYPE_DICTIONARY:
++            var output := {}
++            for key in Dictionary(value).keys():
++                output[String(key)] = json_safe(Dictionary(value)[key])
++            return output
++        TYPE_ARRAY:
++            var output := []
++            for item in Array(value):
++                output.append(json_safe(item))
++            return output
++        TYPE_VECTOR2:
++            var vector := Vector2(value)
++            return [vector.x, vector.y]
++        TYPE_VECTOR2I:
++            var vector_i := Vector2i(value)
++            return [vector_i.x, vector_i.y]
++        TYPE_RECT2I:
++            var rect := Rect2i(value)
++            return [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
++        TYPE_COLOR:
++            return Color(value).to_html(true)
++        _:
++            return value
 +
 +
 +static func _apply_cleanup(source: Image, params: Dictionary) -> Dictionary:
-+	var normalized := Pipeline.normalize_params(params)
-+	var cleanup_result := Pipeline.apply(source, normalized)
-+	return {
-+		"ok": true,
-+		"operation": OP_CLEANUP,
-+		"image": cleanup_result["image"],
-+		"suffix": "clean",
-+		"name_suffix": "clean",
-+		"origin": "edited",
-+		"tags": ["cleanup"],
-+		"provenance_key": "cleanup",
-+		"report":
-+		{
-+			"params": json_safe(normalized),
-+			"report": json_safe(cleanup_result.get("report", {})),
-+		},
-+	}
++    var normalized := Pipeline.normalize_params(params)
++    var cleanup_result := Pipeline.apply(source, normalized)
++    return {
++        "ok": true,
++        "operation": OP_CLEANUP,
++        "image": cleanup_result["image"],
++        "suffix": "clean",
++        "name_suffix": "clean",
++        "origin": "edited",
++        "tags": ["cleanup"],
++        "provenance_key": "cleanup",
++        "report":
++        {
++            "params": json_safe(normalized),
++            "report": json_safe(cleanup_result.get("report", {})),
++        },
++    }
 +
 +
 +static func _apply_matting(source: Image, params: Dictionary) -> Dictionary:
-+	var normalized := normalize_matte_params(params)
-+	var matting_result: Dictionary = Matting.matte(source, normalized)
-+	# Provenance must stay JSON-safe; the generated Image is stored as an asset, not in metadata.
-+	var report := matting_result.duplicate(true)
-+	report.erase("image")
-+	report["params"] = json_safe(normalized)
-+	return {
-+		"ok": true,
-+		"operation": OP_MATTING,
-+		"image": matting_result["image"],
-+		"suffix": "matte",
-+		"name_suffix": "matte",
-+		"origin": "edited",
-+		"tags": ["matting"],
-+		"provenance_key": "matting",
-+		"report": json_safe(report),
-+		"warning": String(matting_result.get("warning", "")),
-+	}
++    var normalized := normalize_matte_params(params)
++    var matting_result: Dictionary = Matting.matte(source, normalized)
++    # Provenance must stay JSON-safe; the generated Image is stored as an asset, not in metadata.
++    var report := matting_result.duplicate(true)
++    report.erase("image")
++    report["params"] = json_safe(normalized)
++    return {
++        "ok": true,
++        "operation": OP_MATTING,
++        "image": matting_result["image"],
++        "suffix": "matte",
++        "name_suffix": "matte",
++        "origin": "edited",
++        "tags": ["matting"],
++        "provenance_key": "matting",
++        "report": json_safe(report),
++        "warning": String(matting_result.get("warning", "")),
++    }
 +
 +
 +static func _apply_outline(source: Image, params: Dictionary) -> Dictionary:
-+	var normalized := normalize_outline_params(params)
-+	return {
-+		"ok": true,
-+		"operation": OP_OUTLINE,
-+		"image": Outliner.add_outline(source, normalized),
-+		"suffix": "outline",
-+		"name_suffix": "outline",
-+		"origin": "edited",
-+		"tags": ["outline"],
-+		"provenance_key": "outline",
-+		"report": json_safe(normalized),
-+	}
++    var normalized := normalize_outline_params(params)
++    return {
++        "ok": true,
++        "operation": OP_OUTLINE,
++        "image": Outliner.add_outline(source, normalized),
++        "suffix": "outline",
++        "name_suffix": "outline",
++        "origin": "edited",
++        "tags": ["outline"],
++        "provenance_key": "outline",
++        "report": json_safe(normalized),
++    }
 +
 +
 +static func _string_array(value: Variant) -> Array[String]:
-+	var result: Array[String] = []
-+	if value is Array:
-+		for item in Array(value):
-+			var id := String(item)
-+			if not id.is_empty():
-+				result.append(id)
-+	return result
++    var result: Array[String] = []
++    if value is Array:
++        for item in Array(value):
++            var id := String(item)
++            if not id.is_empty():
++                result.append(id)
++    return result
 diff --git a/pixel/services/pixel_operations.gd.uid b/pixel/services/pixel_operations.gd.uid
 new file mode 100644
 index 0000000..ec06ca5
@@ -1473,83 +1974,83 @@ index 60769a2..72a4393 100644
 --- a/pixel/tests/smoke/test_main_window_ui.gd
 +++ b/pixel/tests/smoke/test_main_window_ui.gd
 @@ -233,7 +233,12 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
- 
- 	assert_eq(canvas.get_item_count(), 1)
- 	assert_eq(ProjectService.current_project.graphs.size(), 1)
--	var graph_data: Dictionary = ProjectService.current_project.graphs.values()[0]
-+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
-+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
- 	var batch_node: Dictionary = graph_data["nodes"][3]
- 	assert_eq(batch_node["type"], "batch")
- 	assert_eq(batch_node["params"]["asset_ids"].size(), 10)
-+	var canvas_item: Dictionary = canvas.export_canvas_data()["items"][0]
-+	assert_eq(canvas_item["type"], "node")
-+	assert_eq(canvas_item["graph_id"], graph_id)
-+	assert_eq(canvas_item["node_id"], "batch_1")
+
+     assert_eq(canvas.get_item_count(), 1)
+     assert_eq(ProjectService.current_project.graphs.size(), 1)
+-    var graph_data: Dictionary = ProjectService.current_project.graphs.values()[0]
++    var graph_id := String(ProjectService.current_project.graphs.keys()[0])
++    var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+     var batch_node: Dictionary = graph_data["nodes"][3]
+     assert_eq(batch_node["type"], "batch")
+     assert_eq(batch_node["params"]["asset_ids"].size(), 10)
++    var canvas_item: Dictionary = canvas.export_canvas_data()["items"][0]
++    assert_eq(canvas_item["type"], "node")
++    assert_eq(canvas_item["graph_id"], graph_id)
++    assert_eq(canvas_item["node_id"], "batch_1")
 diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
 index c5f5d58..aefa8fb 100644
 --- a/pixel/tests/unit/test_canvas_batch_card.gd
 +++ b/pixel/tests/unit/test_canvas_batch_card.gd
 @@ -1,6 +1,8 @@
  extends "res://addons/gut/test.gd"
- 
+
  const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 +const GraphScript := preload("res://core/graph/pf_graph.gd")
 +const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
- 
- 
+
+
  func before_each() -> void:
 @@ -32,6 +34,50 @@ func test_canvas_batch_card_exports_asset_queue_and_can_split_subset() -> void:
- 	assert_eq(canvas.get_item_count(), 2)
- 
- 
+     assert_eq(canvas.get_item_count(), 2)
+
+
 +func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
-+	var graph := GraphScript.new()
-+	graph.id = "graph_batch_test"
-+	graph.add_node(
-+		BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
-+	)
-+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++    var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++    var graph := GraphScript.new()
++    graph.id = "graph_batch_test"
++    graph.add_node(
++        BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
++    )
++    ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 +
-+	var card: Node = canvas._add_batch_card(
-+		ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
-+	)
-+	assert_eq(card.asset_ids, ids)
++    var card: Node = canvas._add_batch_card(
++        ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
++    )
++    assert_eq(card.asset_ids, ids)
 +
-+	var canvas_data: Dictionary = canvas.export_canvas_data()
-+	var item: Dictionary = canvas_data["items"][0]
-+	assert_eq(item["type"], "node")
-+	assert_eq(item["graph_id"], graph.id)
-+	assert_eq(item["node_id"], "batch_1")
-+	assert_false(item.has("asset_ids"))
++    var canvas_data: Dictionary = canvas.export_canvas_data()
++    var item: Dictionary = canvas_data["items"][0]
++    assert_eq(item["type"], "node")
++    assert_eq(item["graph_id"], graph.id)
++    assert_eq(item["node_id"], "batch_1")
++    assert_false(item.has("asset_ids"))
 +
-+	var green_id := _register_asset(Color.GREEN, "green")
-+	canvas._replace_batch_asset_ids("node_item_1", [green_id], false)
++    var green_id := _register_asset(Color.GREEN, "green")
++    canvas._replace_batch_asset_ids("node_item_1", [green_id], false)
 +
-+	assert_eq(card.asset_ids, [green_id])
-+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
-+	var batch_node: Dictionary = graph_data["nodes"][0]
-+	assert_eq(batch_node["params"]["asset_ids"], [green_id])
++    assert_eq(card.asset_ids, [green_id])
++    var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
++    var batch_node: Dictionary = graph_data["nodes"][0]
++    assert_eq(batch_node["params"]["asset_ids"], [green_id])
 +
-+	var reloaded_canvas: Control = CanvasScript.new()
-+	reloaded_canvas.size = Vector2(512, 512)
-+	add_child_autofree(reloaded_canvas)
-+	await wait_process_frames(2)
-+	reloaded_canvas.load_canvas_data(canvas_data)
++    var reloaded_canvas: Control = CanvasScript.new()
++    reloaded_canvas.size = Vector2(512, 512)
++    add_child_autofree(reloaded_canvas)
++    await wait_process_frames(2)
++    reloaded_canvas.load_canvas_data(canvas_data)
 +
-+	assert_eq(reloaded_canvas.get_item_count(), 1)
-+	assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), [green_id])
++    assert_eq(reloaded_canvas.get_item_count(), 1)
++    assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), [green_id])
 +
 +
  func _register_asset(color: Color, name: String) -> String:
- 	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
- 	image.fill(color)
+     var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+     image.fill(color)
 diff --git a/pixel/tests/unit/test_pixel_operations.gd b/pixel/tests/unit/test_pixel_operations.gd
 new file mode 100644
 index 0000000..357a8f8
@@ -1563,61 +2064,61 @@ index 0000000..357a8f8
 +
 +
 +func before_each() -> void:
-+	get_tree().root.get_node("ProjectService").new_project("Pixel Operations")
++    get_tree().root.get_node("ProjectService").new_project("Pixel Operations")
 +
 +
 +func test_cleanup_operation_processes_assets_and_registers_provenance() -> void:
-+	var source_id := AssetLibrary.register_image(
-+		_make_source_image(), "source", {"origin": "imported"}
-+	)
-+	var result: Dictionary = PixelOperations.apply_to_assets(
-+		[source_id], AssetLibrary, PixelOperations.OP_CLEANUP, _disabled_cleanup_params()
-+	)
++    var source_id := AssetLibrary.register_image(
++        _make_source_image(), "source", {"origin": "imported"}
++    )
++    var result: Dictionary = PixelOperations.apply_to_assets(
++        [source_id], AssetLibrary, PixelOperations.OP_CLEANUP, _disabled_cleanup_params()
++    )
 +
-+	assert_false(bool(result.get("canceled", false)))
-+	assert_eq(result["items"].size(), 1)
++    assert_false(bool(result.get("canceled", false)))
++    assert_eq(result["items"].size(), 1)
 +
-+	var output_id := PixelOperations.register_result_asset(
-+		AssetLibrary, source_id, result["items"][0]
-+	)
-+	var meta := AssetLibrary.get_asset_meta(output_id)
-+	var provenance: Dictionary = meta["provenance"]
++    var output_id := PixelOperations.register_result_asset(
++        AssetLibrary, source_id, result["items"][0]
++    )
++    var meta := AssetLibrary.get_asset_meta(output_id)
++    var provenance: Dictionary = meta["provenance"]
 +
-+	assert_eq(meta["origin"], "edited")
-+	assert_eq(meta["tags"], ["cleanup"])
-+	assert_eq(provenance["parent_asset"], source_id)
-+	assert_eq(provenance["cleanup"]["source_asset"], source_id)
-+	assert_true(provenance["cleanup"].has("params"))
-+	assert_true(provenance["cleanup"].has("report"))
++    assert_eq(meta["origin"], "edited")
++    assert_eq(meta["tags"], ["cleanup"])
++    assert_eq(provenance["parent_asset"], source_id)
++    assert_eq(provenance["cleanup"]["source_asset"], source_id)
++    assert_true(provenance["cleanup"].has("params"))
++    assert_true(provenance["cleanup"].has("report"))
 +
 +
 +func test_matting_report_is_metadata_safe() -> void:
-+	var result: Dictionary = PixelOperations.apply_image(
-+		PixelOperations.OP_MATTING, _make_source_image(), {}
-+	)
-+	var report: Dictionary = result["report"]
++    var result: Dictionary = PixelOperations.apply_image(
++        PixelOperations.OP_MATTING, _make_source_image(), {}
++    )
++    var report: Dictionary = result["report"]
 +
-+	assert_true(bool(result.get("ok", false)))
-+	assert_false(report.has("image"))
-+	assert_eq(String(result.get("provenance_key", "")), "matting")
++    assert_true(bool(result.get("ok", false)))
++    assert_false(report.has("image"))
++    assert_eq(String(result.get("provenance_key", "")), "matting")
 +
 +
 +func _make_source_image() -> Image:
-+	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
-+	image.fill(Color.WHITE)
-+	image.set_pixel(1, 1, Color.RED)
-+	image.set_pixel(2, 1, Color.RED)
-+	image.set_pixel(1, 2, Color.RED)
-+	image.set_pixel(2, 2, Color.RED)
-+	return image
++    var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
++    image.fill(Color.WHITE)
++    image.set_pixel(1, 1, Color.RED)
++    image.set_pixel(2, 1, Color.RED)
++    image.set_pixel(1, 2, Color.RED)
++    image.set_pixel(2, 2, Color.RED)
++    return image
 +
 +
 +func _disabled_cleanup_params() -> Dictionary:
-+	return {
-+		Pipeline.STEP_DETECT_GRID: {"enabled": false},
-+		Pipeline.STEP_RESAMPLE: {"enabled": false},
-+		Pipeline.STEP_QUANTIZE: {"enabled": false},
-+	}
++    return {
++        Pipeline.STEP_DETECT_GRID: {"enabled": false},
++        Pipeline.STEP_RESAMPLE: {"enabled": false},
++        Pipeline.STEP_QUANTIZE: {"enabled": false},
++    }
 diff --git a/pixel/tests/unit/test_pixel_operations.gd.uid b/pixel/tests/unit/test_pixel_operations.gd.uid
 new file mode 100644
 index 0000000..6e7dc88
@@ -1631,16 +2132,16 @@ index 0a510bd..3a73278 100644
 +++ b/pixel/ui/canvas/canvas_batch_card.gd
 @@ -2,7 +2,7 @@ class_name PFCanvasBatchCard
  extends Node2D
- 
+
  ## M2.1 批次内容卡（无连线 MVP）。
 -## 只持有 asset_id 队列和卡内勾选状态；节点图双身份与正式 graph 持久化留到 M3。
 +## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
- 
+
  const IdUtil := preload("res://core/util/id_util.gd")
- 
+
 @@ -19,6 +19,8 @@ const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
  const THUMB_BACKGROUND := Color(0.08, 0.085, 0.09, 1.0)
- 
+
  var item_id := ""
 +var graph_id := ""
 +var node_id := ""
@@ -1648,250 +2149,250 @@ index 0a510bd..3a73278 100644
  var selected_asset_ids: Array[String] = []
  var label := ""
 @@ -30,8 +32,12 @@ var _font: Font = null
- 
+
  func setup_from_data(data: Dictionary) -> void:
- 	item_id = String(data.get("id", IdUtil.uuid_v4()))
--	label = String(data.get("label", "Batch"))
--	asset_ids = _string_array(data.get("asset_ids", []))
-+	graph_id = String(data.get("graph_id", ""))
-+	node_id = String(data.get("node_id", ""))
-+	var graph_node_data := _resolve_graph_batch_node_data()
-+	var graph_params: Dictionary = graph_node_data.get("params", {})
-+	label = String(graph_params.get("label", data.get("label", "Batch")))
-+	asset_ids = _string_array(graph_params.get("asset_ids", data.get("asset_ids", [])))
- 	selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
- 	locked = bool(data.get("locked", false))
- 	z_index = int(data.get("z_index", 0))
+     item_id = String(data.get("id", IdUtil.uuid_v4()))
+-    label = String(data.get("label", "Batch"))
+-    asset_ids = _string_array(data.get("asset_ids", []))
++    graph_id = String(data.get("graph_id", ""))
++    node_id = String(data.get("node_id", ""))
++    var graph_node_data := _resolve_graph_batch_node_data()
++    var graph_params: Dictionary = graph_node_data.get("params", {})
++    label = String(graph_params.get("label", data.get("label", "Batch")))
++    asset_ids = _string_array(graph_params.get("asset_ids", data.get("asset_ids", [])))
+     selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
+     locked = bool(data.get("locked", false))
+     z_index = int(data.get("z_index", 0))
 @@ -43,6 +49,17 @@ func setup_from_data(data: Dictionary) -> void:
- 
- 
+
+
  func to_canvas_data() -> Dictionary:
-+	if has_graph_binding():
-+		return {
-+			"id": item_id,
-+			"type": "node",
-+			"graph_id": graph_id,
-+			"node_id": node_id,
-+			"position": [int(round(position.x)), int(round(position.y))],
-+			"z_index": z_index,
-+			"collapsed": false,
-+			"locked": locked,
-+		}
- 	return {
- 		"id": item_id,
- 		"type": "batch_card",
++    if has_graph_binding():
++        return {
++            "id": item_id,
++            "type": "node",
++            "graph_id": graph_id,
++            "node_id": node_id,
++            "position": [int(round(position.x)), int(round(position.y))],
++            "z_index": z_index,
++            "collapsed": false,
++            "locked": locked,
++        }
+     return {
+         "id": item_id,
+         "type": "batch_card",
 @@ -55,6 +72,10 @@ func to_canvas_data() -> Dictionary:
- 	}
- 
- 
+     }
+
+
 +func has_graph_binding() -> bool:
-+	return not graph_id.is_empty() and not node_id.is_empty()
++    return not graph_id.is_empty() and not node_id.is_empty()
 +
 +
  func get_canvas_bounds() -> Rect2:
- 	return Rect2(position, Vector2(CARD_WIDTH, _card_height()))
- 
+     return Rect2(position, Vector2(CARD_WIDTH, _card_height()))
+
 @@ -184,6 +205,22 @@ func _rebuild_thumbnails() -> void:
- 		_thumbnail_textures[asset_id] = ImageTexture.create_from_image(thumb)
- 
- 
+         _thumbnail_textures[asset_id] = ImageTexture.create_from_image(thumb)
+
+
 +func _resolve_graph_batch_node_data() -> Dictionary:
-+	if not has_graph_binding():
-+		return {}
-+	var graph_data := ProjectService.get_graph_data(graph_id)
-+	for raw_node in graph_data.get("nodes", []):
-+		if not (raw_node is Dictionary):
-+			continue
-+		var node_data: Dictionary = raw_node
-+		if (
-+			String(node_data.get("id", "")) == node_id
-+			and String(node_data.get("type", "")) == "batch"
-+		):
-+			return node_data
-+	return {}
++    if not has_graph_binding():
++        return {}
++    var graph_data := ProjectService.get_graph_data(graph_id)
++    for raw_node in graph_data.get("nodes", []):
++        if not (raw_node is Dictionary):
++            continue
++        var node_data: Dictionary = raw_node
++        if (
++            String(node_data.get("id", "")) == node_id
++            and String(node_data.get("type", "")) == "batch"
++        ):
++            return node_data
++    return {}
 +
 +
  func _string_array(value: Variant) -> Array[String]:
- 	var result: Array[String] = []
- 	if value is Array:
+     var result: Array[String] = []
+     if value is Array:
 diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
 index c87f1bb..d9118fe 100644
 --- a/pixel/ui/canvas/infinite_canvas.gd
 +++ b/pixel/ui/canvas/infinite_canvas.gd
 @@ -189,14 +189,18 @@ func _add_batch_card(
- 	world_position: Vector2 = Vector2.ZERO,
- 	label: String = "Batch",
- 	item_id: String = "",
--	record_undo: bool = true
-+	record_undo: bool = true,
-+	graph_id: String = "",
-+	node_id: String = ""
+     world_position: Vector2 = Vector2.ZERO,
+     label: String = "Batch",
+     item_id: String = "",
+-    record_undo: bool = true
++    record_undo: bool = true,
++    graph_id: String = "",
++    node_id: String = ""
  ) -> Node:
- 	var data := {
- 		"id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
--		"type": "batch_card",
-+		"type": "node" if not node_id.is_empty() else "batch_card",
- 		"asset_ids": asset_ids.duplicate(),
- 		"selected_asset_ids": [],
- 		"label": label,
-+		"graph_id": graph_id,
-+		"node_id": node_id,
- 		"position": [int(round(world_position.x)), int(round(world_position.y))],
- 		"z_index": _items_by_id.size(),
- 		"locked": false,
+     var data := {
+         "id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
+-        "type": "batch_card",
++        "type": "node" if not node_id.is_empty() else "batch_card",
+         "asset_ids": asset_ids.duplicate(),
+         "selected_asset_ids": [],
+         "label": label,
++        "graph_id": graph_id,
++        "node_id": node_id,
+         "position": [int(round(world_position.x)), int(round(world_position.y))],
+         "z_index": _items_by_id.size(),
+         "locked": false,
 @@ -248,7 +252,7 @@ func delete_selected(record_undo: bool = true) -> void:
- 			var data: Dictionary = snapshot["data"]
- 			if String(data.get("type", "")) == "sprite":
- 				_add_sprite_direct(data, snapshot["image"])
--			elif String(data.get("type", "")) == "batch_card":
-+			elif _is_batch_card_data(data):
- 				_add_batch_direct(data)
- 		_select_only(_ids_from_snapshots(snapshots))
- 		_emit_canvas_changed()
+             var data: Dictionary = snapshot["data"]
+             if String(data.get("type", "")) == "sprite":
+                 _add_sprite_direct(data, snapshot["image"])
+-            elif String(data.get("type", "")) == "batch_card":
++            elif _is_batch_card_data(data):
+                 _add_batch_direct(data)
+         _select_only(_ids_from_snapshots(snapshots))
+         _emit_canvas_changed()
 @@ -298,6 +302,8 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
- 			_add_sprite_direct(item_data, image)
- 		elif item_type == "batch_card":
- 			_add_batch_direct(item_data)
-+		elif item_type == "node" and _is_graph_batch_node_data(item_data):
-+			_add_batch_direct(item_data)
- 
- 	_suppress_change_signal = false
- 	_update_layer_transform()
+             _add_sprite_direct(item_data, image)
+         elif item_type == "batch_card":
+             _add_batch_direct(item_data)
++        elif item_type == "node" and _is_graph_batch_node_data(item_data):
++            _add_batch_direct(item_data)
+
+     _suppress_change_signal = false
+     _update_layer_transform()
 @@ -448,11 +454,13 @@ func _replace_batch_asset_ids(
- 	var before: Array = item.asset_ids.duplicate()
- 	var after := new_asset_ids.duplicate()
- 	var do_replace := func() -> void:
--		item.set_asset_ids(after)
-+		_apply_batch_asset_ids(item, after)
-+		_sync_batch_node_asset_ids(item, after)
- 		_select_only([card_id])
- 		_emit_canvas_changed()
- 	var undo_replace := func() -> void:
--		item.set_asset_ids(before)
-+		_apply_batch_asset_ids(item, before)
-+		_sync_batch_node_asset_ids(item, before)
- 		_select_only([card_id])
- 		_emit_canvas_changed()
- 	if record_undo:
+     var before: Array = item.asset_ids.duplicate()
+     var after := new_asset_ids.duplicate()
+     var do_replace := func() -> void:
+-        item.set_asset_ids(after)
++        _apply_batch_asset_ids(item, after)
++        _sync_batch_node_asset_ids(item, after)
+         _select_only([card_id])
+         _emit_canvas_changed()
+     var undo_replace := func() -> void:
+-        item.set_asset_ids(before)
++        _apply_batch_asset_ids(item, before)
++        _sync_batch_node_asset_ids(item, before)
+         _select_only([card_id])
+         _emit_canvas_changed()
+     if record_undo:
 @@ -461,6 +469,44 @@ func _replace_batch_asset_ids(
- 		do_replace.call()
- 
- 
+         do_replace.call()
+
+
 +func _apply_batch_asset_ids(item: Node, asset_ids: Array) -> void:
-+	for asset_id in item.asset_ids:
-+		AssetLibrary.release_ref(asset_id)
-+	item.set_asset_ids(asset_ids)
-+	for asset_id in item.asset_ids:
-+		AssetLibrary.add_ref(asset_id)
++    for asset_id in item.asset_ids:
++        AssetLibrary.release_ref(asset_id)
++    item.set_asset_ids(asset_ids)
++    for asset_id in item.asset_ids:
++        AssetLibrary.add_ref(asset_id)
 +
 +
 +func _sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
-+	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-+		return
++    if not item.has_method("has_graph_binding") or not item.has_graph_binding():
++        return
 +
-+	var graph_data := ProjectService.get_graph_data(item.graph_id)
-+	if graph_data.is_empty():
-+		return
++    var graph_data := ProjectService.get_graph_data(item.graph_id)
++    if graph_data.is_empty():
++        return
 +
-+	var nodes := []
-+	var changed := false
-+	for raw_node in graph_data.get("nodes", []):
-+		if not (raw_node is Dictionary):
-+			nodes.append(raw_node)
-+			continue
-+		var node_data: Dictionary = raw_node
-+		if (
-+			String(node_data.get("id", "")) == item.node_id
-+			and String(node_data.get("type", "")) == "batch"
-+		):
-+			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-+			params["asset_ids"] = _string_array(asset_ids)
-+			node_data["params"] = params
-+			changed = true
-+		nodes.append(node_data)
++    var nodes := []
++    var changed := false
++    for raw_node in graph_data.get("nodes", []):
++        if not (raw_node is Dictionary):
++            nodes.append(raw_node)
++            continue
++        var node_data: Dictionary = raw_node
++        if (
++            String(node_data.get("id", "")) == item.node_id
++            and String(node_data.get("type", "")) == "batch"
++        ):
++            var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
++            params["asset_ids"] = _string_array(asset_ids)
++            node_data["params"] = params
++            changed = true
++        nodes.append(node_data)
 +
-+	if changed:
-+		graph_data["nodes"] = nodes
-+		ProjectService.set_graph_data(item.graph_id, graph_data, true)
++    if changed:
++        graph_data["nodes"] = nodes
++        ProjectService.set_graph_data(item.graph_id, graph_data, true)
 +
 +
  func _split_batch_selection(card_id: String) -> Node:
- 	if not _items_by_id.has(card_id):
- 		return null
+     if not _items_by_id.has(card_id):
+         return null
 @@ -685,6 +731,31 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
- 	return item
- 
- 
+     return item
+
+
 +func _is_batch_card_data(item_data: Dictionary) -> bool:
-+	var item_type := String(item_data.get("type", ""))
-+	return (
-+		item_type == "batch_card" or (item_type == "node" and _is_graph_batch_node_data(item_data))
-+	)
++    var item_type := String(item_data.get("type", ""))
++    return (
++        item_type == "batch_card" or (item_type == "node" and _is_graph_batch_node_data(item_data))
++    )
 +
 +
 +func _is_graph_batch_node_data(item_data: Dictionary) -> bool:
-+	if String(item_data.get("type", "")) != "node":
-+		return false
-+	var graph_id := String(item_data.get("graph_id", ""))
-+	var node_id := String(item_data.get("node_id", ""))
-+	if graph_id.is_empty() or node_id.is_empty():
-+		return false
++    if String(item_data.get("type", "")) != "node":
++        return false
++    var graph_id := String(item_data.get("graph_id", ""))
++    var node_id := String(item_data.get("node_id", ""))
++    if graph_id.is_empty() or node_id.is_empty():
++        return false
 +
-+	var graph_data := ProjectService.get_graph_data(graph_id)
-+	for raw_node in graph_data.get("nodes", []):
-+		if not (raw_node is Dictionary):
-+			continue
-+		var node_data: Dictionary = raw_node
-+		if String(node_data.get("id", "")) == node_id:
-+			return String(node_data.get("type", "")) == "batch"
-+	return false
++    var graph_data := ProjectService.get_graph_data(graph_id)
++    for raw_node in graph_data.get("nodes", []):
++        if not (raw_node is Dictionary):
++            continue
++        var node_data: Dictionary = raw_node
++        if String(node_data.get("id", "")) == node_id:
++            return String(node_data.get("type", "")) == "batch"
++    return false
 +
 +
  func _remove_item_direct(item_id: String) -> void:
- 	if not _items_by_id.has(item_id):
- 		return
+     if not _items_by_id.has(item_id):
+         return
 @@ -762,6 +833,16 @@ func _ids_from_snapshots(snapshots: Array) -> Array:
- 	return ids
- 
- 
+     return ids
+
+
 +func _string_array(value: Variant) -> Array[String]:
-+	var result: Array[String] = []
-+	if value is Array:
-+		for item in Array(value):
-+			var id := String(item)
-+			if not id.is_empty():
-+				result.append(id)
-+	return result
++    var result: Array[String] = []
++    if value is Array:
++        for item in Array(value):
++            var id := String(item)
++            if not id.is_empty():
++                result.append(id)
++    return result
 +
 +
  func _set_zoom_to_value(value: float) -> void:
- 	var nearest_index := 0
- 	var nearest_distance := INF
+     var nearest_index := 0
+     var nearest_distance := INF
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index 1b87de2..d1ebdc3 100644
 --- a/pixel/ui/shell/m2_1_ui_controller.gd
 +++ b/pixel/ui/shell/m2_1_ui_controller.gd
 @@ -210,7 +210,13 @@ func generate_mock_batch() -> void:
- 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
- 	var asset_ids: Array = result["asset_ids"]
- 	var card: Node = _canvas._add_batch_card(
--		asset_ids, _canvas.get_mouse_world_position(), Strings.MOCK_BATCH_LABEL, "", true
-+		asset_ids,
-+		_canvas.get_mouse_world_position(),
-+		Strings.MOCK_BATCH_LABEL,
-+		"",
-+		true,
-+		graph.id,
-+		"batch_1"
- 	)
- 	if card != null:
- 		_focus_canvas_on_card(card)
+     ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+     var asset_ids: Array = result["asset_ids"]
+     var card: Node = _canvas._add_batch_card(
+-        asset_ids, _canvas.get_mouse_world_position(), Strings.MOCK_BATCH_LABEL, "", true
++        asset_ids,
++        _canvas.get_mouse_world_position(),
++        Strings.MOCK_BATCH_LABEL,
++        "",
++        true,
++        graph.id,
++        "batch_1"
+     )
+     if card != null:
+         _focus_canvas_on_card(card)
 diff --git a/pixel/ui/shell/m2_action_controller.gd b/pixel/ui/shell/m2_action_controller.gd
 index a6a1e75..c42ea1e 100644
 --- a/pixel/ui/shell/m2_action_controller.gd
 +++ b/pixel/ui/shell/m2_action_controller.gd
 @@ -7,11 +7,9 @@ extends RefCounted
- 
+
  const Strings := preload("res://ui/shell/strings.gd")
  const TaskScript := preload("res://services/pf_task.gd")
 -const IdUtil := preload("res://core/util/id_util.gd")
@@ -1901,326 +2402,326 @@ index a6a1e75..c42ea1e 100644
 -const Pipeline := preload("res://core/pixel/pipeline.gd")
 +const PixelOperations := preload("res://services/pixel_operations.gd")
  const ErrorHelper := preload("res://ui/dialogs/error_helper.gd")
- 
+
  const CLEANUP_RESULT_GAP := 8
 @@ -151,21 +149,11 @@ func _matting_work(task_ref: Variant) -> Dictionary:
- 		if task_ref.cancel_requested:
- 			return {"canceled": true, "items": results}
- 		var item: Dictionary = items[index]
--		var matting_result: Dictionary = Matting.matte(item["image"], params)
--		(
--			results
--			. append(
--				{
--					"source_data": item["data"],
--					"image": matting_result["image"],
--					"suffix": "matte",
--					"tags": ["matting"],
--					"provenance_key": "matting",
--					"report": _json_safe(matting_result),
--					"warning": String(matting_result.get("warning", "")),
--				}
--			)
-+		var operation_result: Dictionary = PixelOperations.apply_image(
-+			PixelOperations.OP_MATTING, item["image"], params
- 		)
-+		operation_result["source_data"] = item["data"]
-+		results.append(operation_result)
- 		task_ref.report_progress(float(index + 1) / float(items.size()), "matting")
- 	return {"canceled": false, "items": results}
- 
+         if task_ref.cancel_requested:
+             return {"canceled": true, "items": results}
+         var item: Dictionary = items[index]
+-        var matting_result: Dictionary = Matting.matte(item["image"], params)
+-        (
+-            results
+-            . append(
+-                {
+-                    "source_data": item["data"],
+-                    "image": matting_result["image"],
+-                    "suffix": "matte",
+-                    "tags": ["matting"],
+-                    "provenance_key": "matting",
+-                    "report": _json_safe(matting_result),
+-                    "warning": String(matting_result.get("warning", "")),
+-                }
+-            )
++        var operation_result: Dictionary = PixelOperations.apply_image(
++            PixelOperations.OP_MATTING, item["image"], params
+         )
++        operation_result["source_data"] = item["data"]
++        results.append(operation_result)
+         task_ref.report_progress(float(index + 1) / float(items.size()), "matting")
+     return {"canceled": false, "items": results}
+
 @@ -215,20 +203,11 @@ func _outline_work(task_ref: Variant) -> Dictionary:
- 		if task_ref.cancel_requested:
- 			return {"canceled": true, "items": results}
- 		var item: Dictionary = items[index]
--		var output: Image = Outliner.add_outline(item["image"], params)
--		(
--			results
--			. append(
--				{
--					"source_data": item["data"],
--					"image": output,
--					"suffix": "outline",
--					"tags": ["outline"],
--					"provenance_key": "outline",
--					"report": _json_safe(params),
--				}
--			)
-+		var operation_result: Dictionary = PixelOperations.apply_image(
-+			PixelOperations.OP_OUTLINE, item["image"], params
- 		)
-+		operation_result["source_data"] = item["data"]
-+		results.append(operation_result)
- 		task_ref.report_progress(float(index + 1) / float(items.size()), "outline")
- 	return {"canceled": false, "items": results}
- 
+         if task_ref.cancel_requested:
+             return {"canceled": true, "items": results}
+         var item: Dictionary = items[index]
+-        var output: Image = Outliner.add_outline(item["image"], params)
+-        (
+-            results
+-            . append(
+-                {
+-                    "source_data": item["data"],
+-                    "image": output,
+-                    "suffix": "outline",
+-                    "tags": ["outline"],
+-                    "provenance_key": "outline",
+-                    "report": _json_safe(params),
+-                }
+-            )
++        var operation_result: Dictionary = PixelOperations.apply_image(
++            PixelOperations.OP_OUTLINE, item["image"], params
+         )
++        operation_result["source_data"] = item["data"]
++        results.append(operation_result)
+         task_ref.report_progress(float(index + 1) / float(items.size()), "outline")
+     return {"canceled": false, "items": results}
+
 @@ -236,104 +215,49 @@ func _outline_work(task_ref: Variant) -> Dictionary:
  func _batch_cleanup_work(task_ref: Variant) -> Dictionary:
- 	var asset_ids: Array = task_ref.payload["asset_ids"]
- 	var params: Dictionary = task_ref.payload["extra"].get("params", {})
--	var results := []
--	for index in range(asset_ids.size()):
--		if task_ref.cancel_requested:
--			return {
--				"canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
--			}
--		var asset_id := String(asset_ids[index])
--		var image := AssetLibrary.get_image(asset_id)
--		if image == null:
--			continue
--		var pipeline_result := Pipeline.apply(image, params)
--		(
--			results
--			. append(
--				{
--					"parent_asset": asset_id,
--					"image": pipeline_result["image"],
--					"name_suffix": "clean",
--					"origin": "edited",
--					"tags": ["cleanup"],
--					"provenance_key": "cleanup",
--					"report":
--					_json_safe(
--						{
--							"source_asset": asset_id,
--							"params": params,
--							"report": pipeline_result.get("report", {}),
--						}
--					),
--				}
--			)
--		)
--		task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_cleanup")
--	return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
-+	var result := PixelOperations.apply_to_assets(
-+		asset_ids,
-+		AssetLibrary,
-+		PixelOperations.OP_CLEANUP,
-+		params,
-+		func() -> bool: return task_ref.cancel_requested,
-+		func(ratio: float, _operation: String) -> void:
-+			task_ref.report_progress(ratio, "batch_cleanup")
-+	)
-+	result["card_id"] = String(task_ref.payload["card_id"])
-+	return result
- 
- 
+     var asset_ids: Array = task_ref.payload["asset_ids"]
+     var params: Dictionary = task_ref.payload["extra"].get("params", {})
+-    var results := []
+-    for index in range(asset_ids.size()):
+-        if task_ref.cancel_requested:
+-            return {
+-                "canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
+-            }
+-        var asset_id := String(asset_ids[index])
+-        var image := AssetLibrary.get_image(asset_id)
+-        if image == null:
+-            continue
+-        var pipeline_result := Pipeline.apply(image, params)
+-        (
+-            results
+-            . append(
+-                {
+-                    "parent_asset": asset_id,
+-                    "image": pipeline_result["image"],
+-                    "name_suffix": "clean",
+-                    "origin": "edited",
+-                    "tags": ["cleanup"],
+-                    "provenance_key": "cleanup",
+-                    "report":
+-                    _json_safe(
+-                        {
+-                            "source_asset": asset_id,
+-                            "params": params,
+-                            "report": pipeline_result.get("report", {}),
+-                        }
+-                    ),
+-                }
+-            )
+-        )
+-        task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_cleanup")
+-    return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
++    var result := PixelOperations.apply_to_assets(
++        asset_ids,
++        AssetLibrary,
++        PixelOperations.OP_CLEANUP,
++        params,
++        func() -> bool: return task_ref.cancel_requested,
++        func(ratio: float, _operation: String) -> void:
++            task_ref.report_progress(ratio, "batch_cleanup")
++    )
++    result["card_id"] = String(task_ref.payload["card_id"])
++    return result
+
+
  func _batch_matte_work(task_ref: Variant) -> Dictionary:
- 	var asset_ids: Array = task_ref.payload["asset_ids"]
- 	var params: Dictionary = _matte_params(task_ref.payload["extra"].get("params", {}))
--	var results := []
--	for index in range(asset_ids.size()):
--		if task_ref.cancel_requested:
--			return {
--				"canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
--			}
--		var asset_id := String(asset_ids[index])
--		var image := AssetLibrary.get_image(asset_id)
--		if image == null:
--			continue
--		var matting_result: Dictionary = Matting.matte(image, params)
--		(
--			results
--			. append(
--				{
--					"parent_asset": asset_id,
--					"image": matting_result["image"],
--					"name_suffix": "matte",
--					"origin": "edited",
--					"tags": ["matting"],
--					"provenance_key": "matting",
--					"report": _json_safe(matting_result),
--					"warning": String(matting_result.get("warning", "")),
--				}
--			)
--		)
--		task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_matting")
--	return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
-+	var result := PixelOperations.apply_to_assets(
-+		asset_ids,
-+		AssetLibrary,
-+		PixelOperations.OP_MATTING,
-+		params,
-+		func() -> bool: return task_ref.cancel_requested,
-+		func(ratio: float, _operation: String) -> void:
-+			task_ref.report_progress(ratio, "batch_matting")
-+	)
-+	result["card_id"] = String(task_ref.payload["card_id"])
-+	return result
- 
- 
+     var asset_ids: Array = task_ref.payload["asset_ids"]
+     var params: Dictionary = _matte_params(task_ref.payload["extra"].get("params", {}))
+-    var results := []
+-    for index in range(asset_ids.size()):
+-        if task_ref.cancel_requested:
+-            return {
+-                "canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
+-            }
+-        var asset_id := String(asset_ids[index])
+-        var image := AssetLibrary.get_image(asset_id)
+-        if image == null:
+-            continue
+-        var matting_result: Dictionary = Matting.matte(image, params)
+-        (
+-            results
+-            . append(
+-                {
+-                    "parent_asset": asset_id,
+-                    "image": matting_result["image"],
+-                    "name_suffix": "matte",
+-                    "origin": "edited",
+-                    "tags": ["matting"],
+-                    "provenance_key": "matting",
+-                    "report": _json_safe(matting_result),
+-                    "warning": String(matting_result.get("warning", "")),
+-                }
+-            )
+-        )
+-        task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_matting")
+-    return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
++    var result := PixelOperations.apply_to_assets(
++        asset_ids,
++        AssetLibrary,
++        PixelOperations.OP_MATTING,
++        params,
++        func() -> bool: return task_ref.cancel_requested,
++        func(ratio: float, _operation: String) -> void:
++            task_ref.report_progress(ratio, "batch_matting")
++    )
++    result["card_id"] = String(task_ref.payload["card_id"])
++    return result
+
+
  func _batch_outline_work(task_ref: Variant) -> Dictionary:
- 	var asset_ids: Array = task_ref.payload["asset_ids"]
- 	var params: Dictionary = _outline_params(task_ref.payload["extra"].get("params", {}))
--	var results := []
--	for index in range(asset_ids.size()):
--		if task_ref.cancel_requested:
--			return {
--				"canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
--			}
--		var asset_id := String(asset_ids[index])
--		var image := AssetLibrary.get_image(asset_id)
--		if image == null:
--			continue
--		(
--			results
--			. append(
--				{
--					"parent_asset": asset_id,
--					"image": Outliner.add_outline(image, params),
--					"name_suffix": "outline",
--					"origin": "edited",
--					"tags": ["outline"],
--					"provenance_key": "outline",
--					"report": _json_safe(params),
--				}
--			)
--		)
--		task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_outline")
--	return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
-+	var result := PixelOperations.apply_to_assets(
-+		asset_ids,
-+		AssetLibrary,
-+		PixelOperations.OP_OUTLINE,
-+		params,
-+		func() -> bool: return task_ref.cancel_requested,
-+		func(ratio: float, _operation: String) -> void:
-+			task_ref.report_progress(ratio, "batch_outline")
-+	)
-+	result["card_id"] = String(task_ref.payload["card_id"])
-+	return result
- 
- 
+     var asset_ids: Array = task_ref.payload["asset_ids"]
+     var params: Dictionary = _outline_params(task_ref.payload["extra"].get("params", {}))
+-    var results := []
+-    for index in range(asset_ids.size()):
+-        if task_ref.cancel_requested:
+-            return {
+-                "canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
+-            }
+-        var asset_id := String(asset_ids[index])
+-        var image := AssetLibrary.get_image(asset_id)
+-        if image == null:
+-            continue
+-        (
+-            results
+-            . append(
+-                {
+-                    "parent_asset": asset_id,
+-                    "image": Outliner.add_outline(image, params),
+-                    "name_suffix": "outline",
+-                    "origin": "edited",
+-                    "tags": ["outline"],
+-                    "provenance_key": "outline",
+-                    "report": _json_safe(params),
+-                }
+-            )
+-        )
+-        task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_outline")
+-    return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
++    var result := PixelOperations.apply_to_assets(
++        asset_ids,
++        AssetLibrary,
++        PixelOperations.OP_OUTLINE,
++        params,
++        func() -> bool: return task_ref.cancel_requested,
++        func(ratio: float, _operation: String) -> void:
++            task_ref.report_progress(ratio, "batch_outline")
++    )
++    result["card_id"] = String(task_ref.payload["card_id"])
++    return result
+
+
  func _on_generated_asset_task_finished(result: Variant, done_status: String) -> void:
 @@ -356,30 +280,8 @@ func _on_generated_asset_task_finished(result: Variant, done_status: String) ->
- 		var source_width := _source_width_for_canvas_data(source_data, output)
- 		var placement_index := int(placement_offsets.get(parent_asset_id, 0))
- 		placement_offsets[parent_asset_id] = placement_index + 1
+         var source_width := _source_width_for_canvas_data(source_data, output)
+         var placement_index := int(placement_offsets.get(parent_asset_id, 0))
+         placement_offsets[parent_asset_id] = placement_index + 1
 -
--		var provenance_key := String(item_result.get("provenance_key", "operation"))
--		var provenance := {
--			"provider": null,
--			"model": null,
--			"prompt": "",
--			"seed": null,
--			"parent_asset": parent_asset_id,
--			"graph_id": null,
--			"created_at": IdUtil.utc_now_iso(),
--		}
--		provenance[provenance_key] = _json_safe(item_result.get("report", {}))
+-        var provenance_key := String(item_result.get("provenance_key", "operation"))
+-        var provenance := {
+-            "provider": null,
+-            "model": null,
+-            "prompt": "",
+-            "seed": null,
+-            "parent_asset": parent_asset_id,
+-            "graph_id": null,
+-            "created_at": IdUtil.utc_now_iso(),
+-        }
+-        provenance[provenance_key] = _json_safe(item_result.get("report", {}))
 -
--		var asset_id := (
--			AssetLibrary
--			. register_image(
--				output,
--				"%s_%s" % [parent_asset_id.left(8), String(item_result.get("suffix", "m2"))],
--				{
--					"origin": "edited",
--					"tags": item_result.get("tags", []),
--					"provenance": provenance,
--				}
--			)
-+		var asset_id := PixelOperations.register_result_asset(
-+			AssetLibrary, parent_asset_id, item_result
- 		)
- 		var world_position := (
- 			source_position
+-        var asset_id := (
+-            AssetLibrary
+-            . register_image(
+-                output,
+-                "%s_%s" % [parent_asset_id.left(8), String(item_result.get("suffix", "m2"))],
+-                {
+-                    "origin": "edited",
+-                    "tags": item_result.get("tags", []),
+-                    "provenance": provenance,
+-                }
+-            )
++        var asset_id := PixelOperations.register_result_asset(
++            AssetLibrary, parent_asset_id, item_result
+         )
+         var world_position := (
+             source_position
 @@ -431,32 +333,8 @@ func _on_batch_task_finished(result: Variant, done_status: String) -> void:
- 	var new_asset_ids: Array[String] = []
- 	for item_result in result.get("items", []):
- 		var parent_asset_id := String(item_result.get("parent_asset", ""))
--		var output: Image = item_result["image"]
--		var provenance_key := String(item_result.get("provenance_key", "operation"))
--		var provenance := {
--			"provider": null,
--			"model": null,
--			"prompt": "",
--			"seed": null,
--			"parent_asset": parent_asset_id,
--			"graph_id": null,
--			"created_at": IdUtil.utc_now_iso(),
--		}
--		provenance[provenance_key] = _json_safe(item_result.get("report", {}))
--		var asset_id := (
--			AssetLibrary
--			. register_image(
--				output,
--				(
--					"%s_%s"
--					% [parent_asset_id.left(8), String(item_result.get("name_suffix", "batch"))]
--				),
--				{
--					"origin": String(item_result.get("origin", "edited")),
--					"tags": item_result.get("tags", []),
--					"provenance": provenance,
--				}
--			)
-+		var asset_id := PixelOperations.register_result_asset(
-+			AssetLibrary, parent_asset_id, item_result
- 		)
- 		new_asset_ids.append(asset_id)
- 
+     var new_asset_ids: Array[String] = []
+     for item_result in result.get("items", []):
+         var parent_asset_id := String(item_result.get("parent_asset", ""))
+-        var output: Image = item_result["image"]
+-        var provenance_key := String(item_result.get("provenance_key", "operation"))
+-        var provenance := {
+-            "provider": null,
+-            "model": null,
+-            "prompt": "",
+-            "seed": null,
+-            "parent_asset": parent_asset_id,
+-            "graph_id": null,
+-            "created_at": IdUtil.utc_now_iso(),
+-        }
+-        provenance[provenance_key] = _json_safe(item_result.get("report", {}))
+-        var asset_id := (
+-            AssetLibrary
+-            . register_image(
+-                output,
+-                (
+-                    "%s_%s"
+-                    % [parent_asset_id.left(8), String(item_result.get("name_suffix", "batch"))]
+-                ),
+-                {
+-                    "origin": String(item_result.get("origin", "edited")),
+-                    "tags": item_result.get("tags", []),
+-                    "provenance": provenance,
+-                }
+-            )
++        var asset_id := PixelOperations.register_result_asset(
++            AssetLibrary, parent_asset_id, item_result
+         )
+         new_asset_ids.append(asset_id)
+
 @@ -465,13 +343,7 @@ func _on_batch_task_finished(result: Variant, done_status: String) -> void:
- 
- 
+
+
  func _matte_params(params: Dictionary) -> Dictionary:
--	if params.is_empty():
--		return {"mode": Matting.MODE_FLOOD, "tolerance": 12.0, "feather": 0}
--	return {
--		"mode": String(params.get("mode", Matting.MODE_FLOOD)),
--		"tolerance": float(params.get("tolerance", 12.0)),
--		"feather": int(params.get("feather", 0)),
--	}
-+	return PixelOperations.normalize_matte_params(params)
- 
- 
+-    if params.is_empty():
+-        return {"mode": Matting.MODE_FLOOD, "tolerance": 12.0, "feather": 0}
+-    return {
+-        "mode": String(params.get("mode", Matting.MODE_FLOOD)),
+-        "tolerance": float(params.get("tolerance", 12.0)),
+-        "feather": int(params.get("feather", 0)),
+-    }
++    return PixelOperations.normalize_matte_params(params)
+
+
  func _slice_params(params: Dictionary) -> Dictionary:
 @@ -494,14 +366,7 @@ func _slice_params(params: Dictionary) -> Dictionary:
- 
- 
+
+
  func _outline_params(params: Dictionary) -> Dictionary:
--	if params.is_empty():
--		return {"type": Outliner.TYPE_OUTER, "color": Color.BLACK, "corner": Outliner.CORNER_CROSS}
--	return {
--		"type": String(params.get("type", Outliner.TYPE_OUTER)),
--		"color": params.get("color", Color.BLACK),
--		"corner": String(params.get("corner", Outliner.CORNER_CROSS)),
--		"colored": bool(params.get("colored", false)),
--	}
-+	return PixelOperations.normalize_outline_params(params)
- 
- 
+-    if params.is_empty():
+-        return {"type": Outliner.TYPE_OUTER, "color": Color.BLACK, "corner": Outliner.CORNER_CROSS}
+-    return {
+-        "type": String(params.get("type", Outliner.TYPE_OUTER)),
+-        "color": params.get("color", Color.BLACK),
+-        "corner": String(params.get("corner", Outliner.CORNER_CROSS)),
+-        "colored": bool(params.get("colored", false)),
+-    }
++    return PixelOperations.normalize_outline_params(params)
+
+
  func _first_warning(items: Array) -> String:
 @@ -536,29 +401,3 @@ static func _source_width_for_canvas_data(data: Dictionary, fallback_image: Imag
- 
+
  static func _rect_to_array(rect: Rect2i) -> Array:
- 	return [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
+     return [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
 -
 -
 -static func _json_safe(value: Variant) -> Variant:
--	match typeof(value):
--		TYPE_DICTIONARY:
--			var output := {}
--			for key in Dictionary(value).keys():
--				output[String(key)] = _json_safe(Dictionary(value)[key])
--			return output
--		TYPE_ARRAY:
--			var output := []
--			for item in Array(value):
--				output.append(_json_safe(item))
--			return output
--		TYPE_VECTOR2:
--			var vector := Vector2(value)
--			return [vector.x, vector.y]
--		TYPE_VECTOR2I:
--			var vector_i := Vector2i(value)
--			return [vector_i.x, vector_i.y]
--		TYPE_RECT2I:
--			return _rect_to_array(Rect2i(value))
--		TYPE_COLOR:
--			return Color(value).to_html(true)
--		_:
--			return value
+-    match typeof(value):
+-        TYPE_DICTIONARY:
+-            var output := {}
+-            for key in Dictionary(value).keys():
+-                output[String(key)] = _json_safe(Dictionary(value)[key])
+-            return output
+-        TYPE_ARRAY:
+-            var output := []
+-            for item in Array(value):
+-                output.append(_json_safe(item))
+-            return output
+-        TYPE_VECTOR2:
+-            var vector := Vector2(value)
+-            return [vector.x, vector.y]
+-        TYPE_VECTOR2I:
+-            var vector_i := Vector2i(value)
+-            return [vector_i.x, vector_i.y]
+-        TYPE_RECT2I:
+-            return _rect_to_array(Rect2i(value))
+-        TYPE_COLOR:
+-            return Color(value).to_html(true)
+-        _:
+-            return value
 ```
 
 ## 追加修复：G-4 端口与连线对齐
@@ -2272,70 +2773,70 @@ index e5e6e96..732c28c 100644
 --- a/pixel/tests/unit/test_canvas_batch_card.gd
 +++ b/pixel/tests/unit/test_canvas_batch_card.gd
 @@ -2,6 +2,8 @@ extends "res://addons/gut/test.gd"
- 
+
  const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
  const GraphScript := preload("res://core/graph/pf_graph.gd")
 +const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
 +const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
  const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
  const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
- 
+
 @@ -114,6 +116,55 @@ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
- 	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
- 
- 
+     assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
+
+
 +func test_graph_edge_anchors_follow_named_ports() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [_register_asset(Color.RED, "red")]
-+	var graph := GraphScript.new()
-+	graph.id = "graph_anchor_test"
-+	graph.add_node(
-+		AiGenerateNodeScript.new(),
-+		"generate",
-+		{"provider_id": "mock", "batch_size": 1, "seed": 3},
-+		Vector2(10, 20)
-+	)
-+	graph.add_node(
-+		BatchNodeScript.new(),
-+		"batch_1",
-+		{"label": "Candidates", "asset_ids": ids},
-+		Vector2(300, 69)
-+	)
-+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++    var ids := [_register_asset(Color.RED, "red")]
++    var graph := GraphScript.new()
++    graph.id = "graph_anchor_test"
++    graph.add_node(
++        AiGenerateNodeScript.new(),
++        "generate",
++        {"provider_id": "mock", "batch_size": 1, "seed": 3},
++        Vector2(10, 20)
++    )
++    graph.add_node(
++        BatchNodeScript.new(),
++        "batch_1",
++        {"label": "Candidates", "asset_ids": ids},
++        Vector2(300, 69)
++    )
++    ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 +
-+	var generate_card: Node = canvas._add_graph_node_card(
-+		graph.id, "generate", Vector2(10, 20), "node_item_generate", false
-+	)
-+	var batch_card: Node = canvas._add_batch_card(
-+		ids, Vector2(300, 69), "Candidates", "node_item_batch", false, graph.id, "batch_1"
-+	)
++    var generate_card: Node = canvas._add_graph_node_card(
++        graph.id, "generate", Vector2(10, 20), "node_item_generate", false
++    )
++    var batch_card: Node = canvas._add_batch_card(
++        ids, Vector2(300, 69), "Candidates", "node_item_batch", false, graph.id, "batch_1"
++    )
 +
-+	var items_anchor: Vector2 = generate_card.get_graph_port_anchor("items", true)
-+	var spec_anchor: Vector2 = generate_card.get_graph_port_anchor("spec", true)
-+	var output_anchor: Vector2 = generate_card.get_graph_port_anchor("images", false)
-+	var right_center: Vector2 = (
-+		generate_card.get_canvas_bounds().position
-+		+ Vector2(
-+			generate_card.get_canvas_bounds().size.x, generate_card.get_canvas_bounds().size.y * 0.5
-+		)
-+	)
++    var items_anchor: Vector2 = generate_card.get_graph_port_anchor("items", true)
++    var spec_anchor: Vector2 = generate_card.get_graph_port_anchor("spec", true)
++    var output_anchor: Vector2 = generate_card.get_graph_port_anchor("images", false)
++    var right_center: Vector2 = (
++        generate_card.get_canvas_bounds().position
++        + Vector2(
++            generate_card.get_canvas_bounds().size.x, generate_card.get_canvas_bounds().size.y * 0.5
++        )
++    )
 +
-+	assert_ne(items_anchor, spec_anchor)
-+	assert_ne(output_anchor, right_center)
-+	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "images", false), output_anchor)
-+	assert_eq(
-+		GraphEdgeRenderer._edge_anchor_world(batch_card, "in", true),
-+		batch_card.get_graph_port_anchor("in", true)
-+	)
++    assert_ne(items_anchor, spec_anchor)
++    assert_ne(output_anchor, right_center)
++    assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "images", false), output_anchor)
++    assert_eq(
++        GraphEdgeRenderer._edge_anchor_world(batch_card, "in", true),
++        batch_card.get_graph_port_anchor("in", true)
++    )
 +
 +
  func _register_asset(color: Color, name: String) -> String:
- 	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
- 	image.fill(color)
+     var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+     image.fill(color)
 diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
 index 3a73278..426b25d 100644
 --- a/pixel/ui/canvas/canvas_batch_card.gd
@@ -2348,116 +2849,116 @@ index 3a73278..426b25d 100644
 +const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
 +const INPUT_PORTS: Array[String] = ["in"]
 +const OUTPUT_PORTS: Array[String] = ["images", "assets"]
- 
+
  var item_id := ""
  var graph_id := ""
 @@ -84,6 +88,17 @@ func contains_world_point(world_position: Vector2) -> bool:
- 	return get_canvas_bounds().has_point(world_position)
- 
- 
+     return get_canvas_bounds().has_point(world_position)
+
+
 +func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
-+	var ports := INPUT_PORTS if is_input else OUTPUT_PORTS
-+	var count := ports.size()
-+	if count <= 0:
-+		return position + Vector2(0.0 if is_input else CARD_WIDTH, _card_height() * 0.5)
-+	var index := ports.find(port_name)
-+	if index < 0:
-+		index = 0
-+	return position + _graph_port_position(index, count, is_input)
++    var ports := INPUT_PORTS if is_input else OUTPUT_PORTS
++    var count := ports.size()
++    if count <= 0:
++        return position + Vector2(0.0 if is_input else CARD_WIDTH, _card_height() * 0.5)
++    var index := ports.find(port_name)
++    if index < 0:
++        index = 0
++    return position + _graph_port_position(index, count, is_input)
 +
 +
  func set_asset_ids(new_asset_ids: Array) -> void:
- 	asset_ids = _string_array(new_asset_ids)
- 	for selected_id in selected_asset_ids.duplicate():
+     asset_ids = _string_array(new_asset_ids)
+     for selected_id in selected_asset_ids.duplicate():
 @@ -146,6 +161,8 @@ func _draw() -> void:
- 	var columns := _columns()
- 	for index in range(asset_ids.size()):
- 		_draw_thumbnail(index, _thumb_rect(index, columns))
-+	if has_graph_binding():
-+		_draw_graph_ports()
- 
- 
+     var columns := _columns()
+     for index in range(asset_ids.size()):
+         _draw_thumbnail(index, _thumb_rect(index, columns))
++    if has_graph_binding():
++        _draw_graph_ports()
+
+
  func _draw_thumbnail(index: int, rect: Rect2) -> void:
 @@ -187,6 +204,21 @@ func _columns() -> int:
- 	return maxi(1, int((CARD_WIDTH - PADDING * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP)))
- 
- 
+     return maxi(1, int((CARD_WIDTH - PADDING * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP)))
+
+
 +func _draw_graph_ports() -> void:
-+	for index in range(INPUT_PORTS.size()):
-+		draw_circle(_graph_port_position(index, INPUT_PORTS.size(), true), 5.0, PORT_IN)
-+	for index in range(OUTPUT_PORTS.size()):
-+		draw_circle(_graph_port_position(index, OUTPUT_PORTS.size(), false), 5.0, PORT_OUT)
++    for index in range(INPUT_PORTS.size()):
++        draw_circle(_graph_port_position(index, INPUT_PORTS.size(), true), 5.0, PORT_IN)
++    for index in range(OUTPUT_PORTS.size()):
++        draw_circle(_graph_port_position(index, OUTPUT_PORTS.size(), false), 5.0, PORT_OUT)
 +
 +
 +func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
-+	var lane_height := minf(
-+		THUMB_SIZE, maxf(0.0, float(_card_height()) - HEADER_HEIGHT - PADDING * 2)
-+	)
-+	var y := HEADER_HEIGHT + PADDING + lane_height * float(index + 1) / float(count + 1)
-+	return Vector2(0.0 if is_input else CARD_WIDTH, y)
++    var lane_height := minf(
++        THUMB_SIZE, maxf(0.0, float(_card_height()) - HEADER_HEIGHT - PADDING * 2)
++    )
++    var y := HEADER_HEIGHT + PADDING + lane_height * float(index + 1) / float(count + 1)
++    return Vector2(0.0 if is_input else CARD_WIDTH, y)
 +
 +
  func _rebuild_thumbnails() -> void:
- 	_thumbnail_textures.clear()
- 	for asset_id in asset_ids:
+     _thumbnail_textures.clear()
+     for asset_id in asset_ids:
 diff --git a/pixel/ui/canvas/canvas_graph_edge_renderer.gd b/pixel/ui/canvas/canvas_graph_edge_renderer.gd
 index 3ee0fb5..e24bbf2 100644
 --- a/pixel/ui/canvas/canvas_graph_edge_renderer.gd
 +++ b/pixel/ui/canvas/canvas_graph_edge_renderer.gd
 @@ -30,18 +30,30 @@ static func _draw_edge_if_visible(
- 	var to_node := String(to_data[0])
- 	if not items_by_node.has(from_node) or not items_by_node.has(to_node):
- 		return
--	_draw_graph_edge(canvas, items_by_node[from_node], items_by_node[to_node], color)
-+	_draw_graph_edge(
-+		canvas,
-+		items_by_node[from_node],
-+		String(from_data[1]),
-+		items_by_node[to_node],
-+		String(to_data[1]),
-+		color
-+	)
- 
- 
+     var to_node := String(to_data[0])
+     if not items_by_node.has(from_node) or not items_by_node.has(to_node):
+         return
+-    _draw_graph_edge(canvas, items_by_node[from_node], items_by_node[to_node], color)
++    _draw_graph_edge(
++        canvas,
++        items_by_node[from_node],
++        String(from_data[1]),
++        items_by_node[to_node],
++        String(to_data[1]),
++        color
++    )
+
+
 -static func _draw_graph_edge(canvas: Control, from_item: Node, to_item: Node, color: Color) -> void:
--	var from_bounds: Rect2 = from_item.get_canvas_bounds()
--	var to_bounds: Rect2 = to_item.get_canvas_bounds()
--	var start: Vector2 = canvas.world_to_screen(
--		from_bounds.position + Vector2(from_bounds.size.x, from_bounds.size.y * 0.5)
--	)
--	var end: Vector2 = canvas.world_to_screen(
--		to_bounds.position + Vector2(0.0, to_bounds.size.y * 0.5)
--	)
+-    var from_bounds: Rect2 = from_item.get_canvas_bounds()
+-    var to_bounds: Rect2 = to_item.get_canvas_bounds()
+-    var start: Vector2 = canvas.world_to_screen(
+-        from_bounds.position + Vector2(from_bounds.size.x, from_bounds.size.y * 0.5)
+-    )
+-    var end: Vector2 = canvas.world_to_screen(
+-        to_bounds.position + Vector2(0.0, to_bounds.size.y * 0.5)
+-    )
 +static func _draw_graph_edge(
-+	canvas: Control,
-+	from_item: Node,
-+	from_port: String,
-+	to_item: Node,
-+	to_port: String,
-+	color: Color
++    canvas: Control,
++    from_item: Node,
++    from_port: String,
++    to_item: Node,
++    to_port: String,
++    color: Color
 +) -> void:
-+	var start_world: Variant = _edge_anchor_world(from_item, from_port, false)
-+	var end_world: Variant = _edge_anchor_world(to_item, to_port, true)
-+	if not (start_world is Vector2) or not (end_world is Vector2):
-+		return
-+	var start: Vector2 = canvas.world_to_screen(start_world)
-+	var end: Vector2 = canvas.world_to_screen(end_world)
- 	var bend := maxf(48.0, absf(end.x - start.x) * 0.35)
- 	var control_a := start + Vector2(bend, 0.0)
- 	var control_b := end - Vector2(bend, 0.0)
++    var start_world: Variant = _edge_anchor_world(from_item, from_port, false)
++    var end_world: Variant = _edge_anchor_world(to_item, to_port, true)
++    if not (start_world is Vector2) or not (end_world is Vector2):
++        return
++    var start: Vector2 = canvas.world_to_screen(start_world)
++    var end: Vector2 = canvas.world_to_screen(end_world)
+     var bend := maxf(48.0, absf(end.x - start.x) * 0.35)
+     var control_a := start + Vector2(bend, 0.0)
+     var control_b := end - Vector2(bend, 0.0)
 @@ -52,6 +64,13 @@ static func _draw_graph_edge(canvas: Control, from_item: Node, to_item: Node, co
- 	canvas.draw_polyline(points, color, 2.0, true)
- 
- 
+     canvas.draw_polyline(points, color, 2.0, true)
+
+
 +static func _edge_anchor_world(item: Node, port_name: String, is_input: bool) -> Variant:
-+	if item.has_method("get_graph_port_anchor"):
-+		return item.get_graph_port_anchor(port_name, is_input)
-+	var bounds: Rect2 = item.get_canvas_bounds()
-+	return bounds.position + Vector2(0.0 if is_input else bounds.size.x, bounds.size.y * 0.5)
++    if item.has_method("get_graph_port_anchor"):
++        return item.get_graph_port_anchor(port_name, is_input)
++    var bounds: Rect2 = item.get_canvas_bounds()
++    return bounds.position + Vector2(0.0 if is_input else bounds.size.x, bounds.size.y * 0.5)
 +
 +
  static func _graph_items_by_node(
- 	items_by_id: Dictionary, batch_script: Script, node_script: Script
+     items_by_id: Dictionary, batch_script: Script, node_script: Script
  ) -> Dictionary:
 diff --git a/pixel/ui/canvas/canvas_node_card.gd b/pixel/ui/canvas/canvas_node_card.gd
 index 1377b36..382cf04 100644
@@ -2471,77 +2972,77 @@ index 1377b36..382cf04 100644
 +var _output_ports: Array[String] = []
  var _is_ghost := false
  var _font: Font = null
- 
+
 @@ -69,6 +71,16 @@ func is_graph_node() -> bool:
- 	return not graph_id.is_empty() and not node_id.is_empty()
- 
- 
+     return not graph_id.is_empty() and not node_id.is_empty()
+
+
 +func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
-+	var count := _input_count if is_input else _output_count
-+	if count <= 0:
-+		return position + Vector2(0.0 if is_input else CARD_SIZE.x, CARD_SIZE.y * 0.5)
-+	var index := _port_index(port_name, is_input)
-+	if index < 0:
-+		index = 0
-+	return position + _port_position(index, count, is_input)
++    var count := _input_count if is_input else _output_count
++    if count <= 0:
++        return position + Vector2(0.0 if is_input else CARD_SIZE.x, CARD_SIZE.y * 0.5)
++    var index := _port_index(port_name, is_input)
++    if index < 0:
++        index = 0
++    return position + _port_position(index, count, is_input)
 +
 +
  func _draw() -> void:
- 	_font = ThemeDB.fallback_font if _font == null else _font
- 	var rect := Rect2(Vector2.ZERO, CARD_SIZE)
+     _font = ThemeDB.fallback_font if _font == null else _font
+     var rect := Rect2(Vector2.ZERO, CARD_SIZE)
 @@ -120,6 +132,11 @@ func _port_position(index: int, count: int, is_input: bool) -> Vector2:
- 	return Vector2(0.0 if is_input else CARD_SIZE.x, y)
- 
- 
+     return Vector2(0.0 if is_input else CARD_SIZE.x, y)
+
+
 +func _port_index(port_name: String, is_input: bool) -> int:
-+	var ports := _input_ports if is_input else _output_ports
-+	return ports.find(port_name)
++    var ports := _input_ports if is_input else _output_ports
++    return ports.find(port_name)
 +
 +
  func _resolve_graph_node() -> void:
- 	var node_data := _find_node_data()
- 	_node_type = String(node_data.get("type", "missing"))
+     var node_data := _find_node_data()
+     _node_type = String(node_data.get("type", "missing"))
 @@ -132,14 +149,25 @@ func _resolve_graph_node() -> void:
- 		_display_name = "Missing: %s" % _node_type
- 		_input_count = 0
- 		_output_count = 0
-+		_input_ports = []
-+		_output_ports = []
- 		return
- 
- 	_display_name = node.get_display_name()
--	_input_count = node.get_input_ports().size()
--	_output_count = node.get_output_ports().size()
-+	_input_ports = _port_names(node.get_input_ports())
-+	_output_ports = _port_names(node.get_output_ports())
-+	_input_count = _input_ports.size()
-+	_output_count = _output_ports.size()
- 	_is_ghost = false
- 
- 
+         _display_name = "Missing: %s" % _node_type
+         _input_count = 0
+         _output_count = 0
++        _input_ports = []
++        _output_ports = []
+         return
+
+     _display_name = node.get_display_name()
+-    _input_count = node.get_input_ports().size()
+-    _output_count = node.get_output_ports().size()
++    _input_ports = _port_names(node.get_input_ports())
++    _output_ports = _port_names(node.get_output_ports())
++    _input_count = _input_ports.size()
++    _output_count = _output_ports.size()
+     _is_ghost = false
+
+
 +func _port_names(port_specs: Array[Dictionary]) -> Array[String]:
-+	var result: Array[String] = []
-+	for port_spec in port_specs:
-+		result.append(String(port_spec.get("name", "")))
-+	return result
++    var result: Array[String] = []
++    for port_spec in port_specs:
++        result.append(String(port_spec.get("name", "")))
++    return result
 +
 +
  func _find_node_data() -> Dictionary:
- 	var graph_data := ProjectService.get_graph_data(graph_id)
- 	for raw_node in graph_data.get("nodes", []):
+     var graph_data := ProjectService.get_graph_data(graph_id)
+     for raw_node in graph_data.get("nodes", []):
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index 851efd4..58e6b2d 100644
 --- a/pixel/ui/shell/m2_1_ui_controller.gd
 +++ b/pixel/ui/shell/m2_1_ui_controller.gd
 @@ -459,7 +459,7 @@ func _make_mock_generate_graph() -> PFGraph:
- 		Vector2(280, 75)
- 	)
- 	graph.add_node(
--		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, -20)
-+		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, 29)
- 	)
- 	graph.add_edge("objects", "items", "generate", "items")
- 	graph.add_edge("size", "spec", "generate", "spec")
+         Vector2(280, 75)
+     )
+     graph.add_node(
+-        BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, -20)
++        BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, 29)
+     )
+     graph.add_edge("objects", "items", "generate", "items")
+     graph.add_edge("size", "spec", "generate", "spec")
 ```
 
 ## 追加修复：AI Generate 单视觉输入点
@@ -2590,26 +3091,26 @@ index 732c28c..913ef43 100644
 --- a/pixel/tests/unit/test_canvas_batch_card.gd
 +++ b/pixel/tests/unit/test_canvas_batch_card.gd
 @@ -116,7 +116,7 @@ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
- 	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
- 
- 
+     assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
+
+
 -func test_graph_edge_anchors_follow_named_ports() -> void:
 +func test_ai_generate_inputs_share_single_canvas_anchor() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
- 	add_child_autofree(canvas)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
+     add_child_autofree(canvas)
 @@ -156,8 +156,10 @@ func test_graph_edge_anchors_follow_named_ports() -> void:
- 		)
- 	)
- 
--	assert_ne(items_anchor, spec_anchor)
-+	assert_eq(items_anchor, spec_anchor)
- 	assert_ne(output_anchor, right_center)
-+	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "items", true), items_anchor)
-+	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "spec", true), items_anchor)
- 	assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "images", false), output_anchor)
- 	assert_eq(
- 		GraphEdgeRenderer._edge_anchor_world(batch_card, "in", true),
+         )
+     )
+
+-    assert_ne(items_anchor, spec_anchor)
++    assert_eq(items_anchor, spec_anchor)
+     assert_ne(output_anchor, right_center)
++    assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "items", true), items_anchor)
++    assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "spec", true), items_anchor)
+     assert_eq(GraphEdgeRenderer._edge_anchor_world(generate_card, "images", false), output_anchor)
+     assert_eq(
+         GraphEdgeRenderer._edge_anchor_world(batch_card, "in", true),
 diff --git a/pixel/ui/canvas/canvas_node_card.gd b/pixel/ui/canvas/canvas_node_card.gd
 index 382cf04..256e81f 100644
 --- a/pixel/ui/canvas/canvas_node_card.gd
@@ -2622,46 +3123,46 @@ index 382cf04..256e81f 100644
 +var _visible_output_ports: Array[String] = []
  var _is_ghost := false
  var _font: Font = null
- 
+
 @@ -133,7 +135,7 @@ func _port_position(index: int, count: int, is_input: bool) -> Vector2:
- 
- 
+
+
  func _port_index(port_name: String, is_input: bool) -> int:
--	var ports := _input_ports if is_input else _output_ports
-+	var ports := _visible_input_ports if is_input else _visible_output_ports
- 	return ports.find(port_name)
- 
- 
+-    var ports := _input_ports if is_input else _output_ports
++    var ports := _visible_input_ports if is_input else _visible_output_ports
+     return ports.find(port_name)
+
+
 @@ -151,16 +153,27 @@ func _resolve_graph_node() -> void:
- 		_output_count = 0
- 		_input_ports = []
- 		_output_ports = []
-+		_visible_input_ports = []
-+		_visible_output_ports = []
- 		return
- 
- 	_display_name = node.get_display_name()
- 	_input_ports = _port_names(node.get_input_ports())
- 	_output_ports = _port_names(node.get_output_ports())
--	_input_count = _input_ports.size()
--	_output_count = _output_ports.size()
-+	_visible_input_ports = _visible_input_ports_for_node(_node_type, _input_ports)
-+	_visible_output_ports = _output_ports.duplicate()
-+	_input_count = _visible_input_ports.size()
-+	_output_count = _visible_output_ports.size()
- 	_is_ghost = false
- 
- 
+         _output_count = 0
+         _input_ports = []
+         _output_ports = []
++        _visible_input_ports = []
++        _visible_output_ports = []
+         return
+
+     _display_name = node.get_display_name()
+     _input_ports = _port_names(node.get_input_ports())
+     _output_ports = _port_names(node.get_output_ports())
+-    _input_count = _input_ports.size()
+-    _output_count = _output_ports.size()
++    _visible_input_ports = _visible_input_ports_for_node(_node_type, _input_ports)
++    _visible_output_ports = _output_ports.duplicate()
++    _input_count = _visible_input_ports.size()
++    _output_count = _visible_output_ports.size()
+     _is_ghost = false
+
+
 +func _visible_input_ports_for_node(node_type: String, port_names: Array[String]) -> Array[String]:
-+	# M3 画布 MVP 只折叠视觉入口；graph edge 仍保留原始命名端口。
-+	if node_type == "ai_generate" and not port_names.is_empty():
-+		return ["in"]
-+	return port_names.duplicate()
++    # M3 画布 MVP 只折叠视觉入口；graph edge 仍保留原始命名端口。
++    if node_type == "ai_generate" and not port_names.is_empty():
++        return ["in"]
++    return port_names.duplicate()
 +
 +
  func _port_names(port_specs: Array[Dictionary]) -> Array[String]:
-	var result: Array[String] = []
-	for port_spec in port_specs:
+    var result: Array[String] = []
+    for port_spec in port_specs:
 ```
 
 ## 追加开发：G-5 最小重跑入口
@@ -2748,162 +3249,162 @@ index bdd4954..b3f9621 100644
 +++ b/pixel/services/graph_mock_runner.gd
 @@ -7,7 +7,12 @@ extends RefCounted
  const IdUtil := preload("res://core/util/id_util.gd")
- 
- 
+
+
 -func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "") -> Dictionary:
 +func run_to_batch(
-+	graph: PFGraph,
-+	asset_library: Node,
-+	batch_node_id: String = "",
-+	replace_batch_assets: bool = false
++    graph: PFGraph,
++    asset_library: Node,
++    batch_node_id: String = "",
++    replace_batch_assets: bool = false
 +) -> Dictionary:
- 	if graph == null:
- 		return _error("missing_graph", "Graph is required")
- 	if asset_library == null or not asset_library.has_method("register_image"):
+     if graph == null:
+         return _error("missing_graph", "Graph is required")
+     if asset_library == null or not asset_library.has_method("register_image"):
 @@ -22,7 +27,13 @@ func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "
- 	var materialized_asset_ids := []
- 	for node_id in order_result["order"]:
- 		var run_result := _run_node(
--			graph, String(node_id), inputs_by_node, outputs_by_node, asset_library, batch_node_id
-+			graph,
-+			String(node_id),
-+			inputs_by_node,
-+			outputs_by_node,
-+			asset_library,
-+			batch_node_id,
-+			replace_batch_assets
- 		)
- 		if not bool(run_result["ok"]):
- 			return run_result
+     var materialized_asset_ids := []
+     for node_id in order_result["order"]:
+         var run_result := _run_node(
+-            graph, String(node_id), inputs_by_node, outputs_by_node, asset_library, batch_node_id
++            graph,
++            String(node_id),
++            inputs_by_node,
++            outputs_by_node,
++            asset_library,
++            batch_node_id,
++            replace_batch_assets
+         )
+         if not bool(run_result["ok"]):
+             return run_result
 @@ -40,7 +51,8 @@ func _run_node(
- 	inputs_by_node: Dictionary,
- 	outputs_by_node: Dictionary,
- 	asset_library: Node,
--	batch_node_id: String
-+	batch_node_id: String,
-+	replace_batch_assets: bool
+     inputs_by_node: Dictionary,
+     outputs_by_node: Dictionary,
+     asset_library: Node,
+-    batch_node_id: String
++    batch_node_id: String,
++    replace_batch_assets: bool
  ) -> Dictionary:
- 	var node := graph.get_node(node_id)
- 	if node == null:
+     var node := graph.get_node(node_id)
+     if node == null:
 @@ -54,7 +66,12 @@ func _run_node(
- 	if node.get_type() == "batch":
- 		if batch_node_id.is_empty() or batch_node_id == node_id:
- 			var materialized := _materialize_batch(
--				graph, node_id, inputs.get("in", []), inputs.get("__metadata", []), asset_library
-+				graph,
-+				node_id,
-+				inputs.get("in", []),
-+				inputs.get("__metadata", []),
-+				asset_library,
-+				replace_batch_assets
- 			)
- 			if not bool(materialized["ok"]):
- 				return materialized
+     if node.get_type() == "batch":
+         if batch_node_id.is_empty() or batch_node_id == node_id:
+             var materialized := _materialize_batch(
+-                graph, node_id, inputs.get("in", []), inputs.get("__metadata", []), asset_library
++                graph,
++                node_id,
++                inputs.get("in", []),
++                inputs.get("__metadata", []),
++                asset_library,
++                replace_batch_assets
+             )
+             if not bool(materialized["ok"]):
+                 return materialized
 @@ -71,7 +88,12 @@ func _run_node(
- 
- 
+
+
  func _materialize_batch(
--	graph: PFGraph, node_id: String, value: Variant, metadata: Variant, asset_library: Node
-+	graph: PFGraph,
-+	node_id: String,
-+	value: Variant,
-+	metadata: Variant,
-+	asset_library: Node,
-+	replace_batch_assets: bool
+-    graph: PFGraph, node_id: String, value: Variant, metadata: Variant, asset_library: Node
++    graph: PFGraph,
++    node_id: String,
++    value: Variant,
++    metadata: Variant,
++    asset_library: Node,
++    replace_batch_assets: bool
  ) -> Dictionary:
- 	var images := _image_array(value)
- 	if images.is_empty():
+     var images := _image_array(value)
+     if images.is_empty():
 @@ -89,7 +111,7 @@ func _materialize_batch(
- 		asset_ids.append(asset_id)
- 
- 	var params := graph.get_node_params(node_id)
--	var existing: Array = params.get("asset_ids", [])
-+	var existing: Array = [] if replace_batch_assets else _string_array(params.get("asset_ids", []))
- 	for asset_id in asset_ids:
- 		existing.append(asset_id)
- 	params["asset_ids"] = existing
+         asset_ids.append(asset_id)
+
+     var params := graph.get_node_params(node_id)
+-    var existing: Array = params.get("asset_ids", [])
++    var existing: Array = [] if replace_batch_assets else _string_array(params.get("asset_ids", []))
+     for asset_id in asset_ids:
+         existing.append(asset_id)
+     params["asset_ids"] = existing
 @@ -209,6 +231,16 @@ func _metadata_array(value: Variant) -> Array:
- 	return result
- 
- 
+     return result
+
+
 +func _string_array(value: Variant) -> Array:
-+	var result := []
-+	if value is Array:
-+		for item in value:
-+			var id := String(item)
-+			if not id.is_empty():
-+				result.append(id)
-+	return result
++    var result := []
++    if value is Array:
++        for item in value:
++            var id := String(item)
++            if not id.is_empty():
++                result.append(id)
++    return result
 +
 +
  func _edge_node(edge: Dictionary, key: String) -> String:
- 	var data: Array = edge.get(key, ["", ""])
- 	return String(data[0])
+     var data: Array = edge.get(key, ["", ""])
+     return String(data[0])
 diff --git a/pixel/tests/integration/test_graph_mock_runner.gd b/pixel/tests/integration/test_graph_mock_runner.gd
 index a29d0f7..ca71790 100644
 --- a/pixel/tests/integration/test_graph_mock_runner.gd
 +++ b/pixel/tests/integration/test_graph_mock_runner.gd
 @@ -33,6 +33,25 @@ func test_mock_generate_chain_materializes_images_into_batch_node() -> void:
- 	assert_eq(meta["provenance"]["seed"], 700)
- 
- 
+     assert_eq(meta["provenance"]["seed"], 700)
+
+
 +func test_mock_generate_chain_can_replace_existing_batch_assets() -> void:
-+	var graph := _make_mock_graph()
-+	var asset_library := get_tree().root.get_node("AssetLibrary")
-+	var runner := MockRunnerScript.new()
++    var graph := _make_mock_graph()
++    var asset_library := get_tree().root.get_node("AssetLibrary")
++    var runner := MockRunnerScript.new()
 +
-+	var first_result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
-+	assert_true(bool(first_result["ok"]))
-+	var first_ids: Array = graph.get_node_params("batch_1")["asset_ids"].duplicate()
-+	assert_eq(first_ids.size(), 10)
++    var first_result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
++    assert_true(bool(first_result["ok"]))
++    var first_ids: Array = graph.get_node_params("batch_1")["asset_ids"].duplicate()
++    assert_eq(first_ids.size(), 10)
 +
-+	var second_result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
-+	assert_true(bool(second_result["ok"]))
-+	var second_ids: Array = graph.get_node_params("batch_1")["asset_ids"]
++    var second_result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
++    assert_true(bool(second_result["ok"]))
++    var second_ids: Array = graph.get_node_params("batch_1")["asset_ids"]
 +
-+	assert_eq(second_result["asset_ids"].size(), 10)
-+	assert_eq(second_ids.size(), 10)
-+	assert_ne(second_ids, first_ids)
++    assert_eq(second_result["asset_ids"].size(), 10)
++    assert_eq(second_ids.size(), 10)
++    assert_ne(second_ids, first_ids)
 +
 +
  func test_mock_generate_chain_survives_project_roundtrip_after_materialization() -> void:
- 	var project_service := get_tree().root.get_node("ProjectService")
- 	var asset_library := get_tree().root.get_node("AssetLibrary")
+     var project_service := get_tree().root.get_node("ProjectService")
+     var asset_library := get_tree().root.get_node("AssetLibrary")
 diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
 index 2e30fa2..16b1d28 100644
 --- a/pixel/tests/smoke/test_main_window_ui.gd
 +++ b/pixel/tests/smoke/test_main_window_ui.gd
 @@ -245,9 +245,30 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
- 		assert_eq(canvas_item["type"], "node")
- 		assert_eq(canvas_item["graph_id"], graph_id)
- 
-+	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
-+	var first_asset_ids: Array = batch_node["params"]["asset_ids"].duplicate()
-+	canvas.select_ids([batch_item_id])
-+	controller.run_selected_mock_graph()
-+	await wait_process_frames(2)
+         assert_eq(canvas_item["type"], "node")
+         assert_eq(canvas_item["graph_id"], graph_id)
+
++    var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
++    var first_asset_ids: Array = batch_node["params"]["asset_ids"].duplicate()
++    canvas.select_ids([batch_item_id])
++    controller.run_selected_mock_graph()
++    await wait_process_frames(2)
 +
-+	graph_data = ProjectService.current_project.graphs[graph_id]
-+	batch_node = graph_data["nodes"][3]
-+	var rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
-+	assert_eq(rerun_asset_ids.size(), 10)
-+	assert_ne(rerun_asset_ids, first_asset_ids)
-+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
++    graph_data = ProjectService.current_project.graphs[graph_id]
++    batch_node = graph_data["nodes"][3]
++    var rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
++    assert_eq(rerun_asset_ids.size(), 10)
++    assert_ne(rerun_asset_ids, first_asset_ids)
++    assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
 +
- 
+
  func _node_ids_from_canvas_items(items: Array) -> Array:
- 	var node_ids := []
- 	for item in items:
- 		node_ids.append(String(Dictionary(item).get("node_id", "")))
- 	return node_ids
+     var node_ids := []
+     for item in items:
+         node_ids.append(String(Dictionary(item).get("node_id", "")))
+     return node_ids
 +
 +
 +func _item_id_for_node(items: Array, node_id: String) -> String:
-+	for item in items:
-+		var data: Dictionary = item
-+		if String(data.get("node_id", "")) == node_id:
-+			return String(data.get("id", ""))
-+	return ""
++    for item in items:
++        var data: Dictionary = item
++        if String(data.get("node_id", "")) == node_id:
++            return String(data.get("id", ""))
++    return ""
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index 58e6b2d..b39fd18 100644
 --- a/pixel/ui/shell/m2_1_ui_controller.gd
@@ -2923,105 +3424,105 @@ index 58e6b2d..b39fd18 100644
  const BATCH_MENU_MATTE := 1
  const BATCH_MENU_OUTLINE := 2
 @@ -92,6 +93,7 @@ func add_file_menu(parent: Control) -> void:
- 	var popup := file_menu_button.get_popup()
- 	popup.add_item(Strings.MENU_IMPORT_IMAGES, FILE_MENU_IMPORT_IMAGES)
- 	popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
-+	popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
- 	popup.add_separator()
- 	popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
- 	popup.add_item(Strings.ACTION_OPEN, FILE_MENU_OPEN)
+     var popup := file_menu_button.get_popup()
+     popup.add_item(Strings.MENU_IMPORT_IMAGES, FILE_MENU_IMPORT_IMAGES)
+     popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
++    popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
+     popup.add_separator()
+     popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
+     popup.add_item(Strings.ACTION_OPEN, FILE_MENU_OPEN)
 @@ -215,6 +217,42 @@ func generate_mock_batch() -> void:
- 	_status_label.text = Strings.STATUS_MOCK_GENERATE_DONE % asset_ids.size()
- 
- 
+     _status_label.text = Strings.STATUS_MOCK_GENERATE_DONE % asset_ids.size()
+
+
 +func run_selected_mock_graph() -> void:
-+	var binding := _selected_graph_binding()
-+	if binding.is_empty():
-+		_status_label.text = Strings.STATUS_GRAPH_RUN_NEEDS_SELECTION
-+		return
++    var binding := _selected_graph_binding()
++    if binding.is_empty():
++        _status_label.text = Strings.STATUS_GRAPH_RUN_NEEDS_SELECTION
++        return
 +
-+	var graph_id := String(binding["graph_id"])
-+	var graph_data := ProjectService.get_graph_data(graph_id)
-+	if graph_data.is_empty():
-+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
-+		return
++    var graph_id := String(binding["graph_id"])
++    var graph_data := ProjectService.get_graph_data(graph_id)
++    if graph_data.is_empty():
++        _status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++        return
 +
-+	var graph := GraphScript.from_json(graph_data)
-+	var batch_node_id := _first_batch_node_id(graph)
-+	if batch_node_id.is_empty():
-+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
-+		return
++    var graph := GraphScript.from_json(graph_data)
++    var batch_node_id := _first_batch_node_id(graph)
++    if batch_node_id.is_empty():
++        _status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++        return
 +
-+	var runner := GraphMockRunnerScript.new()
-+	var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, batch_node_id, true)
-+	if not bool(result.get("ok", false)):
-+		var error: Dictionary = result.get("error", {})
-+		Log.warn("Selected mock graph run failed", error)
-+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
-+		return
++    var runner := GraphMockRunnerScript.new()
++    var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, batch_node_id, true)
++    if not bool(result.get("ok", false)):
++        var error: Dictionary = result.get("error", {})
++        Log.warn("Selected mock graph run failed", error)
++        _status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++        return
 +
-+	var asset_ids: Array = result["asset_ids"]
-+	var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
-+	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
-+	if batch_card_id.is_empty():
-+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
-+		return
-+	_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
-+	_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
++    var asset_ids: Array = result["asset_ids"]
++    var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
++    ProjectService.set_graph_data(graph.id, graph.to_json(), true)
++    if batch_card_id.is_empty():
++        _status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++        return
++    _canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
++    _status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
 +
 +
  func show_onboarding_if_needed() -> void:
- 	if DisplayServer.get_name() == "headless":
- 		return
+     if DisplayServer.get_name() == "headless":
+         return
 @@ -276,6 +314,8 @@ func _on_file_menu_pressed(id: int) -> void:
- 			_import_dialog.popup_centered_ratio(0.7)
- 		FILE_MENU_GENERATE_MOCK_BATCH:
- 			generate_mock_batch()
-+		FILE_MENU_RUN_SELECTED_GRAPH:
-+			run_selected_mock_graph()
- 		FILE_MENU_NEW:
- 			_new_project_callback.call()
- 		FILE_MENU_OPEN:
+             _import_dialog.popup_centered_ratio(0.7)
+         FILE_MENU_GENERATE_MOCK_BATCH:
+             generate_mock_batch()
++        FILE_MENU_RUN_SELECTED_GRAPH:
++            run_selected_mock_graph()
+         FILE_MENU_NEW:
+             _new_project_callback.call()
+         FILE_MENU_OPEN:
 @@ -495,6 +535,39 @@ func _graph_node_position(graph: PFGraph, node_id: String) -> Vector2:
- 	return Vector2(float(raw_position[0]), float(raw_position[1])).round()
- 
- 
+     return Vector2(float(raw_position[0]), float(raw_position[1])).round()
+
+
 +func _first_batch_node_id(graph: PFGraph) -> String:
-+	for node_id in graph.nodes.keys():
-+		var node: PFNode = graph.get_node(String(node_id))
-+		if node != null and node.get_type() == "batch":
-+			return String(node_id)
-+	return ""
++    for node_id in graph.nodes.keys():
++        var node: PFNode = graph.get_node(String(node_id))
++        if node != null and node.get_type() == "batch":
++            return String(node_id)
++    return ""
 +
 +
 +func _selected_graph_binding() -> Dictionary:
-+	var selected_ids: Array = _canvas.get_selected_ids()
-+	for item in _canvas.export_canvas_data()["items"]:
-+		var item_data: Dictionary = item
-+		if not selected_ids.has(String(item_data.get("id", ""))):
-+			continue
-+		var graph_id := String(item_data.get("graph_id", ""))
-+		var node_id := String(item_data.get("node_id", ""))
-+		if graph_id.is_empty() or node_id.is_empty():
-+			continue
-+		return {"item_id": String(item_data["id"]), "graph_id": graph_id, "node_id": node_id}
-+	return {}
++    var selected_ids: Array = _canvas.get_selected_ids()
++    for item in _canvas.export_canvas_data()["items"]:
++        var item_data: Dictionary = item
++        if not selected_ids.has(String(item_data.get("id", ""))):
++            continue
++        var graph_id := String(item_data.get("graph_id", ""))
++        var node_id := String(item_data.get("node_id", ""))
++        if graph_id.is_empty() or node_id.is_empty():
++            continue
++        return {"item_id": String(item_data["id"]), "graph_id": graph_id, "node_id": node_id}
++    return {}
 +
 +
 +func _graph_batch_card_id(graph_id: String, batch_node_id: String) -> String:
-+	for item in _canvas.export_canvas_data()["items"]:
-+		var item_data: Dictionary = item
-+		if (
-+			String(item_data.get("graph_id", "")) == graph_id
-+			and String(item_data.get("node_id", "")) == batch_node_id
-+		):
-+			return String(item_data.get("id", ""))
-+	return ""
++    for item in _canvas.export_canvas_data()["items"]:
++        var item_data: Dictionary = item
++        if (
++            String(item_data.get("graph_id", "")) == graph_id
++            and String(item_data.get("node_id", "")) == batch_node_id
++        ):
++            return String(item_data.get("id", ""))
++    return ""
 +
 +
  func _show_onboarding_dialog() -> void:
- 	var dialog: AcceptDialog = OnboardingScript.show_first_run_tips(self)
- 	if dialog == null:
+     var dialog: AcceptDialog = OnboardingScript.show_first_run_tips(self)
+     if dialog == null:
 diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
 index 25d32a0..fa7475e 100644
 --- a/pixel/ui/shell/strings.gd
@@ -3125,102 +3626,102 @@ index 913ef43..bc96991 100644
 +++ b/pixel/tests/unit/test_canvas_batch_card.gd
 @@ -1,6 +1,7 @@
  extends "res://addons/gut/test.gd"
- 
+
  const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 +const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
  const GraphScript := preload("res://core/graph/pf_graph.gd")
  const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
  const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 @@ -37,6 +38,40 @@ func test_canvas_batch_card_exports_asset_queue_and_can_split_subset() -> void:
- 	assert_eq(canvas.get_item_count(), 2)
- 
- 
+     assert_eq(canvas.get_item_count(), 2)
+
+
 +func test_canvas_batch_card_marks_review_state_and_splits_kept_subset() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [
-+		_register_asset(Color.RED, "red"),
-+		_register_asset(Color.BLUE, "blue"),
-+		_register_asset(Color.GREEN, "green"),
-+	]
-+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++    var ids := [
++        _register_asset(Color.RED, "red"),
++        _register_asset(Color.BLUE, "blue"),
++        _register_asset(Color.GREEN, "green"),
++    ]
++    var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 +
-+	assert_eq(
-+		canvas._set_batch_review_state(
-+			"batch_1", [ids[0], ids[2]], CanvasBatchCardScript.REVIEW_KEEP, false
-+		),
-+		2
-+	)
-+	assert_eq(card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_KEEP), [ids[0], ids[2]])
++    assert_eq(
++        canvas._set_batch_review_state(
++            "batch_1", [ids[0], ids[2]], CanvasBatchCardScript.REVIEW_KEEP, false
++        ),
++        2
++    )
++    assert_eq(card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_KEEP), [ids[0], ids[2]])
 +
-+	var data: Dictionary = canvas.export_canvas_data()
-+	var item: Dictionary = data["items"][0]
-+	assert_eq(item["review_states"][ids[0]], CanvasBatchCardScript.REVIEW_KEEP)
-+	assert_eq(item["review_states"][ids[2]], CanvasBatchCardScript.REVIEW_KEEP)
++    var data: Dictionary = canvas.export_canvas_data()
++    var item: Dictionary = data["items"][0]
++    assert_eq(item["review_states"][ids[0]], CanvasBatchCardScript.REVIEW_KEEP)
++    assert_eq(item["review_states"][ids[2]], CanvasBatchCardScript.REVIEW_KEEP)
 +
-+	var child: Node = canvas._split_batch_marked(
-+		"batch_1", CanvasBatchCardScript.REVIEW_KEEP, "keep"
-+	)
-+	assert_not_null(child)
-+	assert_eq(child.asset_ids, [ids[0], ids[2]])
-+	assert_eq(canvas.get_item_count(), 2)
++    var child: Node = canvas._split_batch_marked(
++        "batch_1", CanvasBatchCardScript.REVIEW_KEEP, "keep"
++    )
++    assert_not_null(child)
++    assert_eq(child.asset_ids, [ids[0], ids[2]])
++    assert_eq(canvas.get_item_count(), 2)
 +
 +
  func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 @@ -81,6 +116,48 @@ func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement()
- 	assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), [green_id])
- 
- 
+     assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), [green_id])
+
+
 +func test_graph_batch_card_persists_review_state_in_graph_params() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
-+	var graph := GraphScript.new()
-+	graph.id = "graph_batch_review_test"
-+	graph.add_node(
-+		BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
-+	)
-+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++    var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++    var graph := GraphScript.new()
++    graph.id = "graph_batch_review_test"
++    graph.add_node(
++        BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
++    )
++    ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 +
-+	var card: Node = canvas._add_batch_card(
-+		ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
-+	)
-+	assert_eq(
-+		canvas._set_batch_review_state(
-+			"node_item_1", [ids[1]], CanvasBatchCardScript.REVIEW_FLAG, false
-+		),
-+		1
-+	)
-+	assert_eq(card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_FLAG), [ids[1]])
++    var card: Node = canvas._add_batch_card(
++        ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
++    )
++    assert_eq(
++        canvas._set_batch_review_state(
++            "node_item_1", [ids[1]], CanvasBatchCardScript.REVIEW_FLAG, false
++        ),
++        1
++    )
++    assert_eq(card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_FLAG), [ids[1]])
 +
-+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
-+	var batch_node: Dictionary = graph_data["nodes"][0]
-+	assert_eq(batch_node["params"]["review_states"][ids[1]], CanvasBatchCardScript.REVIEW_FLAG)
++    var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
++    var batch_node: Dictionary = graph_data["nodes"][0]
++    assert_eq(batch_node["params"]["review_states"][ids[1]], CanvasBatchCardScript.REVIEW_FLAG)
 +
-+	var canvas_data: Dictionary = canvas.export_canvas_data()
-+	assert_false(Dictionary(canvas_data["items"][0]).has("review_states"))
++    var canvas_data: Dictionary = canvas.export_canvas_data()
++    assert_false(Dictionary(canvas_data["items"][0]).has("review_states"))
 +
-+	var reloaded_canvas: Control = CanvasScript.new()
-+	reloaded_canvas.size = Vector2(512, 512)
-+	add_child_autofree(reloaded_canvas)
-+	await wait_process_frames(2)
-+	reloaded_canvas.load_canvas_data(canvas_data)
-+	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
++    var reloaded_canvas: Control = CanvasScript.new()
++    reloaded_canvas.size = Vector2(512, 512)
++    add_child_autofree(reloaded_canvas)
++    await wait_process_frames(2)
++    reloaded_canvas.load_canvas_data(canvas_data)
++    var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
 +
-+	assert_eq(reloaded_card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_FLAG), [ids[1]])
++    assert_eq(reloaded_card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_FLAG), [ids[1]])
 +
 +
  func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
 index 426b25d..176a229 100644
 --- a/pixel/ui/canvas/canvas_batch_card.gd
@@ -3238,7 +3739,7 @@ index 426b25d..176a229 100644
 +const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
  const INPUT_PORTS: Array[String] = ["in"]
  const OUTPUT_PORTS: Array[String] = ["images", "assets"]
- 
+
 @@ -27,6 +34,7 @@ var graph_id := ""
  var node_id := ""
  var asset_ids: Array[String] = []
@@ -3246,128 +3747,128 @@ index 426b25d..176a229 100644
 +var review_states := {}
  var label := ""
  var locked := false
- 
+
 @@ -43,6 +51,9 @@ func setup_from_data(data: Dictionary) -> void:
- 	label = String(graph_params.get("label", data.get("label", "Batch")))
- 	asset_ids = _string_array(graph_params.get("asset_ids", data.get("asset_ids", [])))
- 	selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
-+	review_states = _review_state_map(
-+		graph_params.get("review_states", data.get("review_states", {})), asset_ids
-+	)
- 	locked = bool(data.get("locked", false))
- 	z_index = int(data.get("z_index", 0))
- 	var raw_position: Variant = data.get("position", [0, 0])
+     label = String(graph_params.get("label", data.get("label", "Batch")))
+     asset_ids = _string_array(graph_params.get("asset_ids", data.get("asset_ids", [])))
+     selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
++    review_states = _review_state_map(
++        graph_params.get("review_states", data.get("review_states", {})), asset_ids
++    )
+     locked = bool(data.get("locked", false))
+     z_index = int(data.get("z_index", 0))
+     var raw_position: Variant = data.get("position", [0, 0])
 @@ -69,6 +80,7 @@ func to_canvas_data() -> Dictionary:
- 		"type": "batch_card",
- 		"asset_ids": asset_ids.duplicate(),
- 		"selected_asset_ids": selected_asset_ids.duplicate(),
-+		"review_states": review_states.duplicate(true),
- 		"label": label,
- 		"position": [int(round(position.x)), int(round(position.y))],
- 		"z_index": z_index,
+         "type": "batch_card",
+         "asset_ids": asset_ids.duplicate(),
+         "selected_asset_ids": selected_asset_ids.duplicate(),
++        "review_states": review_states.duplicate(true),
+         "label": label,
+         "position": [int(round(position.x)), int(round(position.y))],
+         "z_index": z_index,
 @@ -104,16 +116,39 @@ func set_asset_ids(new_asset_ids: Array) -> void:
- 	for selected_id in selected_asset_ids.duplicate():
- 		if not asset_ids.has(selected_id):
- 			selected_asset_ids.erase(selected_id)
-+	review_states = _review_state_map(review_states, asset_ids)
- 	_rebuild_thumbnails()
- 	queue_redraw()
- 
- 
+     for selected_id in selected_asset_ids.duplicate():
+         if not asset_ids.has(selected_id):
+             selected_asset_ids.erase(selected_id)
++    review_states = _review_state_map(review_states, asset_ids)
+     _rebuild_thumbnails()
+     queue_redraw()
+
+
 +func get_selected_asset_ids() -> Array[String]:
-+	return selected_asset_ids.duplicate()
++    return selected_asset_ids.duplicate()
 +
 +
  func get_selected_or_all_asset_ids() -> Array[String]:
- 	if selected_asset_ids.is_empty():
- 		return asset_ids.duplicate()
- 	return selected_asset_ids.duplicate()
- 
- 
+     if selected_asset_ids.is_empty():
+         return asset_ids.duplicate()
+     return selected_asset_ids.duplicate()
+
+
 +func get_marked_asset_ids(review_state: String) -> Array[String]:
-+	var normalized_state := _normalize_review_state(review_state)
-+	var result: Array[String] = []
-+	for asset_id in asset_ids:
-+		if String(review_states.get(asset_id, REVIEW_NONE)) == normalized_state:
-+			result.append(asset_id)
-+	return result
++    var normalized_state := _normalize_review_state(review_state)
++    var result: Array[String] = []
++    for asset_id in asset_ids:
++        if String(review_states.get(asset_id, REVIEW_NONE)) == normalized_state:
++            result.append(asset_id)
++    return result
 +
 +
 +func get_review_states() -> Dictionary:
-+	return review_states.duplicate(true)
++    return review_states.duplicate(true)
 +
 +
 +func set_review_states(new_review_states: Dictionary) -> void:
-+	review_states = _review_state_map(new_review_states, asset_ids)
-+	queue_redraw()
++    review_states = _review_state_map(new_review_states, asset_ids)
++    queue_redraw()
 +
 +
  func toggle_asset_at_world(world_position: Vector2) -> bool:
- 	var index := asset_index_at_world(world_position)
- 	if index < 0 or index >= asset_ids.size():
+     var index := asset_index_at_world(world_position)
+     if index < 0 or index >= asset_ids.size():
 @@ -177,6 +212,32 @@ func _draw_thumbnail(index: int, rect: Rect2) -> void:
- 		draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
- 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
- 	draw_rect(rect, border_color, false, 1.5)
-+	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
+         draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
+     var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
+     draw_rect(rect, border_color, false, 1.5)
++    _draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
 +
 +
 +func _draw_review_marker(rect: Rect2, review_state: String) -> void:
-+	match _normalize_review_state(review_state):
-+		REVIEW_KEEP:
-+			draw_rect(Rect2(rect.position, Vector2(7.0, rect.size.y)), KEEP_MARK, true)
-+		REVIEW_REJECT:
-+			draw_line(rect.position + Vector2(8, 8), rect.end - Vector2(8, 8), REJECT_MARK, 4.0)
-+			draw_line(
-+				Vector2(rect.end.x - 8, rect.position.y + 8),
-+				Vector2(rect.position.x + 8, rect.end.y - 8),
-+				REJECT_MARK,
-+				4.0
-+			)
-+		REVIEW_FLAG:
-+			draw_colored_polygon(
-+				PackedVector2Array(
-+					[
-+						rect.position + Vector2(rect.size.x - 30.0, 0.0),
-+						rect.position + Vector2(rect.size.x, 0.0),
-+						rect.position + Vector2(rect.size.x, 30.0),
-+					]
-+				),
-+				FLAG_MARK
-+			)
- 
- 
++    match _normalize_review_state(review_state):
++        REVIEW_KEEP:
++            draw_rect(Rect2(rect.position, Vector2(7.0, rect.size.y)), KEEP_MARK, true)
++        REVIEW_REJECT:
++            draw_line(rect.position + Vector2(8, 8), rect.end - Vector2(8, 8), REJECT_MARK, 4.0)
++            draw_line(
++                Vector2(rect.end.x - 8, rect.position.y + 8),
++                Vector2(rect.position.x + 8, rect.end.y - 8),
++                REJECT_MARK,
++                4.0
++            )
++        REVIEW_FLAG:
++            draw_colored_polygon(
++                PackedVector2Array(
++                    [
++                        rect.position + Vector2(rect.size.x - 30.0, 0.0),
++                        rect.position + Vector2(rect.size.x, 0.0),
++                        rect.position + Vector2(rect.size.x, 30.0),
++                    ]
++                ),
++                FLAG_MARK
++            )
+
+
  func _thumb_rect(index: int, columns: int) -> Rect2:
 @@ -259,3 +320,29 @@ func _string_array(value: Variant) -> Array[String]:
- 		for item in Array(value):
- 			result.append(String(item))
- 	return result
+         for item in Array(value):
+             result.append(String(item))
+     return result
 +
 +
 +func _review_state_map(value: Variant, valid_asset_ids: Array[String]) -> Dictionary:
-+	var result := {}
-+	if not (value is Dictionary):
-+		return result
-+	var valid_lookup := {}
-+	for asset_id in valid_asset_ids:
-+		valid_lookup[asset_id] = true
-+	var raw_states: Dictionary = value
-+	for key in raw_states.keys():
-+		var asset_id := String(key)
-+		if not valid_lookup.has(asset_id):
-+			continue
-+		var review_state := _normalize_review_state(String(raw_states[key]))
-+		if not review_state.is_empty():
-+			result[asset_id] = review_state
-+	return result
++    var result := {}
++    if not (value is Dictionary):
++        return result
++    var valid_lookup := {}
++    for asset_id in valid_asset_ids:
++        valid_lookup[asset_id] = true
++    var raw_states: Dictionary = value
++    for key in raw_states.keys():
++        var asset_id := String(key)
++        if not valid_lookup.has(asset_id):
++            continue
++        var review_state := _normalize_review_state(String(raw_states[key]))
++        if not review_state.is_empty():
++            result[asset_id] = review_state
++    return result
 +
 +
 +func _normalize_review_state(review_state: String) -> String:
-+	match review_state:
-+		REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
-+			return review_state
-+		_:
-+			return REVIEW_NONE
++    match review_state:
++        REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
++            return review_state
++        _:
++            return REVIEW_NONE
 diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
 new file mode 100644
 index 0000000..99403b0
@@ -3386,169 +3887,169 @@ index 0000000..99403b0
 +
 +
 +static func get_asset_ids(
-+	items_by_id: Dictionary, card_id: String, selected_only: bool = false
++    items_by_id: Dictionary, card_id: String, selected_only: bool = false
 +) -> Array:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return []
-+	if selected_only:
-+		return item.get_selected_or_all_asset_ids()
-+	return item.asset_ids.duplicate()
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return []
++    if selected_only:
++        return item.get_selected_or_all_asset_ids()
++    return item.asset_ids.duplicate()
 +
 +
 +static func get_selected_asset_ids(items_by_id: Dictionary, card_id: String) -> Array:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return []
-+	return item.get_selected_asset_ids()
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return []
++    return item.get_selected_asset_ids()
 +
 +
 +static func get_marked_asset_ids(
-+	items_by_id: Dictionary, card_id: String, review_state: String
++    items_by_id: Dictionary, card_id: String, review_state: String
 +) -> Array:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return []
-+	return item.get_marked_asset_ids(review_state)
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return []
++    return item.get_marked_asset_ids(review_state)
 +
 +
 +static func replace_asset_ids(
-+	items_by_id: Dictionary,
-+	card_id: String,
-+	new_asset_ids: Array,
-+	record_undo: bool,
-+	select_only: Callable,
-+	emit_changed: Callable
++    items_by_id: Dictionary,
++    card_id: String,
++    new_asset_ids: Array,
++    record_undo: bool,
++    select_only: Callable,
++    emit_changed: Callable
 +) -> void:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return
-+	var before: Array = item.asset_ids.duplicate()
-+	var before_review_states: Dictionary = item.get_review_states()
-+	var after := new_asset_ids.duplicate()
-+	var after_review_states := {}
-+	var do_replace := func() -> void:
-+		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
-+		_apply_review_states(item, after_review_states)
-+		GraphItemBridge.sync_batch_node_asset_ids(item, after)
-+		GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
-+		select_only.call([card_id])
-+		emit_changed.call()
-+	var undo_replace := func() -> void:
-+		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
-+		_apply_review_states(item, before_review_states)
-+		GraphItemBridge.sync_batch_node_asset_ids(item, before)
-+		GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
-+		select_only.call([card_id])
-+		emit_changed.call()
-+	if record_undo:
-+		UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
-+	else:
-+		do_replace.call()
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return
++    var before: Array = item.asset_ids.duplicate()
++    var before_review_states: Dictionary = item.get_review_states()
++    var after := new_asset_ids.duplicate()
++    var after_review_states := {}
++    var do_replace := func() -> void:
++        GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
++        _apply_review_states(item, after_review_states)
++        GraphItemBridge.sync_batch_node_asset_ids(item, after)
++        GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
++        select_only.call([card_id])
++        emit_changed.call()
++    var undo_replace := func() -> void:
++        GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
++        _apply_review_states(item, before_review_states)
++        GraphItemBridge.sync_batch_node_asset_ids(item, before)
++        GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
++        select_only.call([card_id])
++        emit_changed.call()
++    if record_undo:
++        UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
++    else:
++        do_replace.call()
 +
 +
 +static func set_review_state(
-+	items_by_id: Dictionary,
-+	card_id: String,
-+	asset_ids: Array,
-+	review_state: String,
-+	record_undo: bool,
-+	select_only: Callable,
-+	emit_changed: Callable
++    items_by_id: Dictionary,
++    card_id: String,
++    asset_ids: Array,
++    review_state: String,
++    record_undo: bool,
++    select_only: Callable,
++    emit_changed: Callable
 +) -> int:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return 0
-+	var target_ids := _valid_target_ids(item, asset_ids)
-+	if target_ids.is_empty():
-+		return 0
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return 0
++    var target_ids := _valid_target_ids(item, asset_ids)
++    if target_ids.is_empty():
++        return 0
 +
-+	var before: Dictionary = item.get_review_states()
-+	var after := before.duplicate(true)
-+	var normalized_state := _normalize_review_state(review_state)
-+	for asset_id in target_ids:
-+		if normalized_state.is_empty():
-+			after.erase(asset_id)
-+		else:
-+			after[asset_id] = normalized_state
++    var before: Dictionary = item.get_review_states()
++    var after := before.duplicate(true)
++    var normalized_state := _normalize_review_state(review_state)
++    for asset_id in target_ids:
++        if normalized_state.is_empty():
++            after.erase(asset_id)
++        else:
++            after[asset_id] = normalized_state
 +
-+	var do_mark := func() -> void:
-+		_apply_review_states(item, after)
-+		GraphItemBridge.sync_batch_node_review_states(item, after)
-+		select_only.call([card_id])
-+		emit_changed.call()
-+	var undo_mark := func() -> void:
-+		_apply_review_states(item, before)
-+		GraphItemBridge.sync_batch_node_review_states(item, before)
-+		select_only.call([card_id])
-+		emit_changed.call()
++    var do_mark := func() -> void:
++        _apply_review_states(item, after)
++        GraphItemBridge.sync_batch_node_review_states(item, after)
++        select_only.call([card_id])
++        emit_changed.call()
++    var undo_mark := func() -> void:
++        _apply_review_states(item, before)
++        GraphItemBridge.sync_batch_node_review_states(item, before)
++        select_only.call([card_id])
++        emit_changed.call()
 +
-+	if record_undo:
-+		UndoService.perform_action("Mark batch review state", do_mark, undo_mark)
-+	else:
-+		do_mark.call()
-+	return target_ids.size()
++    if record_undo:
++        UndoService.perform_action("Mark batch review state", do_mark, undo_mark)
++    else:
++        do_mark.call()
++    return target_ids.size()
 +
 +
 +static func split_selection_spec(items_by_id: Dictionary, card_id: String) -> Dictionary:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return {}
-+	return _split_spec(item, item.get_selected_or_all_asset_ids(), "subset")
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return {}
++    return _split_spec(item, item.get_selected_or_all_asset_ids(), "subset")
 +
 +
 +static func split_marked_spec(
-+	items_by_id: Dictionary, card_id: String, review_state: String, label_suffix: String
++    items_by_id: Dictionary, card_id: String, review_state: String, label_suffix: String
 +) -> Dictionary:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return {}
-+	return _split_spec(item, item.get_marked_asset_ids(review_state), label_suffix)
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return {}
++    return _split_spec(item, item.get_marked_asset_ids(review_state), label_suffix)
 +
 +
 +static func _batch_item(items_by_id: Dictionary, card_id: String) -> Node:
-+	if not items_by_id.has(card_id):
-+		return null
-+	var item: Node = items_by_id[card_id]
-+	if item.get_script() != CanvasBatchCardScript:
-+		return null
-+	return item
++    if not items_by_id.has(card_id):
++        return null
++    var item: Node = items_by_id[card_id]
++    if item.get_script() != CanvasBatchCardScript:
++        return null
++    return item
 +
 +
 +static func _valid_target_ids(item: Node, asset_ids: Array) -> Array:
-+	var result := []
-+	for raw_id in asset_ids:
-+		var asset_id := String(raw_id)
-+		if item.asset_ids.has(asset_id) and not result.has(asset_id):
-+			result.append(asset_id)
-+	return result
++    var result := []
++    for raw_id in asset_ids:
++        var asset_id := String(raw_id)
++        if item.asset_ids.has(asset_id) and not result.has(asset_id):
++            result.append(asset_id)
++    return result
 +
 +
 +static func _split_spec(item: Node, subset: Array, label_suffix: String) -> Dictionary:
-+	if subset.is_empty() or subset.size() == item.asset_ids.size():
-+		return {}
-+	return {
-+		"asset_ids": subset,
-+		"position": item.position + Vector2(item.get_canvas_bounds().size.x + SPLIT_GAP, 0.0),
-+		"label": "%s %s" % [item.label, label_suffix],
-+	}
++    if subset.is_empty() or subset.size() == item.asset_ids.size():
++        return {}
++    return {
++        "asset_ids": subset,
++        "position": item.position + Vector2(item.get_canvas_bounds().size.x + SPLIT_GAP, 0.0),
++        "label": "%s %s" % [item.label, label_suffix],
++    }
 +
 +
 +static func _apply_review_states(item: Node, review_states: Dictionary) -> void:
-+	item.set_review_states(review_states)
++    item.set_review_states(review_states)
 +
 +
 +static func _normalize_review_state(review_state: String) -> String:
-+	if (
-+		review_state
-+		in [
-+			CanvasBatchCardScript.REVIEW_KEEP,
-+			CanvasBatchCardScript.REVIEW_REJECT,
-+			CanvasBatchCardScript.REVIEW_FLAG,
-+		]
-+	):
-+		return review_state
-+	return CanvasBatchCardScript.REVIEW_NONE
++    if (
++        review_state
++        in [
++            CanvasBatchCardScript.REVIEW_KEEP,
++            CanvasBatchCardScript.REVIEW_REJECT,
++            CanvasBatchCardScript.REVIEW_FLAG,
++        ]
++    ):
++        return review_state
++    return CanvasBatchCardScript.REVIEW_NONE
 diff --git a/pixel/ui/canvas/canvas_batch_ops.gd.uid b/pixel/ui/canvas/canvas_batch_ops.gd.uid
 new file mode 100644
 index 0000000..dbe60e0
@@ -3561,65 +4062,65 @@ index 9cbd4de..5371ed5 100644
 --- a/pixel/ui/canvas/canvas_graph_item_bridge.gd
 +++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd
 @@ -52,6 +52,37 @@ static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
- 		):
- 			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
- 			params["asset_ids"] = _string_array(asset_ids)
-+			params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
-+			node_data["params"] = params
-+			changed = true
-+		nodes.append(node_data)
+         ):
+             var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+             params["asset_ids"] = _string_array(asset_ids)
++            params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
++            node_data["params"] = params
++            changed = true
++        nodes.append(node_data)
 +
-+	if changed:
-+		graph_data["nodes"] = nodes
-+		ProjectService.set_graph_data(item.graph_id, graph_data, true)
++    if changed:
++        graph_data["nodes"] = nodes
++        ProjectService.set_graph_data(item.graph_id, graph_data, true)
 +
 +
 +static func sync_batch_node_review_states(item: Node, review_states: Dictionary) -> void:
-+	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-+		return
++    if not item.has_method("has_graph_binding") or not item.has_graph_binding():
++        return
 +
-+	var graph_data := ProjectService.get_graph_data(item.graph_id)
-+	if graph_data.is_empty():
-+		return
++    var graph_data := ProjectService.get_graph_data(item.graph_id)
++    if graph_data.is_empty():
++        return
 +
-+	var nodes := []
-+	var changed := false
-+	for raw_node in graph_data.get("nodes", []):
-+		if not (raw_node is Dictionary):
-+			nodes.append(raw_node)
-+			continue
-+		var node_data: Dictionary = raw_node
-+		if (
-+			String(node_data.get("id", "")) == item.node_id
-+			and String(node_data.get("type", "")) == "batch"
-+		):
-+			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-+			params["review_states"] = _review_state_map(review_states, params.get("asset_ids", []))
- 			node_data["params"] = params
- 			changed = true
- 		nodes.append(node_data)
++    var nodes := []
++    var changed := false
++    for raw_node in graph_data.get("nodes", []):
++        if not (raw_node is Dictionary):
++            nodes.append(raw_node)
++            continue
++        var node_data: Dictionary = raw_node
++        if (
++            String(node_data.get("id", "")) == item.node_id
++            and String(node_data.get("type", "")) == "batch"
++        ):
++            var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
++            params["review_states"] = _review_state_map(review_states, params.get("asset_ids", []))
+             node_data["params"] = params
+             changed = true
+         nodes.append(node_data)
 @@ -69,3 +100,21 @@ static func _string_array(value: Variant) -> Array[String]:
- 			if not id.is_empty():
- 				result.append(id)
- 	return result
+             if not id.is_empty():
+                 result.append(id)
+     return result
 +
 +
 +static func _review_state_map(value: Variant, valid_asset_ids: Variant) -> Dictionary:
-+	var result := {}
-+	if not (value is Dictionary):
-+		return result
-+	var valid_lookup := {}
-+	for asset_id in _string_array(valid_asset_ids):
-+		valid_lookup[asset_id] = true
-+	var raw_states: Dictionary = value
-+	for key in raw_states.keys():
-+		var asset_id := String(key)
-+		if not valid_lookup.has(asset_id):
-+			continue
-+		var review_state := String(raw_states[key])
-+		if review_state in ["keep", "reject", "flag"]:
-+			result[asset_id] = review_state
-+	return result
++    var result := {}
++    if not (value is Dictionary):
++        return result
++    var valid_lookup := {}
++    for asset_id in _string_array(valid_asset_ids):
++        valid_lookup[asset_id] = true
++    var raw_states: Dictionary = value
++    for key in raw_states.keys():
++        var asset_id := String(key)
++        if not valid_lookup.has(asset_id):
++            continue
++        var review_state := String(raw_states[key])
++        if review_state in ["keep", "reject", "flag"]:
++            result[asset_id] = review_state
++    return result
 diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
 index 10ef29b..0a76239 100644
 --- a/pixel/ui/canvas/infinite_canvas.gd
@@ -3633,100 +4134,100 @@ index 10ef29b..0a76239 100644
  const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
  const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
 @@ -480,58 +481,53 @@ func _get_active_tool_target() -> Dictionary:
- 
- 
+
+
  func _get_batch_asset_ids(card_id: String, selected_only: bool = false) -> Array:
--	if not _items_by_id.has(card_id):
--		return []
--	var item: Node = _items_by_id[card_id]
--	if item.get_script() != CanvasBatchCardScript:
--		return []
--	if selected_only:
--		return item.get_selected_or_all_asset_ids()
--	return item.asset_ids.duplicate()
-+	return BatchOps.get_asset_ids(_items_by_id, card_id, selected_only)
+-    if not _items_by_id.has(card_id):
+-        return []
+-    var item: Node = _items_by_id[card_id]
+-    if item.get_script() != CanvasBatchCardScript:
+-        return []
+-    if selected_only:
+-        return item.get_selected_or_all_asset_ids()
+-    return item.asset_ids.duplicate()
++    return BatchOps.get_asset_ids(_items_by_id, card_id, selected_only)
 +
 +
 +func _get_batch_selected_asset_ids(card_id: String) -> Array:
-+	return BatchOps.get_selected_asset_ids(_items_by_id, card_id)
++    return BatchOps.get_selected_asset_ids(_items_by_id, card_id)
 +
 +
 +func _get_batch_marked_asset_ids(card_id: String, review_state: String) -> Array:
-+	return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
- 
- 
++    return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
+
+
  func _replace_batch_asset_ids(
- 	card_id: String, new_asset_ids: Array, record_undo: bool = true
+     card_id: String, new_asset_ids: Array, record_undo: bool = true
  ) -> void:
--	if not _items_by_id.has(card_id):
--		return
--	var item: Node = _items_by_id[card_id]
--	if item.get_script() != CanvasBatchCardScript:
--		return
--	var before: Array = item.asset_ids.duplicate()
--	var after := new_asset_ids.duplicate()
--	var do_replace := func() -> void:
--		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
--		GraphItemBridge.sync_batch_node_asset_ids(item, after)
--		_select_only([card_id])
--		_emit_canvas_changed()
--	var undo_replace := func() -> void:
--		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
--		GraphItemBridge.sync_batch_node_asset_ids(item, before)
--		_select_only([card_id])
--		_emit_canvas_changed()
--	if record_undo:
--		UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
--	else:
--		do_replace.call()
-+	BatchOps.replace_asset_ids(
-+		_items_by_id, card_id, new_asset_ids, record_undo, _select_only, _emit_canvas_changed
-+	)
+-    if not _items_by_id.has(card_id):
+-        return
+-    var item: Node = _items_by_id[card_id]
+-    if item.get_script() != CanvasBatchCardScript:
+-        return
+-    var before: Array = item.asset_ids.duplicate()
+-    var after := new_asset_ids.duplicate()
+-    var do_replace := func() -> void:
+-        GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
+-        GraphItemBridge.sync_batch_node_asset_ids(item, after)
+-        _select_only([card_id])
+-        _emit_canvas_changed()
+-    var undo_replace := func() -> void:
+-        GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
+-        GraphItemBridge.sync_batch_node_asset_ids(item, before)
+-        _select_only([card_id])
+-        _emit_canvas_changed()
+-    if record_undo:
+-        UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
+-    else:
+-        do_replace.call()
++    BatchOps.replace_asset_ids(
++        _items_by_id, card_id, new_asset_ids, record_undo, _select_only, _emit_canvas_changed
++    )
 +
 +
 +func _set_batch_review_state(
-+	card_id: String, asset_ids: Array, review_state: String, record_undo: bool = true
++    card_id: String, asset_ids: Array, review_state: String, record_undo: bool = true
 +) -> int:
-+	return BatchOps.set_review_state(
-+		_items_by_id,
-+		card_id,
-+		asset_ids,
-+		review_state,
-+		record_undo,
-+		_select_only,
-+		_emit_canvas_changed
-+	)
- 
- 
++    return BatchOps.set_review_state(
++        _items_by_id,
++        card_id,
++        asset_ids,
++        review_state,
++        record_undo,
++        _select_only,
++        _emit_canvas_changed
++    )
+
+
  func _split_batch_selection(card_id: String) -> Node:
--	if not _items_by_id.has(card_id):
--		return null
--	var item: Node = _items_by_id[card_id]
--	if item.get_script() != CanvasBatchCardScript:
-+	var spec: Dictionary = BatchOps.split_selection_spec(_items_by_id, card_id)
-+	if spec.is_empty():
- 		return null
--	var subset: Array = item.get_selected_or_all_asset_ids()
--	if subset.is_empty() or subset.size() == item.asset_ids.size():
--		return null
--	return _add_batch_card(
--		subset,
--		item.position + Vector2(item.get_canvas_bounds().size.x + 24.0, 0.0),
--		"%s subset" % item.label,
--		"",
--		true
-+	return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
+-    if not _items_by_id.has(card_id):
+-        return null
+-    var item: Node = _items_by_id[card_id]
+-    if item.get_script() != CanvasBatchCardScript:
++    var spec: Dictionary = BatchOps.split_selection_spec(_items_by_id, card_id)
++    if spec.is_empty():
+         return null
+-    var subset: Array = item.get_selected_or_all_asset_ids()
+-    if subset.is_empty() or subset.size() == item.asset_ids.size():
+-        return null
+-    return _add_batch_card(
+-        subset,
+-        item.position + Vector2(item.get_canvas_bounds().size.x + 24.0, 0.0),
+-        "%s subset" % item.label,
+-        "",
+-        true
++    return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
 +
 +
 +func _split_batch_marked(card_id: String, review_state: String, label_suffix: String) -> Node:
-+	var spec: Dictionary = BatchOps.split_marked_spec(
-+		_items_by_id, card_id, review_state, label_suffix
- 	)
-+	if spec.is_empty():
-+		return null
-+	return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
- 
- 
++    var spec: Dictionary = BatchOps.split_marked_spec(
++        _items_by_id, card_id, review_state, label_suffix
+     )
++    if spec.is_empty():
++        return null
++    return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
+
+
  func show_cleanup_preview(
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index b39fd18..fd0cf59 100644
@@ -3739,7 +4240,7 @@ index b39fd18..fd0cf59 100644
 +const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
  const IdUtil := preload("res://core/util/id_util.gd")
  const Log := preload("res://core/util/log_util.gd")
- 
+
 @@ -42,6 +43,11 @@ const BATCH_MENU_MATTE := 1
  const BATCH_MENU_OUTLINE := 2
  const BATCH_MENU_SPLIT := 3
@@ -3750,78 +4251,78 @@ index b39fd18..fd0cf59 100644
 +const BATCH_MENU_CLEAR_MARK := 8
 +const BATCH_MENU_SPLIT_KEEP := 9
  const SELECTION_TOOLS_VISIBLE := false
- 
+
  var _canvas: Control = null
 @@ -292,7 +298,14 @@ func _create_batch_menu() -> void:
- 	_batch_menu.add_item(Strings.BATCH_ACTION_MATTE, BATCH_MENU_MATTE)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_OUTLINE, BATCH_MENU_OUTLINE)
- 	_batch_menu.add_separator()
-+	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_KEEP, BATCH_MENU_MARK_KEEP)
-+	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_REJECT, BATCH_MENU_MARK_REJECT)
-+	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_FLAG, BATCH_MENU_MARK_FLAG)
-+	_batch_menu.add_item(Strings.BATCH_ACTION_CLEAR_MARK, BATCH_MENU_CLEAR_MARK)
-+	_batch_menu.add_separator()
-+	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
-+	_batch_menu.add_separator()
- 	_batch_menu.add_item(Strings.BATCH_ACTION_EXPORT, BATCH_MENU_EXPORT)
- 	_batch_menu.id_pressed.connect(_on_batch_menu_id_pressed)
- 	add_child(_batch_menu)
+     _batch_menu.add_item(Strings.BATCH_ACTION_MATTE, BATCH_MENU_MATTE)
+     _batch_menu.add_item(Strings.BATCH_ACTION_OUTLINE, BATCH_MENU_OUTLINE)
+     _batch_menu.add_separator()
++    _batch_menu.add_item(Strings.BATCH_ACTION_MARK_KEEP, BATCH_MENU_MARK_KEEP)
++    _batch_menu.add_item(Strings.BATCH_ACTION_MARK_REJECT, BATCH_MENU_MARK_REJECT)
++    _batch_menu.add_item(Strings.BATCH_ACTION_MARK_FLAG, BATCH_MENU_MARK_FLAG)
++    _batch_menu.add_item(Strings.BATCH_ACTION_CLEAR_MARK, BATCH_MENU_CLEAR_MARK)
++    _batch_menu.add_separator()
++    _batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
+     _batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
++    _batch_menu.add_separator()
+     _batch_menu.add_item(Strings.BATCH_ACTION_EXPORT, BATCH_MENU_EXPORT)
+     _batch_menu.id_pressed.connect(_on_batch_menu_id_pressed)
+     add_child(_batch_menu)
 @@ -395,6 +408,33 @@ func _on_batch_menu_id_pressed(id: int) -> void:
- 			_m2_actions.batch_outline(
- 				_batch_menu_card_id, asset_ids, {"type": "outer", "color": Color.BLACK}
- 			)
-+		BATCH_MENU_MARK_KEEP:
-+			_mark_batch_review_state(
-+				CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
-+			)
-+		BATCH_MENU_MARK_REJECT:
-+			_mark_batch_review_state(
-+				CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
-+			)
-+		BATCH_MENU_MARK_FLAG:
-+			_mark_batch_review_state(
-+				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
-+			)
-+		BATCH_MENU_CLEAR_MARK:
-+			_mark_batch_review_state(
-+				CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
-+			)
-+		BATCH_MENU_SPLIT_KEEP:
-+			var new_keep_card: Variant = _canvas._split_batch_marked(
-+				_batch_menu_card_id,
-+				CanvasBatchCardScript.REVIEW_KEEP,
-+				Strings.BATCH_KEEP_LABEL_SUFFIX
-+			)
-+			_status_label.text = (
-+				Strings.STATUS_BATCH_SPLIT_KEEP
-+				if new_keep_card != null
-+				else Strings.STATUS_BATCH_SPLIT_KEEP_EMPTY
-+			)
- 		BATCH_MENU_SPLIT:
- 			var new_card: Variant = _canvas._split_batch_selection(_batch_menu_card_id)
- 			_status_label.text = (
+             _m2_actions.batch_outline(
+                 _batch_menu_card_id, asset_ids, {"type": "outer", "color": Color.BLACK}
+             )
++        BATCH_MENU_MARK_KEEP:
++            _mark_batch_review_state(
++                CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
++            )
++        BATCH_MENU_MARK_REJECT:
++            _mark_batch_review_state(
++                CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
++            )
++        BATCH_MENU_MARK_FLAG:
++            _mark_batch_review_state(
++                CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
++            )
++        BATCH_MENU_CLEAR_MARK:
++            _mark_batch_review_state(
++                CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
++            )
++        BATCH_MENU_SPLIT_KEEP:
++            var new_keep_card: Variant = _canvas._split_batch_marked(
++                _batch_menu_card_id,
++                CanvasBatchCardScript.REVIEW_KEEP,
++                Strings.BATCH_KEEP_LABEL_SUFFIX
++            )
++            _status_label.text = (
++                Strings.STATUS_BATCH_SPLIT_KEEP
++                if new_keep_card != null
++                else Strings.STATUS_BATCH_SPLIT_KEEP_EMPTY
++            )
+         BATCH_MENU_SPLIT:
+             var new_card: Variant = _canvas._split_batch_selection(_batch_menu_card_id)
+             _status_label.text = (
 @@ -404,6 +444,20 @@ func _on_batch_menu_id_pressed(id: int) -> void:
- 			_emit_batch_export(asset_ids)
- 
- 
+             _emit_batch_export(asset_ids)
+
+
 +func _mark_batch_review_state(review_state: String, status_format: String) -> void:
-+	var selected_ids: Array = _canvas._get_batch_selected_asset_ids(_batch_menu_card_id)
-+	if selected_ids.is_empty():
-+		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
-+		return
-+	var marked_count: int = _canvas._set_batch_review_state(
-+		_batch_menu_card_id, selected_ids, review_state, true
-+	)
-+	if marked_count <= 0:
-+		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
-+		return
-+	_status_label.text = status_format % marked_count
++    var selected_ids: Array = _canvas._get_batch_selected_asset_ids(_batch_menu_card_id)
++    if selected_ids.is_empty():
++        _status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
++        return
++    var marked_count: int = _canvas._set_batch_review_state(
++        _batch_menu_card_id, selected_ids, review_state, true
++    )
++    if marked_count <= 0:
++        _status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
++        return
++    _status_label.text = status_format % marked_count
 +
 +
  func _emit_batch_export(asset_ids: Array) -> void:
- 	var snapshots := []
- 	for asset_id in asset_ids:
+     var snapshots := []
+     for asset_id in asset_ids:
 diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
 index fa7475e..115cf3a 100644
 --- a/pixel/ui/shell/strings.gd
@@ -3862,7 +4363,7 @@ index 5018177..529975e 100644
 +++ b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
 @@ -127,7 +127,7 @@ func get_canvas_actions() -> Array[Dictionary]
  新概念，本模型的核心。装一个批次的图片队列，是「AI 输出自由」与「批量加工」的落脚点。
- 
+
  - **双身份**：① 图节点（`type=batch`，`category=container`，`is_canvas_resident()=true`）；② 画布卡（PROJECT-FORMAT canvas.json 的 `node` 引用，特化渲染为容器卡）。
 -- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
 +- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
@@ -3926,95 +4427,95 @@ index bc96991..5103402 100644
 --- a/pixel/tests/unit/test_canvas_batch_card.gd
 +++ b/pixel/tests/unit/test_canvas_batch_card.gd
 @@ -72,6 +72,39 @@ func test_canvas_batch_card_marks_review_state_and_splits_kept_subset() -> void:
- 	assert_eq(canvas.get_item_count(), 2)
- 
- 
+     assert_eq(canvas.get_item_count(), 2)
+
+
 +func test_canvas_batch_card_filters_visible_review_subset() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [
-+		_register_asset(Color.RED, "red"),
-+		_register_asset(Color.BLUE, "blue"),
-+		_register_asset(Color.GREEN, "green"),
-+	]
-+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
-+	canvas._set_batch_review_state("batch_1", [ids[0]], CanvasBatchCardScript.REVIEW_KEEP, false)
-+	canvas._set_batch_review_state("batch_1", [ids[1]], CanvasBatchCardScript.REVIEW_REJECT, false)
++    var ids := [
++        _register_asset(Color.RED, "red"),
++        _register_asset(Color.BLUE, "blue"),
++        _register_asset(Color.GREEN, "green"),
++    ]
++    var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++    canvas._set_batch_review_state("batch_1", [ids[0]], CanvasBatchCardScript.REVIEW_KEEP, false)
++    canvas._set_batch_review_state("batch_1", [ids[1]], CanvasBatchCardScript.REVIEW_REJECT, false)
 +
-+	assert_true(
-+		canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.REVIEW_KEEP, false)
-+	)
-+	assert_eq(card.get_visible_asset_ids(), [ids[0]])
-+	assert_eq(canvas._get_batch_asset_ids("batch_1", true), [ids[0]])
++    assert_true(
++        canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.REVIEW_KEEP, false)
++    )
++    assert_eq(card.get_visible_asset_ids(), [ids[0]])
++    assert_eq(canvas._get_batch_asset_ids("batch_1", true), [ids[0]])
 +
-+	assert_true(
-+		canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.FILTER_PENDING, false)
-+	)
-+	assert_eq(card.get_visible_asset_ids(), [ids[2]])
-+	assert_true(card.toggle_asset_at_world(card.position + Vector2(20, 60)))
-+	assert_eq(card.get_selected_asset_ids(), [ids[2]])
++    assert_true(
++        canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.FILTER_PENDING, false)
++    )
++    assert_eq(card.get_visible_asset_ids(), [ids[2]])
++    assert_true(card.toggle_asset_at_world(card.position + Vector2(20, 60)))
++    assert_eq(card.get_selected_asset_ids(), [ids[2]])
 +
-+	var data: Dictionary = canvas.export_canvas_data()
-+	var item: Dictionary = data["items"][0]
-+	assert_eq(item["review_filter"], CanvasBatchCardScript.FILTER_PENDING)
++    var data: Dictionary = canvas.export_canvas_data()
++    var item: Dictionary = data["items"][0]
++    assert_eq(item["review_filter"], CanvasBatchCardScript.FILTER_PENDING)
 +
 +
  func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 @@ -158,6 +191,49 @@ func test_graph_batch_card_persists_review_state_in_graph_params() -> void:
- 	assert_eq(reloaded_card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_FLAG), [ids[1]])
- 
- 
+     assert_eq(reloaded_card.get_marked_asset_ids(CanvasBatchCardScript.REVIEW_FLAG), [ids[1]])
+
+
 +func test_graph_batch_card_persists_review_filter_in_graph_params() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
-+	var graph := GraphScript.new()
-+	graph.id = "graph_batch_filter_test"
-+	graph.add_node(
-+		BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
-+	)
-+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++    var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++    var graph := GraphScript.new()
++    graph.id = "graph_batch_filter_test"
++    graph.add_node(
++        BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
++    )
++    ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 +
-+	var card: Node = canvas._add_batch_card(
-+		ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
-+	)
-+	canvas._set_batch_review_state(
-+		"node_item_1", [ids[1]], CanvasBatchCardScript.REVIEW_FLAG, false
-+	)
-+	assert_true(
-+		canvas._set_batch_review_filter("node_item_1", CanvasBatchCardScript.REVIEW_FLAG, false)
-+	)
-+	assert_eq(card.get_visible_asset_ids(), [ids[1]])
++    var card: Node = canvas._add_batch_card(
++        ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
++    )
++    canvas._set_batch_review_state(
++        "node_item_1", [ids[1]], CanvasBatchCardScript.REVIEW_FLAG, false
++    )
++    assert_true(
++        canvas._set_batch_review_filter("node_item_1", CanvasBatchCardScript.REVIEW_FLAG, false)
++    )
++    assert_eq(card.get_visible_asset_ids(), [ids[1]])
 +
-+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
-+	var batch_node: Dictionary = graph_data["nodes"][0]
-+	assert_eq(batch_node["params"]["review_filter"], CanvasBatchCardScript.REVIEW_FLAG)
++    var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
++    var batch_node: Dictionary = graph_data["nodes"][0]
++    assert_eq(batch_node["params"]["review_filter"], CanvasBatchCardScript.REVIEW_FLAG)
 +
-+	var canvas_data: Dictionary = canvas.export_canvas_data()
-+	assert_false(Dictionary(canvas_data["items"][0]).has("review_filter"))
++    var canvas_data: Dictionary = canvas.export_canvas_data()
++    assert_false(Dictionary(canvas_data["items"][0]).has("review_filter"))
 +
-+	var reloaded_canvas: Control = CanvasScript.new()
-+	reloaded_canvas.size = Vector2(512, 512)
-+	add_child_autofree(reloaded_canvas)
-+	await wait_process_frames(2)
-+	reloaded_canvas.load_canvas_data(canvas_data)
-+	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
++    var reloaded_canvas: Control = CanvasScript.new()
++    reloaded_canvas.size = Vector2(512, 512)
++    add_child_autofree(reloaded_canvas)
++    await wait_process_frames(2)
++    reloaded_canvas.load_canvas_data(canvas_data)
++    var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
 +
-+	assert_eq(reloaded_card.get_review_filter(), CanvasBatchCardScript.REVIEW_FLAG)
-+	assert_eq(reloaded_card.get_visible_asset_ids(), [ids[1]])
++    assert_eq(reloaded_card.get_review_filter(), CanvasBatchCardScript.REVIEW_FLAG)
++    assert_eq(reloaded_card.get_visible_asset_ids(), [ids[1]])
 +
 +
  func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
 index 176a229..793f7d4 100644
 --- a/pixel/ui/canvas/canvas_batch_card.gd
@@ -4035,301 +4536,301 @@ index 176a229..793f7d4 100644
 +var review_filter := FILTER_ALL
  var label := ""
  var locked := false
- 
+
 @@ -54,6 +57,10 @@ func setup_from_data(data: Dictionary) -> void:
- 	review_states = _review_state_map(
- 		graph_params.get("review_states", data.get("review_states", {})), asset_ids
- 	)
-+	review_filter = _normalize_review_filter(
-+		String(graph_params.get("review_filter", data.get("review_filter", FILTER_ALL)))
-+	)
-+	_prune_selected_to_visible()
- 	locked = bool(data.get("locked", false))
- 	z_index = int(data.get("z_index", 0))
- 	var raw_position: Variant = data.get("position", [0, 0])
+     review_states = _review_state_map(
+         graph_params.get("review_states", data.get("review_states", {})), asset_ids
+     )
++    review_filter = _normalize_review_filter(
++        String(graph_params.get("review_filter", data.get("review_filter", FILTER_ALL)))
++    )
++    _prune_selected_to_visible()
+     locked = bool(data.get("locked", false))
+     z_index = int(data.get("z_index", 0))
+     var raw_position: Variant = data.get("position", [0, 0])
 @@ -81,6 +88,7 @@ func to_canvas_data() -> Dictionary:
- 		"asset_ids": asset_ids.duplicate(),
- 		"selected_asset_ids": selected_asset_ids.duplicate(),
- 		"review_states": review_states.duplicate(true),
-+		"review_filter": review_filter,
- 		"label": label,
- 		"position": [int(round(position.x)), int(round(position.y))],
- 		"z_index": z_index,
+         "asset_ids": asset_ids.duplicate(),
+         "selected_asset_ids": selected_asset_ids.duplicate(),
+         "review_states": review_states.duplicate(true),
++        "review_filter": review_filter,
+         "label": label,
+         "position": [int(round(position.x)), int(round(position.y))],
+         "z_index": z_index,
 @@ -117,18 +125,30 @@ func set_asset_ids(new_asset_ids: Array) -> void:
- 		if not asset_ids.has(selected_id):
- 			selected_asset_ids.erase(selected_id)
- 	review_states = _review_state_map(review_states, asset_ids)
-+	_prune_selected_to_visible()
- 	_rebuild_thumbnails()
- 	queue_redraw()
- 
- 
+         if not asset_ids.has(selected_id):
+             selected_asset_ids.erase(selected_id)
+     review_states = _review_state_map(review_states, asset_ids)
++    _prune_selected_to_visible()
+     _rebuild_thumbnails()
+     queue_redraw()
+
+
  func get_selected_asset_ids() -> Array[String]:
--	return selected_asset_ids.duplicate()
-+	var visible_lookup := _visible_lookup()
-+	var result: Array[String] = []
-+	for asset_id in selected_asset_ids:
-+		if visible_lookup.has(asset_id):
-+			result.append(asset_id)
-+	return result
- 
- 
+-    return selected_asset_ids.duplicate()
++    var visible_lookup := _visible_lookup()
++    var result: Array[String] = []
++    for asset_id in selected_asset_ids:
++        if visible_lookup.has(asset_id):
++            result.append(asset_id)
++    return result
+
+
  func get_selected_or_all_asset_ids() -> Array[String]:
-+	var visible_ids := get_visible_asset_ids()
- 	if selected_asset_ids.is_empty():
--		return asset_ids.duplicate()
--	return selected_asset_ids.duplicate()
-+		return visible_ids
-+	var visible_lookup := _lookup(visible_ids)
-+	var result: Array[String] = []
-+	for selected_id in selected_asset_ids:
-+		if visible_lookup.has(selected_id):
-+			result.append(selected_id)
-+	return result
- 
- 
++    var visible_ids := get_visible_asset_ids()
+     if selected_asset_ids.is_empty():
+-        return asset_ids.duplicate()
+-    return selected_asset_ids.duplicate()
++        return visible_ids
++    var visible_lookup := _lookup(visible_ids)
++    var result: Array[String] = []
++    for selected_id in selected_asset_ids:
++        if visible_lookup.has(selected_id):
++            result.append(selected_id)
++    return result
+
+
  func get_marked_asset_ids(review_state: String) -> Array[String]:
 @@ -140,20 +160,48 @@ func get_marked_asset_ids(review_state: String) -> Array[String]:
- 	return result
- 
- 
+     return result
+
+
 +func get_visible_asset_ids() -> Array[String]:
-+	var result: Array[String] = []
-+	match review_filter:
-+		FILTER_ALL:
-+			return asset_ids.duplicate()
-+		FILTER_PENDING:
-+			for asset_id in asset_ids:
-+				if not review_states.has(asset_id):
-+					result.append(asset_id)
-+		REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
-+			for asset_id in asset_ids:
-+				if String(review_states.get(asset_id, REVIEW_NONE)) == review_filter:
-+					result.append(asset_id)
-+	return result
++    var result: Array[String] = []
++    match review_filter:
++        FILTER_ALL:
++            return asset_ids.duplicate()
++        FILTER_PENDING:
++            for asset_id in asset_ids:
++                if not review_states.has(asset_id):
++                    result.append(asset_id)
++        REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
++            for asset_id in asset_ids:
++                if String(review_states.get(asset_id, REVIEW_NONE)) == review_filter:
++                    result.append(asset_id)
++    return result
 +
 +
  func get_review_states() -> Dictionary:
- 	return review_states.duplicate(true)
- 
- 
+     return review_states.duplicate(true)
+
+
  func set_review_states(new_review_states: Dictionary) -> void:
- 	review_states = _review_state_map(new_review_states, asset_ids)
-+	_prune_selected_to_visible()
-+	queue_redraw()
+     review_states = _review_state_map(new_review_states, asset_ids)
++    _prune_selected_to_visible()
++    queue_redraw()
 +
 +
 +func get_review_filter() -> String:
-+	return review_filter
++    return review_filter
 +
 +
 +func set_review_filter(new_review_filter: String) -> void:
-+	review_filter = _normalize_review_filter(new_review_filter)
-+	_prune_selected_to_visible()
- 	queue_redraw()
- 
- 
++    review_filter = _normalize_review_filter(new_review_filter)
++    _prune_selected_to_visible()
+     queue_redraw()
+
+
  func toggle_asset_at_world(world_position: Vector2) -> bool:
- 	var index := asset_index_at_world(world_position)
--	if index < 0 or index >= asset_ids.size():
-+	var visible_ids := get_visible_asset_ids()
-+	if index < 0 or index >= visible_ids.size():
- 		return false
--	var asset_id := asset_ids[index]
-+	var asset_id := visible_ids[index]
- 	if selected_asset_ids.has(asset_id):
- 		selected_asset_ids.erase(asset_id)
- 	else:
+     var index := asset_index_at_world(world_position)
+-    if index < 0 or index >= asset_ids.size():
++    var visible_ids := get_visible_asset_ids()
++    if index < 0 or index >= visible_ids.size():
+         return false
+-    var asset_id := asset_ids[index]
++    var asset_id := visible_ids[index]
+     if selected_asset_ids.has(asset_id):
+         selected_asset_ids.erase(asset_id)
+     else:
 @@ -167,7 +215,8 @@ func asset_index_at_world(world_position: Vector2) -> int:
- 	if local.y < HEADER_HEIGHT:
- 		return -1
- 	var columns := _columns()
--	for index in range(asset_ids.size()):
-+	var visible_ids := get_visible_asset_ids()
-+	for index in range(visible_ids.size()):
- 		var rect := _thumb_rect(index, columns)
- 		if rect.has_point(local):
- 			return index
+     if local.y < HEADER_HEIGHT:
+         return -1
+     var columns := _columns()
+-    for index in range(asset_ids.size()):
++    var visible_ids := get_visible_asset_ids()
++    for index in range(visible_ids.size()):
+         var rect := _thumb_rect(index, columns)
+         if rect.has_point(local):
+             return index
 @@ -183,10 +232,14 @@ func _draw() -> void:
- 		Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
- 	)
- 	if _font != null:
-+		var visible_count := get_visible_asset_ids().size()
-+		var title := "%s (%d)" % [label, asset_ids.size()]
-+		if visible_count != asset_ids.size():
-+			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
- 		draw_string(
- 			_font,
- 			Vector2(PADDING, 28),
--			"%s (%d)" % [label, asset_ids.size()],
-+			title,
- 			HORIZONTAL_ALIGNMENT_LEFT,
- 			CARD_WIDTH - PADDING * 2,
- 			18,
+         Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
+     )
+     if _font != null:
++        var visible_count := get_visible_asset_ids().size()
++        var title := "%s (%d)" % [label, asset_ids.size()]
++        if visible_count != asset_ids.size():
++            title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
+         draw_string(
+             _font,
+             Vector2(PADDING, 28),
+-            "%s (%d)" % [label, asset_ids.size()],
++            title,
+             HORIZONTAL_ALIGNMENT_LEFT,
+             CARD_WIDTH - PADDING * 2,
+             18,
 @@ -194,14 +247,14 @@ func _draw() -> void:
- 		)
- 
- 	var columns := _columns()
--	for index in range(asset_ids.size()):
--		_draw_thumbnail(index, _thumb_rect(index, columns))
-+	var visible_ids := get_visible_asset_ids()
-+	for index in range(visible_ids.size()):
-+		_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
- 	if has_graph_binding():
- 		_draw_graph_ports()
- 
- 
+         )
+
+     var columns := _columns()
+-    for index in range(asset_ids.size()):
+-        _draw_thumbnail(index, _thumb_rect(index, columns))
++    var visible_ids := get_visible_asset_ids()
++    for index in range(visible_ids.size()):
++        _draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
+     if has_graph_binding():
+         _draw_graph_ports()
+
+
 -func _draw_thumbnail(index: int, rect: Rect2) -> void:
--	var asset_id := asset_ids[index]
+-    var asset_id := asset_ids[index]
 +func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
- 	draw_rect(rect, THUMB_BACKGROUND, true)
- 	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
- 	if texture != null:
+     draw_rect(rect, THUMB_BACKGROUND, true)
+     var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
+     if texture != null:
 @@ -253,9 +306,10 @@ func _thumb_rect(index: int, columns: int) -> Rect2:
- 
- 
+
+
  func _card_height() -> int:
--	if asset_ids.is_empty():
-+	var visible_count := get_visible_asset_ids().size()
-+	if visible_count <= 0:
- 		return MIN_CARD_HEIGHT
--	var rows := int(ceil(float(asset_ids.size()) / float(_columns())))
-+	var rows := int(ceil(float(visible_count) / float(_columns())))
- 	return maxi(
- 		MIN_CARD_HEIGHT, HEADER_HEIGHT + PADDING * 2 + rows * THUMB_SIZE + (rows - 1) * THUMB_GAP
- 	)
+-    if asset_ids.is_empty():
++    var visible_count := get_visible_asset_ids().size()
++    if visible_count <= 0:
+         return MIN_CARD_HEIGHT
+-    var rows := int(ceil(float(asset_ids.size()) / float(_columns())))
++    var rows := int(ceil(float(visible_count) / float(_columns())))
+     return maxi(
+         MIN_CARD_HEIGHT, HEADER_HEIGHT + PADDING * 2 + rows * THUMB_SIZE + (rows - 1) * THUMB_GAP
+     )
 @@ -346,3 +400,29 @@ func _normalize_review_state(review_state: String) -> String:
- 			return review_state
- 		_:
- 			return REVIEW_NONE
+             return review_state
+         _:
+             return REVIEW_NONE
 +
 +
 +func _normalize_review_filter(value: String) -> String:
-+	match value:
-+		FILTER_ALL, FILTER_PENDING, REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
-+			return value
-+		_:
-+			return FILTER_ALL
++    match value:
++        FILTER_ALL, FILTER_PENDING, REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG:
++            return value
++        _:
++            return FILTER_ALL
 +
 +
 +func _prune_selected_to_visible() -> void:
-+	var visible_lookup := _visible_lookup()
-+	for selected_id in selected_asset_ids.duplicate():
-+		if not visible_lookup.has(selected_id):
-+			selected_asset_ids.erase(selected_id)
++    var visible_lookup := _visible_lookup()
++    for selected_id in selected_asset_ids.duplicate():
++        if not visible_lookup.has(selected_id):
++            selected_asset_ids.erase(selected_id)
 +
 +
 +func _visible_lookup() -> Dictionary:
-+	return _lookup(get_visible_asset_ids())
++    return _lookup(get_visible_asset_ids())
 +
 +
 +func _lookup(values: Array[String]) -> Dictionary:
-+	var result := {}
-+	for value in values:
-+		result[value] = true
-+	return result
++    var result := {}
++    for value in values:
++        result[value] = true
++    return result
 diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
 index 99403b0..a174ed5 100644
 --- a/pixel/ui/canvas/canvas_batch_ops.gd
 +++ b/pixel/ui/canvas/canvas_batch_ops.gd
 @@ -49,20 +49,26 @@ static func replace_asset_ids(
- 		return
- 	var before: Array = item.asset_ids.duplicate()
- 	var before_review_states: Dictionary = item.get_review_states()
-+	var before_review_filter: String = item.get_review_filter()
- 	var after := new_asset_ids.duplicate()
- 	var after_review_states := {}
-+	var after_review_filter := CanvasBatchCardScript.FILTER_ALL
- 	var do_replace := func() -> void:
- 		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
- 		_apply_review_states(item, after_review_states)
-+		_apply_review_filter(item, after_review_filter)
- 		GraphItemBridge.sync_batch_node_asset_ids(item, after)
- 		GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
-+		GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
- 		select_only.call([card_id])
- 		emit_changed.call()
- 	var undo_replace := func() -> void:
- 		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
- 		_apply_review_states(item, before_review_states)
-+		_apply_review_filter(item, before_review_filter)
- 		GraphItemBridge.sync_batch_node_asset_ids(item, before)
- 		GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
-+		GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
- 		select_only.call([card_id])
- 		emit_changed.call()
- 	if record_undo:
+         return
+     var before: Array = item.asset_ids.duplicate()
+     var before_review_states: Dictionary = item.get_review_states()
++    var before_review_filter: String = item.get_review_filter()
+     var after := new_asset_ids.duplicate()
+     var after_review_states := {}
++    var after_review_filter := CanvasBatchCardScript.FILTER_ALL
+     var do_replace := func() -> void:
+         GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
+         _apply_review_states(item, after_review_states)
++        _apply_review_filter(item, after_review_filter)
+         GraphItemBridge.sync_batch_node_asset_ids(item, after)
+         GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
++        GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
+         select_only.call([card_id])
+         emit_changed.call()
+     var undo_replace := func() -> void:
+         GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
+         _apply_review_states(item, before_review_states)
++        _apply_review_filter(item, before_review_filter)
+         GraphItemBridge.sync_batch_node_asset_ids(item, before)
+         GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
++        GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
+         select_only.call([card_id])
+         emit_changed.call()
+     if record_undo:
 @@ -114,6 +120,40 @@ static func set_review_state(
- 	return target_ids.size()
- 
- 
+     return target_ids.size()
+
+
 +static func set_review_filter(
-+	items_by_id: Dictionary,
-+	card_id: String,
-+	review_filter: String,
-+	record_undo: bool,
-+	select_only: Callable,
-+	emit_changed: Callable
++    items_by_id: Dictionary,
++    card_id: String,
++    review_filter: String,
++    record_undo: bool,
++    select_only: Callable,
++    emit_changed: Callable
 +) -> bool:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return false
-+	var before: String = item.get_review_filter()
-+	var after := _normalize_review_filter(review_filter)
-+	if before == after:
-+		return true
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return false
++    var before: String = item.get_review_filter()
++    var after := _normalize_review_filter(review_filter)
++    if before == after:
++        return true
 +
-+	var do_filter := func() -> void:
-+		_apply_review_filter(item, after)
-+		GraphItemBridge.sync_batch_node_review_filter(item, after)
-+		select_only.call([card_id])
-+		emit_changed.call()
-+	var undo_filter := func() -> void:
-+		_apply_review_filter(item, before)
-+		GraphItemBridge.sync_batch_node_review_filter(item, before)
-+		select_only.call([card_id])
-+		emit_changed.call()
++    var do_filter := func() -> void:
++        _apply_review_filter(item, after)
++        GraphItemBridge.sync_batch_node_review_filter(item, after)
++        select_only.call([card_id])
++        emit_changed.call()
++    var undo_filter := func() -> void:
++        _apply_review_filter(item, before)
++        GraphItemBridge.sync_batch_node_review_filter(item, before)
++        select_only.call([card_id])
++        emit_changed.call()
 +
-+	if record_undo:
-+		UndoService.perform_action("Set batch review filter", do_filter, undo_filter)
-+	else:
-+		do_filter.call()
-+	return true
++    if record_undo:
++        UndoService.perform_action("Set batch review filter", do_filter, undo_filter)
++    else:
++        do_filter.call()
++    return true
 +
 +
  static func split_selection_spec(items_by_id: Dictionary, card_id: String) -> Dictionary:
- 	var item := _batch_item(items_by_id, card_id)
- 	if item == null:
+     var item := _batch_item(items_by_id, card_id)
+     if item == null:
 @@ -162,6 +202,10 @@ static func _apply_review_states(item: Node, review_states: Dictionary) -> void:
- 	item.set_review_states(review_states)
- 
- 
+     item.set_review_states(review_states)
+
+
 +static func _apply_review_filter(item: Node, review_filter: String) -> void:
-+	item.set_review_filter(review_filter)
++    item.set_review_filter(review_filter)
 +
 +
  static func _normalize_review_state(review_state: String) -> String:
- 	if (
- 		review_state
+     if (
+         review_state
 @@ -173,3 +217,18 @@ static func _normalize_review_state(review_state: String) -> String:
- 	):
- 		return review_state
- 	return CanvasBatchCardScript.REVIEW_NONE
+     ):
+         return review_state
+     return CanvasBatchCardScript.REVIEW_NONE
 +
 +
 +static func _normalize_review_filter(review_filter: String) -> String:
-+	if (
-+		review_filter
-+		in [
-+			CanvasBatchCardScript.FILTER_ALL,
-+			CanvasBatchCardScript.FILTER_PENDING,
-+			CanvasBatchCardScript.REVIEW_KEEP,
-+			CanvasBatchCardScript.REVIEW_REJECT,
-+			CanvasBatchCardScript.REVIEW_FLAG,
-+		]
-+	):
-+		return review_filter
-+	return CanvasBatchCardScript.FILTER_ALL
++    if (
++        review_filter
++        in [
++            CanvasBatchCardScript.FILTER_ALL,
++            CanvasBatchCardScript.FILTER_PENDING,
++            CanvasBatchCardScript.REVIEW_KEEP,
++            CanvasBatchCardScript.REVIEW_REJECT,
++            CanvasBatchCardScript.REVIEW_FLAG,
++        ]
++    ):
++        return review_filter
++    return CanvasBatchCardScript.FILTER_ALL
 diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd b/pixel/ui/canvas/canvas_graph_item_bridge.gd
 index 5371ed5..1c43497 100644
 --- a/pixel/ui/canvas/canvas_graph_item_bridge.gd
@@ -4337,95 +4838,95 @@ index 5371ed5..1c43497 100644
 @@ -4,6 +4,8 @@ extends RefCounted
  ## Graph 节点引用与画布卡片之间的桥接 helper。
  ## contract: 02-contracts/PROJECT-FORMAT.md §4；canvas 只存 node 引用，batch 队列回写 graph params。
- 
+
 +const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 +
- 
+
  static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
- 	if String(item_data.get("type", "")) != "node":
+     if String(item_data.get("type", "")) != "node":
 @@ -53,6 +55,7 @@ static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
- 			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
- 			params["asset_ids"] = _string_array(asset_ids)
- 			params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
-+			params["review_filter"] = _review_filter(params.get("review_filter", "all"))
- 			node_data["params"] = params
- 			changed = true
- 		nodes.append(node_data)
+             var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+             params["asset_ids"] = _string_array(asset_ids)
+             params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
++            params["review_filter"] = _review_filter(params.get("review_filter", "all"))
+             node_data["params"] = params
+             changed = true
+         nodes.append(node_data)
 @@ -92,6 +95,36 @@ static func sync_batch_node_review_states(item: Node, review_states: Dictionary)
- 		ProjectService.set_graph_data(item.graph_id, graph_data, true)
- 
- 
+         ProjectService.set_graph_data(item.graph_id, graph_data, true)
+
+
 +static func sync_batch_node_review_filter(item: Node, review_filter: String) -> void:
-+	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-+		return
++    if not item.has_method("has_graph_binding") or not item.has_graph_binding():
++        return
 +
-+	var graph_data := ProjectService.get_graph_data(item.graph_id)
-+	if graph_data.is_empty():
-+		return
++    var graph_data := ProjectService.get_graph_data(item.graph_id)
++    if graph_data.is_empty():
++        return
 +
-+	var nodes := []
-+	var changed := false
-+	for raw_node in graph_data.get("nodes", []):
-+		if not (raw_node is Dictionary):
-+			nodes.append(raw_node)
-+			continue
-+		var node_data: Dictionary = raw_node
-+		if (
-+			String(node_data.get("id", "")) == item.node_id
-+			and String(node_data.get("type", "")) == "batch"
-+		):
-+			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-+			params["review_filter"] = _review_filter(review_filter)
-+			node_data["params"] = params
-+			changed = true
-+		nodes.append(node_data)
++    var nodes := []
++    var changed := false
++    for raw_node in graph_data.get("nodes", []):
++        if not (raw_node is Dictionary):
++            nodes.append(raw_node)
++            continue
++        var node_data: Dictionary = raw_node
++        if (
++            String(node_data.get("id", "")) == item.node_id
++            and String(node_data.get("type", "")) == "batch"
++        ):
++            var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
++            params["review_filter"] = _review_filter(review_filter)
++            node_data["params"] = params
++            changed = true
++        nodes.append(node_data)
 +
-+	if changed:
-+		graph_data["nodes"] = nodes
-+		ProjectService.set_graph_data(item.graph_id, graph_data, true)
++    if changed:
++        graph_data["nodes"] = nodes
++        ProjectService.set_graph_data(item.graph_id, graph_data, true)
 +
 +
  static func _string_array(value: Variant) -> Array[String]:
- 	var result: Array[String] = []
- 	if value is Array:
+     var result: Array[String] = []
+     if value is Array:
 @@ -118,3 +151,19 @@ static func _review_state_map(value: Variant, valid_asset_ids: Variant) -> Dicti
- 		if review_state in ["keep", "reject", "flag"]:
- 			result[asset_id] = review_state
- 	return result
+         if review_state in ["keep", "reject", "flag"]:
+             result[asset_id] = review_state
+     return result
 +
 +
 +static func _review_filter(value: Variant) -> String:
-+	var filter := String(value)
-+	if (
-+		filter
-+		in [
-+			CanvasBatchCardScript.FILTER_ALL,
-+			CanvasBatchCardScript.FILTER_PENDING,
-+			CanvasBatchCardScript.REVIEW_KEEP,
-+			CanvasBatchCardScript.REVIEW_REJECT,
-+			CanvasBatchCardScript.REVIEW_FLAG,
-+		]
-+	):
-+		return filter
-+	return CanvasBatchCardScript.FILTER_ALL
++    var filter := String(value)
++    if (
++        filter
++        in [
++            CanvasBatchCardScript.FILTER_ALL,
++            CanvasBatchCardScript.FILTER_PENDING,
++            CanvasBatchCardScript.REVIEW_KEEP,
++            CanvasBatchCardScript.REVIEW_REJECT,
++            CanvasBatchCardScript.REVIEW_FLAG,
++        ]
++    ):
++        return filter
++    return CanvasBatchCardScript.FILTER_ALL
 diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
 index 0a76239..b81dd3f 100644
 --- a/pixel/ui/canvas/infinite_canvas.gd
 +++ b/pixel/ui/canvas/infinite_canvas.gd
 @@ -492,6 +492,14 @@ func _get_batch_marked_asset_ids(card_id: String, review_state: String) -> Array
- 	return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
- 
- 
+     return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
+
+
 +func _set_batch_review_filter(
-+	card_id: String, review_filter: String, record_undo: bool = true
++    card_id: String, review_filter: String, record_undo: bool = true
 +) -> bool:
-+	return BatchOps.set_review_filter(
-+		_items_by_id, card_id, review_filter, record_undo, _select_only, _emit_canvas_changed
-+	)
++    return BatchOps.set_review_filter(
++        _items_by_id, card_id, review_filter, record_undo, _select_only, _emit_canvas_changed
++    )
 +
 +
  func _replace_batch_asset_ids(
- 	card_id: String, new_asset_ids: Array, record_undo: bool = true
+     card_id: String, new_asset_ids: Array, record_undo: bool = true
  ) -> void:
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index fd0cf59..b61aee0 100644
@@ -4441,62 +4942,62 @@ index fd0cf59..b61aee0 100644
 +const BATCH_MENU_FILTER_REJECT := 13
 +const BATCH_MENU_FILTER_FLAG := 14
  const SELECTION_TOOLS_VISIBLE := false
- 
+
  var _canvas: Control = null
 @@ -303,6 +308,12 @@ func _create_batch_menu() -> void:
- 	_batch_menu.add_item(Strings.BATCH_ACTION_MARK_FLAG, BATCH_MENU_MARK_FLAG)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_CLEAR_MARK, BATCH_MENU_CLEAR_MARK)
- 	_batch_menu.add_separator()
-+	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_ALL, BATCH_MENU_FILTER_ALL)
-+	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_KEEP, BATCH_MENU_FILTER_KEEP)
-+	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_PENDING, BATCH_MENU_FILTER_PENDING)
-+	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
-+	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
-+	_batch_menu.add_separator()
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
- 	_batch_menu.add_separator()
+     _batch_menu.add_item(Strings.BATCH_ACTION_MARK_FLAG, BATCH_MENU_MARK_FLAG)
+     _batch_menu.add_item(Strings.BATCH_ACTION_CLEAR_MARK, BATCH_MENU_CLEAR_MARK)
+     _batch_menu.add_separator()
++    _batch_menu.add_item(Strings.BATCH_ACTION_SHOW_ALL, BATCH_MENU_FILTER_ALL)
++    _batch_menu.add_item(Strings.BATCH_ACTION_SHOW_KEEP, BATCH_MENU_FILTER_KEEP)
++    _batch_menu.add_item(Strings.BATCH_ACTION_SHOW_PENDING, BATCH_MENU_FILTER_PENDING)
++    _batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
++    _batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
++    _batch_menu.add_separator()
+     _batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
+     _batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
+     _batch_menu.add_separator()
 @@ -424,6 +435,26 @@ func _on_batch_menu_id_pressed(id: int) -> void:
- 			_mark_batch_review_state(
- 				CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
- 			)
-+		BATCH_MENU_FILTER_ALL:
-+			_set_batch_review_filter(
-+				CanvasBatchCardScript.FILTER_ALL, Strings.STATUS_BATCH_SHOW_ALL
-+			)
-+		BATCH_MENU_FILTER_KEEP:
-+			_set_batch_review_filter(
-+				CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_SHOW_KEEP
-+			)
-+		BATCH_MENU_FILTER_PENDING:
-+			_set_batch_review_filter(
-+				CanvasBatchCardScript.FILTER_PENDING, Strings.STATUS_BATCH_SHOW_PENDING
-+			)
-+		BATCH_MENU_FILTER_REJECT:
-+			_set_batch_review_filter(
-+				CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_SHOW_REJECT
-+			)
-+		BATCH_MENU_FILTER_FLAG:
-+			_set_batch_review_filter(
-+				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
-+			)
- 		BATCH_MENU_SPLIT_KEEP:
- 			var new_keep_card: Variant = _canvas._split_batch_marked(
- 				_batch_menu_card_id,
+             _mark_batch_review_state(
+                 CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
+             )
++        BATCH_MENU_FILTER_ALL:
++            _set_batch_review_filter(
++                CanvasBatchCardScript.FILTER_ALL, Strings.STATUS_BATCH_SHOW_ALL
++            )
++        BATCH_MENU_FILTER_KEEP:
++            _set_batch_review_filter(
++                CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_SHOW_KEEP
++            )
++        BATCH_MENU_FILTER_PENDING:
++            _set_batch_review_filter(
++                CanvasBatchCardScript.FILTER_PENDING, Strings.STATUS_BATCH_SHOW_PENDING
++            )
++        BATCH_MENU_FILTER_REJECT:
++            _set_batch_review_filter(
++                CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_SHOW_REJECT
++            )
++        BATCH_MENU_FILTER_FLAG:
++            _set_batch_review_filter(
++                CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
++            )
+         BATCH_MENU_SPLIT_KEEP:
+             var new_keep_card: Variant = _canvas._split_batch_marked(
+                 _batch_menu_card_id,
 @@ -458,6 +489,13 @@ func _mark_batch_review_state(review_state: String, status_format: String) -> vo
- 	_status_label.text = status_format % marked_count
- 
- 
+     _status_label.text = status_format % marked_count
+
+
 +func _set_batch_review_filter(review_filter: String, status_text: String) -> void:
-+	if not _canvas._set_batch_review_filter(_batch_menu_card_id, review_filter, true):
-+		_status_label.text = Strings.STATUS_BATCH_FILTER_FAILED
-+		return
-+	_status_label.text = status_text
++    if not _canvas._set_batch_review_filter(_batch_menu_card_id, review_filter, true):
++        _status_label.text = Strings.STATUS_BATCH_FILTER_FAILED
++        return
++    _status_label.text = status_text
 +
 +
  func _emit_batch_export(asset_ids: Array) -> void:
- 	var snapshots := []
- 	for asset_id in asset_ids:
+     var snapshots := []
+     for asset_id in asset_ids:
 diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
 index 115cf3a..6b00e04 100644
 --- a/pixel/ui/shell/strings.gd
@@ -4532,7 +5033,7 @@ index 529975e..5f675ae 100644
 +++ b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
 @@ -127,7 +127,7 @@ func get_canvas_actions() -> Array[Dictionary]
  新概念，本模型的核心。装一个批次的图片队列，是「AI 输出自由」与「批量加工」的落脚点。
- 
+
  - **双身份**：① 图节点（`type=batch`，`category=container`，`is_canvas_resident()=true`）；② 画布卡（PROJECT-FORMAT canvas.json 的 `node` 引用，特化渲染为容器卡）。
 -- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
 +- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），二者均随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
@@ -4586,137 +5087,137 @@ index 16b1d28..26565e3 100644
 --- a/pixel/tests/smoke/test_main_window_ui.gd
 +++ b/pixel/tests/smoke/test_main_window_ui.gd
 @@ -259,6 +259,39 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
- 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
- 
- 
+     assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
+
+
 +func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
-+	ProjectService.new_project("Batch Shortcut UI")
-+	var main: Control = MainScript.new()
-+	main.size = Vector2(1280, 800)
-+	add_child_autofree(main)
-+	await wait_process_frames(2)
++    ProjectService.new_project("Batch Shortcut UI")
++    var main: Control = MainScript.new()
++    main.size = Vector2(1280, 800)
++    add_child_autofree(main)
++    await wait_process_frames(2)
 +
-+	var controller: Node = main.get_node("M21UiController")
-+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
-+	controller.generate_mock_batch()
-+	await wait_process_frames(2)
++    var controller: Node = main.get_node("M21UiController")
++    var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
++    controller.generate_mock_batch()
++    await wait_process_frames(2)
 +
-+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
-+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
-+	var batch_node: Dictionary = graph_data["nodes"][3]
-+	var first_asset_id := String(batch_node["params"]["asset_ids"][0])
-+	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
-+	var batch_card: Node = canvas._items_by_id[batch_item_id]
++    var graph_id := String(ProjectService.current_project.graphs.keys()[0])
++    var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
++    var batch_node: Dictionary = graph_data["nodes"][3]
++    var first_asset_id := String(batch_node["params"]["asset_ids"][0])
++    var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
++    var batch_card: Node = canvas._items_by_id[batch_item_id]
 +
-+	canvas.select_ids([batch_item_id])
-+	assert_true(batch_card.toggle_asset_at_world(batch_card.position + Vector2(20, 60)))
-+	assert_true(_send_key(controller, KEY_K))
++    canvas.select_ids([batch_item_id])
++    assert_true(batch_card.toggle_asset_at_world(batch_card.position + Vector2(20, 60)))
++    assert_true(_send_key(controller, KEY_K))
 +
-+	graph_data = ProjectService.current_project.graphs[graph_id]
-+	batch_node = graph_data["nodes"][3]
-+	assert_eq(batch_node["params"]["review_states"][first_asset_id], "keep")
++    graph_data = ProjectService.current_project.graphs[graph_id]
++    batch_node = graph_data["nodes"][3]
++    assert_eq(batch_node["params"]["review_states"][first_asset_id], "keep")
 +
-+	assert_true(_send_key(controller, KEY_R))
-+	graph_data = ProjectService.current_project.graphs[graph_id]
-+	batch_node = graph_data["nodes"][3]
-+	assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
++    assert_true(_send_key(controller, KEY_R))
++    graph_data = ProjectService.current_project.graphs[graph_id]
++    batch_node = graph_data["nodes"][3]
++    assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
 +
 +
  func _node_ids_from_canvas_items(items: Array) -> Array:
- 	var node_ids := []
- 	for item in items:
+     var node_ids := []
+     for item in items:
 @@ -272,3 +305,10 @@ func _item_id_for_node(items: Array, node_id: String) -> String:
- 		if String(data.get("node_id", "")) == node_id:
- 			return String(data.get("id", ""))
- 	return ""
+         if String(data.get("node_id", "")) == node_id:
+             return String(data.get("id", ""))
+     return ""
 +
 +
 +func _send_key(controller: Node, keycode: Key) -> bool:
-+	var event := InputEventKey.new()
-+	event.keycode = keycode
-+	event.pressed = true
-+	return controller.handle_shortcut(event)
++    var event := InputEventKey.new()
++    event.keycode = keycode
++    event.pressed = true
++    return controller.handle_shortcut(event)
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index b61aee0..0aa0545 100644
 --- a/pixel/ui/shell/m2_1_ui_controller.gd
 +++ b/pixel/ui/shell/m2_1_ui_controller.gd
 @@ -146,6 +146,8 @@ func handle_shortcut(event: InputEventKey) -> bool:
- 	if event.keycode == KEY_ESCAPE and not _tool_manager.get_active_tool_id().is_empty():
- 		_tool_manager.clear_active_tool()
- 		return true
-+	if _handle_batch_review_shortcut(event):
-+		return true
- 	if not SELECTION_TOOLS_VISIBLE:
- 		return false
- 	return _tool_manager.handle_shortcut(event.keycode)
+     if event.keycode == KEY_ESCAPE and not _tool_manager.get_active_tool_id().is_empty():
+         _tool_manager.clear_active_tool()
+         return true
++    if _handle_batch_review_shortcut(event):
++        return true
+     if not SELECTION_TOOLS_VISIBLE:
+         return false
+     return _tool_manager.handle_shortcut(event.keycode)
 @@ -476,17 +478,64 @@ func _on_batch_menu_id_pressed(id: int) -> void:
- 
- 
+
+
  func _mark_batch_review_state(review_state: String, status_format: String) -> void:
--	var selected_ids: Array = _canvas._get_batch_selected_asset_ids(_batch_menu_card_id)
-+	_mark_batch_review_state_for_card(_batch_menu_card_id, review_state, status_format)
+-    var selected_ids: Array = _canvas._get_batch_selected_asset_ids(_batch_menu_card_id)
++    _mark_batch_review_state_for_card(_batch_menu_card_id, review_state, status_format)
 +
 +
 +func _mark_batch_review_state_for_card(
-+	card_id: String, review_state: String, status_format: String
++    card_id: String, review_state: String, status_format: String
 +) -> bool:
-+	var selected_ids: Array = _canvas._get_batch_selected_asset_ids(card_id)
- 	if selected_ids.is_empty():
- 		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
--		return
-+		return false
- 	var marked_count: int = _canvas._set_batch_review_state(
--		_batch_menu_card_id, selected_ids, review_state, true
-+		card_id, selected_ids, review_state, true
- 	)
- 	if marked_count <= 0:
- 		_status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
--		return
-+		return false
- 	_status_label.text = status_format % marked_count
-+	return true
++    var selected_ids: Array = _canvas._get_batch_selected_asset_ids(card_id)
+     if selected_ids.is_empty():
+         _status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
+-        return
++        return false
+     var marked_count: int = _canvas._set_batch_review_state(
+-        _batch_menu_card_id, selected_ids, review_state, true
++        card_id, selected_ids, review_state, true
+     )
+     if marked_count <= 0:
+         _status_label.text = Strings.STATUS_BATCH_MARK_NEEDS_SELECTION
+-        return
++        return false
+     _status_label.text = status_format % marked_count
++    return true
 +
 +
 +func _handle_batch_review_shortcut(event: InputEventKey) -> bool:
-+	if event.is_command_or_control_pressed() or event.alt_pressed:
-+		return false
-+	var card_id := _selected_batch_card_id()
-+	match event.keycode:
-+		KEY_K:
-+			_mark_batch_review_state_for_card(
-+				card_id, CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
-+			)
-+			return true
-+		KEY_R:
-+			_mark_batch_review_state_for_card(
-+				card_id, CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
-+			)
-+			return true
-+		KEY_F:
-+			_mark_batch_review_state_for_card(
-+				card_id, CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
-+			)
-+			return true
-+		KEY_C:
-+			_mark_batch_review_state_for_card(
-+				card_id, CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
-+			)
-+			return true
-+	return false
++    if event.is_command_or_control_pressed() or event.alt_pressed:
++        return false
++    var card_id := _selected_batch_card_id()
++    match event.keycode:
++        KEY_K:
++            _mark_batch_review_state_for_card(
++                card_id, CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
++            )
++            return true
++        KEY_R:
++            _mark_batch_review_state_for_card(
++                card_id, CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
++            )
++            return true
++        KEY_F:
++            _mark_batch_review_state_for_card(
++                card_id, CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
++            )
++            return true
++        KEY_C:
++            _mark_batch_review_state_for_card(
++                card_id, CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
++            )
++            return true
++    return false
 +
 +
 +func _selected_batch_card_id() -> String:
-+	var selected_ids: Array = _canvas.get_selected_ids()
-+	if selected_ids.is_empty():
-+		return ""
-+	for item in _canvas.export_canvas_data()["items"]:
-+		var item_data: Dictionary = item
-+		var item_id := String(item_data.get("id", ""))
-+		if selected_ids.has(item_id) and not _canvas._get_batch_asset_ids(item_id).is_empty():
-+			return item_id
-+	return ""
- 
- 
++    var selected_ids: Array = _canvas.get_selected_ids()
++    if selected_ids.is_empty():
++        return ""
++    for item in _canvas.export_canvas_data()["items"]:
++        var item_data: Dictionary = item
++        var item_id := String(item_data.get("id", ""))
++        if selected_ids.has(item_id) and not _canvas._get_batch_asset_ids(item_id).is_empty():
++            return item_id
++    return ""
+
+
 func _set_batch_review_filter(review_filter: String, status_text: String) -> void:
 ```
 
@@ -4753,149 +5254,149 @@ index 26565e3..9c70e83 100644
 --- a/pixel/tests/smoke/test_main_window_ui.gd
 +++ b/pixel/tests/smoke/test_main_window_ui.gd
 @@ -292,6 +292,43 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
- 	assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
- 
- 
+     assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
+
+
 +func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
-+	ProjectService.new_project("Batch Focus UI")
-+	var main: Control = MainScript.new()
-+	main.size = Vector2(1280, 800)
-+	add_child_autofree(main)
-+	await wait_process_frames(2)
++    ProjectService.new_project("Batch Focus UI")
++    var main: Control = MainScript.new()
++    main.size = Vector2(1280, 800)
++    add_child_autofree(main)
++    await wait_process_frames(2)
 +
-+	var controller: Node = main.get_node("M21UiController")
-+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
-+	controller.generate_mock_batch()
-+	await wait_process_frames(2)
++    var controller: Node = main.get_node("M21UiController")
++    var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
++    controller.generate_mock_batch()
++    await wait_process_frames(2)
 +
-+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
-+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
-+	var batch_node: Dictionary = graph_data["nodes"][3]
-+	var asset_ids: Array = batch_node["params"]["asset_ids"]
-+	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
++    var graph_id := String(ProjectService.current_project.graphs.keys()[0])
++    var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
++    var batch_node: Dictionary = graph_data["nodes"][3]
++    var asset_ids: Array = batch_node["params"]["asset_ids"]
++    var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
 +
-+	canvas.select_ids([batch_item_id])
-+	assert_true(_send_key(controller, KEY_RIGHT))
-+	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
++    canvas.select_ids([batch_item_id])
++    assert_true(_send_key(controller, KEY_RIGHT))
++    assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
 +
-+	graph_data = ProjectService.current_project.graphs[graph_id]
-+	batch_node = graph_data["nodes"][3]
-+	assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[0])
++    graph_data = ProjectService.current_project.graphs[graph_id]
++    batch_node = graph_data["nodes"][3]
++    assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[0])
 +
-+	assert_true(_send_key(controller, KEY_RIGHT))
-+	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[1]])
++    assert_true(_send_key(controller, KEY_RIGHT))
++    assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[1]])
 +
-+	graph_data = ProjectService.current_project.graphs[graph_id]
-+	batch_node = graph_data["nodes"][3]
-+	assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[1])
++    graph_data = ProjectService.current_project.graphs[graph_id]
++    batch_node = graph_data["nodes"][3]
++    assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[1])
 +
-+	assert_true(_send_key(controller, KEY_LEFT))
-+	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
++    assert_true(_send_key(controller, KEY_LEFT))
++    assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
 +
 +
  func _node_ids_from_canvas_items(items: Array) -> Array:
- 	var node_ids := []
- 	for item in items:
+     var node_ids := []
+     for item in items:
 diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
 index 5103402..c97601c 100644
 --- a/pixel/tests/unit/test_canvas_batch_card.gd
 +++ b/pixel/tests/unit/test_canvas_batch_card.gd
 @@ -105,6 +105,50 @@ func test_canvas_batch_card_filters_visible_review_subset() -> void:
- 	assert_eq(item["review_filter"], CanvasBatchCardScript.FILTER_PENDING)
- 
- 
+     assert_eq(item["review_filter"], CanvasBatchCardScript.FILTER_PENDING)
+
+
 +func test_canvas_batch_card_focuses_visible_review_thumbnails() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [
-+		_register_asset(Color.RED, "red"),
-+		_register_asset(Color.BLUE, "blue"),
-+		_register_asset(Color.GREEN, "green"),
-+	]
-+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++    var ids := [
++        _register_asset(Color.RED, "red"),
++        _register_asset(Color.BLUE, "blue"),
++        _register_asset(Color.GREEN, "green"),
++    ]
++    var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 +
-+	var focus: Dictionary = canvas._focus_batch_relative("batch_1", 1, false)
-+	assert_eq(focus["asset_id"], ids[0])
-+	assert_eq(focus["index"], 1)
-+	assert_eq(focus["total"], 3)
-+	assert_eq(card._get_focus_asset_id(), ids[0])
-+	assert_eq(card.get_selected_asset_ids(), [ids[0]])
++    var focus: Dictionary = canvas._focus_batch_relative("batch_1", 1, false)
++    assert_eq(focus["asset_id"], ids[0])
++    assert_eq(focus["index"], 1)
++    assert_eq(focus["total"], 3)
++    assert_eq(card._get_focus_asset_id(), ids[0])
++    assert_eq(card.get_selected_asset_ids(), [ids[0]])
 +
-+	focus = canvas._focus_batch_relative("batch_1", 1, false)
-+	assert_eq(focus["asset_id"], ids[1])
-+	assert_eq(card.get_selected_asset_ids(), [ids[1]])
++    focus = canvas._focus_batch_relative("batch_1", 1, false)
++    assert_eq(focus["asset_id"], ids[1])
++    assert_eq(card.get_selected_asset_ids(), [ids[1]])
 +
-+	focus = canvas._focus_batch_relative("batch_1", -1, false)
-+	assert_eq(focus["asset_id"], ids[0])
-+	assert_eq(card.get_selected_asset_ids(), [ids[0]])
++    focus = canvas._focus_batch_relative("batch_1", -1, false)
++    assert_eq(focus["asset_id"], ids[0])
++    assert_eq(card.get_selected_asset_ids(), [ids[0]])
 +
-+	canvas._set_batch_review_state("batch_1", [ids[0]], CanvasBatchCardScript.REVIEW_REJECT, false)
-+	assert_true(
-+		canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.FILTER_PENDING, false)
-+	)
-+	assert_eq(card._get_focus_asset_id(), "")
++    canvas._set_batch_review_state("batch_1", [ids[0]], CanvasBatchCardScript.REVIEW_REJECT, false)
++    assert_true(
++        canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.FILTER_PENDING, false)
++    )
++    assert_eq(card._get_focus_asset_id(), "")
 +
-+	focus = canvas._focus_batch_relative("batch_1", 1, false)
-+	assert_eq(focus["asset_id"], ids[1])
-+	assert_eq(focus["index"], 1)
-+	assert_eq(focus["total"], 2)
++    focus = canvas._focus_batch_relative("batch_1", 1, false)
++    assert_eq(focus["asset_id"], ids[1])
++    assert_eq(focus["index"], 1)
++    assert_eq(focus["total"], 2)
 +
-+	var data: Dictionary = canvas.export_canvas_data()
-+	var item: Dictionary = data["items"][0]
-+	assert_eq(item["focus_asset_id"], ids[1])
++    var data: Dictionary = canvas.export_canvas_data()
++    var item: Dictionary = data["items"][0]
++    assert_eq(item["focus_asset_id"], ids[1])
 +
 +
  func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 @@ -234,6 +278,44 @@ func test_graph_batch_card_persists_review_filter_in_graph_params() -> void:
- 	assert_eq(reloaded_card.get_visible_asset_ids(), [ids[1]])
- 
- 
+     assert_eq(reloaded_card.get_visible_asset_ids(), [ids[1]])
+
+
 +func test_graph_batch_card_persists_focus_asset_id_in_graph_params() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
-+	var graph := GraphScript.new()
-+	graph.id = "graph_batch_focus_test"
-+	graph.add_node(
-+		BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
-+	)
-+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++    var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++    var graph := GraphScript.new()
++    graph.id = "graph_batch_focus_test"
++    graph.add_node(
++        BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
++    )
++    ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 +
-+	var card: Node = canvas._add_batch_card(
-+		ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
-+	)
-+	var focus: Dictionary = canvas._focus_batch_relative("node_item_1", 1, false)
-+	assert_eq(focus["asset_id"], ids[0])
-+	assert_eq(card._get_focus_asset_id(), ids[0])
++    var card: Node = canvas._add_batch_card(
++        ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
++    )
++    var focus: Dictionary = canvas._focus_batch_relative("node_item_1", 1, false)
++    assert_eq(focus["asset_id"], ids[0])
++    assert_eq(card._get_focus_asset_id(), ids[0])
 +
-+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
-+	var batch_node: Dictionary = graph_data["nodes"][0]
-+	assert_eq(batch_node["params"]["focus_asset_id"], ids[0])
++    var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
++    var batch_node: Dictionary = graph_data["nodes"][0]
++    assert_eq(batch_node["params"]["focus_asset_id"], ids[0])
 +
-+	var canvas_data: Dictionary = canvas.export_canvas_data()
-+	assert_false(Dictionary(canvas_data["items"][0]).has("focus_asset_id"))
++    var canvas_data: Dictionary = canvas.export_canvas_data()
++    assert_false(Dictionary(canvas_data["items"][0]).has("focus_asset_id"))
 +
-+	var reloaded_canvas: Control = CanvasScript.new()
-+	reloaded_canvas.size = Vector2(512, 512)
-+	add_child_autofree(reloaded_canvas)
-+	await wait_process_frames(2)
-+	reloaded_canvas.load_canvas_data(canvas_data)
-+	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
++    var reloaded_canvas: Control = CanvasScript.new()
++    reloaded_canvas.size = Vector2(512, 512)
++    add_child_autofree(reloaded_canvas)
++    await wait_process_frames(2)
++    reloaded_canvas.load_canvas_data(canvas_data)
++    var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
 +
-+	assert_eq(reloaded_card._get_focus_asset_id(), ids[0])
++    assert_eq(reloaded_card._get_focus_asset_id(), ids[0])
 +
 +
  func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
 index 793f7d4..0d4f595 100644
 --- a/pixel/ui/canvas/canvas_batch_card.gd
@@ -4907,7 +5408,7 @@ index 793f7d4..0d4f595 100644
 +const FOCUS_BORDER := Color(0.96, 0.96, 0.9, 1.0)
  const INPUT_PORTS: Array[String] = ["in"]
  const OUTPUT_PORTS: Array[String] = ["images", "assets"]
- 
+
 @@ -38,6 +39,7 @@ var asset_ids: Array[String] = []
  var selected_asset_ids: Array[String] = []
  var review_states := {}
@@ -4915,489 +5416,489 @@ index 793f7d4..0d4f595 100644
 +var focus_asset_id := ""
  var label := ""
  var locked := false
- 
+
 @@ -60,7 +62,11 @@ func setup_from_data(data: Dictionary) -> void:
- 	review_filter = _normalize_review_filter(
- 		String(graph_params.get("review_filter", data.get("review_filter", FILTER_ALL)))
- 	)
-+	focus_asset_id = _normalize_focus_asset_id(
-+		String(graph_params.get("focus_asset_id", data.get("focus_asset_id", "")))
-+	)
- 	_prune_selected_to_visible()
-+	_prune_focus_to_visible()
- 	locked = bool(data.get("locked", false))
- 	z_index = int(data.get("z_index", 0))
- 	var raw_position: Variant = data.get("position", [0, 0])
+     review_filter = _normalize_review_filter(
+         String(graph_params.get("review_filter", data.get("review_filter", FILTER_ALL)))
+     )
++    focus_asset_id = _normalize_focus_asset_id(
++        String(graph_params.get("focus_asset_id", data.get("focus_asset_id", "")))
++    )
+     _prune_selected_to_visible()
++    _prune_focus_to_visible()
+     locked = bool(data.get("locked", false))
+     z_index = int(data.get("z_index", 0))
+     var raw_position: Variant = data.get("position", [0, 0])
 @@ -89,6 +95,7 @@ func to_canvas_data() -> Dictionary:
- 		"selected_asset_ids": selected_asset_ids.duplicate(),
- 		"review_states": review_states.duplicate(true),
- 		"review_filter": review_filter,
-+		"focus_asset_id": focus_asset_id,
- 		"label": label,
- 		"position": [int(round(position.x)), int(round(position.y))],
- 		"z_index": z_index,
+         "selected_asset_ids": selected_asset_ids.duplicate(),
+         "review_states": review_states.duplicate(true),
+         "review_filter": review_filter,
++        "focus_asset_id": focus_asset_id,
+         "label": label,
+         "position": [int(round(position.x)), int(round(position.y))],
+         "z_index": z_index,
 @@ -126,6 +133,7 @@ func set_asset_ids(new_asset_ids: Array) -> void:
- 			selected_asset_ids.erase(selected_id)
- 	review_states = _review_state_map(review_states, asset_ids)
- 	_prune_selected_to_visible()
-+	_prune_focus_to_visible()
- 	_rebuild_thumbnails()
- 	queue_redraw()
- 
+             selected_asset_ids.erase(selected_id)
+     review_states = _review_state_map(review_states, asset_ids)
+     _prune_selected_to_visible()
++    _prune_focus_to_visible()
+     _rebuild_thumbnails()
+     queue_redraw()
+
 @@ -183,6 +191,7 @@ func get_review_states() -> Dictionary:
  func set_review_states(new_review_states: Dictionary) -> void:
- 	review_states = _review_state_map(new_review_states, asset_ids)
- 	_prune_selected_to_visible()
-+	_prune_focus_to_visible()
- 	queue_redraw()
- 
- 
+     review_states = _review_state_map(new_review_states, asset_ids)
+     _prune_selected_to_visible()
++    _prune_focus_to_visible()
+     queue_redraw()
+
+
 @@ -193,9 +202,39 @@ func get_review_filter() -> String:
  func set_review_filter(new_review_filter: String) -> void:
- 	review_filter = _normalize_review_filter(new_review_filter)
- 	_prune_selected_to_visible()
-+	_prune_focus_to_visible()
- 	queue_redraw()
- 
- 
+     review_filter = _normalize_review_filter(new_review_filter)
+     _prune_selected_to_visible()
++    _prune_focus_to_visible()
+     queue_redraw()
+
+
 +func _get_focus_asset_id() -> String:
-+	return focus_asset_id
++    return focus_asset_id
 +
 +
 +func _set_focus_asset_id(new_focus_asset_id: String, select_focused: bool = false) -> void:
-+	focus_asset_id = _normalize_focus_asset_id(new_focus_asset_id)
-+	_prune_focus_to_visible()
-+	if select_focused and not focus_asset_id.is_empty():
-+		selected_asset_ids = [focus_asset_id]
-+	queue_redraw()
++    focus_asset_id = _normalize_focus_asset_id(new_focus_asset_id)
++    _prune_focus_to_visible()
++    if select_focused and not focus_asset_id.is_empty():
++        selected_asset_ids = [focus_asset_id]
++    queue_redraw()
 +
 +
 +func _set_selected_asset_ids(new_selected_asset_ids: Array) -> void:
-+	selected_asset_ids = _visible_selected_array(new_selected_asset_ids)
-+	queue_redraw()
++    selected_asset_ids = _visible_selected_array(new_selected_asset_ids)
++    queue_redraw()
 +
 +
 +func _focus_asset_id_relative(step: int) -> String:
-+	var visible_ids := get_visible_asset_ids()
-+	if visible_ids.is_empty():
-+		return ""
-+	if step == 0:
-+		return focus_asset_id if visible_ids.has(focus_asset_id) else ""
-+	var anchor_index := _focus_anchor_index(visible_ids)
-+	if anchor_index < 0:
-+		anchor_index = -1 if step > 0 else visible_ids.size()
-+	return visible_ids[posmod(anchor_index + step, visible_ids.size())]
++    var visible_ids := get_visible_asset_ids()
++    if visible_ids.is_empty():
++        return ""
++    if step == 0:
++        return focus_asset_id if visible_ids.has(focus_asset_id) else ""
++    var anchor_index := _focus_anchor_index(visible_ids)
++    if anchor_index < 0:
++        anchor_index = -1 if step > 0 else visible_ids.size()
++    return visible_ids[posmod(anchor_index + step, visible_ids.size())]
 +
 +
  func toggle_asset_at_world(world_position: Vector2) -> bool:
- 	var index := asset_index_at_world(world_position)
- 	var visible_ids := get_visible_asset_ids()
+     var index := asset_index_at_world(world_position)
+     var visible_ids := get_visible_asset_ids()
 @@ -204,8 +243,13 @@ func toggle_asset_at_world(world_position: Vector2) -> bool:
- 	var asset_id := visible_ids[index]
- 	if selected_asset_ids.has(asset_id):
- 		selected_asset_ids.erase(asset_id)
-+		if focus_asset_id == asset_id:
-+			focus_asset_id = ""
-+			if not selected_asset_ids.is_empty():
-+				focus_asset_id = selected_asset_ids[selected_asset_ids.size() - 1]
- 	else:
- 		selected_asset_ids.append(asset_id)
-+		focus_asset_id = asset_id
- 	queue_redraw()
- 	return true
- 
+     var asset_id := visible_ids[index]
+     if selected_asset_ids.has(asset_id):
+         selected_asset_ids.erase(asset_id)
++        if focus_asset_id == asset_id:
++            focus_asset_id = ""
++            if not selected_asset_ids.is_empty():
++                focus_asset_id = selected_asset_ids[selected_asset_ids.size() - 1]
+     else:
+         selected_asset_ids.append(asset_id)
++        focus_asset_id = asset_id
+     queue_redraw()
+     return true
+
 @@ -266,6 +310,8 @@ func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
- 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
- 	draw_rect(rect, border_color, false, 1.5)
- 	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
-+	if focus_asset_id == asset_id:
-+		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
- 
- 
+     var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
+     draw_rect(rect, border_color, false, 1.5)
+     _draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
++    if focus_asset_id == asset_id:
++        draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
+
+
  func _draw_review_marker(rect: Rect2, review_state: String) -> void:
 @@ -410,6 +456,10 @@ func _normalize_review_filter(value: String) -> String:
- 			return FILTER_ALL
- 
- 
+             return FILTER_ALL
+
+
 +func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
-+	return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
++    return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
 +
 +
  func _prune_selected_to_visible() -> void:
- 	var visible_lookup := _visible_lookup()
- 	for selected_id in selected_asset_ids.duplicate():
+     var visible_lookup := _visible_lookup()
+     for selected_id in selected_asset_ids.duplicate():
 @@ -417,6 +467,34 @@ func _prune_selected_to_visible() -> void:
- 			selected_asset_ids.erase(selected_id)
- 
- 
+             selected_asset_ids.erase(selected_id)
+
+
 +func _prune_focus_to_visible() -> void:
-+	if focus_asset_id.is_empty():
-+		return
-+	if not _visible_lookup().has(focus_asset_id):
-+		focus_asset_id = ""
++    if focus_asset_id.is_empty():
++        return
++    if not _visible_lookup().has(focus_asset_id):
++        focus_asset_id = ""
 +
 +
 +func _focus_anchor_index(visible_ids: Array[String]) -> int:
-+	var focus_index := visible_ids.find(focus_asset_id)
-+	if focus_index >= 0:
-+		return focus_index
-+	for selected_id in selected_asset_ids:
-+		var selected_index := visible_ids.find(selected_id)
-+		if selected_index >= 0:
-+			return selected_index
-+	return -1
++    var focus_index := visible_ids.find(focus_asset_id)
++    if focus_index >= 0:
++        return focus_index
++    for selected_id in selected_asset_ids:
++        var selected_index := visible_ids.find(selected_id)
++        if selected_index >= 0:
++            return selected_index
++    return -1
 +
 +
 +func _visible_selected_array(value: Array) -> Array[String]:
-+	var visible_lookup := _visible_lookup()
-+	var result: Array[String] = []
-+	for raw_id in value:
-+		var asset_id := String(raw_id)
-+		if visible_lookup.has(asset_id) and not result.has(asset_id):
-+			result.append(asset_id)
-+	return result
++    var visible_lookup := _visible_lookup()
++    var result: Array[String] = []
++    for raw_id in value:
++        var asset_id := String(raw_id)
++        if visible_lookup.has(asset_id) and not result.has(asset_id):
++            result.append(asset_id)
++    return result
 +
 +
  func _visible_lookup() -> Dictionary:
- 	return _lookup(get_visible_asset_ids())
- 
+     return _lookup(get_visible_asset_ids())
+
 diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
 index a174ed5..f6e3959 100644
 --- a/pixel/ui/canvas/canvas_batch_ops.gd
 +++ b/pixel/ui/canvas/canvas_batch_ops.gd
 @@ -50,25 +50,31 @@ static func replace_asset_ids(
- 	var before: Array = item.asset_ids.duplicate()
- 	var before_review_states: Dictionary = item.get_review_states()
- 	var before_review_filter: String = item.get_review_filter()
-+	var before_focus_asset_id: String = item._get_focus_asset_id()
- 	var after := new_asset_ids.duplicate()
- 	var after_review_states := {}
- 	var after_review_filter := CanvasBatchCardScript.FILTER_ALL
-+	var after_focus_asset_id := ""
- 	var do_replace := func() -> void:
- 		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
- 		_apply_review_states(item, after_review_states)
- 		_apply_review_filter(item, after_review_filter)
-+		_apply_focus_asset_id(item, after_focus_asset_id)
- 		GraphItemBridge.sync_batch_node_asset_ids(item, after)
- 		GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
- 		GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
-+		GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
- 		select_only.call([card_id])
- 		emit_changed.call()
- 	var undo_replace := func() -> void:
- 		GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
- 		_apply_review_states(item, before_review_states)
- 		_apply_review_filter(item, before_review_filter)
-+		_apply_focus_asset_id(item, before_focus_asset_id)
- 		GraphItemBridge.sync_batch_node_asset_ids(item, before)
- 		GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
- 		GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
-+		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
- 		select_only.call([card_id])
- 		emit_changed.call()
- 	if record_undo:
+     var before: Array = item.asset_ids.duplicate()
+     var before_review_states: Dictionary = item.get_review_states()
+     var before_review_filter: String = item.get_review_filter()
++    var before_focus_asset_id: String = item._get_focus_asset_id()
+     var after := new_asset_ids.duplicate()
+     var after_review_states := {}
+     var after_review_filter := CanvasBatchCardScript.FILTER_ALL
++    var after_focus_asset_id := ""
+     var do_replace := func() -> void:
+         GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
+         _apply_review_states(item, after_review_states)
+         _apply_review_filter(item, after_review_filter)
++        _apply_focus_asset_id(item, after_focus_asset_id)
+         GraphItemBridge.sync_batch_node_asset_ids(item, after)
+         GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
+         GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
++        GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
+         select_only.call([card_id])
+         emit_changed.call()
+     var undo_replace := func() -> void:
+         GraphItemBridge.apply_batch_asset_ids(item, before, AssetLibrary)
+         _apply_review_states(item, before_review_states)
+         _apply_review_filter(item, before_review_filter)
++        _apply_focus_asset_id(item, before_focus_asset_id)
+         GraphItemBridge.sync_batch_node_asset_ids(item, before)
+         GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
+         GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
++        GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
+         select_only.call([card_id])
+         emit_changed.call()
+     if record_undo:
 @@ -94,6 +100,7 @@ static func set_review_state(
- 		return 0
- 
- 	var before: Dictionary = item.get_review_states()
-+	var before_focus_asset_id: String = item._get_focus_asset_id()
- 	var after := before.duplicate(true)
- 	var normalized_state := _normalize_review_state(review_state)
- 	for asset_id in target_ids:
+         return 0
+
+     var before: Dictionary = item.get_review_states()
++    var before_focus_asset_id: String = item._get_focus_asset_id()
+     var after := before.duplicate(true)
+     var normalized_state := _normalize_review_state(review_state)
+     for asset_id in target_ids:
 @@ -104,12 +111,16 @@ static func set_review_state(
- 
- 	var do_mark := func() -> void:
- 		_apply_review_states(item, after)
-+		_apply_focus_asset_id(item, _focus_after_current_filter(item, before_focus_asset_id))
- 		GraphItemBridge.sync_batch_node_review_states(item, after)
-+		GraphItemBridge.sync_batch_node_focus_asset_id(item, item._get_focus_asset_id())
- 		select_only.call([card_id])
- 		emit_changed.call()
- 	var undo_mark := func() -> void:
- 		_apply_review_states(item, before)
-+		_apply_focus_asset_id(item, before_focus_asset_id)
- 		GraphItemBridge.sync_batch_node_review_states(item, before)
-+		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
- 		select_only.call([card_id])
- 		emit_changed.call()
- 
+
+     var do_mark := func() -> void:
+         _apply_review_states(item, after)
++        _apply_focus_asset_id(item, _focus_after_current_filter(item, before_focus_asset_id))
+         GraphItemBridge.sync_batch_node_review_states(item, after)
++        GraphItemBridge.sync_batch_node_focus_asset_id(item, item._get_focus_asset_id())
+         select_only.call([card_id])
+         emit_changed.call()
+     var undo_mark := func() -> void:
+         _apply_review_states(item, before)
++        _apply_focus_asset_id(item, before_focus_asset_id)
+         GraphItemBridge.sync_batch_node_review_states(item, before)
++        GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
+         select_only.call([card_id])
+         emit_changed.call()
+
 @@ -132,18 +143,24 @@ static func set_review_filter(
- 	if item == null:
- 		return false
- 	var before: String = item.get_review_filter()
-+	var before_focus_asset_id: String = item._get_focus_asset_id()
- 	var after := _normalize_review_filter(review_filter)
- 	if before == after:
- 		return true
-+	var after_focus_asset_id := _focus_after_filter(item, before_focus_asset_id, after)
- 
- 	var do_filter := func() -> void:
- 		_apply_review_filter(item, after)
-+		_apply_focus_asset_id(item, after_focus_asset_id)
- 		GraphItemBridge.sync_batch_node_review_filter(item, after)
-+		GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
- 		select_only.call([card_id])
- 		emit_changed.call()
- 	var undo_filter := func() -> void:
- 		_apply_review_filter(item, before)
-+		_apply_focus_asset_id(item, before_focus_asset_id)
- 		GraphItemBridge.sync_batch_node_review_filter(item, before)
-+		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
- 		select_only.call([card_id])
- 		emit_changed.call()
- 
+     if item == null:
+         return false
+     var before: String = item.get_review_filter()
++    var before_focus_asset_id: String = item._get_focus_asset_id()
+     var after := _normalize_review_filter(review_filter)
+     if before == after:
+         return true
++    var after_focus_asset_id := _focus_after_filter(item, before_focus_asset_id, after)
+
+     var do_filter := func() -> void:
+         _apply_review_filter(item, after)
++        _apply_focus_asset_id(item, after_focus_asset_id)
+         GraphItemBridge.sync_batch_node_review_filter(item, after)
++        GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
+         select_only.call([card_id])
+         emit_changed.call()
+     var undo_filter := func() -> void:
+         _apply_review_filter(item, before)
++        _apply_focus_asset_id(item, before_focus_asset_id)
+         GraphItemBridge.sync_batch_node_review_filter(item, before)
++        GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
+         select_only.call([card_id])
+         emit_changed.call()
+
 @@ -154,6 +171,45 @@ static func set_review_filter(
- 	return true
- 
- 
+     return true
+
+
 +static func focus_relative(
-+	items_by_id: Dictionary,
-+	card_id: String,
-+	step: int,
-+	record_undo: bool,
-+	select_only: Callable,
-+	emit_changed: Callable
++    items_by_id: Dictionary,
++    card_id: String,
++    step: int,
++    record_undo: bool,
++    select_only: Callable,
++    emit_changed: Callable
 +) -> Dictionary:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return {}
-+	var target_asset_id: String = item._focus_asset_id_relative(step)
-+	if target_asset_id.is_empty():
-+		return {}
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return {}
++    var target_asset_id: String = item._focus_asset_id_relative(step)
++    if target_asset_id.is_empty():
++        return {}
 +
-+	var before_focus_asset_id: String = item._get_focus_asset_id()
-+	var before_selected_asset_ids: Array = item.selected_asset_ids.duplicate()
-+	var after_selected_asset_ids := [target_asset_id]
-+	var focus_result := _focus_result(item, target_asset_id)
-+	var do_focus := func() -> void:
-+		_apply_selected_asset_ids(item, after_selected_asset_ids)
-+		_apply_focus_asset_id(item, target_asset_id)
-+		GraphItemBridge.sync_batch_node_focus_asset_id(item, target_asset_id)
-+		select_only.call([card_id])
-+		emit_changed.call()
-+	var undo_focus := func() -> void:
-+		_apply_selected_asset_ids(item, before_selected_asset_ids)
-+		_apply_focus_asset_id(item, before_focus_asset_id)
-+		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
-+		select_only.call([card_id])
-+		emit_changed.call()
++    var before_focus_asset_id: String = item._get_focus_asset_id()
++    var before_selected_asset_ids: Array = item.selected_asset_ids.duplicate()
++    var after_selected_asset_ids := [target_asset_id]
++    var focus_result := _focus_result(item, target_asset_id)
++    var do_focus := func() -> void:
++        _apply_selected_asset_ids(item, after_selected_asset_ids)
++        _apply_focus_asset_id(item, target_asset_id)
++        GraphItemBridge.sync_batch_node_focus_asset_id(item, target_asset_id)
++        select_only.call([card_id])
++        emit_changed.call()
++    var undo_focus := func() -> void:
++        _apply_selected_asset_ids(item, before_selected_asset_ids)
++        _apply_focus_asset_id(item, before_focus_asset_id)
++        GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
++        select_only.call([card_id])
++        emit_changed.call()
 +
-+	if record_undo:
-+		UndoService.perform_action("Focus batch thumbnail", do_focus, undo_focus)
-+	else:
-+		do_focus.call()
-+	return focus_result
++    if record_undo:
++        UndoService.perform_action("Focus batch thumbnail", do_focus, undo_focus)
++    else:
++        do_focus.call()
++    return focus_result
 +
 +
  static func split_selection_spec(items_by_id: Dictionary, card_id: String) -> Dictionary:
- 	var item := _batch_item(items_by_id, card_id)
- 	if item == null:
+     var item := _batch_item(items_by_id, card_id)
+     if item == null:
 @@ -206,6 +262,14 @@ static func _apply_review_filter(item: Node, review_filter: String) -> void:
- 	item.set_review_filter(review_filter)
- 
- 
+     item.set_review_filter(review_filter)
+
+
 +static func _apply_focus_asset_id(item: Node, focus_asset_id: String) -> void:
-+	item._set_focus_asset_id(focus_asset_id, false)
++    item._set_focus_asset_id(focus_asset_id, false)
 +
 +
 +static func _apply_selected_asset_ids(item: Node, selected_asset_ids: Array) -> void:
-+	item._set_selected_asset_ids(selected_asset_ids)
++    item._set_selected_asset_ids(selected_asset_ids)
 +
 +
  static func _normalize_review_state(review_state: String) -> String:
- 	if (
- 		review_state
+     if (
+         review_state
 @@ -232,3 +296,40 @@ static func _normalize_review_filter(review_filter: String) -> String:
- 	):
- 		return review_filter
- 	return CanvasBatchCardScript.FILTER_ALL
+     ):
+         return review_filter
+     return CanvasBatchCardScript.FILTER_ALL
 +
 +
 +static func _focus_result(item: Node, focus_asset_id: String) -> Dictionary:
-+	var visible_ids: Array = item.get_visible_asset_ids()
-+	return {
-+		"asset_id": focus_asset_id,
-+		"index": visible_ids.find(focus_asset_id) + 1,
-+		"total": visible_ids.size(),
-+	}
++    var visible_ids: Array = item.get_visible_asset_ids()
++    return {
++        "asset_id": focus_asset_id,
++        "index": visible_ids.find(focus_asset_id) + 1,
++        "total": visible_ids.size(),
++    }
 +
 +
 +static func _focus_after_current_filter(item: Node, focus_asset_id: String) -> String:
-+	return focus_asset_id if item.get_visible_asset_ids().has(focus_asset_id) else ""
++    return focus_asset_id if item.get_visible_asset_ids().has(focus_asset_id) else ""
 +
 +
 +static func _focus_after_filter(
-+	item: Node, focus_asset_id: String, review_filter: String
++    item: Node, focus_asset_id: String, review_filter: String
 +) -> String:
-+	if focus_asset_id.is_empty():
-+		return ""
-+	var normalized_filter := _normalize_review_filter(review_filter)
-+	match normalized_filter:
-+		CanvasBatchCardScript.FILTER_ALL:
-+			return focus_asset_id if item.asset_ids.has(focus_asset_id) else ""
-+		CanvasBatchCardScript.FILTER_PENDING:
-+			if item.asset_ids.has(focus_asset_id) and not item.review_states.has(focus_asset_id):
-+				return focus_asset_id
-+		CanvasBatchCardScript.REVIEW_KEEP:
-+			if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
-+				return focus_asset_id
-+		CanvasBatchCardScript.REVIEW_REJECT:
-+			if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
-+				return focus_asset_id
-+		CanvasBatchCardScript.REVIEW_FLAG:
-+			if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
-+				return focus_asset_id
-+	return ""
++    if focus_asset_id.is_empty():
++        return ""
++    var normalized_filter := _normalize_review_filter(review_filter)
++    match normalized_filter:
++        CanvasBatchCardScript.FILTER_ALL:
++            return focus_asset_id if item.asset_ids.has(focus_asset_id) else ""
++        CanvasBatchCardScript.FILTER_PENDING:
++            if item.asset_ids.has(focus_asset_id) and not item.review_states.has(focus_asset_id):
++                return focus_asset_id
++        CanvasBatchCardScript.REVIEW_KEEP:
++            if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
++                return focus_asset_id
++        CanvasBatchCardScript.REVIEW_REJECT:
++            if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
++                return focus_asset_id
++        CanvasBatchCardScript.REVIEW_FLAG:
++            if String(item.review_states.get(focus_asset_id, "")) == normalized_filter:
++                return focus_asset_id
++    return ""
 diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd b/pixel/ui/canvas/canvas_graph_item_bridge.gd
 index 1c43497..f5c3980 100644
 --- a/pixel/ui/canvas/canvas_graph_item_bridge.gd
 +++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd
 @@ -56,6 +56,7 @@ static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
- 			params["asset_ids"] = _string_array(asset_ids)
- 			params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
- 			params["review_filter"] = _review_filter(params.get("review_filter", "all"))
-+			params["focus_asset_id"] = _focus_asset_id(params.get("focus_asset_id", ""), asset_ids)
- 			node_data["params"] = params
- 			changed = true
- 		nodes.append(node_data)
+             params["asset_ids"] = _string_array(asset_ids)
+             params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
+             params["review_filter"] = _review_filter(params.get("review_filter", "all"))
++            params["focus_asset_id"] = _focus_asset_id(params.get("focus_asset_id", ""), asset_ids)
+             node_data["params"] = params
+             changed = true
+         nodes.append(node_data)
 @@ -125,6 +126,36 @@ static func sync_batch_node_review_filter(item: Node, review_filter: String) ->
- 		ProjectService.set_graph_data(item.graph_id, graph_data, true)
- 
- 
+         ProjectService.set_graph_data(item.graph_id, graph_data, true)
+
+
 +static func sync_batch_node_focus_asset_id(item: Node, focus_asset_id: String) -> void:
-+	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-+		return
++    if not item.has_method("has_graph_binding") or not item.has_graph_binding():
++        return
 +
-+	var graph_data := ProjectService.get_graph_data(item.graph_id)
-+	if graph_data.is_empty():
-+		return
++    var graph_data := ProjectService.get_graph_data(item.graph_id)
++    if graph_data.is_empty():
++        return
 +
-+	var nodes := []
-+	var changed := false
-+	for raw_node in graph_data.get("nodes", []):
-+		if not (raw_node is Dictionary):
-+			nodes.append(raw_node)
-+			continue
-+		var node_data: Dictionary = raw_node
-+		if (
-+			String(node_data.get("id", "")) == item.node_id
-+			and String(node_data.get("type", "")) == "batch"
-+		):
-+			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-+			params["focus_asset_id"] = _focus_asset_id(focus_asset_id, params.get("asset_ids", []))
-+			node_data["params"] = params
-+			changed = true
-+		nodes.append(node_data)
++    var nodes := []
++    var changed := false
++    for raw_node in graph_data.get("nodes", []):
++        if not (raw_node is Dictionary):
++            nodes.append(raw_node)
++            continue
++        var node_data: Dictionary = raw_node
++        if (
++            String(node_data.get("id", "")) == item.node_id
++            and String(node_data.get("type", "")) == "batch"
++        ):
++            var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
++            params["focus_asset_id"] = _focus_asset_id(focus_asset_id, params.get("asset_ids", []))
++            node_data["params"] = params
++            changed = true
++        nodes.append(node_data)
 +
-+	if changed:
-+		graph_data["nodes"] = nodes
-+		ProjectService.set_graph_data(item.graph_id, graph_data, true)
++    if changed:
++        graph_data["nodes"] = nodes
++        ProjectService.set_graph_data(item.graph_id, graph_data, true)
 +
 +
  static func _string_array(value: Variant) -> Array[String]:
- 	var result: Array[String] = []
- 	if value is Array:
+     var result: Array[String] = []
+     if value is Array:
 @@ -167,3 +198,8 @@ static func _review_filter(value: Variant) -> String:
- 	):
- 		return filter
- 	return CanvasBatchCardScript.FILTER_ALL
+     ):
+         return filter
+     return CanvasBatchCardScript.FILTER_ALL
 +
 +
 +static func _focus_asset_id(value: Variant, valid_asset_ids: Variant) -> String:
-+	var asset_id := String(value)
-+	return asset_id if _string_array(valid_asset_ids).has(asset_id) else ""
++    var asset_id := String(value)
++    return asset_id if _string_array(valid_asset_ids).has(asset_id) else ""
 diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
 index b81dd3f..4749072 100644
 --- a/pixel/ui/canvas/infinite_canvas.gd
 +++ b/pixel/ui/canvas/infinite_canvas.gd
 @@ -522,6 +522,12 @@ func _set_batch_review_state(
- 	)
- 
- 
+     )
+
+
 +func _focus_batch_relative(card_id: String, step: int, record_undo: bool = true) -> Dictionary:
-+	return BatchOps.focus_relative(
-+		_items_by_id, card_id, step, record_undo, _select_only, _emit_canvas_changed
-+	)
++    return BatchOps.focus_relative(
++        _items_by_id, card_id, step, record_undo, _select_only, _emit_canvas_changed
++    )
 +
 +
  func _split_batch_selection(card_id: String) -> Node:
- 	var spec: Dictionary = BatchOps.split_selection_spec(_items_by_id, card_id)
- 	if spec.is_empty():
+     var spec: Dictionary = BatchOps.split_selection_spec(_items_by_id, card_id)
+     if spec.is_empty():
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index 0aa0545..f66c064 100644
 --- a/pixel/ui/shell/m2_1_ui_controller.gd
 +++ b/pixel/ui/shell/m2_1_ui_controller.gd
 @@ -501,31 +501,53 @@ func _mark_batch_review_state_for_card(
  func _handle_batch_review_shortcut(event: InputEventKey) -> bool:
- 	if event.is_command_or_control_pressed() or event.alt_pressed:
- 		return false
-+	if _handle_batch_focus_shortcut(event):
-+		return true
- 	var card_id := _selected_batch_card_id()
-+	var review_state := ""
-+	var status_format := ""
- 	match event.keycode:
- 		KEY_K:
--			_mark_batch_review_state_for_card(
--				card_id, CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
--			)
--			return true
-+			review_state = CanvasBatchCardScript.REVIEW_KEEP
-+			status_format = Strings.STATUS_BATCH_MARK_KEEP
- 		KEY_R:
--			_mark_batch_review_state_for_card(
--				card_id, CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
--			)
--			return true
-+			review_state = CanvasBatchCardScript.REVIEW_REJECT
-+			status_format = Strings.STATUS_BATCH_MARK_REJECT
- 		KEY_F:
--			_mark_batch_review_state_for_card(
--				card_id, CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
--			)
--			return true
-+			review_state = CanvasBatchCardScript.REVIEW_FLAG
-+			status_format = Strings.STATUS_BATCH_MARK_FLAG
- 		KEY_C:
--			_mark_batch_review_state_for_card(
--				card_id, CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
--			)
--			return true
-+			review_state = CanvasBatchCardScript.REVIEW_NONE
-+			status_format = Strings.STATUS_BATCH_MARK_CLEAR
-+		_:
-+			return false
-+	_mark_batch_review_state_for_card(card_id, review_state, status_format)
-+	return true
+     if event.is_command_or_control_pressed() or event.alt_pressed:
+         return false
++    if _handle_batch_focus_shortcut(event):
++        return true
+     var card_id := _selected_batch_card_id()
++    var review_state := ""
++    var status_format := ""
+     match event.keycode:
+         KEY_K:
+-            _mark_batch_review_state_for_card(
+-                card_id, CanvasBatchCardScript.REVIEW_KEEP, Strings.STATUS_BATCH_MARK_KEEP
+-            )
+-            return true
++            review_state = CanvasBatchCardScript.REVIEW_KEEP
++            status_format = Strings.STATUS_BATCH_MARK_KEEP
+         KEY_R:
+-            _mark_batch_review_state_for_card(
+-                card_id, CanvasBatchCardScript.REVIEW_REJECT, Strings.STATUS_BATCH_MARK_REJECT
+-            )
+-            return true
++            review_state = CanvasBatchCardScript.REVIEW_REJECT
++            status_format = Strings.STATUS_BATCH_MARK_REJECT
+         KEY_F:
+-            _mark_batch_review_state_for_card(
+-                card_id, CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_MARK_FLAG
+-            )
+-            return true
++            review_state = CanvasBatchCardScript.REVIEW_FLAG
++            status_format = Strings.STATUS_BATCH_MARK_FLAG
+         KEY_C:
+-            _mark_batch_review_state_for_card(
+-                card_id, CanvasBatchCardScript.REVIEW_NONE, Strings.STATUS_BATCH_MARK_CLEAR
+-            )
+-            return true
++            review_state = CanvasBatchCardScript.REVIEW_NONE
++            status_format = Strings.STATUS_BATCH_MARK_CLEAR
++        _:
++            return false
++    _mark_batch_review_state_for_card(card_id, review_state, status_format)
++    return true
 +
 +
 +func _handle_batch_focus_shortcut(event: InputEventKey) -> bool:
-+	match event.keycode:
-+		KEY_RIGHT, KEY_DOWN:
-+			return _focus_selected_batch_relative(1)
-+		KEY_LEFT, KEY_UP:
-+			return _focus_selected_batch_relative(-1)
- 	return false
- 
- 
++    match event.keycode:
++        KEY_RIGHT, KEY_DOWN:
++            return _focus_selected_batch_relative(1)
++        KEY_LEFT, KEY_UP:
++            return _focus_selected_batch_relative(-1)
+     return false
+
+
 +func _focus_selected_batch_relative(step: int) -> bool:
-+	var card_id := _selected_batch_card_id()
-+	if card_id.is_empty():
-+		return false
-+	var focus_result: Dictionary = _canvas._focus_batch_relative(card_id, step, true)
-+	if focus_result.is_empty():
-+		_status_label.text = Strings.STATUS_BATCH_FOCUS_EMPTY
-+		return true
-+	_status_label.text = (
-+		Strings.STATUS_BATCH_FOCUS_FORMAT % [focus_result["index"], focus_result["total"]]
-+	)
-+	return true
++    var card_id := _selected_batch_card_id()
++    if card_id.is_empty():
++        return false
++    var focus_result: Dictionary = _canvas._focus_batch_relative(card_id, step, true)
++    if focus_result.is_empty():
++        _status_label.text = Strings.STATUS_BATCH_FOCUS_EMPTY
++        return true
++    _status_label.text = (
++        Strings.STATUS_BATCH_FOCUS_FORMAT % [focus_result["index"], focus_result["total"]]
++    )
++    return true
 +
 +
  func _selected_batch_card_id() -> String:
- 	var selected_ids: Array = _canvas.get_selected_ids()
- 	if selected_ids.is_empty():
+     var selected_ids: Array = _canvas.get_selected_ids()
+     if selected_ids.is_empty():
 diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
 index 6b00e04..ba97d1e 100644
 --- a/pixel/ui/shell/strings.gd
@@ -5417,7 +5918,7 @@ index 5f675ae..1239323 100644
 +++ b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
 @@ -127,7 +127,7 @@ func get_canvas_actions() -> Array[Dictionary]
  新概念，本模型的核心。装一个批次的图片队列，是「AI 输出自由」与「批量加工」的落脚点。
- 
+
  - **双身份**：① 图节点（`type=batch`，`category=container`，`is_canvas_resident()=true`）；② 画布卡（PROJECT-FORMAT canvas.json 的 `node` 引用，特化渲染为容器卡）。
 -- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），二者均随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
 +- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），可选 `focus_asset_id` 记录当前键盘审阅焦点，三者均随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
@@ -5473,113 +5974,113 @@ index c97601c..e5ca2fe 100644
 --- a/pixel/tests/unit/test_canvas_batch_card.gd
 +++ b/pixel/tests/unit/test_canvas_batch_card.gd
 @@ -149,6 +149,38 @@ func test_canvas_batch_card_focuses_visible_review_thumbnails() -> void:
- 	assert_eq(item["focus_asset_id"], ids[1])
- 
- 
+     assert_eq(item["focus_asset_id"], ids[1])
+
+
 +func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var before_ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
-+	var after_ids := [
-+		_register_asset(Color.GREEN, "green"),
-+		_register_asset(Color.YELLOW, "yellow"),
-+	]
-+	var card: Node = canvas._add_batch_card(before_ids, Vector2(16, 24), "Batch", "batch_1", false)
++    var before_ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++    var after_ids := [
++        _register_asset(Color.GREEN, "green"),
++        _register_asset(Color.YELLOW, "yellow"),
++    ]
++    var card: Node = canvas._add_batch_card(before_ids, Vector2(16, 24), "Batch", "batch_1", false)
 +
-+	canvas._replace_batch_asset_ids("batch_1", after_ids, false, before_ids)
-+	assert_eq(card.asset_ids, after_ids)
-+	assert_eq(card._get_compare_asset_ids(), before_ids)
-+	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_CURRENT)
-+	assert_eq(card.get_visible_asset_ids(), after_ids)
++    canvas._replace_batch_asset_ids("batch_1", after_ids, false, before_ids)
++    assert_eq(card.asset_ids, after_ids)
++    assert_eq(card._get_compare_asset_ids(), before_ids)
++    assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_CURRENT)
++    assert_eq(card.get_visible_asset_ids(), after_ids)
 +
-+	assert_true(
-+		canvas._set_batch_compare_mode("batch_1", CanvasBatchCardScript.COMPARE_PREVIOUS, false)
-+	)
-+	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
-+	assert_eq(card._texture_asset_id_for(after_ids[0]), before_ids[0])
-+	assert_eq(card._texture_asset_id_for(after_ids[1]), before_ids[1])
++    assert_true(
++        canvas._set_batch_compare_mode("batch_1", CanvasBatchCardScript.COMPARE_PREVIOUS, false)
++    )
++    assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
++    assert_eq(card._texture_asset_id_for(after_ids[0]), before_ids[0])
++    assert_eq(card._texture_asset_id_for(after_ids[1]), before_ids[1])
 +
-+	var data: Dictionary = canvas.export_canvas_data()
-+	var item: Dictionary = data["items"][0]
-+	assert_eq(item["compare_asset_ids"], before_ids)
-+	assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
++    var data: Dictionary = canvas.export_canvas_data()
++    var item: Dictionary = data["items"][0]
++    assert_eq(item["compare_asset_ids"], before_ids)
++    assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
 +
 +
  func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 @@ -316,6 +348,58 @@ func test_graph_batch_card_persists_focus_asset_id_in_graph_params() -> void:
- 	assert_eq(reloaded_card._get_focus_asset_id(), ids[0])
- 
- 
+     assert_eq(reloaded_card._get_focus_asset_id(), ids[0])
+
+
 +func test_graph_batch_card_persists_compare_state_in_graph_params() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var before_ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
-+	var after_ids := [
-+		_register_asset(Color.GREEN, "green"),
-+		_register_asset(Color.YELLOW, "yellow"),
-+	]
-+	var graph := GraphScript.new()
-+	graph.id = "graph_batch_compare_test"
-+	graph.add_node(
-+		BatchNodeScript.new(),
-+		"batch_1",
-+		{"label": "Candidates", "asset_ids": before_ids},
-+		Vector2(16, 24)
-+	)
-+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++    var before_ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++    var after_ids := [
++        _register_asset(Color.GREEN, "green"),
++        _register_asset(Color.YELLOW, "yellow"),
++    ]
++    var graph := GraphScript.new()
++    graph.id = "graph_batch_compare_test"
++    graph.add_node(
++        BatchNodeScript.new(),
++        "batch_1",
++        {"label": "Candidates", "asset_ids": before_ids},
++        Vector2(16, 24)
++    )
++    ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 +
-+	var card: Node = canvas._add_batch_card(
-+		before_ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
-+	)
-+	canvas._replace_batch_asset_ids("node_item_1", after_ids, false, before_ids)
-+	assert_true(
-+		canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_PREVIOUS, false)
-+	)
-+	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
++    var card: Node = canvas._add_batch_card(
++        before_ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
++    )
++    canvas._replace_batch_asset_ids("node_item_1", after_ids, false, before_ids)
++    assert_true(
++        canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_PREVIOUS, false)
++    )
++    assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
 +
-+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
-+	var batch_node: Dictionary = graph_data["nodes"][0]
-+	assert_eq(batch_node["params"]["asset_ids"], after_ids)
-+	assert_eq(batch_node["params"]["compare_asset_ids"], before_ids)
-+	assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
++    var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
++    var batch_node: Dictionary = graph_data["nodes"][0]
++    assert_eq(batch_node["params"]["asset_ids"], after_ids)
++    assert_eq(batch_node["params"]["compare_asset_ids"], before_ids)
++    assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
 +
-+	var canvas_data: Dictionary = canvas.export_canvas_data()
-+	assert_false(Dictionary(canvas_data["items"][0]).has("compare_asset_ids"))
-+	assert_false(Dictionary(canvas_data["items"][0]).has("compare_mode"))
++    var canvas_data: Dictionary = canvas.export_canvas_data()
++    assert_false(Dictionary(canvas_data["items"][0]).has("compare_asset_ids"))
++    assert_false(Dictionary(canvas_data["items"][0]).has("compare_mode"))
 +
-+	var reloaded_canvas: Control = CanvasScript.new()
-+	reloaded_canvas.size = Vector2(512, 512)
-+	add_child_autofree(reloaded_canvas)
-+	await wait_process_frames(2)
-+	reloaded_canvas.load_canvas_data(canvas_data)
-+	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
++    var reloaded_canvas: Control = CanvasScript.new()
++    reloaded_canvas.size = Vector2(512, 512)
++    add_child_autofree(reloaded_canvas)
++    await wait_process_frames(2)
++    reloaded_canvas.load_canvas_data(canvas_data)
++    var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
 +
-+	assert_eq(reloaded_card.asset_ids, after_ids)
-+	assert_eq(reloaded_card._get_compare_asset_ids(), before_ids)
-+	assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
++    assert_eq(reloaded_card.asset_ids, after_ids)
++    assert_eq(reloaded_card._get_compare_asset_ids(), before_ids)
++    assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
 +
 +
  func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
 index 0d4f595..f121750 100644
 --- a/pixel/ui/canvas/canvas_batch_card.gd
 +++ b/pixel/ui/canvas/canvas_batch_card.gd
 @@ -5,6 +5,7 @@ extends Node2D
  ## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
- 
+
  const IdUtil := preload("res://core/util/id_util.gd")
 +const Strings := preload("res://ui/shell/strings.gd")
- 
+
  const CARD_WIDTH := 600
  const HEADER_HEIGHT := 40
 @@ -25,6 +26,8 @@ const REVIEW_REJECT := "reject"
@@ -5599,415 +6100,415 @@ index 0d4f595..f121750 100644
 +var compare_mode := COMPARE_CURRENT
  var label := ""
  var locked := false
- 
+
 @@ -65,6 +70,12 @@ func setup_from_data(data: Dictionary) -> void:
- 	focus_asset_id = _normalize_focus_asset_id(
- 		String(graph_params.get("focus_asset_id", data.get("focus_asset_id", "")))
- 	)
-+	compare_asset_ids = _aligned_compare_asset_ids(
-+		graph_params.get("compare_asset_ids", data.get("compare_asset_ids", []))
-+	)
-+	compare_mode = _normalize_compare_mode(
-+		String(graph_params.get("compare_mode", data.get("compare_mode", COMPARE_CURRENT)))
-+	)
- 	_prune_selected_to_visible()
- 	_prune_focus_to_visible()
- 	locked = bool(data.get("locked", false))
+     focus_asset_id = _normalize_focus_asset_id(
+         String(graph_params.get("focus_asset_id", data.get("focus_asset_id", "")))
+     )
++    compare_asset_ids = _aligned_compare_asset_ids(
++        graph_params.get("compare_asset_ids", data.get("compare_asset_ids", []))
++    )
++    compare_mode = _normalize_compare_mode(
++        String(graph_params.get("compare_mode", data.get("compare_mode", COMPARE_CURRENT)))
++    )
+     _prune_selected_to_visible()
+     _prune_focus_to_visible()
+     locked = bool(data.get("locked", false))
 @@ -96,6 +107,8 @@ func to_canvas_data() -> Dictionary:
- 		"review_states": review_states.duplicate(true),
- 		"review_filter": review_filter,
- 		"focus_asset_id": focus_asset_id,
-+		"compare_asset_ids": compare_asset_ids.duplicate(),
-+		"compare_mode": compare_mode,
- 		"label": label,
- 		"position": [int(round(position.x)), int(round(position.y))],
- 		"z_index": z_index,
+         "review_states": review_states.duplicate(true),
+         "review_filter": review_filter,
+         "focus_asset_id": focus_asset_id,
++        "compare_asset_ids": compare_asset_ids.duplicate(),
++        "compare_mode": compare_mode,
+         "label": label,
+         "position": [int(round(position.x)), int(round(position.y))],
+         "z_index": z_index,
 @@ -132,6 +145,8 @@ func set_asset_ids(new_asset_ids: Array) -> void:
- 		if not asset_ids.has(selected_id):
- 			selected_asset_ids.erase(selected_id)
- 	review_states = _review_state_map(review_states, asset_ids)
-+	compare_asset_ids = _aligned_compare_asset_ids(compare_asset_ids)
-+	compare_mode = _normalize_compare_mode(compare_mode)
- 	_prune_selected_to_visible()
- 	_prune_focus_to_visible()
- 	_rebuild_thumbnails()
+         if not asset_ids.has(selected_id):
+             selected_asset_ids.erase(selected_id)
+     review_states = _review_state_map(review_states, asset_ids)
++    compare_asset_ids = _aligned_compare_asset_ids(compare_asset_ids)
++    compare_mode = _normalize_compare_mode(compare_mode)
+     _prune_selected_to_visible()
+     _prune_focus_to_visible()
+     _rebuild_thumbnails()
 @@ -235,6 +250,26 @@ func _focus_asset_id_relative(step: int) -> String:
- 	return visible_ids[posmod(anchor_index + step, visible_ids.size())]
- 
- 
+     return visible_ids[posmod(anchor_index + step, visible_ids.size())]
+
+
 +func _get_compare_asset_ids() -> Array[String]:
-+	return compare_asset_ids.duplicate()
++    return compare_asset_ids.duplicate()
 +
 +
 +func _get_compare_mode() -> String:
-+	return compare_mode
++    return compare_mode
 +
 +
 +func _set_compare_state(new_compare_asset_ids: Array, new_compare_mode: String) -> void:
-+	compare_asset_ids = _aligned_compare_asset_ids(new_compare_asset_ids)
-+	compare_mode = _normalize_compare_mode(new_compare_mode)
-+	_rebuild_thumbnails()
-+	queue_redraw()
++    compare_asset_ids = _aligned_compare_asset_ids(new_compare_asset_ids)
++    compare_mode = _normalize_compare_mode(new_compare_mode)
++    _rebuild_thumbnails()
++    queue_redraw()
 +
 +
 +func _set_compare_mode(new_compare_mode: String) -> void:
-+	compare_mode = _normalize_compare_mode(new_compare_mode)
-+	queue_redraw()
++    compare_mode = _normalize_compare_mode(new_compare_mode)
++    queue_redraw()
 +
 +
  func toggle_asset_at_world(world_position: Vector2) -> bool:
- 	var index := asset_index_at_world(world_position)
- 	var visible_ids := get_visible_asset_ids()
+     var index := asset_index_at_world(world_position)
+     var visible_ids := get_visible_asset_ids()
 @@ -280,6 +315,8 @@ func _draw() -> void:
- 		var title := "%s (%d)" % [label, asset_ids.size()]
- 		if visible_count != asset_ids.size():
- 			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
-+		if compare_mode == COMPARE_PREVIOUS:
-+			title = "%s - %s" % [title, Strings.BATCH_COMPARE_PREVIOUS_SUFFIX]
- 		draw_string(
- 			_font,
- 			Vector2(PADDING, 28),
+         var title := "%s (%d)" % [label, asset_ids.size()]
+         if visible_count != asset_ids.size():
+             title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
++        if compare_mode == COMPARE_PREVIOUS:
++            title = "%s - %s" % [title, Strings.BATCH_COMPARE_PREVIOUS_SUFFIX]
+         draw_string(
+             _font,
+             Vector2(PADDING, 28),
 @@ -300,7 +337,7 @@ func _draw() -> void:
- 
+
  func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
- 	draw_rect(rect, THUMB_BACKGROUND, true)
--	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
-+	var texture: Texture2D = _thumbnail_textures.get(_texture_asset_id_for(asset_id), null)
- 	if texture != null:
- 		var image_size := texture.get_size()
- 		var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
+     draw_rect(rect, THUMB_BACKGROUND, true)
+-    var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
++    var texture: Texture2D = _thumbnail_textures.get(_texture_asset_id_for(asset_id), null)
+     if texture != null:
+         var image_size := texture.get_size()
+         var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
 @@ -382,7 +419,11 @@ func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
- 
+
  func _rebuild_thumbnails() -> void:
- 	_thumbnail_textures.clear()
--	for asset_id in asset_ids:
-+	var texture_asset_ids := asset_ids.duplicate()
-+	for compare_asset_id in compare_asset_ids:
-+		if not texture_asset_ids.has(compare_asset_id):
-+			texture_asset_ids.append(compare_asset_id)
-+	for asset_id in texture_asset_ids:
- 		var image := AssetLibrary.get_image(asset_id)
- 		if image == null:
- 			continue
+     _thumbnail_textures.clear()
+-    for asset_id in asset_ids:
++    var texture_asset_ids := asset_ids.duplicate()
++    for compare_asset_id in compare_asset_ids:
++        if not texture_asset_ids.has(compare_asset_id):
++            texture_asset_ids.append(compare_asset_id)
++    for asset_id in texture_asset_ids:
+         var image := AssetLibrary.get_image(asset_id)
+         if image == null:
+             continue
 @@ -460,6 +501,19 @@ func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
- 	return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
- 
- 
+     return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
+
+
 +func _normalize_compare_mode(new_compare_mode: String) -> String:
-+	if new_compare_mode == COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
-+		return COMPARE_PREVIOUS
-+	return COMPARE_CURRENT
++    if new_compare_mode == COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
++        return COMPARE_PREVIOUS
++    return COMPARE_CURRENT
 +
 +
 +func _aligned_compare_asset_ids(value: Variant) -> Array[String]:
-+	var result := _string_array(value)
-+	if result.size() != asset_ids.size():
-+		return []
-+	return result
++    var result := _string_array(value)
++    if result.size() != asset_ids.size():
++        return []
++    return result
 +
 +
  func _prune_selected_to_visible() -> void:
- 	var visible_lookup := _visible_lookup()
- 	for selected_id in selected_asset_ids.duplicate():
+     var visible_lookup := _visible_lookup()
+     for selected_id in selected_asset_ids.duplicate():
 @@ -495,6 +549,15 @@ func _visible_selected_array(value: Array) -> Array[String]:
- 	return result
- 
- 
+     return result
+
+
 +func _texture_asset_id_for(asset_id: String) -> String:
-+	if compare_mode != COMPARE_PREVIOUS:
-+		return asset_id
-+	var index := asset_ids.find(asset_id)
-+	if index < 0 or index >= compare_asset_ids.size():
-+		return asset_id
-+	return compare_asset_ids[index]
++    if compare_mode != COMPARE_PREVIOUS:
++        return asset_id
++    var index := asset_ids.find(asset_id)
++    if index < 0 or index >= compare_asset_ids.size():
++        return asset_id
++    return compare_asset_ids[index]
 +
 +
  func _visible_lookup() -> Dictionary:
- 	return _lookup(get_visible_asset_ids())
- 
+     return _lookup(get_visible_asset_ids())
+
 diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
 index f6e3959..7bbb76a 100644
 --- a/pixel/ui/canvas/canvas_batch_ops.gd
 +++ b/pixel/ui/canvas/canvas_batch_ops.gd
 @@ -41,6 +41,7 @@ static func replace_asset_ids(
- 	card_id: String,
- 	new_asset_ids: Array,
- 	record_undo: bool,
-+	compare_asset_ids: Array,
- 	select_only: Callable,
- 	emit_changed: Callable
+     card_id: String,
+     new_asset_ids: Array,
+     record_undo: bool,
++    compare_asset_ids: Array,
+     select_only: Callable,
+     emit_changed: Callable
  ) -> void:
 @@ -51,19 +52,27 @@ static func replace_asset_ids(
- 	var before_review_states: Dictionary = item.get_review_states()
- 	var before_review_filter: String = item.get_review_filter()
- 	var before_focus_asset_id: String = item._get_focus_asset_id()
-+	var before_compare_asset_ids: Array = item._get_compare_asset_ids()
-+	var before_compare_mode: String = item._get_compare_mode()
- 	var after := new_asset_ids.duplicate()
- 	var after_review_states := {}
- 	var after_review_filter := CanvasBatchCardScript.FILTER_ALL
- 	var after_focus_asset_id := ""
-+	var after_compare_asset_ids := _aligned_compare_asset_ids(compare_asset_ids, after)
-+	var after_compare_mode := CanvasBatchCardScript.COMPARE_CURRENT
- 	var do_replace := func() -> void:
- 		GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
- 		_apply_review_states(item, after_review_states)
- 		_apply_review_filter(item, after_review_filter)
- 		_apply_focus_asset_id(item, after_focus_asset_id)
-+		_apply_compare_state(item, after_compare_asset_ids, after_compare_mode)
- 		GraphItemBridge.sync_batch_node_asset_ids(item, after)
- 		GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
- 		GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
- 		GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
-+		GraphItemBridge.sync_batch_node_compare_state(
-+			item, after_compare_asset_ids, after_compare_mode
-+		)
- 		select_only.call([card_id])
- 		emit_changed.call()
- 	var undo_replace := func() -> void:
+     var before_review_states: Dictionary = item.get_review_states()
+     var before_review_filter: String = item.get_review_filter()
+     var before_focus_asset_id: String = item._get_focus_asset_id()
++    var before_compare_asset_ids: Array = item._get_compare_asset_ids()
++    var before_compare_mode: String = item._get_compare_mode()
+     var after := new_asset_ids.duplicate()
+     var after_review_states := {}
+     var after_review_filter := CanvasBatchCardScript.FILTER_ALL
+     var after_focus_asset_id := ""
++    var after_compare_asset_ids := _aligned_compare_asset_ids(compare_asset_ids, after)
++    var after_compare_mode := CanvasBatchCardScript.COMPARE_CURRENT
+     var do_replace := func() -> void:
+         GraphItemBridge.apply_batch_asset_ids(item, after, AssetLibrary)
+         _apply_review_states(item, after_review_states)
+         _apply_review_filter(item, after_review_filter)
+         _apply_focus_asset_id(item, after_focus_asset_id)
++        _apply_compare_state(item, after_compare_asset_ids, after_compare_mode)
+         GraphItemBridge.sync_batch_node_asset_ids(item, after)
+         GraphItemBridge.sync_batch_node_review_states(item, after_review_states)
+         GraphItemBridge.sync_batch_node_review_filter(item, after_review_filter)
+         GraphItemBridge.sync_batch_node_focus_asset_id(item, after_focus_asset_id)
++        GraphItemBridge.sync_batch_node_compare_state(
++            item, after_compare_asset_ids, after_compare_mode
++        )
+         select_only.call([card_id])
+         emit_changed.call()
+     var undo_replace := func() -> void:
 @@ -71,10 +80,14 @@ static func replace_asset_ids(
- 		_apply_review_states(item, before_review_states)
- 		_apply_review_filter(item, before_review_filter)
- 		_apply_focus_asset_id(item, before_focus_asset_id)
-+		_apply_compare_state(item, before_compare_asset_ids, before_compare_mode)
- 		GraphItemBridge.sync_batch_node_asset_ids(item, before)
- 		GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
- 		GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
- 		GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
-+		GraphItemBridge.sync_batch_node_compare_state(
-+			item, before_compare_asset_ids, before_compare_mode
-+		)
- 		select_only.call([card_id])
- 		emit_changed.call()
- 	if record_undo:
+         _apply_review_states(item, before_review_states)
+         _apply_review_filter(item, before_review_filter)
+         _apply_focus_asset_id(item, before_focus_asset_id)
++        _apply_compare_state(item, before_compare_asset_ids, before_compare_mode)
+         GraphItemBridge.sync_batch_node_asset_ids(item, before)
+         GraphItemBridge.sync_batch_node_review_states(item, before_review_states)
+         GraphItemBridge.sync_batch_node_review_filter(item, before_review_filter)
+         GraphItemBridge.sync_batch_node_focus_asset_id(item, before_focus_asset_id)
++        GraphItemBridge.sync_batch_node_compare_state(
++            item, before_compare_asset_ids, before_compare_mode
++        )
+         select_only.call([card_id])
+         emit_changed.call()
+     if record_undo:
 @@ -171,6 +184,46 @@ static func set_review_filter(
- 	return true
- 
- 
+     return true
+
+
 +static func set_compare_mode(
-+	items_by_id: Dictionary,
-+	card_id: String,
-+	compare_mode: String,
-+	record_undo: bool,
-+	select_only: Callable,
-+	emit_changed: Callable
++    items_by_id: Dictionary,
++    card_id: String,
++    compare_mode: String,
++    record_undo: bool,
++    select_only: Callable,
++    emit_changed: Callable
 +) -> bool:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return false
-+	var before_mode: String = item._get_compare_mode()
-+	var after_mode := _normalize_compare_mode(item, compare_mode)
-+	if before_mode == after_mode:
-+		return true
-+	if (
-+		after_mode == CanvasBatchCardScript.COMPARE_PREVIOUS
-+		and item._get_compare_asset_ids().is_empty()
-+	):
-+		return false
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return false
++    var before_mode: String = item._get_compare_mode()
++    var after_mode := _normalize_compare_mode(item, compare_mode)
++    if before_mode == after_mode:
++        return true
++    if (
++        after_mode == CanvasBatchCardScript.COMPARE_PREVIOUS
++        and item._get_compare_asset_ids().is_empty()
++    ):
++        return false
 +
-+	var compare_asset_ids: Array = item._get_compare_asset_ids()
-+	var do_compare := func() -> void:
-+		_apply_compare_mode(item, after_mode)
-+		GraphItemBridge.sync_batch_node_compare_state(item, compare_asset_ids, after_mode)
-+		select_only.call([card_id])
-+		emit_changed.call()
-+	var undo_compare := func() -> void:
-+		_apply_compare_mode(item, before_mode)
-+		GraphItemBridge.sync_batch_node_compare_state(item, compare_asset_ids, before_mode)
-+		select_only.call([card_id])
-+		emit_changed.call()
++    var compare_asset_ids: Array = item._get_compare_asset_ids()
++    var do_compare := func() -> void:
++        _apply_compare_mode(item, after_mode)
++        GraphItemBridge.sync_batch_node_compare_state(item, compare_asset_ids, after_mode)
++        select_only.call([card_id])
++        emit_changed.call()
++    var undo_compare := func() -> void:
++        _apply_compare_mode(item, before_mode)
++        GraphItemBridge.sync_batch_node_compare_state(item, compare_asset_ids, before_mode)
++        select_only.call([card_id])
++        emit_changed.call()
 +
-+	if record_undo:
-+		UndoService.perform_action("Set batch compare mode", do_compare, undo_compare)
-+	else:
-+		do_compare.call()
-+	return true
++    if record_undo:
++        UndoService.perform_action("Set batch compare mode", do_compare, undo_compare)
++    else:
++        do_compare.call()
++    return true
 +
 +
  static func focus_relative(
- 	items_by_id: Dictionary,
- 	card_id: String,
+     items_by_id: Dictionary,
+     card_id: String,
 @@ -270,6 +323,16 @@ static func _apply_selected_asset_ids(item: Node, selected_asset_ids: Array) ->
- 	item._set_selected_asset_ids(selected_asset_ids)
- 
- 
+     item._set_selected_asset_ids(selected_asset_ids)
+
+
 +static func _apply_compare_state(
-+	item: Node, compare_asset_ids: Array, compare_mode: String
++    item: Node, compare_asset_ids: Array, compare_mode: String
 +) -> void:
-+	item._set_compare_state(compare_asset_ids, compare_mode)
++    item._set_compare_state(compare_asset_ids, compare_mode)
 +
 +
 +static func _apply_compare_mode(item: Node, compare_mode: String) -> void:
-+	item._set_compare_mode(compare_mode)
++    item._set_compare_mode(compare_mode)
 +
 +
  static func _normalize_review_state(review_state: String) -> String:
- 	if (
- 		review_state
+     if (
+         review_state
 @@ -298,6 +361,24 @@ static func _normalize_review_filter(review_filter: String) -> String:
- 	return CanvasBatchCardScript.FILTER_ALL
- 
- 
+     return CanvasBatchCardScript.FILTER_ALL
+
+
 +static func _normalize_compare_mode(item: Node, compare_mode: String) -> String:
-+	if (
-+		compare_mode == CanvasBatchCardScript.COMPARE_PREVIOUS
-+		and not item._get_compare_asset_ids().is_empty()
-+	):
-+		return CanvasBatchCardScript.COMPARE_PREVIOUS
-+	return CanvasBatchCardScript.COMPARE_CURRENT
++    if (
++        compare_mode == CanvasBatchCardScript.COMPARE_PREVIOUS
++        and not item._get_compare_asset_ids().is_empty()
++    ):
++        return CanvasBatchCardScript.COMPARE_PREVIOUS
++    return CanvasBatchCardScript.COMPARE_CURRENT
 +
 +
 +static func _aligned_compare_asset_ids(compare_asset_ids: Array, current_asset_ids: Array) -> Array:
-+	var result := []
-+	if compare_asset_ids.size() != current_asset_ids.size():
-+		return result
-+	for raw_id in compare_asset_ids:
-+		result.append(String(raw_id))
-+	return result
++    var result := []
++    if compare_asset_ids.size() != current_asset_ids.size():
++        return result
++    for raw_id in compare_asset_ids:
++        result.append(String(raw_id))
++    return result
 +
 +
  static func _focus_result(item: Node, focus_asset_id: String) -> Dictionary:
- 	var visible_ids: Array = item.get_visible_asset_ids()
- 	return {
+     var visible_ids: Array = item.get_visible_asset_ids()
+     return {
 diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd b/pixel/ui/canvas/canvas_graph_item_bridge.gd
 index f5c3980..cebc357 100644
 --- a/pixel/ui/canvas/canvas_graph_item_bridge.gd
 +++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd
 @@ -57,6 +57,12 @@ static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
- 			params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
- 			params["review_filter"] = _review_filter(params.get("review_filter", "all"))
- 			params["focus_asset_id"] = _focus_asset_id(params.get("focus_asset_id", ""), asset_ids)
-+			params["compare_asset_ids"] = _compare_asset_ids(
-+				params.get("compare_asset_ids", []), asset_ids
-+			)
-+			params["compare_mode"] = _compare_mode(
-+				params.get("compare_mode", "current"), params["compare_asset_ids"]
-+			)
- 			node_data["params"] = params
- 			changed = true
- 		nodes.append(node_data)
+             params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
+             params["review_filter"] = _review_filter(params.get("review_filter", "all"))
+             params["focus_asset_id"] = _focus_asset_id(params.get("focus_asset_id", ""), asset_ids)
++            params["compare_asset_ids"] = _compare_asset_ids(
++                params.get("compare_asset_ids", []), asset_ids
++            )
++            params["compare_mode"] = _compare_mode(
++                params.get("compare_mode", "current"), params["compare_asset_ids"]
++            )
+             node_data["params"] = params
+             changed = true
+         nodes.append(node_data)
 @@ -156,6 +162,41 @@ static func sync_batch_node_focus_asset_id(item: Node, focus_asset_id: String) -
- 		ProjectService.set_graph_data(item.graph_id, graph_data, true)
- 
- 
+         ProjectService.set_graph_data(item.graph_id, graph_data, true)
+
+
 +static func sync_batch_node_compare_state(
-+	item: Node, compare_asset_ids: Array, compare_mode: String
++    item: Node, compare_asset_ids: Array, compare_mode: String
 +) -> void:
-+	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-+		return
++    if not item.has_method("has_graph_binding") or not item.has_graph_binding():
++        return
 +
-+	var graph_data := ProjectService.get_graph_data(item.graph_id)
-+	if graph_data.is_empty():
-+		return
++    var graph_data := ProjectService.get_graph_data(item.graph_id)
++    if graph_data.is_empty():
++        return
 +
-+	var nodes := []
-+	var changed := false
-+	for raw_node in graph_data.get("nodes", []):
-+		if not (raw_node is Dictionary):
-+			nodes.append(raw_node)
-+			continue
-+		var node_data: Dictionary = raw_node
-+		if (
-+			String(node_data.get("id", "")) == item.node_id
-+			and String(node_data.get("type", "")) == "batch"
-+		):
-+			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-+			params["compare_asset_ids"] = _compare_asset_ids(
-+				compare_asset_ids, params.get("asset_ids", [])
-+			)
-+			params["compare_mode"] = _compare_mode(compare_mode, params["compare_asset_ids"])
-+			node_data["params"] = params
-+			changed = true
-+		nodes.append(node_data)
++    var nodes := []
++    var changed := false
++    for raw_node in graph_data.get("nodes", []):
++        if not (raw_node is Dictionary):
++            nodes.append(raw_node)
++            continue
++        var node_data: Dictionary = raw_node
++        if (
++            String(node_data.get("id", "")) == item.node_id
++            and String(node_data.get("type", "")) == "batch"
++        ):
++            var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
++            params["compare_asset_ids"] = _compare_asset_ids(
++                compare_asset_ids, params.get("asset_ids", [])
++            )
++            params["compare_mode"] = _compare_mode(compare_mode, params["compare_asset_ids"])
++            node_data["params"] = params
++            changed = true
++        nodes.append(node_data)
 +
-+	if changed:
-+		graph_data["nodes"] = nodes
-+		ProjectService.set_graph_data(item.graph_id, graph_data, true)
++    if changed:
++        graph_data["nodes"] = nodes
++        ProjectService.set_graph_data(item.graph_id, graph_data, true)
 +
 +
  static func _string_array(value: Variant) -> Array[String]:
- 	var result: Array[String] = []
- 	if value is Array:
+     var result: Array[String] = []
+     if value is Array:
 @@ -203,3 +244,17 @@ static func _review_filter(value: Variant) -> String:
  static func _focus_asset_id(value: Variant, valid_asset_ids: Variant) -> String:
- 	var asset_id := String(value)
- 	return asset_id if _string_array(valid_asset_ids).has(asset_id) else ""
+     var asset_id := String(value)
+     return asset_id if _string_array(valid_asset_ids).has(asset_id) else ""
 +
 +
 +static func _compare_asset_ids(value: Variant, current_asset_ids: Variant) -> Array[String]:
-+	var result := _string_array(value)
-+	if result.size() == _string_array(current_asset_ids).size():
-+		return result
-+	var empty: Array[String] = []
-+	return empty
++    var result := _string_array(value)
++    if result.size() == _string_array(current_asset_ids).size():
++        return result
++    var empty: Array[String] = []
++    return empty
 +
 +
 +static func _compare_mode(value: Variant, compare_asset_ids: Array) -> String:
-+	if String(value) == CanvasBatchCardScript.COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
-+		return CanvasBatchCardScript.COMPARE_PREVIOUS
-+	return CanvasBatchCardScript.COMPARE_CURRENT
++    if String(value) == CanvasBatchCardScript.COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
++        return CanvasBatchCardScript.COMPARE_PREVIOUS
++    return CanvasBatchCardScript.COMPARE_CURRENT
 diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
 index 4749072..343a106 100644
 --- a/pixel/ui/canvas/infinite_canvas.gd
 +++ b/pixel/ui/canvas/infinite_canvas.gd
 @@ -84,7 +84,7 @@ func _process(delta: float) -> void:
- 	if _cull_elapsed >= CULL_INTERVAL_SECONDS:
- 		_cull_elapsed = 0.0
- 		_update_item_visibility()
--	_update_cleanup_preview_alt_state()
-+	_cleanup_preview.update_alt_state()
- 	if tool_manager != null and tool_manager.needs_redraw():
- 		queue_redraw()
- 
+     if _cull_elapsed >= CULL_INTERVAL_SECONDS:
+         _cull_elapsed = 0.0
+         _update_item_visibility()
+-    _update_cleanup_preview_alt_state()
++    _cleanup_preview.update_alt_state()
+     if tool_manager != null and tool_manager.needs_redraw():
+         queue_redraw()
+
 @@ -488,10 +488,6 @@ func _get_batch_selected_asset_ids(card_id: String) -> Array:
- 	return BatchOps.get_selected_asset_ids(_items_by_id, card_id)
- 
- 
+     return BatchOps.get_selected_asset_ids(_items_by_id, card_id)
+
+
 -func _get_batch_marked_asset_ids(card_id: String, review_state: String) -> Array:
--	return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
+-    return BatchOps.get_marked_asset_ids(_items_by_id, card_id, review_state)
 -
 -
  func _set_batch_review_filter(
- 	card_id: String, review_filter: String, record_undo: bool = true
+     card_id: String, review_filter: String, record_undo: bool = true
  ) -> bool:
 @@ -501,10 +497,24 @@ func _set_batch_review_filter(
- 
- 
+
+
  func _replace_batch_asset_ids(
--	card_id: String, new_asset_ids: Array, record_undo: bool = true
-+	card_id: String, new_asset_ids: Array, record_undo: bool = true, compare_asset_ids: Array = []
+-    card_id: String, new_asset_ids: Array, record_undo: bool = true
++    card_id: String, new_asset_ids: Array, record_undo: bool = true, compare_asset_ids: Array = []
  ) -> void:
- 	BatchOps.replace_asset_ids(
--		_items_by_id, card_id, new_asset_ids, record_undo, _select_only, _emit_canvas_changed
-+		_items_by_id,
-+		card_id,
-+		new_asset_ids,
-+		record_undo,
-+		compare_asset_ids,
-+		_select_only,
-+		_emit_canvas_changed
-+	)
+     BatchOps.replace_asset_ids(
+-        _items_by_id, card_id, new_asset_ids, record_undo, _select_only, _emit_canvas_changed
++        _items_by_id,
++        card_id,
++        new_asset_ids,
++        record_undo,
++        compare_asset_ids,
++        _select_only,
++        _emit_canvas_changed
++    )
 +
 +
 +func _set_batch_compare_mode(
-+	card_id: String, compare_mode: String, record_undo: bool = true
++    card_id: String, compare_mode: String, record_undo: bool = true
 +) -> bool:
-+	return BatchOps.set_compare_mode(
-+		_items_by_id, card_id, compare_mode, record_undo, _select_only, _emit_canvas_changed
- 	)
- 
- 
++    return BatchOps.set_compare_mode(
++        _items_by_id, card_id, compare_mode, record_undo, _select_only, _emit_canvas_changed
+     )
+
+
 @@ -972,10 +982,6 @@ func _on_cleanup_grid_changed(scale: float, offset: Vector2) -> void:
- 	cleanup_grid_changed.emit(scale, offset)
- 
- 
+     cleanup_grid_changed.emit(scale, offset)
+
+
 -func _update_cleanup_preview_alt_state() -> void:
--	_cleanup_preview.update_alt_state()
+-    _cleanup_preview.update_alt_state()
 -
 -
  func _tool_manager_handles(event: InputEvent) -> bool:
- 	return ToolInputPolicy.tool_manager_handles(
- 		tool_manager, event, self, _get_active_tool_target()
+     return ToolInputPolicy.tool_manager_handles(
+         tool_manager, event, self, _get_active_tool_target()
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index f66c064..cdffc92 100644
 --- a/pixel/ui/shell/m2_1_ui_controller.gd
@@ -6019,71 +6520,71 @@ index f66c064..cdffc92 100644
 +const BATCH_MENU_COMPARE_CURRENT := 15
 +const BATCH_MENU_COMPARE_PREVIOUS := 16
  const SELECTION_TOOLS_VISIBLE := false
- 
+
  var _canvas: Control = null
 @@ -316,6 +318,9 @@ func _create_batch_menu() -> void:
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
- 	_batch_menu.add_separator()
-+	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
-+	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
-+	_batch_menu.add_separator()
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
- 	_batch_menu.add_separator()
+     _batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
+     _batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
+     _batch_menu.add_separator()
++    _batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
++    _batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
++    _batch_menu.add_separator()
+     _batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
+     _batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
+     _batch_menu.add_separator()
 @@ -457,6 +462,14 @@ func _on_batch_menu_id_pressed(id: int) -> void:
- 			_set_batch_review_filter(
- 				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
- 			)
-+		BATCH_MENU_COMPARE_CURRENT:
-+			_set_batch_compare_mode(
-+				CanvasBatchCardScript.COMPARE_CURRENT, Strings.STATUS_BATCH_COMPARE_CURRENT
-+			)
-+		BATCH_MENU_COMPARE_PREVIOUS:
-+			_set_batch_compare_mode(
-+				CanvasBatchCardScript.COMPARE_PREVIOUS, Strings.STATUS_BATCH_COMPARE_PREVIOUS
-+			)
- 		BATCH_MENU_SPLIT_KEEP:
- 			var new_keep_card: Variant = _canvas._split_batch_marked(
- 				_batch_menu_card_id,
+             _set_batch_review_filter(
+                 CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
+             )
++        BATCH_MENU_COMPARE_CURRENT:
++            _set_batch_compare_mode(
++                CanvasBatchCardScript.COMPARE_CURRENT, Strings.STATUS_BATCH_COMPARE_CURRENT
++            )
++        BATCH_MENU_COMPARE_PREVIOUS:
++            _set_batch_compare_mode(
++                CanvasBatchCardScript.COMPARE_PREVIOUS, Strings.STATUS_BATCH_COMPARE_PREVIOUS
++            )
+         BATCH_MENU_SPLIT_KEEP:
+             var new_keep_card: Variant = _canvas._split_batch_marked(
+                 _batch_menu_card_id,
 @@ -567,6 +580,13 @@ func _set_batch_review_filter(review_filter: String, status_text: String) -> voi
- 	_status_label.text = status_text
- 
- 
+     _status_label.text = status_text
+
+
 +func _set_batch_compare_mode(compare_mode: String, status_text: String) -> void:
-+	if not _canvas._set_batch_compare_mode(_batch_menu_card_id, compare_mode, true):
-+		_status_label.text = Strings.STATUS_BATCH_COMPARE_EMPTY
-+		return
-+	_status_label.text = status_text
++    if not _canvas._set_batch_compare_mode(_batch_menu_card_id, compare_mode, true):
++        _status_label.text = Strings.STATUS_BATCH_COMPARE_EMPTY
++        return
++    _status_label.text = status_text
 +
 +
  func _emit_batch_export(asset_ids: Array) -> void:
- 	var snapshots := []
- 	for asset_id in asset_ids:
+     var snapshots := []
+     for asset_id in asset_ids:
 diff --git a/pixel/ui/shell/m2_action_controller.gd b/pixel/ui/shell/m2_action_controller.gd
 index c42ea1e..ad5462f 100644
 --- a/pixel/ui/shell/m2_action_controller.gd
 +++ b/pixel/ui/shell/m2_action_controller.gd
 @@ -331,14 +331,18 @@ func _on_batch_task_finished(result: Variant, done_status: String) -> void:
- 		ErrorHelper.show_matte_error(_dialog_parent, first_warning)
- 
- 	var new_asset_ids: Array[String] = []
-+	var source_asset_ids: Array[String] = []
- 	for item_result in result.get("items", []):
- 		var parent_asset_id := String(item_result.get("parent_asset", ""))
- 		var asset_id := PixelOperations.register_result_asset(
- 			AssetLibrary, parent_asset_id, item_result
- 		)
- 		new_asset_ids.append(asset_id)
-+		source_asset_ids.append(parent_asset_id)
- 
--	_canvas._replace_batch_asset_ids(String(result.get("card_id", "")), new_asset_ids, true)
-+	_canvas._replace_batch_asset_ids(
-+		String(result.get("card_id", "")), new_asset_ids, true, source_asset_ids
-+	)
- 	_status_label.text = done_status
- 
- 
+         ErrorHelper.show_matte_error(_dialog_parent, first_warning)
+
+     var new_asset_ids: Array[String] = []
++    var source_asset_ids: Array[String] = []
+     for item_result in result.get("items", []):
+         var parent_asset_id := String(item_result.get("parent_asset", ""))
+         var asset_id := PixelOperations.register_result_asset(
+             AssetLibrary, parent_asset_id, item_result
+         )
+         new_asset_ids.append(asset_id)
++        source_asset_ids.append(parent_asset_id)
+
+-    _canvas._replace_batch_asset_ids(String(result.get("card_id", "")), new_asset_ids, true)
++    _canvas._replace_batch_asset_ids(
++        String(result.get("card_id", "")), new_asset_ids, true, source_asset_ids
++    )
+     _status_label.text = done_status
+
+
 diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
 index ba97d1e..0e822f3 100644
 --- a/pixel/ui/shell/strings.gd
@@ -6114,7 +6615,7 @@ index 1239323..a1f385f 100644
 +++ b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
 @@ -127,7 +127,7 @@ func get_canvas_actions() -> Array[Dictionary]
  新概念，本模型的核心。装一个批次的图片队列，是「AI 输出自由」与「批量加工」的落脚点。
- 
+
  - **双身份**：① 图节点（`type=batch`，`category=container`，`is_canvas_resident()=true`）；② 画布卡（PROJECT-FORMAT canvas.json 的 `node` 引用，特化渲染为容器卡）。
 -- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），可选 `focus_asset_id` 记录当前键盘审阅焦点，三者均随 `asset_ids` 过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
 +- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），可选 `focus_asset_id` 记录当前键盘审阅焦点，可选 `compare_asset_ids` / `compare_mode` 记录上一版 A/B 对比入口，均随 `asset_ids` 对齐或过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
@@ -6193,51 +6694,51 @@ index e5ca2fe..fc97059 100644
 --- a/pixel/tests/unit/test_canvas_batch_card.gd
 +++ b/pixel/tests/unit/test_canvas_batch_card.gd
 @@ -175,10 +175,17 @@ func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
- 	assert_eq(card._texture_asset_id_for(after_ids[0]), before_ids[0])
- 	assert_eq(card._texture_asset_id_for(after_ids[1]), before_ids[1])
- 
-+	assert_true(
-+		canvas._set_batch_compare_mode("batch_1", CanvasBatchCardScript.COMPARE_SPLIT, false)
-+	)
-+	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
-+	assert_eq(card._texture_asset_id_for(after_ids[0]), after_ids[0])
-+	assert_eq(card._compare_asset_id_for(after_ids[0]), before_ids[0])
+     assert_eq(card._texture_asset_id_for(after_ids[0]), before_ids[0])
+     assert_eq(card._texture_asset_id_for(after_ids[1]), before_ids[1])
+
++    assert_true(
++        canvas._set_batch_compare_mode("batch_1", CanvasBatchCardScript.COMPARE_SPLIT, false)
++    )
++    assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
++    assert_eq(card._texture_asset_id_for(after_ids[0]), after_ids[0])
++    assert_eq(card._compare_asset_id_for(after_ids[0]), before_ids[0])
 +
- 	var data: Dictionary = canvas.export_canvas_data()
- 	var item: Dictionary = data["items"][0]
- 	assert_eq(item["compare_asset_ids"], before_ids)
--	assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
-+	assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_SPLIT)
- 
- 
+     var data: Dictionary = canvas.export_canvas_data()
+     var item: Dictionary = data["items"][0]
+     assert_eq(item["compare_asset_ids"], before_ids)
+-    assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
++    assert_eq(item["compare_mode"], CanvasBatchCardScript.COMPARE_SPLIT)
+
+
  func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() -> void:
 @@ -374,15 +381,15 @@ func test_graph_batch_card_persists_compare_state_in_graph_params() -> void:
- 	)
- 	canvas._replace_batch_asset_ids("node_item_1", after_ids, false, before_ids)
- 	assert_true(
--		canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_PREVIOUS, false)
-+		canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_SPLIT, false)
- 	)
--	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
-+	assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
- 
- 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
- 	var batch_node: Dictionary = graph_data["nodes"][0]
- 	assert_eq(batch_node["params"]["asset_ids"], after_ids)
- 	assert_eq(batch_node["params"]["compare_asset_ids"], before_ids)
--	assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
-+	assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_SPLIT)
- 
- 	var canvas_data: Dictionary = canvas.export_canvas_data()
- 	assert_false(Dictionary(canvas_data["items"][0]).has("compare_asset_ids"))
+     )
+     canvas._replace_batch_asset_ids("node_item_1", after_ids, false, before_ids)
+     assert_true(
+-        canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_PREVIOUS, false)
++        canvas._set_batch_compare_mode("node_item_1", CanvasBatchCardScript.COMPARE_SPLIT, false)
+     )
+-    assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
++    assert_eq(card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
+
+     var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
+     var batch_node: Dictionary = graph_data["nodes"][0]
+     assert_eq(batch_node["params"]["asset_ids"], after_ids)
+     assert_eq(batch_node["params"]["compare_asset_ids"], before_ids)
+-    assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_PREVIOUS)
++    assert_eq(batch_node["params"]["compare_mode"], CanvasBatchCardScript.COMPARE_SPLIT)
+
+     var canvas_data: Dictionary = canvas.export_canvas_data()
+     assert_false(Dictionary(canvas_data["items"][0]).has("compare_asset_ids"))
 @@ -397,7 +404,7 @@ func test_graph_batch_card_persists_compare_state_in_graph_params() -> void:
- 
- 	assert_eq(reloaded_card.asset_ids, after_ids)
- 	assert_eq(reloaded_card._get_compare_asset_ids(), before_ids)
--	assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
-+	assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
- 
- 
+
+     assert_eq(reloaded_card.asset_ids, after_ids)
+     assert_eq(reloaded_card._get_compare_asset_ids(), before_ids)
+-    assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_PREVIOUS)
++    assert_eq(reloaded_card._get_compare_mode(), CanvasBatchCardScript.COMPARE_SPLIT)
+
+
  func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
 diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
 index f121750..78a6e5a 100644
@@ -6255,130 +6756,130 @@ index f121750..78a6e5a 100644
 +const COMPARE_DIVIDER := Color(0.96, 0.96, 0.9, 0.85)
  const INPUT_PORTS: Array[String] = ["in"]
  const OUTPUT_PORTS: Array[String] = ["images", "assets"]
- 
+
 @@ -317,6 +319,8 @@ func _draw() -> void:
- 			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
- 		if compare_mode == COMPARE_PREVIOUS:
- 			title = "%s - %s" % [title, Strings.BATCH_COMPARE_PREVIOUS_SUFFIX]
-+		elif compare_mode == COMPARE_SPLIT:
-+			title = "%s - %s" % [title, Strings.BATCH_COMPARE_SPLIT_SUFFIX]
- 		draw_string(
- 			_font,
- 			Vector2(PADDING, 28),
+             title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
+         if compare_mode == COMPARE_PREVIOUS:
+             title = "%s - %s" % [title, Strings.BATCH_COMPARE_PREVIOUS_SUFFIX]
++        elif compare_mode == COMPARE_SPLIT:
++            title = "%s - %s" % [title, Strings.BATCH_COMPARE_SPLIT_SUFFIX]
+         draw_string(
+             _font,
+             Vector2(PADDING, 28),
 @@ -337,18 +341,43 @@ func _draw() -> void:
- 
+
  func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
- 	draw_rect(rect, THUMB_BACKGROUND, true)
--	var texture: Texture2D = _thumbnail_textures.get(_texture_asset_id_for(asset_id), null)
-+	if compare_mode == COMPARE_SPLIT:
-+		_draw_split_compare_thumbnail(asset_id, rect)
-+	else:
-+		_draw_thumbnail_texture(_texture_asset_id_for(asset_id), rect)
-+	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
-+	draw_rect(rect, border_color, false, 1.5)
-+	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
-+	if focus_asset_id == asset_id:
-+		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
+     draw_rect(rect, THUMB_BACKGROUND, true)
+-    var texture: Texture2D = _thumbnail_textures.get(_texture_asset_id_for(asset_id), null)
++    if compare_mode == COMPARE_SPLIT:
++        _draw_split_compare_thumbnail(asset_id, rect)
++    else:
++        _draw_thumbnail_texture(_texture_asset_id_for(asset_id), rect)
++    var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
++    draw_rect(rect, border_color, false, 1.5)
++    _draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
++    if focus_asset_id == asset_id:
++        draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
 +
 +
 +func _draw_split_compare_thumbnail(asset_id: String, rect: Rect2) -> void:
-+	var compare_asset_id := _compare_asset_id_for(asset_id)
-+	if compare_asset_id.is_empty():
-+		_draw_thumbnail_texture(asset_id, rect)
-+		return
-+	var left_rect := Rect2(rect.position, Vector2(floor(rect.size.x * 0.5), rect.size.y))
-+	var right_rect := Rect2(
-+		Vector2(rect.position.x + left_rect.size.x, rect.position.y),
-+		Vector2(rect.size.x - left_rect.size.x, rect.size.y)
-+	)
-+	_draw_thumbnail_texture(compare_asset_id, left_rect)
-+	_draw_thumbnail_texture(asset_id, right_rect)
-+	var divider_x := rect.position.x + left_rect.size.x
-+	draw_line(
-+		Vector2(divider_x, rect.position.y), Vector2(divider_x, rect.end.y), COMPARE_DIVIDER, 2.0
-+	)
++    var compare_asset_id := _compare_asset_id_for(asset_id)
++    if compare_asset_id.is_empty():
++        _draw_thumbnail_texture(asset_id, rect)
++        return
++    var left_rect := Rect2(rect.position, Vector2(floor(rect.size.x * 0.5), rect.size.y))
++    var right_rect := Rect2(
++        Vector2(rect.position.x + left_rect.size.x, rect.position.y),
++        Vector2(rect.size.x - left_rect.size.x, rect.size.y)
++    )
++    _draw_thumbnail_texture(compare_asset_id, left_rect)
++    _draw_thumbnail_texture(asset_id, right_rect)
++    var divider_x := rect.position.x + left_rect.size.x
++    draw_line(
++        Vector2(divider_x, rect.position.y), Vector2(divider_x, rect.end.y), COMPARE_DIVIDER, 2.0
++    )
 +
 +
 +func _draw_thumbnail_texture(asset_id: String, rect: Rect2) -> void:
-+	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
- 	if texture != null:
- 		var image_size := texture.get_size()
- 		var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
- 		var draw_size := image_size * scale
- 		var draw_pos := rect.position + (rect.size - draw_size) * 0.5
- 		draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
--	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
--	draw_rect(rect, border_color, false, 1.5)
--	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
--	if focus_asset_id == asset_id:
--		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
- 
- 
++    var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
+     if texture != null:
+         var image_size := texture.get_size()
+         var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
+         var draw_size := image_size * scale
+         var draw_pos := rect.position + (rect.size - draw_size) * 0.5
+         draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
+-    var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
+-    draw_rect(rect, border_color, false, 1.5)
+-    _draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
+-    if focus_asset_id == asset_id:
+-        draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
+
+
  func _draw_review_marker(rect: Rect2, review_state: String) -> void:
 @@ -502,8 +531,10 @@ func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
- 
- 
+
+
  func _normalize_compare_mode(new_compare_mode: String) -> String:
--	if new_compare_mode == COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
--		return COMPARE_PREVIOUS
-+	if not compare_asset_ids.is_empty():
-+		match new_compare_mode:
-+			COMPARE_PREVIOUS, COMPARE_SPLIT:
-+				return new_compare_mode
- 	return COMPARE_CURRENT
- 
- 
+-    if new_compare_mode == COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
+-        return COMPARE_PREVIOUS
++    if not compare_asset_ids.is_empty():
++        match new_compare_mode:
++            COMPARE_PREVIOUS, COMPARE_SPLIT:
++                return new_compare_mode
+     return COMPARE_CURRENT
+
+
 @@ -552,9 +583,14 @@ func _visible_selected_array(value: Array) -> Array[String]:
  func _texture_asset_id_for(asset_id: String) -> String:
- 	if compare_mode != COMPARE_PREVIOUS:
- 		return asset_id
-+	var compare_asset_id := _compare_asset_id_for(asset_id)
-+	return asset_id if compare_asset_id.is_empty() else compare_asset_id
+     if compare_mode != COMPARE_PREVIOUS:
+         return asset_id
++    var compare_asset_id := _compare_asset_id_for(asset_id)
++    return asset_id if compare_asset_id.is_empty() else compare_asset_id
 +
 +
 +func _compare_asset_id_for(asset_id: String) -> String:
- 	var index := asset_ids.find(asset_id)
- 	if index < 0 or index >= compare_asset_ids.size():
--		return asset_id
-+		return ""
- 	return compare_asset_ids[index]
- 
- 
+     var index := asset_ids.find(asset_id)
+     if index < 0 or index >= compare_asset_ids.size():
+-        return asset_id
++        return ""
+     return compare_asset_ids[index]
+
+
 diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
 index 7bbb76a..8f56bf7 100644
 --- a/pixel/ui/canvas/canvas_batch_ops.gd
 +++ b/pixel/ui/canvas/canvas_batch_ops.gd
 @@ -362,11 +362,10 @@ static func _normalize_review_filter(review_filter: String) -> String:
- 
- 
+
+
  static func _normalize_compare_mode(item: Node, compare_mode: String) -> String:
--	if (
--		compare_mode == CanvasBatchCardScript.COMPARE_PREVIOUS
--		and not item._get_compare_asset_ids().is_empty()
--	):
--		return CanvasBatchCardScript.COMPARE_PREVIOUS
-+	if not item._get_compare_asset_ids().is_empty():
-+		match compare_mode:
-+			CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
-+				return compare_mode
- 	return CanvasBatchCardScript.COMPARE_CURRENT
- 
- 
+-    if (
+-        compare_mode == CanvasBatchCardScript.COMPARE_PREVIOUS
+-        and not item._get_compare_asset_ids().is_empty()
+-    ):
+-        return CanvasBatchCardScript.COMPARE_PREVIOUS
++    if not item._get_compare_asset_ids().is_empty():
++        match compare_mode:
++            CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
++                return compare_mode
+     return CanvasBatchCardScript.COMPARE_CURRENT
+
+
 diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd b/pixel/ui/canvas/canvas_graph_item_bridge.gd
 index cebc357..cca71d2 100644
 --- a/pixel/ui/canvas/canvas_graph_item_bridge.gd
 +++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd
 @@ -255,6 +255,8 @@ static func _compare_asset_ids(value: Variant, current_asset_ids: Variant) -> Ar
- 
- 
+
+
  static func _compare_mode(value: Variant, compare_asset_ids: Array) -> String:
--	if String(value) == CanvasBatchCardScript.COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
--		return CanvasBatchCardScript.COMPARE_PREVIOUS
-+	if not compare_asset_ids.is_empty():
-+		match String(value):
-+			CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
-+				return String(value)
- 	return CanvasBatchCardScript.COMPARE_CURRENT
+-    if String(value) == CanvasBatchCardScript.COMPARE_PREVIOUS and not compare_asset_ids.is_empty():
+-        return CanvasBatchCardScript.COMPARE_PREVIOUS
++    if not compare_asset_ids.is_empty():
++        match String(value):
++            CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
++                return String(value)
+     return CanvasBatchCardScript.COMPARE_CURRENT
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index cdffc92..9ac3fa7 100644
 --- a/pixel/ui/shell/m2_1_ui_controller.gd
@@ -6389,27 +6890,27 @@ index cdffc92..9ac3fa7 100644
  const BATCH_MENU_COMPARE_PREVIOUS := 16
 +const BATCH_MENU_COMPARE_SPLIT := 17
  const SELECTION_TOOLS_VISIBLE := false
- 
+
  var _canvas: Control = null
 @@ -320,6 +321,7 @@ func _create_batch_menu() -> void:
- 	_batch_menu.add_separator()
- 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
-+	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_SPLIT, BATCH_MENU_COMPARE_SPLIT)
- 	_batch_menu.add_separator()
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
+     _batch_menu.add_separator()
+     _batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
+     _batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
++    _batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_SPLIT, BATCH_MENU_COMPARE_SPLIT)
+     _batch_menu.add_separator()
+     _batch_menu.add_item(Strings.BATCH_ACTION_SPLIT_KEEP, BATCH_MENU_SPLIT_KEEP)
+     _batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
 @@ -470,6 +472,10 @@ func _on_batch_menu_id_pressed(id: int) -> void:
- 			_set_batch_compare_mode(
- 				CanvasBatchCardScript.COMPARE_PREVIOUS, Strings.STATUS_BATCH_COMPARE_PREVIOUS
- 			)
-+		BATCH_MENU_COMPARE_SPLIT:
-+			_set_batch_compare_mode(
-+				CanvasBatchCardScript.COMPARE_SPLIT, Strings.STATUS_BATCH_COMPARE_SPLIT
-+			)
- 		BATCH_MENU_SPLIT_KEEP:
- 			var new_keep_card: Variant = _canvas._split_batch_marked(
- 				_batch_menu_card_id,
+             _set_batch_compare_mode(
+                 CanvasBatchCardScript.COMPARE_PREVIOUS, Strings.STATUS_BATCH_COMPARE_PREVIOUS
+             )
++        BATCH_MENU_COMPARE_SPLIT:
++            _set_batch_compare_mode(
++                CanvasBatchCardScript.COMPARE_SPLIT, Strings.STATUS_BATCH_COMPARE_SPLIT
++            )
+         BATCH_MENU_SPLIT_KEEP:
+             var new_keep_card: Variant = _canvas._split_batch_marked(
+                 _batch_menu_card_id,
 diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
 index 0e822f3..f5b88fe 100644
 --- a/pixel/ui/shell/strings.gd
@@ -6438,7 +6939,7 @@ index a1f385f..ab049a7 100644
 +++ b/pixelforge-plan/02-contracts/GRAPH-SCHEMA.md
 @@ -127,7 +127,7 @@ func get_canvas_actions() -> Array[Dictionary]
  新概念，本模型的核心。装一个批次的图片队列，是「AI 输出自由」与「批量加工」的落脚点。
- 
+
  - **双身份**：① 图节点（`type=batch`，`category=container`，`is_canvas_resident()=true`）；② 画布卡（PROJECT-FORMAT canvas.json 的 `node` 引用，特化渲染为容器卡）。
 -- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），可选 `focus_asset_id` 记录当前键盘审阅焦点，可选 `compare_asset_ids` / `compare_mode` 记录上一版 A/B 对比入口，均随 `asset_ids` 对齐或过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
 +- **持有**：已物化的 `asset_id` 队列（一个批次）+ 批次级参数 + 状态。物化内容属「逻辑」，存于 `graphs/{id}.json` 该节点 params（`asset_ids`）；批次审阅状态以可选 `review_states` 字典持久化（`asset_id → keep|reject|flag`），可选 `review_filter` 记录当前审阅过滤器（`all|pending|keep|reject|flag`），可选 `focus_asset_id` 记录当前键盘审阅焦点，可选 `compare_asset_ids` / `compare_mode`（`current|previous|split`）记录上一版 A/B 对比入口，均随 `asset_ids` 对齐或过滤；canvas.json 只存位置/层级/node_id（逻辑/视图分离，方案 A）。
@@ -6519,85 +7020,85 @@ index fc97059..debfee6 100644
 --- a/pixel/tests/unit/test_canvas_batch_card.gd
 +++ b/pixel/tests/unit/test_canvas_batch_card.gd
 @@ -149,6 +149,33 @@ func test_canvas_batch_card_focuses_visible_review_thumbnails() -> void:
- 	assert_eq(item["focus_asset_id"], ids[1])
- 
- 
+     assert_eq(item["focus_asset_id"], ids[1])
+
+
 +func test_canvas_batch_card_switches_review_layout_for_focus_view() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids: Array[String] = []
-+	for index in range(20):
-+		ids.append(_register_asset(Color(float(index % 5) / 4.0, 0.25, 0.75), "asset_%d" % index))
-+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
-+	var contact_height: float = card.get_canvas_bounds().size.y
++    var ids: Array[String] = []
++    for index in range(20):
++        ids.append(_register_asset(Color(float(index % 5) / 4.0, 0.25, 0.75), "asset_%d" % index))
++    var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++    var contact_height: float = card.get_canvas_bounds().size.y
 +
-+	assert_eq(card.get_review_layout(), CanvasBatchCardScript.LAYOUT_CONTACT)
-+	assert_true(
-+		canvas._set_batch_review_layout("batch_1", CanvasBatchCardScript.LAYOUT_FOCUS, false)
-+	)
-+	assert_eq(card.get_review_layout(), CanvasBatchCardScript.LAYOUT_FOCUS)
-+	assert_true(card.get_canvas_bounds().size.y < contact_height)
-+	assert_eq(card._focused_visible_asset_id(), ids[0])
-+	assert_eq(card.asset_index_at_world(card.position + card._focus_rect().get_center()), 0)
-+	assert_eq(card.asset_index_at_world(card.position + card._filmstrip_rect(3).get_center()), 3)
++    assert_eq(card.get_review_layout(), CanvasBatchCardScript.LAYOUT_CONTACT)
++    assert_true(
++        canvas._set_batch_review_layout("batch_1", CanvasBatchCardScript.LAYOUT_FOCUS, false)
++    )
++    assert_eq(card.get_review_layout(), CanvasBatchCardScript.LAYOUT_FOCUS)
++    assert_true(card.get_canvas_bounds().size.y < contact_height)
++    assert_eq(card._focused_visible_asset_id(), ids[0])
++    assert_eq(card.asset_index_at_world(card.position + card._focus_rect().get_center()), 0)
++    assert_eq(card.asset_index_at_world(card.position + card._filmstrip_rect(3).get_center()), 3)
 +
-+	var data: Dictionary = canvas.export_canvas_data()
-+	var item: Dictionary = data["items"][0]
-+	assert_eq(item["review_layout"], CanvasBatchCardScript.LAYOUT_FOCUS)
++    var data: Dictionary = canvas.export_canvas_data()
++    var item: Dictionary = data["items"][0]
++    assert_eq(item["review_layout"], CanvasBatchCardScript.LAYOUT_FOCUS)
 +
 +
  func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 @@ -355,6 +382,45 @@ func test_graph_batch_card_persists_focus_asset_id_in_graph_params() -> void:
- 	assert_eq(reloaded_card._get_focus_asset_id(), ids[0])
- 
- 
+     assert_eq(reloaded_card._get_focus_asset_id(), ids[0])
+
+
 +func test_graph_batch_card_persists_review_layout_in_canvas_data() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
-+	var graph := GraphScript.new()
-+	graph.id = "graph_batch_layout_test"
-+	graph.add_node(
-+		BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
-+	)
-+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
++    var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++    var graph := GraphScript.new()
++    graph.id = "graph_batch_layout_test"
++    graph.add_node(
++        BatchNodeScript.new(), "batch_1", {"label": "Candidates", "asset_ids": ids}, Vector2(16, 24)
++    )
++    ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 +
-+	var card: Node = canvas._add_batch_card(
-+		ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
-+	)
-+	assert_true(
-+		canvas._set_batch_review_layout("node_item_1", CanvasBatchCardScript.LAYOUT_FOCUS, false)
-+	)
-+	assert_eq(card.get_review_layout(), CanvasBatchCardScript.LAYOUT_FOCUS)
++    var card: Node = canvas._add_batch_card(
++        ids, Vector2(16, 24), "Candidates", "node_item_1", false, graph.id, "batch_1"
++    )
++    assert_true(
++        canvas._set_batch_review_layout("node_item_1", CanvasBatchCardScript.LAYOUT_FOCUS, false)
++    )
++    assert_eq(card.get_review_layout(), CanvasBatchCardScript.LAYOUT_FOCUS)
 +
-+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
-+	var batch_node: Dictionary = graph_data["nodes"][0]
-+	assert_false(batch_node["params"].has("review_layout"))
++    var graph_data: Dictionary = ProjectService.current_project.graphs[graph.id]
++    var batch_node: Dictionary = graph_data["nodes"][0]
++    assert_false(batch_node["params"].has("review_layout"))
 +
-+	var canvas_data: Dictionary = canvas.export_canvas_data()
-+	assert_eq(canvas_data["items"][0]["review_layout"], CanvasBatchCardScript.LAYOUT_FOCUS)
++    var canvas_data: Dictionary = canvas.export_canvas_data()
++    assert_eq(canvas_data["items"][0]["review_layout"], CanvasBatchCardScript.LAYOUT_FOCUS)
 +
-+	var reloaded_canvas: Control = CanvasScript.new()
-+	reloaded_canvas.size = Vector2(512, 512)
-+	add_child_autofree(reloaded_canvas)
-+	await wait_process_frames(2)
-+	reloaded_canvas.load_canvas_data(canvas_data)
-+	var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
++    var reloaded_canvas: Control = CanvasScript.new()
++    reloaded_canvas.size = Vector2(512, 512)
++    add_child_autofree(reloaded_canvas)
++    await wait_process_frames(2)
++    reloaded_canvas.load_canvas_data(canvas_data)
++    var reloaded_card: Node = reloaded_canvas._items_by_id["node_item_1"]
 +
-+	assert_eq(reloaded_card.get_review_layout(), CanvasBatchCardScript.LAYOUT_FOCUS)
++    assert_eq(reloaded_card.get_review_layout(), CanvasBatchCardScript.LAYOUT_FOCUS)
 +
 +
  func test_graph_batch_card_persists_compare_state_in_graph_params() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
 index 78a6e5a..e54db12 100644
 --- a/pixel/ui/canvas/canvas_batch_card.gd
@@ -6618,7 +7119,7 @@ index 78a6e5a..e54db12 100644
 +const FOCUS_IMAGE_HEIGHT := 320
 +const FOCUS_FILMSTRIP_THUMB_SIZE := 72
 +const FOCUS_FILMSTRIP_VISIBLE := 7
- 
+
  var item_id := ""
  var graph_id := ""
 @@ -47,6 +52,7 @@ var review_filter := FILTER_ALL
@@ -6628,318 +7129,318 @@ index 78a6e5a..e54db12 100644
 +var review_layout := LAYOUT_CONTACT
  var label := ""
  var locked := false
- 
+
 @@ -78,6 +84,7 @@ func setup_from_data(data: Dictionary) -> void:
- 	compare_mode = _normalize_compare_mode(
- 		String(graph_params.get("compare_mode", data.get("compare_mode", COMPARE_CURRENT)))
- 	)
-+	review_layout = _normalize_review_layout(String(data.get("review_layout", LAYOUT_CONTACT)))
- 	_prune_selected_to_visible()
- 	_prune_focus_to_visible()
- 	locked = bool(data.get("locked", false))
+     compare_mode = _normalize_compare_mode(
+         String(graph_params.get("compare_mode", data.get("compare_mode", COMPARE_CURRENT)))
+     )
++    review_layout = _normalize_review_layout(String(data.get("review_layout", LAYOUT_CONTACT)))
+     _prune_selected_to_visible()
+     _prune_focus_to_visible()
+     locked = bool(data.get("locked", false))
 @@ -99,6 +106,7 @@ func to_canvas_data() -> Dictionary:
- 			"position": [int(round(position.x)), int(round(position.y))],
- 			"z_index": z_index,
- 			"collapsed": false,
-+			"review_layout": review_layout,
- 			"locked": locked,
- 		}
- 	return {
+             "position": [int(round(position.x)), int(round(position.y))],
+             "z_index": z_index,
+             "collapsed": false,
++            "review_layout": review_layout,
+             "locked": locked,
+         }
+     return {
 @@ -111,6 +119,7 @@ func to_canvas_data() -> Dictionary:
- 		"focus_asset_id": focus_asset_id,
- 		"compare_asset_ids": compare_asset_ids.duplicate(),
- 		"compare_mode": compare_mode,
-+		"review_layout": review_layout,
- 		"label": label,
- 		"position": [int(round(position.x)), int(round(position.y))],
- 		"z_index": z_index,
+         "focus_asset_id": focus_asset_id,
+         "compare_asset_ids": compare_asset_ids.duplicate(),
+         "compare_mode": compare_mode,
++        "review_layout": review_layout,
+         "label": label,
+         "position": [int(round(position.x)), int(round(position.y))],
+         "z_index": z_index,
 @@ -223,6 +232,17 @@ func set_review_filter(new_review_filter: String) -> void:
- 	queue_redraw()
- 
- 
+     queue_redraw()
+
+
 +func get_review_layout() -> String:
-+	return review_layout
++    return review_layout
 +
 +
 +func set_review_layout(new_review_layout: String) -> void:
-+	review_layout = _normalize_review_layout(new_review_layout)
-+	if review_layout == LAYOUT_FOCUS and focus_asset_id.is_empty():
-+		focus_asset_id = _initial_focus_asset_id()
-+	queue_redraw()
++    review_layout = _normalize_review_layout(new_review_layout)
++    if review_layout == LAYOUT_FOCUS and focus_asset_id.is_empty():
++        focus_asset_id = _initial_focus_asset_id()
++    queue_redraw()
 +
 +
  func _get_focus_asset_id() -> String:
- 	return focus_asset_id
- 
+     return focus_asset_id
+
 @@ -295,6 +315,8 @@ func asset_index_at_world(world_position: Vector2) -> int:
- 	var local := world_position - position
- 	if local.y < HEADER_HEIGHT:
- 		return -1
-+	if review_layout == LAYOUT_FOCUS:
-+		return _focus_layout_asset_index_at_local(local)
- 	var columns := _columns()
- 	var visible_ids := get_visible_asset_ids()
- 	for index in range(visible_ids.size()):
+     var local := world_position - position
+     if local.y < HEADER_HEIGHT:
+         return -1
++    if review_layout == LAYOUT_FOCUS:
++        return _focus_layout_asset_index_at_local(local)
+     var columns := _columns()
+     var visible_ids := get_visible_asset_ids()
+     for index in range(visible_ids.size()):
 @@ -333,12 +355,28 @@ func _draw() -> void:
- 
- 	var columns := _columns()
- 	var visible_ids := get_visible_asset_ids()
--	for index in range(visible_ids.size()):
--		_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
-+	if review_layout == LAYOUT_FOCUS:
-+		_draw_focus_layout(visible_ids)
-+	else:
-+		for index in range(visible_ids.size()):
-+			_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
- 	if has_graph_binding():
- 		_draw_graph_ports()
- 
- 
+
+     var columns := _columns()
+     var visible_ids := get_visible_asset_ids()
+-    for index in range(visible_ids.size()):
+-        _draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
++    if review_layout == LAYOUT_FOCUS:
++        _draw_focus_layout(visible_ids)
++    else:
++        for index in range(visible_ids.size()):
++            _draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
+     if has_graph_binding():
+         _draw_graph_ports()
+
+
 +func _draw_focus_layout(visible_ids: Array[String]) -> void:
-+	if visible_ids.is_empty():
-+		return
-+	var focused_asset_id := _focused_visible_asset_id()
-+	if focused_asset_id.is_empty():
-+		return
-+	_draw_thumbnail(focused_asset_id, _focus_rect())
-+	var start_index := _filmstrip_start_index(visible_ids)
-+	var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
-+	for index in range(start_index, end_index):
-+		_draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
++    if visible_ids.is_empty():
++        return
++    var focused_asset_id := _focused_visible_asset_id()
++    if focused_asset_id.is_empty():
++        return
++    _draw_thumbnail(focused_asset_id, _focus_rect())
++    var start_index := _filmstrip_start_index(visible_ids)
++    var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
++    for index in range(start_index, end_index):
++        _draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
 +
 +
  func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
- 	draw_rect(rect, THUMB_BACKGROUND, true)
- 	if compare_mode == COMPARE_SPLIT:
+     draw_rect(rect, THUMB_BACKGROUND, true)
+     if compare_mode == COMPARE_SPLIT:
 @@ -417,10 +455,36 @@ func _thumb_rect(index: int, columns: int) -> Rect2:
- 	)
- 
- 
+     )
+
+
 +func _focus_rect() -> Rect2:
-+	return Rect2(
-+		Vector2(PADDING, HEADER_HEIGHT + PADDING),
-+		Vector2(CARD_WIDTH - PADDING * 2, FOCUS_IMAGE_HEIGHT)
-+	)
++    return Rect2(
++        Vector2(PADDING, HEADER_HEIGHT + PADDING),
++        Vector2(CARD_WIDTH - PADDING * 2, FOCUS_IMAGE_HEIGHT)
++    )
 +
 +
 +func _filmstrip_rect(slot_index: int) -> Rect2:
-+	var y := HEADER_HEIGHT + PADDING + FOCUS_IMAGE_HEIGHT + THUMB_GAP
-+	return Rect2(
-+		Vector2(PADDING + slot_index * (FOCUS_FILMSTRIP_THUMB_SIZE + THUMB_GAP), y),
-+		Vector2(FOCUS_FILMSTRIP_THUMB_SIZE, FOCUS_FILMSTRIP_THUMB_SIZE)
-+	)
++    var y := HEADER_HEIGHT + PADDING + FOCUS_IMAGE_HEIGHT + THUMB_GAP
++    return Rect2(
++        Vector2(PADDING + slot_index * (FOCUS_FILMSTRIP_THUMB_SIZE + THUMB_GAP), y),
++        Vector2(FOCUS_FILMSTRIP_THUMB_SIZE, FOCUS_FILMSTRIP_THUMB_SIZE)
++    )
 +
 +
  func _card_height() -> int:
- 	var visible_count := get_visible_asset_ids().size()
- 	if visible_count <= 0:
- 		return MIN_CARD_HEIGHT
-+	if review_layout == LAYOUT_FOCUS:
-+		return maxi(
-+			MIN_CARD_HEIGHT,
-+			(
-+				HEADER_HEIGHT
-+				+ PADDING * 2
-+				+ FOCUS_IMAGE_HEIGHT
-+				+ THUMB_GAP
-+				+ FOCUS_FILMSTRIP_THUMB_SIZE
-+			)
-+		)
- 	var rows := int(ceil(float(visible_count) / float(_columns())))
- 	return maxi(
- 		MIN_CARD_HEIGHT, HEADER_HEIGHT + PADDING * 2 + rows * THUMB_SIZE + (rows - 1) * THUMB_GAP
+     var visible_count := get_visible_asset_ids().size()
+     if visible_count <= 0:
+         return MIN_CARD_HEIGHT
++    if review_layout == LAYOUT_FOCUS:
++        return maxi(
++            MIN_CARD_HEIGHT,
++            (
++                HEADER_HEIGHT
++                + PADDING * 2
++                + FOCUS_IMAGE_HEIGHT
++                + THUMB_GAP
++                + FOCUS_FILMSTRIP_THUMB_SIZE
++            )
++        )
+     var rows := int(ceil(float(visible_count) / float(_columns())))
+     return maxi(
+         MIN_CARD_HEIGHT, HEADER_HEIGHT + PADDING * 2 + rows * THUMB_SIZE + (rows - 1) * THUMB_GAP
 @@ -526,6 +590,14 @@ func _normalize_review_filter(value: String) -> String:
- 			return FILTER_ALL
- 
- 
+             return FILTER_ALL
+
+
 +func _normalize_review_layout(value: String) -> String:
-+	match value:
-+		LAYOUT_CONTACT, LAYOUT_FOCUS:
-+			return value
-+		_:
-+			return LAYOUT_CONTACT
++    match value:
++        LAYOUT_CONTACT, LAYOUT_FOCUS:
++            return value
++        _:
++            return LAYOUT_CONTACT
 +
 +
  func _normalize_focus_asset_id(new_focus_asset_id: String) -> String:
- 	return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
- 
+     return new_focus_asset_id if asset_ids.has(new_focus_asset_id) else ""
+
 @@ -570,6 +642,44 @@ func _focus_anchor_index(visible_ids: Array[String]) -> int:
- 	return -1
- 
- 
+     return -1
+
+
 +func _focused_visible_asset_id() -> String:
-+	var visible_ids := get_visible_asset_ids()
-+	if visible_ids.is_empty():
-+		return ""
-+	var anchor_index := _focus_anchor_index(visible_ids)
-+	if anchor_index >= 0:
-+		return visible_ids[anchor_index]
-+	return visible_ids[0]
++    var visible_ids := get_visible_asset_ids()
++    if visible_ids.is_empty():
++        return ""
++    var anchor_index := _focus_anchor_index(visible_ids)
++    if anchor_index >= 0:
++        return visible_ids[anchor_index]
++    return visible_ids[0]
 +
 +
 +func _initial_focus_asset_id() -> String:
-+	return _focused_visible_asset_id()
++    return _focused_visible_asset_id()
 +
 +
 +func _focus_layout_asset_index_at_local(local: Vector2) -> int:
-+	var visible_ids := get_visible_asset_ids()
-+	if visible_ids.is_empty():
-+		return -1
-+	if _focus_rect().has_point(local):
-+		return visible_ids.find(_focused_visible_asset_id())
-+	var start_index := _filmstrip_start_index(visible_ids)
-+	var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
-+	for index in range(start_index, end_index):
-+		if _filmstrip_rect(index - start_index).has_point(local):
-+			return index
-+	return -1
++    var visible_ids := get_visible_asset_ids()
++    if visible_ids.is_empty():
++        return -1
++    if _focus_rect().has_point(local):
++        return visible_ids.find(_focused_visible_asset_id())
++    var start_index := _filmstrip_start_index(visible_ids)
++    var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
++    for index in range(start_index, end_index):
++        if _filmstrip_rect(index - start_index).has_point(local):
++            return index
++    return -1
 +
 +
 +func _filmstrip_start_index(visible_ids: Array[String]) -> int:
-+	if visible_ids.size() <= FOCUS_FILMSTRIP_VISIBLE:
-+		return 0
-+	var anchor_index := _focus_anchor_index(visible_ids)
-+	if anchor_index < 0:
-+		anchor_index = 0
-+	var half_window := int(floor(float(FOCUS_FILMSTRIP_VISIBLE) * 0.5))
-+	return clampi(anchor_index - half_window, 0, visible_ids.size() - FOCUS_FILMSTRIP_VISIBLE)
++    if visible_ids.size() <= FOCUS_FILMSTRIP_VISIBLE:
++        return 0
++    var anchor_index := _focus_anchor_index(visible_ids)
++    if anchor_index < 0:
++        anchor_index = 0
++    var half_window := int(floor(float(FOCUS_FILMSTRIP_VISIBLE) * 0.5))
++    return clampi(anchor_index - half_window, 0, visible_ids.size() - FOCUS_FILMSTRIP_VISIBLE)
 +
 +
  func _visible_selected_array(value: Array) -> Array[String]:
- 	var visible_lookup := _visible_lookup()
- 	var result: Array[String] = []
+     var visible_lookup := _visible_lookup()
+     var result: Array[String] = []
 diff --git a/pixel/ui/canvas/canvas_batch_ops.gd b/pixel/ui/canvas/canvas_batch_ops.gd
 index 8f56bf7..09b4272 100644
 --- a/pixel/ui/canvas/canvas_batch_ops.gd
 +++ b/pixel/ui/canvas/canvas_batch_ops.gd
 @@ -184,6 +184,38 @@ static func set_review_filter(
- 	return true
- 
- 
+     return true
+
+
 +static func set_review_layout(
-+	items_by_id: Dictionary,
-+	card_id: String,
-+	review_layout: String,
-+	record_undo: bool,
-+	select_only: Callable,
-+	emit_changed: Callable
++    items_by_id: Dictionary,
++    card_id: String,
++    review_layout: String,
++    record_undo: bool,
++    select_only: Callable,
++    emit_changed: Callable
 +) -> bool:
-+	var item := _batch_item(items_by_id, card_id)
-+	if item == null:
-+		return false
-+	var before: String = item.get_review_layout()
-+	var after := _normalize_review_layout(review_layout)
-+	if before == after:
-+		return true
++    var item := _batch_item(items_by_id, card_id)
++    if item == null:
++        return false
++    var before: String = item.get_review_layout()
++    var after := _normalize_review_layout(review_layout)
++    if before == after:
++        return true
 +
-+	var do_layout := func() -> void:
-+		_apply_review_layout(item, after)
-+		select_only.call([card_id])
-+		emit_changed.call()
-+	var undo_layout := func() -> void:
-+		_apply_review_layout(item, before)
-+		select_only.call([card_id])
-+		emit_changed.call()
++    var do_layout := func() -> void:
++        _apply_review_layout(item, after)
++        select_only.call([card_id])
++        emit_changed.call()
++    var undo_layout := func() -> void:
++        _apply_review_layout(item, before)
++        select_only.call([card_id])
++        emit_changed.call()
 +
-+	if record_undo:
-+		UndoService.perform_action("Set batch review layout", do_layout, undo_layout)
-+	else:
-+		do_layout.call()
-+	return true
++    if record_undo:
++        UndoService.perform_action("Set batch review layout", do_layout, undo_layout)
++    else:
++        do_layout.call()
++    return true
 +
 +
  static func set_compare_mode(
- 	items_by_id: Dictionary,
- 	card_id: String,
+     items_by_id: Dictionary,
+     card_id: String,
 @@ -319,6 +351,10 @@ static func _apply_focus_asset_id(item: Node, focus_asset_id: String) -> void:
- 	item._set_focus_asset_id(focus_asset_id, false)
- 
- 
+     item._set_focus_asset_id(focus_asset_id, false)
+
+
 +static func _apply_review_layout(item: Node, review_layout: String) -> void:
-+	item.set_review_layout(review_layout)
++    item.set_review_layout(review_layout)
 +
 +
  static func _apply_selected_asset_ids(item: Node, selected_asset_ids: Array) -> void:
- 	item._set_selected_asset_ids(selected_asset_ids)
- 
+     item._set_selected_asset_ids(selected_asset_ids)
+
 @@ -361,6 +397,12 @@ static func _normalize_review_filter(review_filter: String) -> String:
- 	return CanvasBatchCardScript.FILTER_ALL
- 
- 
+     return CanvasBatchCardScript.FILTER_ALL
+
+
 +static func _normalize_review_layout(review_layout: String) -> String:
-+	if review_layout in [CanvasBatchCardScript.LAYOUT_CONTACT, CanvasBatchCardScript.LAYOUT_FOCUS]:
-+		return review_layout
-+	return CanvasBatchCardScript.LAYOUT_CONTACT
++    if review_layout in [CanvasBatchCardScript.LAYOUT_CONTACT, CanvasBatchCardScript.LAYOUT_FOCUS]:
++        return review_layout
++    return CanvasBatchCardScript.LAYOUT_CONTACT
 +
 +
  static func _normalize_compare_mode(item: Node, compare_mode: String) -> String:
- 	if not item._get_compare_asset_ids().is_empty():
- 		match compare_mode:
+     if not item._get_compare_asset_ids().is_empty():
+         match compare_mode:
 diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
 index 343a106..9c54730 100644
 --- a/pixel/ui/canvas/infinite_canvas.gd
 +++ b/pixel/ui/canvas/infinite_canvas.gd
 @@ -131,7 +131,7 @@ func _draw() -> void:
- 		ScalePolicy.compute_art_physical_scale(camera_zoom, _resolve_viewport_scale_factor())
- 		>= GRID_MIN_ZOOM
- 	):
--		_draw_pixel_grid()
-+		PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
- 	_draw_graph_edges()
- 
- 	for item_id in _selection.selected_ids:
+         ScalePolicy.compute_art_physical_scale(camera_zoom, _resolve_viewport_scale_factor())
+         >= GRID_MIN_ZOOM
+     ):
+-        _draw_pixel_grid()
++        PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+     _draw_graph_edges()
+
+     for item_id in _selection.selected_ids:
 @@ -346,7 +346,7 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
- 			_add_sprite_direct(item_data, image)
- 		elif item_type == "batch_card":
- 			_add_batch_direct(item_data)
--		elif item_type == "node" and _is_graph_batch_node_data(item_data):
-+		elif item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data):
- 			_add_batch_direct(item_data)
- 		elif item_type == "node":
- 			_add_node_direct(item_data)
+             _add_sprite_direct(item_data, image)
+         elif item_type == "batch_card":
+             _add_batch_direct(item_data)
+-        elif item_type == "node" and _is_graph_batch_node_data(item_data):
++        elif item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data):
+             _add_batch_direct(item_data)
+         elif item_type == "node":
+             _add_node_direct(item_data)
 @@ -496,6 +496,14 @@ func _set_batch_review_filter(
- 	)
- 
- 
+     )
+
+
 +func _set_batch_review_layout(
-+	card_id: String, review_layout: String, record_undo: bool = true
++    card_id: String, review_layout: String, record_undo: bool = true
 +) -> bool:
-+	return BatchOps.set_review_layout(
-+		_items_by_id, card_id, review_layout, record_undo, _select_only, _emit_canvas_changed
-+	)
++    return BatchOps.set_review_layout(
++        _items_by_id, card_id, review_layout, record_undo, _select_only, _emit_canvas_changed
++    )
 +
 +
  func _replace_batch_asset_ids(
- 	card_id: String, new_asset_ids: Array, record_undo: bool = true, compare_asset_ids: Array = []
+     card_id: String, new_asset_ids: Array, record_undo: bool = true, compare_asset_ids: Array = []
  ) -> void:
 @@ -773,14 +781,11 @@ func _add_node_direct(item_data: Dictionary) -> Node:
  func _is_batch_card_data(item_data: Dictionary) -> bool:
- 	var item_type := String(item_data.get("type", ""))
- 	return (
--		item_type == "batch_card" or (item_type == "node" and _is_graph_batch_node_data(item_data))
-+		item_type == "batch_card"
-+		or (item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data))
- 	)
- 
- 
+     var item_type := String(item_data.get("type", ""))
+     return (
+-        item_type == "batch_card" or (item_type == "node" and _is_graph_batch_node_data(item_data))
++        item_type == "batch_card"
++        or (item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data))
+     )
+
+
 -func _is_graph_batch_node_data(item_data: Dictionary) -> bool:
--	return GraphItemBridge.is_graph_batch_node_data(item_data)
+-    return GraphItemBridge.is_graph_batch_node_data(item_data)
 -
 -
  func _remove_item_direct(item_id: String) -> void:
- 	if not _items_by_id.has(item_id):
- 		return
+     if not _items_by_id.has(item_id):
+         return
 @@ -928,10 +933,6 @@ func _camera_center_for_snapped_anchor(anchor_world: Vector2, screen_anchor: Vec
- 	)
- 
- 
+     )
+
+
 -func _draw_pixel_grid() -> void:
--	PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+-    PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
 -
 -
  func _draw_graph_edges() -> void:
- 	GraphEdgeRenderer.draw(
- 		self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
+     GraphEdgeRenderer.draw(
+         self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
 diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
 index 9ac3fa7..73fa686 100644
 --- a/pixel/ui/shell/m2_1_ui_controller.gd
@@ -6951,47 +7452,47 @@ index 9ac3fa7..73fa686 100644
 +const BATCH_MENU_LAYOUT_CONTACT := 18
 +const BATCH_MENU_LAYOUT_FOCUS := 19
  const SELECTION_TOOLS_VISIBLE := false
- 
+
  var _canvas: Control = null
 @@ -319,6 +321,9 @@ func _create_batch_menu() -> void:
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
- 	_batch_menu.add_separator()
-+	_batch_menu.add_item(Strings.BATCH_ACTION_LAYOUT_CONTACT, BATCH_MENU_LAYOUT_CONTACT)
-+	_batch_menu.add_item(Strings.BATCH_ACTION_LAYOUT_FOCUS, BATCH_MENU_LAYOUT_FOCUS)
-+	_batch_menu.add_separator()
- 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
- 	_batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_SPLIT, BATCH_MENU_COMPARE_SPLIT)
+     _batch_menu.add_item(Strings.BATCH_ACTION_SHOW_REJECT, BATCH_MENU_FILTER_REJECT)
+     _batch_menu.add_item(Strings.BATCH_ACTION_SHOW_FLAG, BATCH_MENU_FILTER_FLAG)
+     _batch_menu.add_separator()
++    _batch_menu.add_item(Strings.BATCH_ACTION_LAYOUT_CONTACT, BATCH_MENU_LAYOUT_CONTACT)
++    _batch_menu.add_item(Strings.BATCH_ACTION_LAYOUT_FOCUS, BATCH_MENU_LAYOUT_FOCUS)
++    _batch_menu.add_separator()
+     _batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_CURRENT, BATCH_MENU_COMPARE_CURRENT)
+     _batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_PREVIOUS, BATCH_MENU_COMPARE_PREVIOUS)
+     _batch_menu.add_item(Strings.BATCH_ACTION_COMPARE_SPLIT, BATCH_MENU_COMPARE_SPLIT)
 @@ -464,6 +469,14 @@ func _on_batch_menu_id_pressed(id: int) -> void:
- 			_set_batch_review_filter(
- 				CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
- 			)
-+		BATCH_MENU_LAYOUT_CONTACT:
-+			_set_batch_review_layout(
-+				CanvasBatchCardScript.LAYOUT_CONTACT, Strings.STATUS_BATCH_LAYOUT_CONTACT
-+			)
-+		BATCH_MENU_LAYOUT_FOCUS:
-+			_set_batch_review_layout(
-+				CanvasBatchCardScript.LAYOUT_FOCUS, Strings.STATUS_BATCH_LAYOUT_FOCUS
-+			)
- 		BATCH_MENU_COMPARE_CURRENT:
- 			_set_batch_compare_mode(
- 				CanvasBatchCardScript.COMPARE_CURRENT, Strings.STATUS_BATCH_COMPARE_CURRENT
+             _set_batch_review_filter(
+                 CanvasBatchCardScript.REVIEW_FLAG, Strings.STATUS_BATCH_SHOW_FLAG
+             )
++        BATCH_MENU_LAYOUT_CONTACT:
++            _set_batch_review_layout(
++                CanvasBatchCardScript.LAYOUT_CONTACT, Strings.STATUS_BATCH_LAYOUT_CONTACT
++            )
++        BATCH_MENU_LAYOUT_FOCUS:
++            _set_batch_review_layout(
++                CanvasBatchCardScript.LAYOUT_FOCUS, Strings.STATUS_BATCH_LAYOUT_FOCUS
++            )
+         BATCH_MENU_COMPARE_CURRENT:
+             _set_batch_compare_mode(
+                 CanvasBatchCardScript.COMPARE_CURRENT, Strings.STATUS_BATCH_COMPARE_CURRENT
 @@ -586,6 +599,13 @@ func _set_batch_review_filter(review_filter: String, status_text: String) -> voi
- 	_status_label.text = status_text
- 
- 
+     _status_label.text = status_text
+
+
 +func _set_batch_review_layout(review_layout: String, status_text: String) -> void:
-+	if not _canvas._set_batch_review_layout(_batch_menu_card_id, review_layout, true):
-+		_status_label.text = Strings.STATUS_BATCH_LAYOUT_FAILED
-+		return
-+	_status_label.text = status_text
++    if not _canvas._set_batch_review_layout(_batch_menu_card_id, review_layout, true):
++        _status_label.text = Strings.STATUS_BATCH_LAYOUT_FAILED
++        return
++    _status_label.text = status_text
 +
 +
  func _set_batch_compare_mode(compare_mode: String, status_text: String) -> void:
- 	if not _canvas._set_batch_compare_mode(_batch_menu_card_id, compare_mode, true):
- 		_status_label.text = Strings.STATUS_BATCH_COMPARE_EMPTY
+     if not _canvas._set_batch_compare_mode(_batch_menu_card_id, compare_mode, true):
+         _status_label.text = Strings.STATUS_BATCH_COMPARE_EMPTY
 diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
 index f5b88fe..4954bff 100644
 --- a/pixel/ui/shell/strings.gd
@@ -7036,7 +7537,7 @@ index d0f4337..d5eb761 100644
      }
    ]
 @@ -133,7 +135,7 @@ my_project.pxproj (ZIP)
- 
+
  规则：
  - 画布元素 position 强制整数（像素网格对齐，体验原则1）。
 -- `node` 元素是画布上一切图节点（style/prompt/generate/batch/process…）的统一引用形态：只存"画在哪、第几层、是否折叠"，节点的类型/参数/连线全在 `graphs/`。连线在画布上从 graphs 渲染，不写进本文件。
@@ -7155,75 +7656,75 @@ index bc63e51..69675b0 100644
 +++ b/pixel/tests/smoke/test_infinite_canvas.gd
 @@ -1,6 +1,7 @@
  extends "res://addons/gut/test.gd"
- 
+
  const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 +const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
  const CanvasScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
  const ImageMath := preload("res://core/util/image_math.gd")
  const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
 @@ -149,6 +150,30 @@ func test_canvas_coordinates_use_compensated_logical_scale() -> void:
- 	assert_almost_eq(roundtrip.y, world_position.y, 0.001)
- 
- 
+     assert_almost_eq(roundtrip.y, world_position.y, 0.001)
+
+
 +func test_batch_lod_uses_camera_zoom_not_compensated_art_scale() -> void:
-+	get_tree().root.get_node("ProjectService").new_project("LOD Test")
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(320, 240)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    get_tree().root.get_node("ProjectService").new_project("LOD Test")
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(320, 240)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [_register_asset(Color.RED, "red")]
-+	var card: Node = canvas._add_batch_card(ids, Vector2.ZERO, "Batch", "batch_1", false)
++    var ids := [_register_asset(Color.RED, "red")]
++    var card: Node = canvas._add_batch_card(ids, Vector2.ZERO, "Batch", "batch_1", false)
 +
-+	canvas._set_viewport_scale_factor_for_test(1.5)
-+	canvas.set_camera_zoom(0.25, Vector2(160, 120))
-+	await wait_process_frames(1)
++    canvas._set_viewport_scale_factor_for_test(1.5)
++    canvas.set_camera_zoom(0.25, Vector2(160, 120))
++    await wait_process_frames(1)
 +
-+	assert_almost_eq(canvas._get_art_logical_scale(), 0.333, 0.001)
-+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_OVERVIEW)
++    assert_almost_eq(canvas._get_art_logical_scale(), 0.333, 0.001)
++    assert_eq(card._get_lod_profile(), LODProfile.PROFILE_OVERVIEW)
 +
-+	canvas.set_camera_zoom(4.0, Vector2(160, 120))
-+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
++    canvas.set_camera_zoom(4.0, Vector2(160, 120))
++    assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
 +
-+	canvas.set_camera_zoom(1.0, Vector2(160, 120))
-+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
++    canvas.set_camera_zoom(1.0, Vector2(160, 120))
++    assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
 +
 +
  func test_zoom_anchor_stays_fixed_with_fractional_content_scale() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(320, 240)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(320, 240)
 @@ -321,6 +346,12 @@ func _make_checker_image(size: int) -> Image:
- 	return image
- 
- 
+     return image
+
+
 +func _register_asset(color: Color, name: String) -> String:
-+	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
-+	image.fill(color)
-+	return AssetLibrary.register_image(image, name, {"origin": "imported"})
++    var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
++    image.fill(color)
++    return AssetLibrary.register_image(image, name, {"origin": "imported"})
 +
 +
  func _mouse_button(button: MouseButton, pressed: bool, position: Vector2) -> InputEventMouseButton:
- 	var event := InputEventMouseButton.new()
- 	event.button_index = button
+     var event := InputEventMouseButton.new()
+     event.button_index = button
 diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
 index 9c70e83..f5a019c 100644
 --- a/pixel/tests/smoke/test_main_window_ui.gd
 +++ b/pixel/tests/smoke/test_main_window_ui.gd
 @@ -270,6 +270,8 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
- 	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
- 	controller.generate_mock_batch()
- 	await wait_process_frames(2)
-+	canvas.set_camera_zoom(1.0, canvas.size * 0.5)
-+	await wait_process_frames(1)
- 
- 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
- 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+     var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+     controller.generate_mock_batch()
+     await wait_process_frames(2)
++    canvas.set_camera_zoom(1.0, canvas.size * 0.5)
++    await wait_process_frames(1)
+
+     var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+     var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
 diff --git a/pixel/tests/unit/test_canvas_batch_card.gd b/pixel/tests/unit/test_canvas_batch_card.gd
 index debfee6..2af1e30 100644
 --- a/pixel/tests/unit/test_canvas_batch_card.gd
 +++ b/pixel/tests/unit/test_canvas_batch_card.gd
 @@ -2,6 +2,7 @@ extends "res://addons/gut/test.gd"
- 
+
  const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
  const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 +const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
@@ -7231,50 +7732,50 @@ index debfee6..2af1e30 100644
  const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
  const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 @@ -176,6 +177,33 @@ func test_canvas_batch_card_switches_review_layout_for_focus_view() -> void:
- 	assert_eq(item["review_layout"], CanvasBatchCardScript.LAYOUT_FOCUS)
- 
- 
+     assert_eq(item["review_layout"], CanvasBatchCardScript.LAYOUT_FOCUS)
+
+
 +func test_canvas_batch_card_switches_semantic_lod_profiles() -> void:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	await wait_process_frames(2)
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    await wait_process_frames(2)
 +
-+	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
-+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++    var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++    var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 +
-+	assert_eq(LODProfile.profile_for_camera_zoom(0.25), LODProfile.PROFILE_OVERVIEW)
-+	assert_eq(LODProfile.profile_for_camera_zoom(1.0), LODProfile.PROFILE_REVIEW)
-+	assert_eq(LODProfile.profile_for_camera_zoom(4.0), LODProfile.PROFILE_INSPECT)
-+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
++    assert_eq(LODProfile.profile_for_camera_zoom(0.25), LODProfile.PROFILE_OVERVIEW)
++    assert_eq(LODProfile.profile_for_camera_zoom(1.0), LODProfile.PROFILE_REVIEW)
++    assert_eq(LODProfile.profile_for_camera_zoom(4.0), LODProfile.PROFILE_INSPECT)
++    assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
 +
-+	card.set_lod_camera_zoom(0.25)
-+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_OVERVIEW)
-+	assert_almost_eq(
-+		card.get_canvas_bounds().size.y, float(CanvasBatchCardScript.OVERVIEW_HEIGHT), 0.001
-+	)
-+	assert_eq(card.asset_index_at_world(card.position + Vector2(24, 64)), -1)
++    card.set_lod_camera_zoom(0.25)
++    assert_eq(card._get_lod_profile(), LODProfile.PROFILE_OVERVIEW)
++    assert_almost_eq(
++        card.get_canvas_bounds().size.y, float(CanvasBatchCardScript.OVERVIEW_HEIGHT), 0.001
++    )
++    assert_eq(card.asset_index_at_world(card.position + Vector2(24, 64)), -1)
 +
-+	card.set_lod_camera_zoom(4.0)
-+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
-+	assert_gt(card.get_canvas_bounds().size.y, float(CanvasBatchCardScript.OVERVIEW_HEIGHT))
-+	assert_false(card._asset_hint_for(ids[0]).is_empty())
++    card.set_lod_camera_zoom(4.0)
++    assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
++    assert_gt(card.get_canvas_bounds().size.y, float(CanvasBatchCardScript.OVERVIEW_HEIGHT))
++    assert_false(card._asset_hint_for(ids[0]).is_empty())
 +
 +
  func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
- 	var canvas: Control = CanvasScript.new()
- 	canvas.size = Vector2(512, 512)
+     var canvas: Control = CanvasScript.new()
+     canvas.size = Vector2(512, 512)
 diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
 index e54db12..cd7ae7d 100644
 --- a/pixel/ui/canvas/canvas_batch_card.gd
 +++ b/pixel/ui/canvas/canvas_batch_card.gd
 @@ -5,6 +5,7 @@ extends Node2D
  ## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
- 
+
  const IdUtil := preload("res://core/util/id_util.gd")
 +const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
  const Strings := preload("res://ui/shell/strings.gd")
- 
+
  const CARD_WIDTH := 600
 @@ -41,6 +42,14 @@ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
  const FOCUS_IMAGE_HEIGHT := 320
@@ -7288,314 +7789,314 @@ index e54db12..cd7ae7d 100644
 +const CHECKER_DARK := Color(0.1, 0.105, 0.11, 1.0)
 +const INSPECT_GRID := Color(1.0, 1.0, 1.0, 0.16)
 +const HINT_BACKGROUND := Color(0.02, 0.025, 0.03, 0.78)
- 
+
  var item_id := ""
  var graph_id := ""
 @@ -57,7 +66,9 @@ var label := ""
  var locked := false
- 
+
  var _thumbnail_textures := {}
 +var _asset_hints := {}
  var _font: Font = null
 +var _lod_camera_zoom := 1.0
- 
- 
+
+
  func setup_from_data(data: Dictionary) -> void:
 @@ -135,6 +146,14 @@ func get_canvas_bounds() -> Rect2:
- 	return Rect2(position, Vector2(CARD_WIDTH, _card_height()))
- 
- 
+     return Rect2(position, Vector2(CARD_WIDTH, _card_height()))
+
+
 +func set_lod_camera_zoom(camera_zoom_value: float) -> void:
-+	var normalized_zoom := maxf(camera_zoom_value, 0.0)
-+	if is_equal_approx(_lod_camera_zoom, normalized_zoom):
-+		return
-+	_lod_camera_zoom = normalized_zoom
-+	queue_redraw()
++    var normalized_zoom := maxf(camera_zoom_value, 0.0)
++    if is_equal_approx(_lod_camera_zoom, normalized_zoom):
++        return
++    _lod_camera_zoom = normalized_zoom
++    queue_redraw()
 +
 +
  func contains_world_point(world_position: Vector2) -> bool:
- 	return get_canvas_bounds().has_point(world_position)
- 
+     return get_canvas_bounds().has_point(world_position)
+
 @@ -312,6 +331,8 @@ func toggle_asset_at_world(world_position: Vector2) -> bool:
- 
- 
+
+
  func asset_index_at_world(world_position: Vector2) -> int:
-+	if _get_lod_profile() == LODProfile.PROFILE_OVERVIEW:
-+		return -1
- 	var local := world_position - position
- 	if local.y < HEADER_HEIGHT:
- 		return -1
++    if _get_lod_profile() == LODProfile.PROFILE_OVERVIEW:
++        return -1
+     var local := world_position - position
+     if local.y < HEADER_HEIGHT:
+         return -1
 @@ -326,6 +347,10 @@ func asset_index_at_world(world_position: Vector2) -> int:
- 	return -1
- 
- 
+     return -1
+
+
 +func _get_lod_profile() -> String:
-+	return LODProfile.profile_for_camera_zoom(_lod_camera_zoom)
++    return LODProfile.profile_for_camera_zoom(_lod_camera_zoom)
 +
 +
  func _draw() -> void:
- 	_font = ThemeDB.fallback_font if _font == null else _font
- 	var card_rect := Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, _card_height()))
+     _font = ThemeDB.fallback_font if _font == null else _font
+     var card_rect := Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, _card_height()))
 @@ -334,8 +359,9 @@ func _draw() -> void:
- 	draw_rect(
- 		Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
- 	)
-+	var visible_ids := get_visible_asset_ids()
- 	if _font != null:
--		var visible_count := get_visible_asset_ids().size()
-+		var visible_count := visible_ids.size()
- 		var title := "%s (%d)" % [label, asset_ids.size()]
- 		if visible_count != asset_ids.size():
- 			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
+     draw_rect(
+         Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
+     )
++    var visible_ids := get_visible_asset_ids()
+     if _font != null:
+-        var visible_count := get_visible_asset_ids().size()
++        var visible_count := visible_ids.size()
+         var title := "%s (%d)" % [label, asset_ids.size()]
+         if visible_count != asset_ids.size():
+             title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
 @@ -353,11 +379,13 @@ func _draw() -> void:
- 			Color(0.9, 0.92, 0.92, 1.0)
- 		)
- 
--	var columns := _columns()
--	var visible_ids := get_visible_asset_ids()
--	if review_layout == LAYOUT_FOCUS:
-+	var lod_profile := _get_lod_profile()
-+	if lod_profile == LODProfile.PROFILE_OVERVIEW:
-+		_draw_overview(visible_ids)
-+	elif review_layout == LAYOUT_FOCUS:
- 		_draw_focus_layout(visible_ids)
- 	else:
-+		var columns := _columns()
- 		for index in range(visible_ids.size()):
- 			_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
- 	if has_graph_binding():
+             Color(0.9, 0.92, 0.92, 1.0)
+         )
+
+-    var columns := _columns()
+-    var visible_ids := get_visible_asset_ids()
+-    if review_layout == LAYOUT_FOCUS:
++    var lod_profile := _get_lod_profile()
++    if lod_profile == LODProfile.PROFILE_OVERVIEW:
++        _draw_overview(visible_ids)
++    elif review_layout == LAYOUT_FOCUS:
+         _draw_focus_layout(visible_ids)
+     else:
++        var columns := _columns()
+         for index in range(visible_ids.size()):
+             _draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
+     if has_graph_binding():
 @@ -377,12 +405,58 @@ func _draw_focus_layout(visible_ids: Array[String]) -> void:
- 		_draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
- 
- 
+         _draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
+
+
 +func _draw_overview(visible_ids: Array[String]) -> void:
-+	var content_rect := Rect2(
-+		Vector2(PADDING, HEADER_HEIGHT + PADDING), Vector2(CARD_WIDTH - PADDING * 2, 42.0)
-+	)
-+	draw_rect(content_rect, Color(0.08, 0.085, 0.09, 1.0), true)
-+	if _font != null:
-+		draw_string(
-+			_font,
-+			content_rect.position + Vector2(0.0, 31.0),
-+			str(visible_ids.size()),
-+			HORIZONTAL_ALIGNMENT_CENTER,
-+			content_rect.size.x,
-+			28,
-+			Color(0.92, 0.94, 0.92, 1.0)
-+		)
-+	var bar_rect := Rect2(
-+		Vector2(PADDING, content_rect.end.y + THUMB_GAP),
-+		Vector2(CARD_WIDTH - PADDING * 2, OVERVIEW_BAR_HEIGHT)
-+	)
-+	_draw_overview_status_bar(bar_rect, visible_ids)
++    var content_rect := Rect2(
++        Vector2(PADDING, HEADER_HEIGHT + PADDING), Vector2(CARD_WIDTH - PADDING * 2, 42.0)
++    )
++    draw_rect(content_rect, Color(0.08, 0.085, 0.09, 1.0), true)
++    if _font != null:
++        draw_string(
++            _font,
++            content_rect.position + Vector2(0.0, 31.0),
++            str(visible_ids.size()),
++            HORIZONTAL_ALIGNMENT_CENTER,
++            content_rect.size.x,
++            28,
++            Color(0.92, 0.94, 0.92, 1.0)
++        )
++    var bar_rect := Rect2(
++        Vector2(PADDING, content_rect.end.y + THUMB_GAP),
++        Vector2(CARD_WIDTH - PADDING * 2, OVERVIEW_BAR_HEIGHT)
++    )
++    _draw_overview_status_bar(bar_rect, visible_ids)
 +
 +
 +func _draw_overview_status_bar(bar_rect: Rect2, visible_ids: Array[String]) -> void:
-+	draw_rect(bar_rect, Color(0.08, 0.085, 0.09, 1.0), true)
-+	if visible_ids.is_empty():
-+		return
-+	var counts := _review_counts(visible_ids)
-+	var cursor_x := bar_rect.position.x
-+	for review_state in [FILTER_PENDING, REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG]:
-+		var count := int(counts.get(review_state, 0))
-+		if count <= 0:
-+			continue
-+		var width := bar_rect.size.x * float(count) / float(visible_ids.size())
-+		var segment := Rect2(
-+			Vector2(cursor_x, bar_rect.position.y), Vector2(width, bar_rect.size.y)
-+		)
-+		draw_rect(segment, _overview_color_for_state(review_state), true)
-+		cursor_x += width
++    draw_rect(bar_rect, Color(0.08, 0.085, 0.09, 1.0), true)
++    if visible_ids.is_empty():
++        return
++    var counts := _review_counts(visible_ids)
++    var cursor_x := bar_rect.position.x
++    for review_state in [FILTER_PENDING, REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG]:
++        var count := int(counts.get(review_state, 0))
++        if count <= 0:
++            continue
++        var width := bar_rect.size.x * float(count) / float(visible_ids.size())
++        var segment := Rect2(
++            Vector2(cursor_x, bar_rect.position.y), Vector2(width, bar_rect.size.y)
++        )
++        draw_rect(segment, _overview_color_for_state(review_state), true)
++        cursor_x += width
 +
 +
  func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
--	draw_rect(rect, THUMB_BACKGROUND, true)
-+	var inspect_mode := _get_lod_profile() == LODProfile.PROFILE_INSPECT
-+	if inspect_mode:
-+		_draw_checkerboard(rect)
-+	else:
-+		draw_rect(rect, THUMB_BACKGROUND, true)
- 	if compare_mode == COMPARE_SPLIT:
- 		_draw_split_compare_thumbnail(asset_id, rect)
- 	else:
- 		_draw_thumbnail_texture(_texture_asset_id_for(asset_id), rect)
-+	if inspect_mode:
-+		_draw_inspect_overlay(asset_id, rect)
- 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
- 	draw_rect(rect, border_color, false, 1.5)
- 	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
+-    draw_rect(rect, THUMB_BACKGROUND, true)
++    var inspect_mode := _get_lod_profile() == LODProfile.PROFILE_INSPECT
++    if inspect_mode:
++        _draw_checkerboard(rect)
++    else:
++        draw_rect(rect, THUMB_BACKGROUND, true)
+     if compare_mode == COMPARE_SPLIT:
+         _draw_split_compare_thumbnail(asset_id, rect)
+     else:
+         _draw_thumbnail_texture(_texture_asset_id_for(asset_id), rect)
++    if inspect_mode:
++        _draw_inspect_overlay(asset_id, rect)
+     var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
+     draw_rect(rect, border_color, false, 1.5)
+     _draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
 @@ -409,13 +483,81 @@ func _draw_split_compare_thumbnail(asset_id: String, rect: Rect2) -> void:
- 
- 
+
+
  func _draw_thumbnail_texture(asset_id: String, rect: Rect2) -> void:
-+	var texture_rect := _thumbnail_texture_rect(asset_id, rect)
-+	if texture_rect.size == Vector2.ZERO:
-+		return
-+	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
-+	draw_texture_rect(texture, texture_rect, false)
++    var texture_rect := _thumbnail_texture_rect(asset_id, rect)
++    if texture_rect.size == Vector2.ZERO:
++        return
++    var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
++    draw_texture_rect(texture, texture_rect, false)
 +
 +
 +func _thumbnail_texture_rect(asset_id: String, rect: Rect2) -> Rect2:
- 	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
- 	if texture != null:
- 		var image_size := texture.get_size()
- 		var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
- 		var draw_size := image_size * scale
- 		var draw_pos := rect.position + (rect.size - draw_size) * 0.5
--		draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
-+		return Rect2(draw_pos, draw_size)
-+	return Rect2()
+     var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
+     if texture != null:
+         var image_size := texture.get_size()
+         var scale := minf(rect.size.x / image_size.x, rect.size.y / image_size.y)
+         var draw_size := image_size * scale
+         var draw_pos := rect.position + (rect.size - draw_size) * 0.5
+-        draw_texture_rect(texture, Rect2(draw_pos, draw_size), false)
++        return Rect2(draw_pos, draw_size)
++    return Rect2()
 +
 +
 +func _draw_checkerboard(rect: Rect2) -> void:
-+	var columns := int(ceil(rect.size.x / float(CHECKER_SIZE)))
-+	var rows := int(ceil(rect.size.y / float(CHECKER_SIZE)))
-+	for row in range(rows):
-+		for column in range(columns):
-+			var cell := Rect2(
-+				rect.position + Vector2(column * CHECKER_SIZE, row * CHECKER_SIZE),
-+				Vector2(CHECKER_SIZE, CHECKER_SIZE)
-+			)
-+			draw_rect(cell, CHECKER_LIGHT if (row + column) % 2 == 0 else CHECKER_DARK, true)
++    var columns := int(ceil(rect.size.x / float(CHECKER_SIZE)))
++    var rows := int(ceil(rect.size.y / float(CHECKER_SIZE)))
++    for row in range(rows):
++        for column in range(columns):
++            var cell := Rect2(
++                rect.position + Vector2(column * CHECKER_SIZE, row * CHECKER_SIZE),
++                Vector2(CHECKER_SIZE, CHECKER_SIZE)
++            )
++            draw_rect(cell, CHECKER_LIGHT if (row + column) % 2 == 0 else CHECKER_DARK, true)
 +
 +
 +func _draw_inspect_overlay(asset_id: String, rect: Rect2) -> void:
-+	var texture_asset_id := _texture_asset_id_for(asset_id)
-+	var texture_rect := _thumbnail_texture_rect(texture_asset_id, rect)
-+	if texture_rect.size != Vector2.ZERO:
-+		_draw_texture_pixel_grid(texture_asset_id, texture_rect)
-+	var hint := _asset_hint_for(asset_id)
-+	if hint.is_empty() or _font == null:
-+		return
-+	var hint_rect := Rect2(
-+		rect.position + Vector2(6.0, rect.size.y - 24.0), Vector2(rect.size.x - 12.0, 18.0)
-+	)
-+	draw_rect(hint_rect, HINT_BACKGROUND, true)
-+	draw_string(
-+		_font,
-+		hint_rect.position + Vector2(5.0, 14.0),
-+		hint,
-+		HORIZONTAL_ALIGNMENT_LEFT,
-+		hint_rect.size.x - 10.0,
-+		12,
-+		Color(0.94, 0.95, 0.94, 1.0)
-+	)
++    var texture_asset_id := _texture_asset_id_for(asset_id)
++    var texture_rect := _thumbnail_texture_rect(texture_asset_id, rect)
++    if texture_rect.size != Vector2.ZERO:
++        _draw_texture_pixel_grid(texture_asset_id, texture_rect)
++    var hint := _asset_hint_for(asset_id)
++    if hint.is_empty() or _font == null:
++        return
++    var hint_rect := Rect2(
++        rect.position + Vector2(6.0, rect.size.y - 24.0), Vector2(rect.size.x - 12.0, 18.0)
++    )
++    draw_rect(hint_rect, HINT_BACKGROUND, true)
++    draw_string(
++        _font,
++        hint_rect.position + Vector2(5.0, 14.0),
++        hint,
++        HORIZONTAL_ALIGNMENT_LEFT,
++        hint_rect.size.x - 10.0,
++        12,
++        Color(0.94, 0.95, 0.94, 1.0)
++    )
 +
 +
 +func _draw_texture_pixel_grid(asset_id: String, texture_rect: Rect2) -> void:
-+	var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
-+	if texture == null:
-+		return
-+	var image_size := texture.get_size()
-+	var cell_size := minf(texture_rect.size.x / image_size.x, texture_rect.size.y / image_size.y)
-+	if not LODProfile.should_draw_pixel_grid(_lod_camera_zoom, cell_size):
-+		return
-+	for x in range(1, int(image_size.x)):
-+		var line_x := texture_rect.position.x + float(x) * cell_size
-+		draw_line(
-+			Vector2(line_x, texture_rect.position.y),
-+			Vector2(line_x, texture_rect.end.y),
-+			INSPECT_GRID
-+		)
-+	for y in range(1, int(image_size.y)):
-+		var line_y := texture_rect.position.y + float(y) * cell_size
-+		draw_line(
-+			Vector2(texture_rect.position.x, line_y),
-+			Vector2(texture_rect.end.x, line_y),
-+			INSPECT_GRID
-+		)
- 
- 
++    var texture: Texture2D = _thumbnail_textures.get(asset_id, null)
++    if texture == null:
++        return
++    var image_size := texture.get_size()
++    var cell_size := minf(texture_rect.size.x / image_size.x, texture_rect.size.y / image_size.y)
++    if not LODProfile.should_draw_pixel_grid(_lod_camera_zoom, cell_size):
++        return
++    for x in range(1, int(image_size.x)):
++        var line_x := texture_rect.position.x + float(x) * cell_size
++        draw_line(
++            Vector2(line_x, texture_rect.position.y),
++            Vector2(line_x, texture_rect.end.y),
++            INSPECT_GRID
++        )
++    for y in range(1, int(image_size.y)):
++        var line_y := texture_rect.position.y + float(y) * cell_size
++        draw_line(
++            Vector2(texture_rect.position.x, line_y),
++            Vector2(texture_rect.end.x, line_y),
++            INSPECT_GRID
++        )
+
+
  func _draw_review_marker(rect: Rect2, review_state: String) -> void:
 @@ -443,6 +585,29 @@ func _draw_review_marker(rect: Rect2, review_state: String) -> void:
- 			)
- 
- 
+             )
+
+
 +func _review_counts(visible_ids: Array[String]) -> Dictionary:
-+	var counts := {FILTER_PENDING: 0, REVIEW_KEEP: 0, REVIEW_REJECT: 0, REVIEW_FLAG: 0}
-+	for asset_id in visible_ids:
-+		var review_state := String(review_states.get(asset_id, REVIEW_NONE))
-+		if review_state.is_empty():
-+			counts[FILTER_PENDING] += 1
-+		else:
-+			counts[review_state] = int(counts.get(review_state, 0)) + 1
-+	return counts
++    var counts := {FILTER_PENDING: 0, REVIEW_KEEP: 0, REVIEW_REJECT: 0, REVIEW_FLAG: 0}
++    for asset_id in visible_ids:
++        var review_state := String(review_states.get(asset_id, REVIEW_NONE))
++        if review_state.is_empty():
++            counts[FILTER_PENDING] += 1
++        else:
++            counts[review_state] = int(counts.get(review_state, 0)) + 1
++    return counts
 +
 +
 +func _overview_color_for_state(review_state: String) -> Color:
-+	match review_state:
-+		REVIEW_KEEP:
-+			return KEEP_MARK
-+		REVIEW_REJECT:
-+			return REJECT_MARK
-+		REVIEW_FLAG:
-+			return FLAG_MARK
-+		_:
-+			return BORDER
++    match review_state:
++        REVIEW_KEEP:
++            return KEEP_MARK
++        REVIEW_REJECT:
++            return REJECT_MARK
++        REVIEW_FLAG:
++            return FLAG_MARK
++        _:
++            return BORDER
 +
 +
  func _thumb_rect(index: int, columns: int) -> Rect2:
- 	var col := index % columns
- 	var row := int(index / columns)
+     var col := index % columns
+     var row := int(index / columns)
 @@ -471,6 +636,8 @@ func _filmstrip_rect(slot_index: int) -> Rect2:
- 
- 
+
+
  func _card_height() -> int:
-+	if _get_lod_profile() == LODProfile.PROFILE_OVERVIEW:
-+		return OVERVIEW_HEIGHT
- 	var visible_count := get_visible_asset_ids().size()
- 	if visible_count <= 0:
- 		return MIN_CARD_HEIGHT
++    if _get_lod_profile() == LODProfile.PROFILE_OVERVIEW:
++        return OVERVIEW_HEIGHT
+     var visible_count := get_visible_asset_ids().size()
+     if visible_count <= 0:
+         return MIN_CARD_HEIGHT
 @@ -512,6 +679,7 @@ func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
- 
+
  func _rebuild_thumbnails() -> void:
- 	_thumbnail_textures.clear()
-+	_asset_hints.clear()
- 	var texture_asset_ids := asset_ids.duplicate()
- 	for compare_asset_id in compare_asset_ids:
- 		if not texture_asset_ids.has(compare_asset_id):
+     _thumbnail_textures.clear()
++    _asset_hints.clear()
+     var texture_asset_ids := asset_ids.duplicate()
+     for compare_asset_id in compare_asset_ids:
+         if not texture_asset_ids.has(compare_asset_id):
 @@ -520,6 +688,10 @@ func _rebuild_thumbnails() -> void:
- 		var image := AssetLibrary.get_image(asset_id)
- 		if image == null:
- 			continue
-+		_asset_hints[asset_id] = {
-+			"size": image.get_size(),
-+			"color_count": _count_limited_colors(image, MAX_INSPECT_COLOR_HINTS),
-+		}
- 		var thumb := image.duplicate()
- 		var longest := maxi(thumb.get_width(), thumb.get_height())
- 		if longest > THUMB_TEXTURE_SIZE:
+         var image := AssetLibrary.get_image(asset_id)
+         if image == null:
+             continue
++        _asset_hints[asset_id] = {
++            "size": image.get_size(),
++            "color_count": _count_limited_colors(image, MAX_INSPECT_COLOR_HINTS),
++        }
+         var thumb := image.duplicate()
+         var longest := maxi(thumb.get_width(), thumb.get_height())
+         if longest > THUMB_TEXTURE_SIZE:
 @@ -532,6 +704,30 @@ func _rebuild_thumbnails() -> void:
- 		_thumbnail_textures[asset_id] = ImageTexture.create_from_image(thumb)
- 
- 
+         _thumbnail_textures[asset_id] = ImageTexture.create_from_image(thumb)
+
+
 +func _asset_hint_for(asset_id: String) -> String:
-+	var hint: Dictionary = _asset_hints.get(asset_id, {})
-+	if hint.is_empty():
-+		return ""
-+	var image_size: Vector2i = hint.get("size", Vector2i.ZERO)
-+	var color_count := int(hint.get("color_count", 0))
-+	if color_count > MAX_INSPECT_COLOR_HINTS:
-+		return (
-+			Strings.BATCH_INSPECT_HINT_CAPPED_FORMAT
-+			% [image_size.x, image_size.y, MAX_INSPECT_COLOR_HINTS]
-+		)
-+	return Strings.BATCH_INSPECT_HINT_FORMAT % [image_size.x, image_size.y, color_count]
++    var hint: Dictionary = _asset_hints.get(asset_id, {})
++    if hint.is_empty():
++        return ""
++    var image_size: Vector2i = hint.get("size", Vector2i.ZERO)
++    var color_count := int(hint.get("color_count", 0))
++    if color_count > MAX_INSPECT_COLOR_HINTS:
++        return (
++            Strings.BATCH_INSPECT_HINT_CAPPED_FORMAT
++            % [image_size.x, image_size.y, MAX_INSPECT_COLOR_HINTS]
++        )
++    return Strings.BATCH_INSPECT_HINT_FORMAT % [image_size.x, image_size.y, color_count]
 +
 +
 +func _count_limited_colors(image: Image, max_colors: int) -> int:
-+	var colors := {}
-+	for y in range(image.get_height()):
-+		for x in range(image.get_width()):
-+			colors[image.get_pixel(x, y).to_html(true)] = true
-+			if colors.size() > max_colors:
-+				return colors.size()
-+	return colors.size()
++    var colors := {}
++    for y in range(image.get_height()):
++        for x in range(image.get_width()):
++            colors[image.get_pixel(x, y).to_html(true)] = true
++            if colors.size() > max_colors:
++                return colors.size()
++    return colors.size()
 +
 +
  func _resolve_graph_batch_node_data() -> Dictionary:
- 	if not has_graph_binding():
- 		return {}
+     if not has_graph_binding():
+         return {}
 diff --git a/pixel/ui/canvas/canvas_lod_coordinator.gd b/pixel/ui/canvas/canvas_lod_coordinator.gd
 new file mode 100644
 index 0000000..295c020
@@ -7609,14 +8110,14 @@ index 0000000..295c020
 +
 +
 +static func sync_batch_camera_zoom(
-+	items_by_id: Dictionary, batch_card_script: Script, camera_zoom: float
++    items_by_id: Dictionary, batch_card_script: Script, camera_zoom: float
 +) -> void:
-+	for raw_item in items_by_id.values():
-+		if not (raw_item is Node):
-+			continue
-+		var item: Node = raw_item
-+		if item.get_script() == batch_card_script:
-+			item.set_lod_camera_zoom(camera_zoom)
++    for raw_item in items_by_id.values():
++        if not (raw_item is Node):
++            continue
++        var item: Node = raw_item
++        if item.get_script() == batch_card_script:
++            item.set_lod_camera_zoom(camera_zoom)
 diff --git a/pixel/ui/canvas/canvas_lod_coordinator.gd.uid b/pixel/ui/canvas/canvas_lod_coordinator.gd.uid
 new file mode 100644
 index 0000000..060fc9b
@@ -7644,16 +8145,16 @@ index 0000000..2006b01
 +
 +
 +static func profile_for_camera_zoom(camera_zoom: float) -> String:
-+	var safe_zoom := maxf(camera_zoom, 0.0)
-+	if safe_zoom <= OVERVIEW_MAX_CAMERA_ZOOM:
-+		return PROFILE_OVERVIEW
-+	if safe_zoom >= INSPECT_MIN_CAMERA_ZOOM:
-+		return PROFILE_INSPECT
-+	return PROFILE_REVIEW
++    var safe_zoom := maxf(camera_zoom, 0.0)
++    if safe_zoom <= OVERVIEW_MAX_CAMERA_ZOOM:
++        return PROFILE_OVERVIEW
++    if safe_zoom >= INSPECT_MIN_CAMERA_ZOOM:
++        return PROFILE_INSPECT
++    return PROFILE_REVIEW
 +
 +
 +static func should_draw_pixel_grid(camera_zoom: float, local_cell_size: float) -> bool:
-+	return maxf(camera_zoom, 0.0) * maxf(local_cell_size, 0.0) >= PIXEL_GRID_MIN_PHYSICAL_CELL
++    return maxf(camera_zoom, 0.0) * maxf(local_cell_size, 0.0) >= PIXEL_GRID_MIN_PHYSICAL_CELL
 diff --git a/pixel/ui/canvas/canvas_lod_profile.gd.uid b/pixel/ui/canvas/canvas_lod_profile.gd.uid
 new file mode 100644
 index 0000000..a43ab38
@@ -7674,48 +8175,48 @@ index 9c54730..74821ee 100644
  const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
  const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
 @@ -294,7 +295,10 @@ func delete_selected(record_undo: bool = true) -> void:
- 			var data: Dictionary = snapshot["data"]
- 			if String(data.get("type", "")) == "sprite":
- 				_add_sprite_direct(data, snapshot["image"])
--			elif _is_batch_card_data(data):
-+			elif (
-+				String(data.get("type", "")) == "batch_card"
-+				or GraphItemBridge.is_graph_batch_node_data(data)
-+			):
- 				_add_batch_direct(data)
- 			elif String(data.get("type", "")) == "node":
- 				_add_node_direct(data)
+             var data: Dictionary = snapshot["data"]
+             if String(data.get("type", "")) == "sprite":
+                 _add_sprite_direct(data, snapshot["image"])
+-            elif _is_batch_card_data(data):
++            elif (
++                String(data.get("type", "")) == "batch_card"
++                or GraphItemBridge.is_graph_batch_node_data(data)
++            ):
+                 _add_batch_direct(data)
+             elif String(data.get("type", "")) == "node":
+                 _add_node_direct(data)
 @@ -759,6 +763,7 @@ func _add_sprite_direct(item_data: Dictionary, image: Image) -> Node:
  func _add_batch_direct(item_data: Dictionary) -> Node:
- 	var item: Node = CanvasBatchCardScript.new()
- 	item.setup_from_data(item_data)
-+	item.set_lod_camera_zoom(camera_zoom)
- 	item_layer.add_child(item)
- 	_items_by_id[item.item_id] = item
- 	for asset_id in item.asset_ids:
+     var item: Node = CanvasBatchCardScript.new()
+     item.setup_from_data(item_data)
++    item.set_lod_camera_zoom(camera_zoom)
+     item_layer.add_child(item)
+     _items_by_id[item.item_id] = item
+     for asset_id in item.asset_ids:
 @@ -778,14 +783,6 @@ func _add_node_direct(item_data: Dictionary) -> Node:
- 	return item
- 
- 
+     return item
+
+
 -func _is_batch_card_data(item_data: Dictionary) -> bool:
--	var item_type := String(item_data.get("type", ""))
--	return (
--		item_type == "batch_card"
--		or (item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data))
--	)
+-    var item_type := String(item_data.get("type", ""))
+-    return (
+-        item_type == "batch_card"
+-        or (item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data))
+-    )
 -
 -
  func _remove_item_direct(item_id: String) -> void:
- 	if not _items_by_id.has(item_id):
- 		return
+     if not _items_by_id.has(item_id):
+         return
 @@ -889,6 +886,7 @@ func _update_layer_transform() -> void:
- 		raw_position, viewport_scale_factor
- 	)
- 	item_layer.scale = Vector2.ONE * art_logical_scale
-+	LODCoordinator.sync_batch_camera_zoom(_items_by_id, CanvasBatchCardScript, camera_zoom)
- 	_sync_cleanup_grid_overlay()
- 	queue_redraw()
- 
+         raw_position, viewport_scale_factor
+     )
+     item_layer.scale = Vector2.ONE * art_logical_scale
++    LODCoordinator.sync_batch_camera_zoom(_items_by_id, CanvasBatchCardScript, camera_zoom)
+     _sync_cleanup_grid_overlay()
+     queue_redraw()
+
 diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
 index 4954bff..8e3a28a 100644
 --- a/pixel/ui/shell/strings.gd
@@ -7825,92 +8326,92 @@ index 0000000..c492fad
 +
 +
 +func before_each() -> void:
-+	get_tree().root.get_node("ProjectService").new_project("Hit Policy")
++    get_tree().root.get_node("ProjectService").new_project("Hit Policy")
 +
 +
 +func test_canvas_hit_policy_prioritizes_batch_thumbnail_inside_review_card() -> void:
-+	var canvas: Control = _canvas()
-+	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
-+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++    var canvas: Control = _canvas()
++    var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
++    var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 +
-+	var hit := _hit(canvas, card.position + Vector2(20, 60))
++    var hit := _hit(canvas, card.position + Vector2(20, 60))
 +
-+	assert_eq(hit["kind"], HitPolicy.KIND_BATCH_THUMBNAIL)
-+	assert_eq(hit["item_id"], "batch_1")
-+	assert_eq(hit["asset_index"], 0)
++    assert_eq(hit["kind"], HitPolicy.KIND_BATCH_THUMBNAIL)
++    assert_eq(hit["item_id"], "batch_1")
++    assert_eq(hit["asset_index"], 0)
 +
 +
 +func test_canvas_left_click_on_batch_thumbnail_does_not_start_card_drag() -> void:
-+	var canvas: Control = _canvas()
-+	var ids := [_register_asset(Color.RED, "red")]
-+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++    var canvas: Control = _canvas()
++    var ids := [_register_asset(Color.RED, "red")]
++    var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 +
-+	canvas._begin_left_interaction(canvas.world_to_screen(card.position + Vector2(20, 60)), false)
++    canvas._begin_left_interaction(canvas.world_to_screen(card.position + Vector2(20, 60)), false)
 +
-+	assert_eq(canvas.get_selected_ids(), ["batch_1"])
-+	assert_eq(card.get_selected_asset_ids(), [ids[0]])
-+	assert_false(canvas._selection.is_dragging_items)
++    assert_eq(canvas.get_selected_ids(), ["batch_1"])
++    assert_eq(card.get_selected_asset_ids(), [ids[0]])
++    assert_false(canvas._selection.is_dragging_items)
 +
 +
 +func test_canvas_hit_policy_treats_overview_batch_as_whole_card() -> void:
-+	var canvas: Control = _canvas()
-+	var ids := [_register_asset(Color.RED, "red")]
-+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
-+	card.set_lod_camera_zoom(0.25)
++    var canvas: Control = _canvas()
++    var ids := [_register_asset(Color.RED, "red")]
++    var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++    card.set_lod_camera_zoom(0.25)
 +
-+	var hit := _hit(canvas, card.position + Vector2(20, 60))
++    var hit := _hit(canvas, card.position + Vector2(20, 60))
 +
-+	assert_eq(hit["kind"], HitPolicy.KIND_ITEM)
-+	assert_eq(hit["item_id"], "batch_1")
-+	assert_eq(hit["asset_index"], -1)
++    assert_eq(hit["kind"], HitPolicy.KIND_ITEM)
++    assert_eq(hit["item_id"], "batch_1")
++    assert_eq(hit["asset_index"], -1)
 +
 +
 +func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
-+	var canvas: Control = _canvas()
-+	var ids := [_register_asset(Color.RED, "red")]
-+	canvas._add_batch_card(ids, Vector2.ZERO, "Batch", "batch_1", false)
-+	canvas.add_sprite_item(_image(Color.GREEN), "", Vector2.ZERO, "sprite_top", false)
++    var canvas: Control = _canvas()
++    var ids := [_register_asset(Color.RED, "red")]
++    canvas._add_batch_card(ids, Vector2.ZERO, "Batch", "batch_1", false)
++    canvas.add_sprite_item(_image(Color.GREEN), "", Vector2.ZERO, "sprite_top", false)
 +
-+	var hit := _hit(canvas, Vector2(2, 2))
++    var hit := _hit(canvas, Vector2(2, 2))
 +
-+	assert_eq(hit["kind"], HitPolicy.KIND_ITEM)
-+	assert_eq(hit["item_id"], "sprite_top")
++    assert_eq(hit["kind"], HitPolicy.KIND_ITEM)
++    assert_eq(hit["item_id"], "sprite_top")
 +
 +
 +func test_canvas_hit_policy_reports_empty_space() -> void:
-+	var canvas: Control = _canvas()
++    var canvas: Control = _canvas()
 +
-+	var hit := _hit(canvas, Vector2(2000, 2000))
++    var hit := _hit(canvas, Vector2(2000, 2000))
 +
-+	assert_eq(hit["kind"], HitPolicy.KIND_EMPTY)
-+	assert_eq(hit["item_id"], "")
++    assert_eq(hit["kind"], HitPolicy.KIND_EMPTY)
++    assert_eq(hit["item_id"], "")
 +
 +
 +func _canvas() -> Control:
-+	var canvas: Control = CanvasScript.new()
-+	canvas.size = Vector2(512, 512)
-+	add_child_autofree(canvas)
-+	return canvas
++    var canvas: Control = CanvasScript.new()
++    canvas.size = Vector2(512, 512)
++    add_child_autofree(canvas)
++    return canvas
 +
 +
 +func _hit(canvas: Control, world_position: Vector2) -> Dictionary:
-+	return HitPolicy.hit_at_world(
-+		canvas.item_layer,
-+		world_position,
-+		CanvasBatchCardScript,
-+		CanvasItemSpriteScript,
-+		CanvasNodeCardScript
-+	)
++    return HitPolicy.hit_at_world(
++        canvas.item_layer,
++        world_position,
++        CanvasBatchCardScript,
++        CanvasItemSpriteScript,
++        CanvasNodeCardScript
++    )
 +
 +
 +func _register_asset(color: Color, name: String) -> String:
-+	return AssetLibrary.register_image(_image(color), name, {"origin": "imported"})
++    return AssetLibrary.register_image(_image(color), name, {"origin": "imported"})
 +
 +
 +func _image(color: Color) -> Image:
-+	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
-+	image.fill(color)
-+	return image
++    var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
++    image.fill(color)
++    return image
 diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd.uid b/pixel/tests/unit/test_canvas_hit_policy.gd.uid
 new file mode 100644
 index 0000000..286adb7
@@ -7935,38 +8436,38 @@ index 0000000..7a31588
 +
 +
 +static func hit_at_world(
-+	item_layer: Node,
-+	world_position: Vector2,
-+	batch_card_script: Script,
-+	sprite_script: Script,
-+	node_card_script: Script
++    item_layer: Node,
++    world_position: Vector2,
++    batch_card_script: Script,
++    sprite_script: Script,
++    node_card_script: Script
 +) -> Dictionary:
-+	var children := item_layer.get_children()
-+	for index in range(children.size() - 1, -1, -1):
-+		var item := children[index]
-+		if not _is_canvas_item(item, batch_card_script, sprite_script, node_card_script):
-+			continue
-+		if not item.visible or not item.contains_world_point(world_position):
-+			continue
-+		if item.get_script() == batch_card_script:
-+			var asset_index: int = item.asset_index_at_world(world_position)
-+			if asset_index >= 0:
-+				return _hit(KIND_BATCH_THUMBNAIL, item, asset_index)
-+		return _hit(KIND_ITEM, item, -1)
-+	return {"kind": KIND_EMPTY, "item": null, "item_id": "", "asset_index": -1}
++    var children := item_layer.get_children()
++    for index in range(children.size() - 1, -1, -1):
++        var item := children[index]
++        if not _is_canvas_item(item, batch_card_script, sprite_script, node_card_script):
++            continue
++        if not item.visible or not item.contains_world_point(world_position):
++            continue
++        if item.get_script() == batch_card_script:
++            var asset_index: int = item.asset_index_at_world(world_position)
++            if asset_index >= 0:
++                return _hit(KIND_BATCH_THUMBNAIL, item, asset_index)
++        return _hit(KIND_ITEM, item, -1)
++    return {"kind": KIND_EMPTY, "item": null, "item_id": "", "asset_index": -1}
 +
 +
 +static func _is_canvas_item(
-+	item: Variant, batch_card_script: Script, sprite_script: Script, node_card_script: Script
++    item: Variant, batch_card_script: Script, sprite_script: Script, node_card_script: Script
 +) -> bool:
-+	if not (item is Node):
-+		return false
-+	var script: Script = item.get_script()
-+	return script == batch_card_script or script == sprite_script or script == node_card_script
++    if not (item is Node):
++        return false
++    var script: Script = item.get_script()
++    return script == batch_card_script or script == sprite_script or script == node_card_script
 +
 +
 +static func _hit(kind: String, item: Node, asset_index: int) -> Dictionary:
-+	return {"kind": kind, "item": item, "item_id": item.item_id, "asset_index": asset_index}
++    return {"kind": kind, "item": item, "item_id": item.item_id, "asset_index": asset_index}
 diff --git a/pixel/ui/canvas/canvas_hit_policy.gd.uid b/pixel/ui/canvas/canvas_hit_policy.gd.uid
 new file mode 100644
 index 0000000..996e267
@@ -7987,58 +8488,58 @@ index 74821ee..09731f6 100644
  const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
  const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
 @@ -665,10 +666,11 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
- 
+
  func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
- 	var world_position := screen_to_world(screen_position)
--	var hit_item := _item_at_world(world_position)
-+	var hit := _hit_at_world(world_position)
-+	var hit_item: Node = hit.get("item", null)
- 	if hit_item != null:
- 		if (
--			hit_item.get_script() == CanvasBatchCardScript
-+			String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
- 			and hit_item.toggle_asset_at_world(world_position)
- 		):
- 			_select_only([hit_item.item_id])
+     var world_position := screen_to_world(screen_position)
+-    var hit_item := _item_at_world(world_position)
++    var hit := _hit_at_world(world_position)
++    var hit_item: Node = hit.get("item", null)
+     if hit_item != null:
+         if (
+-            hit_item.get_script() == CanvasBatchCardScript
++            String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
+             and hit_item.toggle_asset_at_world(world_position)
+         ):
+             _select_only([hit_item.item_id])
 @@ -802,21 +804,14 @@ func _remove_item_direct(item_id: String) -> void:
- 	queue_redraw()
- 
- 
+     queue_redraw()
+
+
 -func _item_at_world(world_position: Vector2) -> Node:
--	var children := item_layer.get_children()
--	for index in range(children.size() - 1, -1, -1):
--		var item := children[index]
--		if (
--			(
--				item.get_script() == CanvasItemSpriteScript
--				or item.get_script() == CanvasBatchCardScript
--				or item.get_script() == CanvasNodeCardScript
--			)
--			and item.visible
--			and item.contains_world_point(world_position)
--		):
--			return item
--	return null
+-    var children := item_layer.get_children()
+-    for index in range(children.size() - 1, -1, -1):
+-        var item := children[index]
+-        if (
+-            (
+-                item.get_script() == CanvasItemSpriteScript
+-                or item.get_script() == CanvasBatchCardScript
+-                or item.get_script() == CanvasNodeCardScript
+-            )
+-            and item.visible
+-            and item.contains_world_point(world_position)
+-        ):
+-            return item
+-    return null
 +func _hit_at_world(world_position: Vector2) -> Dictionary:
-+	return HitPolicy.hit_at_world(
-+		item_layer,
-+		world_position,
-+		CanvasBatchCardScript,
-+		CanvasItemSpriteScript,
-+		CanvasNodeCardScript
-+	)
- 
- 
++    return HitPolicy.hit_at_world(
++        item_layer,
++        world_position,
++        CanvasBatchCardScript,
++        CanvasItemSpriteScript,
++        CanvasNodeCardScript
++    )
+
+
  func _selected_positions() -> Dictionary:
 @@ -988,7 +983,7 @@ func _tool_manager_handles(event: InputEvent) -> bool:
- 
- 
+
+
  func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
--	var hit_item := _item_at_world(screen_to_world(screen_position))
-+	var hit_item: Node = _hit_at_world(screen_to_world(screen_position)).get("item", null)
-	if hit_item == null or hit_item.get_script() != CanvasBatchCardScript:
-		return
-	_select_only([hit_item.item_id])
+-    var hit_item := _item_at_world(screen_to_world(screen_position))
++    var hit_item: Node = _hit_at_world(screen_to_world(screen_position)).get("item", null)
+    if hit_item == null or hit_item.get_script() != CanvasBatchCardScript:
+        return
+    _select_only([hit_item.item_id])
 ```
 
 ## 2026-06-20 M3 UX-4 overview 撤销与不予通过标记

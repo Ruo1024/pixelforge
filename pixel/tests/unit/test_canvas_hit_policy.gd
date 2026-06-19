@@ -96,6 +96,50 @@ func test_canvas_left_click_on_graph_port_selects_without_dragging_card() -> voi
 	assert_false(canvas._selection.is_dragging_items)
 
 
+func test_canvas_drag_between_compatible_graph_ports_adds_edge() -> void:
+	var canvas: Control = _canvas()
+	_set_graph(
+		"graph_hit", [_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")]
+	)
+	var objects: Node = canvas._add_node_direct(
+		_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
+	)
+	var generate: Node = canvas._add_node_direct(
+		_node_item("generate_item", "graph_hit", "generate", Vector2(380, 100))
+	)
+
+	canvas._begin_left_interaction(
+		canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
+	)
+	canvas._finish_left_interaction(
+		canvas.world_to_screen(generate.get_graph_port_anchor("items", true))
+	)
+
+	var graph_data := ProjectService.get_graph_data("graph_hit")
+	assert_eq(
+		graph_data.get("edges", []), [{"from": ["objects", "items"], "to": ["generate", "items"]}]
+	)
+
+
+func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> void:
+	var canvas: Control = _canvas()
+	var ids := [_register_asset(Color.RED, "red")]
+	_set_graph("graph_hit", [_graph_node("objects", "object_list"), _batch_node("batch_1", ids)])
+	var objects: Node = canvas._add_node_direct(
+		_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
+	)
+	var batch: Node = canvas._add_batch_card(
+		ids, Vector2(380, 100), "Batch", "batch_item", false, "graph_hit", "batch_1"
+	)
+
+	canvas._begin_left_interaction(
+		canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
+	)
+	canvas._finish_left_interaction(canvas.world_to_screen(batch.get_graph_port_anchor("in", true)))
+
+	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
+
+
 func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]

@@ -24,12 +24,14 @@ const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
 const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
+const GraphEdgeInteraction := preload("res://ui/canvas/canvas_graph_edge_interaction.gd")
 const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
 const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
 const LODCoordinator := preload("res://ui/canvas/canvas_lod_coordinator.gd")
 const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
 const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
+const SelectionSnapshot := preload("res://ui/canvas/canvas_selection_snapshot.gd")
 const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
 const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
 const PixelGridRenderer := preload("res://ui/canvas/canvas_pixel_grid_renderer.gd")
@@ -57,6 +59,8 @@ var _is_panning := false
 var _cull_elapsed := 0.0
 var _suppress_change_signal := false
 var _last_wheel_zoom_msec := -1000000
+var _graph_edge_drag := {}
+var _graph_edge_drag_world := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -134,7 +138,9 @@ func _draw() -> void:
 		>= GRID_MIN_ZOOM
 	):
 		PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
-	_draw_graph_edges()
+	GraphEdgeRenderer.draw(
+		self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
+	)
 
 	for item_id in _selection.selected_ids:
 		if not _items_by_id.has(item_id):
@@ -148,6 +154,11 @@ func _draw() -> void:
 		var box: Rect2 = _selection.get_box_rect()
 		draw_rect(box, BOX_COLOR, true)
 		draw_rect(box, Color(1.0, 0.85, 0.25, 1.0), false, 1.0)
+
+	if not _graph_edge_drag.is_empty():
+		GraphEdgeInteraction.draw_preview(
+			self, GraphEdgeRenderer, _graph_edge_drag, _graph_edge_drag_world
+		)
 
 	if tool_manager != null:
 		tool_manager.draw_overlay(self, _get_active_tool_target())
@@ -303,7 +314,7 @@ func delete_selected(record_undo: bool = true) -> void:
 				_add_batch_direct(data)
 			elif String(data.get("type", "")) == "node":
 				_add_node_direct(data)
-		_select_only(_ids_from_snapshots(snapshots))
+		_select_only(SelectionSnapshot.ids_from_snapshots(snapshots))
 		_emit_canvas_changed()
 
 	var memory_cost := 0
@@ -593,13 +604,13 @@ func move_selected_by(delta: Vector2, record_undo: bool = true) -> void:
 	if _selection.is_empty():
 		return
 
-	var before := _selected_positions()
+	var before := SelectionSnapshot.selected_positions(_items_by_id, _selection)
 	var after := {}
 	var snapped_delta := delta.round()
 	for item_id in before.keys():
 		after[item_id] = (Vector2(before[item_id]) + snapped_delta).round()
 
-	if _positions_equal(before, after):
+	if SelectionSnapshot.positions_equal(before, after):
 		return
 
 	var ids: Array = _selection.get_selected_ids()
@@ -652,7 +663,11 @@ func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:
 
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
-	if _is_panning:
+	if not _graph_edge_drag.is_empty():
+		_graph_edge_drag_world = screen_to_world(event.position)
+		queue_redraw()
+		accept_event()
+	elif _is_panning:
 		pan_by_pixels(-event.relative)
 		accept_event()
 	elif _selection.is_dragging_items:
@@ -674,6 +689,7 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 				_selection.toggle(hit_item.item_id, _items_by_id.keys())
 			else:
 				_select_only([hit_item.item_id])
+			_begin_graph_edge_drag(hit, world_position)
 			return
 		if (
 			String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
@@ -688,7 +704,9 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 			_select_only([hit_item.item_id])
 
 		if _selection.has(hit_item.item_id):
-			_selection.start_drag(world_position, _selected_positions())
+			_selection.start_drag(
+				world_position, SelectionSnapshot.selected_positions(_items_by_id, _selection)
+			)
 	else:
 		if not additive:
 			_clear_selection()
@@ -697,7 +715,9 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 
 
 func _finish_left_interaction(screen_position: Vector2) -> void:
-	if _selection.is_dragging_items:
+	if not _graph_edge_drag.is_empty():
+		_finish_graph_edge_drag(screen_to_world(screen_position))
+	elif _selection.is_dragging_items:
 		_commit_drag_if_needed()
 		_selection.stop_drag()
 	elif _selection.is_box_selecting:
@@ -705,6 +725,21 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
 		_finish_box_selection()
 		_selection.stop_box()
 
+	queue_redraw()
+
+
+func _begin_graph_edge_drag(port_hit: Dictionary, world_position: Vector2) -> void:
+	_graph_edge_drag = GraphEdgeInteraction.begin_drag(port_hit)
+	_graph_edge_drag_world = world_position
+	queue_redraw()
+
+
+func _finish_graph_edge_drag(world_position: Vector2) -> void:
+	var start := _graph_edge_drag.duplicate(true)
+	_graph_edge_drag = {}
+	var hit := _hit_at_world(world_position)
+	if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
+		GraphEdgeInteraction.try_connect(start, hit, _emit_canvas_changed)
 	queue_redraw()
 
 
@@ -720,8 +755,8 @@ func _drag_selected_to(world_position: Vector2) -> void:
 
 
 func _commit_drag_if_needed() -> void:
-	var after_positions := _selected_positions()
-	if _positions_equal(_selection.drag_start_positions, after_positions):
+	var after_positions := SelectionSnapshot.selected_positions(_items_by_id, _selection)
+	if SelectionSnapshot.positions_equal(_selection.drag_start_positions, after_positions):
 		return
 
 	var before: Dictionary = _selection.drag_start_positions.duplicate(true)
@@ -820,31 +855,10 @@ func _hit_at_world(world_position: Vector2) -> Dictionary:
 	)
 
 
-func _selected_positions() -> Dictionary:
-	var positions := {}
-	for item_id in _selection.get_selected_ids():
-		if _items_by_id.has(item_id):
-			positions[item_id] = _items_by_id[item_id].position
-	return positions
-
-
 func _apply_positions(positions: Dictionary) -> void:
-	for item_id in positions.keys():
-		if _items_by_id.has(item_id):
-			_items_by_id[item_id].position = Vector2(positions[item_id]).round()
+	SelectionSnapshot.apply_positions(_items_by_id, positions)
 	_sync_cleanup_grid_overlay()
 	queue_redraw()
-
-
-func _positions_equal(left: Dictionary, right: Dictionary) -> bool:
-	if left.size() != right.size():
-		return false
-	for item_id in left.keys():
-		if not right.has(item_id):
-			return false
-		if Vector2(left[item_id]) != Vector2(right[item_id]):
-			return false
-	return true
 
 
 func _select_only(ids: Array) -> void:
@@ -853,13 +867,6 @@ func _select_only(ids: Array) -> void:
 
 func _clear_selection() -> void:
 	_selection.clear()
-
-
-func _ids_from_snapshots(snapshots: Array) -> Array:
-	var ids := []
-	for snapshot in snapshots:
-		ids.append(String(snapshot["data"]["id"]))
-	return ids
 
 
 func _set_zoom_to_value(value: float) -> void:
@@ -929,12 +936,6 @@ func _camera_center_for_snapped_anchor(anchor_world: Vector2, screen_anchor: Vec
 		screen_anchor,
 		_get_art_logical_scale(),
 		_resolve_viewport_scale_factor()
-	)
-
-
-func _draw_graph_edges() -> void:
-	GraphEdgeRenderer.draw(
-		self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, EDGE_COLOR
 	)
 
 
