@@ -42,6 +42,7 @@ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
 const FOCUS_IMAGE_HEIGHT := 320
 const FOCUS_FILMSTRIP_THUMB_SIZE := 72
 const FOCUS_FILMSTRIP_VISIBLE := 7
+const PORT_HIT_RADIUS := 10.0
 const CHECKER_SIZE := 8
 const MAX_INSPECT_COLOR_HINTS := 256
 const CHECKER_LIGHT := Color(0.18, 0.19, 0.2, 1.0)
@@ -165,6 +166,15 @@ func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
 	if index < 0:
 		index = 0
 	return position + _graph_port_position(index, count, is_input)
+
+
+func _graph_port_at_world(world_position: Vector2) -> Dictionary:
+	if not has_graph_binding():
+		return {}
+	var input_hit := _port_hit_at_world(world_position, true)
+	if not input_hit.is_empty():
+		return input_hit
+	return _port_hit_at_world(world_position, false)
 
 
 func set_asset_ids(new_asset_ids: Array) -> void:
@@ -603,6 +613,16 @@ func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
 	)
 	var y := HEADER_HEIGHT + PADDING + lane_height * float(index + 1) / float(count + 1)
 	return Vector2(0.0 if is_input else CARD_WIDTH, y)
+
+
+func _port_hit_at_world(world_position: Vector2, is_input: bool) -> Dictionary:
+	var ports := INPUT_PORTS if is_input else OUTPUT_PORTS
+	var count := ports.size()
+	for index in range(count):
+		var anchor := position + _graph_port_position(index, count, is_input)
+		if anchor.distance_to(world_position) <= PORT_HIT_RADIUS:
+			return {"port_name": ports[index], "is_input": is_input, "port_index": index}
+	return {}
 
 
 func _rebuild_thumbnails() -> void:

@@ -8707,3 +8707,298 @@ index 0000000..e904876
 +- PureRef：参考板导入、normalize、arrange、低干扰导航。
 +- Lightroom / Capture One / Bridge：批量审阅、compare/survey、flag/rating/label。
 ```
+
+## 2026-06-20 M3 UX-7 graph port hit policy follow-up
+
+### 本轮实现说明
+
+- 在 `CanvasHitPolicy` 中新增 `graph_port` 命中类型，统一返回 `port_name`、`is_input`、`port_index`。
+- `CanvasNodeCard` 与 graph-bound `CanvasBatchCard` 提供端口半径命中查询，端口命中优先于 batch 缩略图、整卡拖动和空白框选。
+- `PFInfiniteCanvas` 左键按在 graph port 上时只选择对应卡片，不启动拖卡，为后续“从端口拖线”留出集中入口。
+- 新增 3 条 UX-7 单元回归：batch 输入端口优先于缩略图、普通节点右侧输出端口在卡片边界上可命中、端口点击不启动拖卡。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：通过，157/157 tests passed。
+- `./pixel/scripts/verify_m3_ux7.sh`：首次受沙箱限制无法写入 Godot editor settings；提升权限重跑后通过，包含 lint、run_tests、check_ui_scaling、check_export_templates。
+- staged 图片检查：无 PNG/JPG/JPEG。
+- staged 保留目录检查：未包含 `test picture/`、`pixel/tests/fixtures/real/`、`垃圾桶/`、`godot-interactive-guide/`。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 点击 Object List / Size Spec / AI Generate / Mock Batch 卡片左右两侧的小圆端口，确认选中对应卡片，但不会立刻拖动卡片。
+3. 点击 Mock Batch 卡片内部缩略图，确认仍选中单张缩略图，而不是被端口策略误吞。
+4. 轻微拖动卡片正文区域，确认普通拖卡仍可用。
+5. 重点试右侧输出端口：点击卡片右边界上的输出点，确认它可命中并且不需要点到卡片内部。
+
+### 本轮完整 diff
+
+> 注：本报告中的 diff 为完整实现 diff；为避免 Markdown 报告触发 whitespace 检查，代码缩进 tab 在本展示块内展开为空格。
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index e9314d7..3e28865 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -32,3 +32,4 @@
+ - M3 UX-4: 恢复 batch 语义 LOD 原型，改由 camera zoom 下发 overview/review/inspect，覆盖分数缩放下 25% 进入 overview 的回归路径。
+ - M3 UX-7: 新增 CanvasHitPolicy 最小输入仲裁层，统一 batch 缩略图、整卡、sprite 和空白画布命中，避免缩略图点击误触拖卡。
+ - M3 UX-4: 撤销隐藏缩略图的 overview 摘要卡路径，25% 缩放保持 review 缩略图可见且可命中，计划中标记该 UX-4 原型不予实际通过。
++- M3 UX-7: CanvasHitPolicy 纳入 graph port 命中，端口优先于 batch 缩略图和整卡拖动，为后续连线交互保留集中入口。
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd b/pixel/tests/unit/test_canvas_hit_policy.gd
+index 2ed1fa3..a9745c5 100644
+--- a/pixel/tests/unit/test_canvas_hit_policy.gd
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd
+@@ -48,6 +48,54 @@ func test_canvas_hit_policy_keeps_batch_thumbnail_available_at_25_percent() -> v
+    assert_eq(hit["asset_index"], 0)
+
+
++func test_canvas_hit_policy_prioritizes_batch_graph_port_over_thumbnail() -> void:
++   var canvas: Control = _canvas()
++   var ids := [_register_asset(Color.RED, "red")]
++   _set_graph("graph_hit", [_batch_node("batch_1", ids)])
++   var card: Node = canvas._add_batch_card(
++       ids, Vector2(16, 24), "Batch", "batch_item", false, "graph_hit", "batch_1"
++   )
++
++   var hit := _hit(canvas, card.get_graph_port_anchor("in", true))
++
++   assert_eq(hit["kind"], HitPolicy.KIND_GRAPH_PORT)
++   assert_eq(hit["item_id"], "batch_item")
++   assert_eq(hit["port_name"], "in")
++   assert_true(hit["is_input"])
++   assert_eq(hit["asset_index"], -1)
++
++
++func test_canvas_hit_policy_reports_node_output_port_on_card_edge() -> void:
++   var canvas: Control = _canvas()
++   _set_graph("graph_hit", [_graph_node("objects", "object_list")])
++   var node: Node = canvas._add_node_direct(
++       _node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
++   )
++
++   var hit := _hit(canvas, node.get_graph_port_anchor("items", false))
++
++   assert_eq(hit["kind"], HitPolicy.KIND_GRAPH_PORT)
++   assert_eq(hit["item_id"], "objects_item")
++   assert_eq(hit["port_name"], "items")
++   assert_false(hit["is_input"])
++   assert_eq(hit["port_index"], 0)
++
++
++func test_canvas_left_click_on_graph_port_selects_without_dragging_card() -> void:
++   var canvas: Control = _canvas()
++   _set_graph("graph_hit", [_graph_node("objects", "object_list")])
++   var node: Node = canvas._add_node_direct(
++       _node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
++   )
++
++   canvas._begin_left_interaction(
++       canvas.world_to_screen(node.get_graph_port_anchor("items", false)), false
++   )
++
++   assert_eq(canvas.get_selected_ids(), ["objects_item"])
++   assert_false(canvas._selection.is_dragging_items)
++
++
+ func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
+    var canvas: Control = _canvas()
+    var ids := [_register_asset(Color.RED, "red")]
+@@ -90,6 +138,40 @@ func _register_asset(color: Color, name: String) -> String:
+    return AssetLibrary.register_image(_image(color), name, {"origin": "imported"})
+
+
++func _set_graph(graph_id: String, nodes: Array) -> void:
++   ProjectService.set_graph_data(
++       graph_id,
++       {"graph_version": 1, "id": graph_id, "name": "Hit Policy", "nodes": nodes, "edges": []}
++   )
++
++
++func _graph_node(node_id: String, node_type: String) -> Dictionary:
++   return {"id": node_id, "type": node_type, "params": {}, "position": [0, 0]}
++
++
++func _batch_node(node_id: String, asset_ids: Array) -> Dictionary:
++   return {
++       "id": node_id,
++       "type": "batch",
++       "params": {"asset_ids": asset_ids.duplicate(), "label": "Batch"},
++       "position": [0, 0],
++   }
++
++
++func _node_item(
++   item_id: String, graph_id: String, node_id: String, position: Vector2
++) -> Dictionary:
++   return {
++       "id": item_id,
++       "type": "node",
++       "graph_id": graph_id,
++       "node_id": node_id,
++       "position": [int(position.x), int(position.y)],
++       "z_index": 0,
++       "locked": false,
++   }
++
++
+ func _image(color: Color) -> Image:
+    var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+    image.fill(color)
+diff --git a/pixel/ui/canvas/canvas_batch_card.gd b/pixel/ui/canvas/canvas_batch_card.gd
+index 658ce00..0e25f7a 100644
+--- a/pixel/ui/canvas/canvas_batch_card.gd
++++ b/pixel/ui/canvas/canvas_batch_card.gd
+@@ -42,6 +42,7 @@ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
+ const FOCUS_IMAGE_HEIGHT := 320
+ const FOCUS_FILMSTRIP_THUMB_SIZE := 72
+ const FOCUS_FILMSTRIP_VISIBLE := 7
++const PORT_HIT_RADIUS := 10.0
+ const CHECKER_SIZE := 8
+ const MAX_INSPECT_COLOR_HINTS := 256
+ const CHECKER_LIGHT := Color(0.18, 0.19, 0.2, 1.0)
+@@ -167,6 +168,15 @@ func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
+    return position + _graph_port_position(index, count, is_input)
+
+
++func _graph_port_at_world(world_position: Vector2) -> Dictionary:
++   if not has_graph_binding():
++       return {}
++   var input_hit := _port_hit_at_world(world_position, true)
++   if not input_hit.is_empty():
++       return input_hit
++   return _port_hit_at_world(world_position, false)
++
++
+ func set_asset_ids(new_asset_ids: Array) -> void:
+    asset_ids = _string_array(new_asset_ids)
+    for selected_id in selected_asset_ids.duplicate():
+@@ -605,6 +615,16 @@ func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
+    return Vector2(0.0 if is_input else CARD_WIDTH, y)
+
+
++func _port_hit_at_world(world_position: Vector2, is_input: bool) -> Dictionary:
++   var ports := INPUT_PORTS if is_input else OUTPUT_PORTS
++   var count := ports.size()
++   for index in range(count):
++       var anchor := position + _graph_port_position(index, count, is_input)
++       if anchor.distance_to(world_position) <= PORT_HIT_RADIUS:
++           return {"port_name": ports[index], "is_input": is_input, "port_index": index}
++   return {}
++
++
+ func _rebuild_thumbnails() -> void:
+    _thumbnail_textures.clear()
+    _asset_hints.clear()
+diff --git a/pixel/ui/canvas/canvas_hit_policy.gd b/pixel/ui/canvas/canvas_hit_policy.gd
+index 7a31588..92d0df5 100644
+--- a/pixel/ui/canvas/canvas_hit_policy.gd
++++ b/pixel/ui/canvas/canvas_hit_policy.gd
+@@ -6,6 +6,7 @@ extends RefCounted
+ const KIND_EMPTY := "empty"
+ const KIND_ITEM := "item"
+ const KIND_BATCH_THUMBNAIL := "batch_thumbnail"
++const KIND_GRAPH_PORT := "graph_port"
+
+
+ static func hit_at_world(
+@@ -20,7 +21,12 @@ static func hit_at_world(
+        var item := children[index]
+        if not _is_canvas_item(item, batch_card_script, sprite_script, node_card_script):
+            continue
+-       if not item.visible or not item.contains_world_point(world_position):
++       if not item.visible:
++           continue
++       var port_hit := _graph_port_at_world(item, world_position)
++       if not port_hit.is_empty():
++           return _graph_port_hit(item, port_hit)
++       if not item.contains_world_point(world_position):
+            continue
+        if item.get_script() == batch_card_script:
+            var asset_index: int = item.asset_index_at_world(world_position)
+@@ -39,5 +45,22 @@ static func _is_canvas_item(
+    return script == batch_card_script or script == sprite_script or script == node_card_script
+
+
++static func _graph_port_at_world(item: Node, world_position: Vector2) -> Dictionary:
++   if not item.has_method("_graph_port_at_world"):
++       return {}
++   var raw_hit: Variant = item.call("_graph_port_at_world", world_position)
++   if raw_hit is Dictionary:
++       return raw_hit
++   return {}
++
++
+ static func _hit(kind: String, item: Node, asset_index: int) -> Dictionary:
+    return {"kind": kind, "item": item, "item_id": item.item_id, "asset_index": asset_index}
++
++
++static func _graph_port_hit(item: Node, port_hit: Dictionary) -> Dictionary:
++   var hit := _hit(KIND_GRAPH_PORT, item, -1)
++   hit["port_name"] = String(port_hit.get("port_name", ""))
++   hit["is_input"] = bool(port_hit.get("is_input", false))
++   hit["port_index"] = int(port_hit.get("port_index", -1))
++   return hit
+diff --git a/pixel/ui/canvas/canvas_node_card.gd b/pixel/ui/canvas/canvas_node_card.gd
+index 256e81f..7f0c6e9 100644
+--- a/pixel/ui/canvas/canvas_node_card.gd
++++ b/pixel/ui/canvas/canvas_node_card.gd
+@@ -16,6 +16,7 @@ const BORDER := Color(0.56, 0.64, 0.66, 1.0)
+ const GHOST_BORDER := Color(0.8, 0.36, 0.36, 1.0)
+ const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
+ const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
++const PORT_HIT_RADIUS := 10.0
+
+ var item_id := ""
+ var graph_id := ""
+@@ -83,6 +84,13 @@ func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
+    return position + _port_position(index, count, is_input)
+
+
++func _graph_port_at_world(world_position: Vector2) -> Dictionary:
++   var input_hit := _port_hit_at_world(world_position, true)
++   if not input_hit.is_empty():
++       return input_hit
++   return _port_hit_at_world(world_position, false)
++
++
+ func _draw() -> void:
+    _font = ThemeDB.fallback_font if _font == null else _font
+    var rect := Rect2(Vector2.ZERO, CARD_SIZE)
+@@ -139,6 +147,16 @@ func _port_index(port_name: String, is_input: bool) -> int:
+    return ports.find(port_name)
+
+
++func _port_hit_at_world(world_position: Vector2, is_input: bool) -> Dictionary:
++   var ports := _visible_input_ports if is_input else _visible_output_ports
++   var count := ports.size()
++   for index in range(count):
++       var anchor := position + _port_position(index, count, is_input)
++       if anchor.distance_to(world_position) <= PORT_HIT_RADIUS:
++           return {"port_name": ports[index], "is_input": is_input, "port_index": index}
++   return {}
++
++
+ func _resolve_graph_node() -> void:
+    var node_data := _find_node_data()
+    _node_type = String(node_data.get("type", "missing"))
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 09731f6..77f3fd3 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -669,6 +669,12 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
+    var hit := _hit_at_world(world_position)
+    var hit_item: Node = hit.get("item", null)
+    if hit_item != null:
++       if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
++           if additive:
++               _selection.toggle(hit_item.item_id, _items_by_id.keys())
++           else:
++               _select_only([hit_item.item_id])
++           return
+        if (
+            String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
+            and hit_item.toggle_asset_at_world(world_position)
+```

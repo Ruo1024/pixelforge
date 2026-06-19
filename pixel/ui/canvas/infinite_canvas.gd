@@ -669,6 +669,12 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 	var hit := _hit_at_world(world_position)
 	var hit_item: Node = hit.get("item", null)
 	if hit_item != null:
+		if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
+			if additive:
+				_selection.toggle(hit_item.item_id, _items_by_id.keys())
+			else:
+				_select_only([hit_item.item_id])
+			return
 		if (
 			String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
 			and hit_item.toggle_asset_at_world(world_position)

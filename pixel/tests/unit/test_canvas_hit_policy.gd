@@ -48,6 +48,54 @@ func test_canvas_hit_policy_keeps_batch_thumbnail_available_at_25_percent() -> v
 	assert_eq(hit["asset_index"], 0)
 
 
+func test_canvas_hit_policy_prioritizes_batch_graph_port_over_thumbnail() -> void:
+	var canvas: Control = _canvas()
+	var ids := [_register_asset(Color.RED, "red")]
+	_set_graph("graph_hit", [_batch_node("batch_1", ids)])
+	var card: Node = canvas._add_batch_card(
+		ids, Vector2(16, 24), "Batch", "batch_item", false, "graph_hit", "batch_1"
+	)
+
+	var hit := _hit(canvas, card.get_graph_port_anchor("in", true))
+
+	assert_eq(hit["kind"], HitPolicy.KIND_GRAPH_PORT)
+	assert_eq(hit["item_id"], "batch_item")
+	assert_eq(hit["port_name"], "in")
+	assert_true(hit["is_input"])
+	assert_eq(hit["asset_index"], -1)
+
+
+func test_canvas_hit_policy_reports_node_output_port_on_card_edge() -> void:
+	var canvas: Control = _canvas()
+	_set_graph("graph_hit", [_graph_node("objects", "object_list")])
+	var node: Node = canvas._add_node_direct(
+		_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
+	)
+
+	var hit := _hit(canvas, node.get_graph_port_anchor("items", false))
+
+	assert_eq(hit["kind"], HitPolicy.KIND_GRAPH_PORT)
+	assert_eq(hit["item_id"], "objects_item")
+	assert_eq(hit["port_name"], "items")
+	assert_false(hit["is_input"])
+	assert_eq(hit["port_index"], 0)
+
+
+func test_canvas_left_click_on_graph_port_selects_without_dragging_card() -> void:
+	var canvas: Control = _canvas()
+	_set_graph("graph_hit", [_graph_node("objects", "object_list")])
+	var node: Node = canvas._add_node_direct(
+		_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
+	)
+
+	canvas._begin_left_interaction(
+		canvas.world_to_screen(node.get_graph_port_anchor("items", false)), false
+	)
+
+	assert_eq(canvas.get_selected_ids(), ["objects_item"])
+	assert_false(canvas._selection.is_dragging_items)
+
+
 func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]
@@ -88,6 +136,40 @@ func _hit(canvas: Control, world_position: Vector2) -> Dictionary:
 
 func _register_asset(color: Color, name: String) -> String:
 	return AssetLibrary.register_image(_image(color), name, {"origin": "imported"})
+
+
+func _set_graph(graph_id: String, nodes: Array) -> void:
+	ProjectService.set_graph_data(
+		graph_id,
+		{"graph_version": 1, "id": graph_id, "name": "Hit Policy", "nodes": nodes, "edges": []}
+	)
+
+
+func _graph_node(node_id: String, node_type: String) -> Dictionary:
+	return {"id": node_id, "type": node_type, "params": {}, "position": [0, 0]}
+
+
+func _batch_node(node_id: String, asset_ids: Array) -> Dictionary:
+	return {
+		"id": node_id,
+		"type": "batch",
+		"params": {"asset_ids": asset_ids.duplicate(), "label": "Batch"},
+		"position": [0, 0],
+	}
+
+
+func _node_item(
+	item_id: String, graph_id: String, node_id: String, position: Vector2
+) -> Dictionary:
+	return {
+		"id": item_id,
+		"type": "node",
+		"graph_id": graph_id,
+		"node_id": node_id,
+		"position": [int(position.x), int(position.y)],
+		"z_index": 0,
+		"locked": false,
+	}
 
 
 func _image(color: Color) -> Image:

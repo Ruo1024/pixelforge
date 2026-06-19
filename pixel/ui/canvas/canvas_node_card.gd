@@ -16,6 +16,7 @@ const BORDER := Color(0.56, 0.64, 0.66, 1.0)
 const GHOST_BORDER := Color(0.8, 0.36, 0.36, 1.0)
 const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
 const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
+const PORT_HIT_RADIUS := 10.0
 
 var item_id := ""
 var graph_id := ""
@@ -83,6 +84,13 @@ func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
 	return position + _port_position(index, count, is_input)
 
 
+func _graph_port_at_world(world_position: Vector2) -> Dictionary:
+	var input_hit := _port_hit_at_world(world_position, true)
+	if not input_hit.is_empty():
+		return input_hit
+	return _port_hit_at_world(world_position, false)
+
+
 func _draw() -> void:
 	_font = ThemeDB.fallback_font if _font == null else _font
 	var rect := Rect2(Vector2.ZERO, CARD_SIZE)
@@ -137,6 +145,16 @@ func _port_position(index: int, count: int, is_input: bool) -> Vector2:
 func _port_index(port_name: String, is_input: bool) -> int:
 	var ports := _visible_input_ports if is_input else _visible_output_ports
 	return ports.find(port_name)
+
+
+func _port_hit_at_world(world_position: Vector2, is_input: bool) -> Dictionary:
+	var ports := _visible_input_ports if is_input else _visible_output_ports
+	var count := ports.size()
+	for index in range(count):
+		var anchor := position + _port_position(index, count, is_input)
+		if anchor.distance_to(world_position) <= PORT_HIT_RADIUS:
+			return {"port_name": ports[index], "is_input": is_input, "port_index": index}
+	return {}
 
 
 func _resolve_graph_node() -> void:
