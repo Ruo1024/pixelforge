@@ -165,7 +165,7 @@ func test_batch_lod_uses_camera_zoom_not_compensated_art_scale() -> void:
 	await wait_process_frames(1)
 
 	assert_almost_eq(canvas._get_art_logical_scale(), 0.333, 0.001)
-	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_OVERVIEW)
+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
 
 	canvas.set_camera_zoom(4.0, Vector2(160, 120))
 	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)

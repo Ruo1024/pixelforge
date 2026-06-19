@@ -186,21 +186,17 @@ func test_canvas_batch_card_switches_semantic_lod_profiles() -> void:
 	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
 	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 
-	assert_eq(LODProfile.profile_for_camera_zoom(0.25), LODProfile.PROFILE_OVERVIEW)
+	assert_eq(LODProfile.profile_for_camera_zoom(0.25), LODProfile.PROFILE_REVIEW)
 	assert_eq(LODProfile.profile_for_camera_zoom(1.0), LODProfile.PROFILE_REVIEW)
 	assert_eq(LODProfile.profile_for_camera_zoom(4.0), LODProfile.PROFILE_INSPECT)
 	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
 
 	card.set_lod_camera_zoom(0.25)
-	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_OVERVIEW)
-	assert_almost_eq(
-		card.get_canvas_bounds().size.y, float(CanvasBatchCardScript.OVERVIEW_HEIGHT), 0.001
-	)
-	assert_eq(card.asset_index_at_world(card.position + Vector2(24, 64)), -1)
+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
+	assert_eq(card.asset_index_at_world(card.position + Vector2(24, 64)), 0)
 
 	card.set_lod_camera_zoom(4.0)
 	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
-	assert_gt(card.get_canvas_bounds().size.y, float(CanvasBatchCardScript.OVERVIEW_HEIGHT))
 	assert_false(card._asset_hint_for(ids[0]).is_empty())
 
 

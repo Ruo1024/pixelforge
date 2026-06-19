@@ -35,7 +35,7 @@ func test_canvas_left_click_on_batch_thumbnail_does_not_start_card_drag() -> voi
 	assert_false(canvas._selection.is_dragging_items)
 
 
-func test_canvas_hit_policy_treats_overview_batch_as_whole_card() -> void:
+func test_canvas_hit_policy_keeps_batch_thumbnail_available_at_25_percent() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]
 	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
@@ -43,9 +43,9 @@ func test_canvas_hit_policy_treats_overview_batch_as_whole_card() -> void:
 
 	var hit := _hit(canvas, card.position + Vector2(20, 60))
 
-	assert_eq(hit["kind"], HitPolicy.KIND_ITEM)
+	assert_eq(hit["kind"], HitPolicy.KIND_BATCH_THUMBNAIL)
 	assert_eq(hit["item_id"], "batch_1")
-	assert_eq(hit["asset_index"], -1)
+	assert_eq(hit["asset_index"], 0)
 
 
 func test_canvas_hit_policy_keeps_topmost_item_order() -> void:

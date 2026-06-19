@@ -42,8 +42,6 @@ const OUTPUT_PORTS: Array[String] = ["images", "assets"]
 const FOCUS_IMAGE_HEIGHT := 320
 const FOCUS_FILMSTRIP_THUMB_SIZE := 72
 const FOCUS_FILMSTRIP_VISIBLE := 7
-const OVERVIEW_HEIGHT := 124
-const OVERVIEW_BAR_HEIGHT := 12
 const CHECKER_SIZE := 8
 const MAX_INSPECT_COLOR_HINTS := 256
 const CHECKER_LIGHT := Color(0.18, 0.19, 0.2, 1.0)
@@ -331,8 +329,6 @@ func toggle_asset_at_world(world_position: Vector2) -> bool:
 
 
 func asset_index_at_world(world_position: Vector2) -> int:
-	if _get_lod_profile() == LODProfile.PROFILE_OVERVIEW:
-		return -1
 	var local := world_position - position
 	if local.y < HEADER_HEIGHT:
 		return -1
@@ -379,10 +375,7 @@ func _draw() -> void:
 			Color(0.9, 0.92, 0.92, 1.0)
 		)
 
-	var lod_profile := _get_lod_profile()
-	if lod_profile == LODProfile.PROFILE_OVERVIEW:
-		_draw_overview(visible_ids)
-	elif review_layout == LAYOUT_FOCUS:
+	if review_layout == LAYOUT_FOCUS:
 		_draw_focus_layout(visible_ids)
 	else:
 		var columns := _columns()
@@ -403,46 +396,6 @@ func _draw_focus_layout(visible_ids: Array[String]) -> void:
 	var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
 	for index in range(start_index, end_index):
 		_draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
-
-
-func _draw_overview(visible_ids: Array[String]) -> void:
-	var content_rect := Rect2(
-		Vector2(PADDING, HEADER_HEIGHT + PADDING), Vector2(CARD_WIDTH - PADDING * 2, 42.0)
-	)
-	draw_rect(content_rect, Color(0.08, 0.085, 0.09, 1.0), true)
-	if _font != null:
-		draw_string(
-			_font,
-			content_rect.position + Vector2(0.0, 31.0),
-			str(visible_ids.size()),
-			HORIZONTAL_ALIGNMENT_CENTER,
-			content_rect.size.x,
-			28,
-			Color(0.92, 0.94, 0.92, 1.0)
-		)
-	var bar_rect := Rect2(
-		Vector2(PADDING, content_rect.end.y + THUMB_GAP),
-		Vector2(CARD_WIDTH - PADDING * 2, OVERVIEW_BAR_HEIGHT)
-	)
-	_draw_overview_status_bar(bar_rect, visible_ids)
-
-
-func _draw_overview_status_bar(bar_rect: Rect2, visible_ids: Array[String]) -> void:
-	draw_rect(bar_rect, Color(0.08, 0.085, 0.09, 1.0), true)
-	if visible_ids.is_empty():
-		return
-	var counts := _review_counts(visible_ids)
-	var cursor_x := bar_rect.position.x
-	for review_state in [FILTER_PENDING, REVIEW_KEEP, REVIEW_REJECT, REVIEW_FLAG]:
-		var count := int(counts.get(review_state, 0))
-		if count <= 0:
-			continue
-		var width := bar_rect.size.x * float(count) / float(visible_ids.size())
-		var segment := Rect2(
-			Vector2(cursor_x, bar_rect.position.y), Vector2(width, bar_rect.size.y)
-		)
-		draw_rect(segment, _overview_color_for_state(review_state), true)
-		cursor_x += width
 
 
 func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
@@ -585,29 +538,6 @@ func _draw_review_marker(rect: Rect2, review_state: String) -> void:
 			)
 
 
-func _review_counts(visible_ids: Array[String]) -> Dictionary:
-	var counts := {FILTER_PENDING: 0, REVIEW_KEEP: 0, REVIEW_REJECT: 0, REVIEW_FLAG: 0}
-	for asset_id in visible_ids:
-		var review_state := String(review_states.get(asset_id, REVIEW_NONE))
-		if review_state.is_empty():
-			counts[FILTER_PENDING] += 1
-		else:
-			counts[review_state] = int(counts.get(review_state, 0)) + 1
-	return counts
-
-
-func _overview_color_for_state(review_state: String) -> Color:
-	match review_state:
-		REVIEW_KEEP:
-			return KEEP_MARK
-		REVIEW_REJECT:
-			return REJECT_MARK
-		REVIEW_FLAG:
-			return FLAG_MARK
-		_:
-			return BORDER
-
-
 func _thumb_rect(index: int, columns: int) -> Rect2:
 	var col := index % columns
 	var row := int(index / columns)
@@ -636,8 +566,6 @@ func _filmstrip_rect(slot_index: int) -> Rect2:
 
 
 func _card_height() -> int:
-	if _get_lod_profile() == LODProfile.PROFILE_OVERVIEW:
-		return OVERVIEW_HEIGHT
 	var visible_count := get_visible_asset_ids().size()
 	if visible_count <= 0:
 		return MIN_CARD_HEIGHT
