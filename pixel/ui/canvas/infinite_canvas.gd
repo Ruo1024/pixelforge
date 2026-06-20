@@ -9,6 +9,7 @@ signal selection_changed(selected_ids: Array)
 signal cleanup_grid_changed(scale: float, offset: Vector2)
 signal batch_context_requested(card_id: String, screen_position: Vector2i)
 signal zoom_changed(zoom_index: int, camera_zoom: float)
+signal graph_connect_failed(reason: String)
 
 const ZOOM_LEVELS := [0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
 const DEFAULT_ZOOM_INDEX := 4
@@ -715,7 +716,7 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
 	if not _graph_edge_drag.is_empty():
 		var start := _graph_edge_drag.duplicate(true)
 		_graph_edge_drag = {}
-		GraphEdgeInteraction.connect_at_screen(
+		var result := GraphEdgeInteraction.connect_at_screen(
 			self,
 			_items_by_id,
 			CanvasBatchCardScript,
@@ -724,6 +725,9 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
 			screen_position,
 			_emit_canvas_changed
 		)
+		var reason := String(result.get("reason", ""))
+		if not bool(result.get("ok", false)) and not reason.is_empty():
+			graph_connect_failed.emit(reason)
 	elif _selection.is_dragging_items:
 		_commit_drag_if_needed()
 		_selection.stop_drag()

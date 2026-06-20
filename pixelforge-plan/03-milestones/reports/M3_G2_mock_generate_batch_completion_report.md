@@ -10916,3 +10916,335 @@ index 5e8d7f6..b368ff9 100644
 
  ## 8. 从原 M3 规划继承与降级
 ```
+
+## 2026-06-21 M3 UX-7c 连线失败状态反馈
+
+### 本轮实现说明
+
+- 将 `GraphEdgeInteraction.try_connect()` / `connect_at_screen()` 的返回值从 bool 升级为 `{ok, reason}`，成功连接仍走原有 Undo 路径。
+- 松开鼠标后如果落点在目标端口热区但 `PFGraph.can_connect()` / `add_edge()` 拒绝连接，保留来自 graph 层的 reason。
+- `PFInfiniteCanvas` 在有明确失败 reason 时发出 `graph_connect_failed(reason)`，`PFMain` 用集中 UI 文案 `STATUS_GRAPH_CONNECT_FAILED` 更新底部状态栏。
+- 自动化补充不兼容端口路径：Object List 的 `text_list` 输出拖到 Mock Batch 的 `image_list` 输入时，不新增 edge，并收到 `Graph connection failed: Cannot connect text_list to image_list`。
+- 在 `M3-开发规划.md` 追加 UX-7c 小卡，明确这是轻量状态反馈，不提前实现端口高亮或错误面板。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：通过，162/162 tests，1273 asserts。
+- `./pixel/scripts/verify_m3_ux7.sh`：通过。
+
+### 人工测试步骤
+
+1. 执行 `File > Generate Mock Batch`，确认出现 Object List / Size Spec / AI Generate / Mock Batch 节点链。
+2. 从 Object List 右侧输出端口拖线到 Mock Batch 左侧输入端口附近松手。
+3. 预期：不会新增连线，底部状态栏显示 `Graph connection failed: Cannot connect text_list to image_list`。
+4. 再从 Object List 输出端口拖到 AI Generate 左侧输入热区松手。
+5. 预期：兼容连接仍正常创建，不显示失败状态。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd b/pixel/tests/unit/test_canvas_hit_policy.gd
+index bdcda22..56ca537 100644
+--- a/pixel/tests/unit/test_canvas_hit_policy.gd
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd
+@@ -5,6 +5,7 @@ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+ const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
+ const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
+ const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
++const Strings := preload("res://ui/shell/strings.gd")
+
+
+ func before_each() -> void:
+@@ -128,6 +129,11 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
+
+ func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> void:
+     var canvas: Control = _canvas()
++    var status_messages := []
++    canvas.graph_connect_failed.connect(
++        func(reason: String) -> void:
++            status_messages.append(Strings.STATUS_GRAPH_CONNECT_FAILED % reason)
++    )
+     var ids := [_register_asset(Color.RED, "red")]
+     _set_graph("graph_hit", [_graph_node("objects", "object_list"), _batch_node("batch_1", ids)])
+     var objects: Node = canvas._add_node_direct(
+@@ -143,6 +149,10 @@ func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> vo
+     canvas._finish_left_interaction(canvas.world_to_screen(batch.get_graph_port_anchor("in", true)))
+
+     assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
++    assert_eq(
++        status_messages,
++        [Strings.STATUS_GRAPH_CONNECT_FAILED % "Cannot connect text_list to image_list"]
++    )
+
+
+ func test_canvas_delete_key_removes_selected_graph_edge() -> void:
+diff --git a/pixel/ui/canvas/canvas_graph_edge_interaction.gd b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+index 89108fa..8c5358a 100644
+--- a/pixel/ui/canvas/canvas_graph_edge_interaction.gd
++++ b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+@@ -25,23 +25,23 @@ static func begin_drag(port_hit: Dictionary) -> Dictionary:
+     }
+
+
+-static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -> bool:
++static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -> Dictionary:
+     var end_item: Node = end.get("item", null)
+     if end_item == null:
+-        return false
++        return _connect_result(false, "")
+     if String(start.get("graph_id", "")) != end_item.graph_id:
+-        return false
++        return _connect_result(false, "")
+     if bool(start.get("is_input", false)) == bool(end.get("is_input", false)):
+-        return false
++        return _connect_result(false, "")
+
+     var graph_id := String(start.get("graph_id", ""))
+     var before := ProjectService.get_graph_data(graph_id)
+     if before.is_empty():
+-        return false
++        return _connect_result(false, "")
+     var graph: PFGraph = GraphScript.from_json(before)
+-    var endpoints := _resolve_endpoints(graph, start, end, end_item)
+-    if endpoints.is_empty():
+-        return false
++    var endpoints := _resolve_connection(graph, start, end, end_item)
++    if not bool(endpoints.get("ok", false)):
++        return _connect_result(false, String(endpoints.get("reason", "")))
+     var result := graph.add_edge(
+         endpoints["source_node"],
+         endpoints["source_port"],
+@@ -49,7 +49,7 @@ static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -
+         endpoints["target_port"]
+     )
+     if not bool(result.get("ok", false)):
+-        return false
++        return _connect_result(false, String(result.get("reason", "")))
+
+     var after := graph.to_json()
+     UndoService.perform_action(
+@@ -61,7 +61,7 @@ static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -
+             ProjectService.set_graph_data(graph_id, before)
+             changed.call()
+     )
+-    return true
++    return _connect_result(true, "")
+
+
+ static func connect_at_screen(
+@@ -72,10 +72,14 @@ static func connect_at_screen(
+     start: Dictionary,
+     screen_position: Vector2,
+     changed: Callable
+-) -> bool:
++) -> Dictionary:
+     var end := snap_target(canvas, items_by_id, batch_script, node_script, start, screen_position)
+     if end.is_empty():
+-        return false
++        end = _target_at_screen(
++            canvas, items_by_id, batch_script, node_script, start, screen_position, false
++        )
++    if end.is_empty():
++        return _connect_result(false, "")
+     return try_connect(start, end, changed)
+
+
+@@ -90,6 +94,20 @@ static func snap_target(
+     node_script: Script,
+     start: Dictionary,
+     screen_position: Vector2
++) -> Dictionary:
++    return _target_at_screen(
++        canvas, items_by_id, batch_script, node_script, start, screen_position, true
++    )
++
++
++static func _target_at_screen(
++    canvas: Control,
++    items_by_id: Dictionary,
++    batch_script: Script,
++    node_script: Script,
++    start: Dictionary,
++    screen_position: Vector2,
++    require_valid_connection: bool
+ ) -> Dictionary:
+     var graph_id := String(start.get("graph_id", ""))
+     if graph_id.is_empty():
+@@ -119,7 +137,8 @@ static func snap_target(
+                 "is_input": target_is_input,
+                 "port_index": -1,
+             }
+-            if _resolve_endpoints(graph, start, candidate, item).is_empty():
++            var connection := _resolve_connection(graph, start, candidate, item)
++            if require_valid_connection and not bool(connection.get("ok", false)):
+                 continue
+             var anchor: Vector2 = item.get_graph_port_anchor(String(port_name), target_is_input)
+             var distance: float = canvas.world_to_screen(anchor).distance_to(screen_position)
+@@ -194,11 +213,11 @@ static func draw_edges(
+         draw_preview(canvas, edge_renderer, drag_state, drag_world)
+
+
+-static func _resolve_endpoints(
++static func _resolve_connection(
+     graph: PFGraph, start: Dictionary, end: Dictionary, end_item: Node
+ ) -> Dictionary:
+     if bool(start.get("is_input", false)):
+-        return _first_valid_connection(
++        return _first_connection_result(
+             graph,
+             end_item.node_id,
+             [String(end.get("port_name", ""))],
+@@ -207,7 +226,7 @@ static func _resolve_endpoints(
+                 graph, String(start.get("node_id", "")), String(start.get("port_name", ""))
+             )
+         )
+-    return _first_valid_connection(
++    return _first_connection_result(
+         graph,
+         String(start.get("node_id", "")),
+         [String(start.get("port_name", ""))],
+@@ -216,26 +235,29 @@ static func _resolve_endpoints(
+     )
+
+
+-static func _first_valid_connection(
++static func _first_connection_result(
+     graph: PFGraph,
+     source_node: String,
+     source_ports: Array,
+     target_node: String,
+     target_ports: Array
+ ) -> Dictionary:
++    var first_reason := ""
+     for source_port in source_ports:
+         for target_port in target_ports:
+             var result := graph.can_connect(
+                 source_node, String(source_port), target_node, String(target_port)
+             )
+             if bool(result.get("ok", false)):
+-                return {
+-                    "source_node": source_node,
+-                    "source_port": String(source_port),
+-                    "target_node": target_node,
+-                    "target_port": String(target_port),
+-                }
+-    return {}
++                var connection := _connect_result(true, "")
++                connection["source_node"] = source_node
++                connection["source_port"] = String(source_port)
++                connection["target_node"] = target_node
++                connection["target_port"] = String(target_port)
++                return connection
++            if first_reason.is_empty():
++                first_reason = String(result.get("reason", ""))
++    return _connect_result(false, first_reason)
+
+
+ static func _input_port_candidates(graph: PFGraph, node_id: String, port_name: String) -> Array:
+@@ -275,3 +297,7 @@ static func _port_side_snap_zone(item: Node, is_input: bool) -> Rect2:
+     if not is_input:
+         side_bounds.position.x += bounds.size.x * 0.5
+     return side_bounds.grow(SNAP_ZONE_GROW)
++
++
++static func _connect_result(ok: bool, reason: String) -> Dictionary:
++    return {"ok": ok, "reason": reason}
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 63d0243..c477e21 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -9,6 +9,7 @@ signal selection_changed(selected_ids: Array)
+ signal cleanup_grid_changed(scale: float, offset: Vector2)
+ signal batch_context_requested(card_id: String, screen_position: Vector2i)
+ signal zoom_changed(zoom_index: int, camera_zoom: float)
++signal graph_connect_failed(reason: String)
+
+ const ZOOM_LEVELS := [0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
+ const DEFAULT_ZOOM_INDEX := 4
+@@ -715,7 +716,7 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
+     if not _graph_edge_drag.is_empty():
+         var start := _graph_edge_drag.duplicate(true)
+         _graph_edge_drag = {}
+-        GraphEdgeInteraction.connect_at_screen(
++        var result := GraphEdgeInteraction.connect_at_screen(
+             self,
+             _items_by_id,
+             CanvasBatchCardScript,
+@@ -724,6 +725,9 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
+             screen_position,
+             _emit_canvas_changed
+         )
++        var reason := String(result.get("reason", ""))
++        if not bool(result.get("ok", false)) and not reason.is_empty():
++            graph_connect_failed.emit(reason)
+     elif _selection.is_dragging_items:
+         _commit_drag_if_needed()
+         _selection.stop_drag()
+diff --git a/pixel/ui/shell/main.gd b/pixel/ui/shell/main.gd
+index 35b1a12..872b72a 100644
+--- a/pixel/ui/shell/main.gd
++++ b/pixel/ui/shell/main.gd
+@@ -453,6 +453,7 @@ func _connect_services() -> void:
+     _canvas.canvas_changed.connect(_on_canvas_changed)
+     _canvas.selection_changed.connect(_on_canvas_selection_changed)
+     _canvas.cleanup_grid_changed.connect(_on_cleanup_grid_changed)
++    _canvas.graph_connect_failed.connect(_on_canvas_graph_connect_failed)
+     _cleanup_inspector.apply_requested.connect(_apply_cleanup_to_selection)
+     _cleanup_inspector.preview_requested.connect(_request_cleanup_preview)
+     _cleanup_inspector.cancel_requested.connect(_cancel_cleanup_task)
+@@ -559,6 +560,10 @@ func _on_canvas_selection_changed(selected_ids: Array) -> void:
+     _sync_manual_grid_overlay()
+
+
++func _on_canvas_graph_connect_failed(reason: String) -> void:
++    _status_label.text = Strings.STATUS_GRAPH_CONNECT_FAILED % reason
++
++
+ func _apply_cleanup_to_selection(params: Dictionary) -> void:
+     var snapshots: Array = _canvas.get_selected_sprite_snapshots()
+     if snapshots.is_empty():
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index 8e3a28a..ff4aa1d 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -70,6 +70,7 @@ const STATUS_MOCK_GENERATE_FAILED := "Mock batch generation failed"
+ const STATUS_GRAPH_RUN_DONE := "Graph run complete: %d sprites"
+ const STATUS_GRAPH_RUN_FAILED := "Graph run failed"
+ const STATUS_GRAPH_RUN_NEEDS_SELECTION := "Select a graph node or batch before running"
++const STATUS_GRAPH_CONNECT_FAILED := "Graph connection failed: %s"
+ const CLEANUP_TITLE := "Pixel Cleanup"
+ const CLEANUP_SELECTED_FORMAT := "%d selected"
+ const CLEANUP_PRESET_PRIOR_FORMAT := "Preset prior: %dpx"
+diff --git a/pixelforge-plan/03-milestones/M3-开发规划.md b/pixelforge-plan/03-milestones/M3-开发规划.md
+index b368ff9..dc3ff30 100644
+--- a/pixelforge-plan/03-milestones/M3-开发规划.md
++++ b/pixelforge-plan/03-milestones/M3-开发规划.md
+@@ -344,6 +344,26 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ - Undo/Redo 需恢复 graph 数据和 canvas 视图一致性。
+ - 非 graph sprite / 旧 batch_card 删除路径不受影响。
+
++### UX-7c 连线失败状态反馈
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 正在尝试连接节点、但不确定失败原因的人 |
++| 当前痛点 | 无效连线目前只是静默失败，用户分不清是没放到热区、类型不兼容、重复连线，还是 graph 规则拒绝 |
++| 技术选择 | `GraphEdgeInteraction.connect_at_screen()` 返回 `{ok, reason}`；画布只在有具体 reason 时发 `graph_connect_failed`，shell 用集中 UI 文案更新底部状态栏 |
++| 选择原因 | 保持轻量，不打断拖线流；失败原因仍来自 `PFGraph.can_connect()` / `add_edge()`，UI 不复制规则 |
++| 优势 | 拖到不兼容端口时能立即看到原因，减少反复试错 |
++| 缺陷 | 仅状态栏文字，没有端口高亮、toast 或节点错误标记 |
++| 改进空间 | 后续可把 reason 映射到端口高亮、连线预览颜色和 inspector 错误列表 |
++| 验证入口 | 从 Object List 输出拖到 Mock Batch 输入附近松手，不生成 edge，状态栏显示 text_list 不能连接到 image_list |
++
++任务：
++
++- 连线 helper 返回结构化结果，不再只返回 bool。
++- 失败状态只在松开鼠标后、有明确目标端口 reason 时显示。
++- 画布通过 signal 通知 shell 更新状态栏，不弹窗打断操作。
++- 自动化覆盖不兼容端口失败时不加 edge 且发出状态消息。
++
+ ---
+
+ ## 7. 技术骨架卡
+```

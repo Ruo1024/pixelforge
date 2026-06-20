@@ -5,6 +5,7 @@ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
 const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
+const Strings := preload("res://ui/shell/strings.gd")
 
 
 func before_each() -> void:
@@ -128,6 +129,11 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 
 func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> void:
 	var canvas: Control = _canvas()
+	var status_messages := []
+	canvas.graph_connect_failed.connect(
+		func(reason: String) -> void:
+			status_messages.append(Strings.STATUS_GRAPH_CONNECT_FAILED % reason)
+	)
 	var ids := [_register_asset(Color.RED, "red")]
 	_set_graph("graph_hit", [_graph_node("objects", "object_list"), _batch_node("batch_1", ids)])
 	var objects: Node = canvas._add_node_direct(
@@ -143,6 +149,10 @@ func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> vo
 	canvas._finish_left_interaction(canvas.world_to_screen(batch.get_graph_port_anchor("in", true)))
 
 	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
+	assert_eq(
+		status_messages,
+		[Strings.STATUS_GRAPH_CONNECT_FAILED % "Cannot connect text_list to image_list"]
+	)
 
 
 func test_canvas_delete_key_removes_selected_graph_edge() -> void:

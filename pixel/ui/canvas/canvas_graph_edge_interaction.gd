@@ -25,23 +25,23 @@ static func begin_drag(port_hit: Dictionary) -> Dictionary:
 	}
 
 
-static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -> bool:
+static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -> Dictionary:
 	var end_item: Node = end.get("item", null)
 	if end_item == null:
-		return false
+		return _connect_result(false, "")
 	if String(start.get("graph_id", "")) != end_item.graph_id:
-		return false
+		return _connect_result(false, "")
 	if bool(start.get("is_input", false)) == bool(end.get("is_input", false)):
-		return false
+		return _connect_result(false, "")
 
 	var graph_id := String(start.get("graph_id", ""))
 	var before := ProjectService.get_graph_data(graph_id)
 	if before.is_empty():
-		return false
+		return _connect_result(false, "")
 	var graph: PFGraph = GraphScript.from_json(before)
-	var endpoints := _resolve_endpoints(graph, start, end, end_item)
-	if endpoints.is_empty():
-		return false
+	var endpoints := _resolve_connection(graph, start, end, end_item)
+	if not bool(endpoints.get("ok", false)):
+		return _connect_result(false, String(endpoints.get("reason", "")))
 	var result := graph.add_edge(
 		endpoints["source_node"],
 		endpoints["source_port"],
@@ -49,7 +49,7 @@ static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -
 		endpoints["target_port"]
 	)
 	if not bool(result.get("ok", false)):
-		return false
+		return _connect_result(false, String(result.get("reason", "")))
 
 	var after := graph.to_json()
 	UndoService.perform_action(
@@ -61,7 +61,7 @@ static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -
 			ProjectService.set_graph_data(graph_id, before)
 			changed.call()
 	)
-	return true
+	return _connect_result(true, "")
 
 
 static func connect_at_screen(
@@ -72,10 +72,14 @@ static func connect_at_screen(
 	start: Dictionary,
 	screen_position: Vector2,
 	changed: Callable
-) -> bool:
+) -> Dictionary:
 	var end := snap_target(canvas, items_by_id, batch_script, node_script, start, screen_position)
 	if end.is_empty():
-		return false
+		end = _target_at_screen(
+			canvas, items_by_id, batch_script, node_script, start, screen_position, false
+		)
+	if end.is_empty():
+		return _connect_result(false, "")
 	return try_connect(start, end, changed)
 
 
@@ -90,6 +94,20 @@ static func snap_target(
 	node_script: Script,
 	start: Dictionary,
 	screen_position: Vector2
+) -> Dictionary:
+	return _target_at_screen(
+		canvas, items_by_id, batch_script, node_script, start, screen_position, true
+	)
+
+
+static func _target_at_screen(
+	canvas: Control,
+	items_by_id: Dictionary,
+	batch_script: Script,
+	node_script: Script,
+	start: Dictionary,
+	screen_position: Vector2,
+	require_valid_connection: bool
 ) -> Dictionary:
 	var graph_id := String(start.get("graph_id", ""))
 	if graph_id.is_empty():
@@ -119,7 +137,8 @@ static func snap_target(
 				"is_input": target_is_input,
 				"port_index": -1,
 			}
-			if _resolve_endpoints(graph, start, candidate, item).is_empty():
+			var connection := _resolve_connection(graph, start, candidate, item)
+			if require_valid_connection and not bool(connection.get("ok", false)):
 				continue
 			var anchor: Vector2 = item.get_graph_port_anchor(String(port_name), target_is_input)
 			var distance: float = canvas.world_to_screen(anchor).distance_to(screen_position)
@@ -194,11 +213,11 @@ static func draw_edges(
 		draw_preview(canvas, edge_renderer, drag_state, drag_world)
 
 
-static func _resolve_endpoints(
+static func _resolve_connection(
 	graph: PFGraph, start: Dictionary, end: Dictionary, end_item: Node
 ) -> Dictionary:
 	if bool(start.get("is_input", false)):
-		return _first_valid_connection(
+		return _first_connection_result(
 			graph,
 			end_item.node_id,
 			[String(end.get("port_name", ""))],
@@ -207,7 +226,7 @@ static func _resolve_endpoints(
 				graph, String(start.get("node_id", "")), String(start.get("port_name", ""))
 			)
 		)
-	return _first_valid_connection(
+	return _first_connection_result(
 		graph,
 		String(start.get("node_id", "")),
 		[String(start.get("port_name", ""))],
@@ -216,26 +235,29 @@ static func _resolve_endpoints(
 	)
 
 
-static func _first_valid_connection(
+static func _first_connection_result(
 	graph: PFGraph,
 	source_node: String,
 	source_ports: Array,
 	target_node: String,
 	target_ports: Array
 ) -> Dictionary:
+	var first_reason := ""
 	for source_port in source_ports:
 		for target_port in target_ports:
 			var result := graph.can_connect(
 				source_node, String(source_port), target_node, String(target_port)
 			)
 			if bool(result.get("ok", false)):
-				return {
-					"source_node": source_node,
-					"source_port": String(source_port),
-					"target_node": target_node,
-					"target_port": String(target_port),
-				}
-	return {}
+				var connection := _connect_result(true, "")
+				connection["source_node"] = source_node
+				connection["source_port"] = String(source_port)
+				connection["target_node"] = target_node
+				connection["target_port"] = String(target_port)
+				return connection
+			if first_reason.is_empty():
+				first_reason = String(result.get("reason", ""))
+	return _connect_result(false, first_reason)
 
 
 static func _input_port_candidates(graph: PFGraph, node_id: String, port_name: String) -> Array:
@@ -275,3 +297,7 @@ static func _port_side_snap_zone(item: Node, is_input: bool) -> Rect2:
 	if not is_input:
 		side_bounds.position.x += bounds.size.x * 0.5
 	return side_bounds.grow(SNAP_ZONE_GROW)
+
+
+static func _connect_result(ok: bool, reason: String) -> Dictionary:
+	return {"ok": ok, "reason": reason}
