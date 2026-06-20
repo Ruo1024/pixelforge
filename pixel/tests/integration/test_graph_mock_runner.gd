@@ -52,6 +52,21 @@ func test_mock_generate_chain_can_replace_existing_batch_assets() -> void:
 	assert_ne(second_ids, first_ids)
 
 
+func test_mock_generate_chain_rejects_missing_required_spec_input() -> void:
+	var graph := _make_mock_graph()
+	var asset_library := get_tree().root.get_node("AssetLibrary")
+	var runner := MockRunnerScript.new()
+	var existing_ids := ["asset_existing"]
+	graph.set_node_params("batch_1", {"label": "Mock Batch", "asset_ids": existing_ids})
+	_remove_edge(graph, "size", "spec", "generate", "spec")
+
+	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
+
+	assert_false(bool(result["ok"]))
+	assert_eq(result["error"]["code"], "missing_required_input")
+	assert_eq(graph.get_node_params("batch_1")["asset_ids"], existing_ids)
+
+
 func test_mock_generate_chain_survives_project_roundtrip_after_materialization() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var asset_library := get_tree().root.get_node("AssetLibrary")
@@ -98,3 +113,21 @@ func _make_mock_graph() -> PFGraph:
 	assert_true(bool(graph.add_edge("size", "spec", "generate", "spec")["ok"]))
 	assert_true(bool(graph.add_edge("generate", "images", "batch_1", "in")["ok"]))
 	return graph
+
+
+func _remove_edge(
+	graph: PFGraph, from_node: String, from_port: String, to_node: String, to_port: String
+) -> void:
+	var kept: Array[Dictionary] = []
+	for edge in graph.edges:
+		var from_data: Array = edge.get("from", ["", ""])
+		var to_data: Array = edge.get("to", ["", ""])
+		if (
+			String(from_data[0]) == from_node
+			and String(from_data[1]) == from_port
+			and String(to_data[0]) == to_node
+			and String(to_data[1]) == to_port
+		):
+			continue
+		kept.append(edge)
+	graph.edges = kept

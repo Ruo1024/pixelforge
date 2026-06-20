@@ -61,6 +61,9 @@ func _run_node(
 		return _error("ghost_node", "Cannot run graph with missing node type: %s" % node.get_type())
 
 	var inputs: Dictionary = inputs_by_node.get(node_id, {})
+	var required_inputs := _validate_required_inputs(node, node_id, inputs)
+	if not bool(required_inputs["ok"]):
+		return required_inputs
 	var outputs := {}
 	var asset_ids := []
 	if node.get_type() == "batch":
@@ -158,6 +161,32 @@ func _coerce_edge_value(
 	):
 		return [value]
 	return value
+
+
+func _validate_required_inputs(node: PFNode, node_id: String, inputs: Dictionary) -> Dictionary:
+	for port in node.get_input_ports():
+		if not bool(port.get("required", false)):
+			continue
+		var port_name := String(port.get("name", ""))
+		if port_name.is_empty():
+			continue
+		if not inputs.has(port_name) or _is_missing_input(inputs[port_name]):
+			return _error(
+				"missing_required_input", "Node %s requires input port %s" % [node_id, port_name]
+			)
+	return {"ok": true}
+
+
+func _is_missing_input(value: Variant) -> bool:
+	if value == null:
+		return true
+	if value is Array or value is PackedStringArray:
+		return value.is_empty()
+	if value is Dictionary:
+		return value.is_empty()
+	if value is String:
+		return String(value).strip_edges().is_empty()
+	return false
 
 
 func _topological_order(graph: PFGraph) -> Dictionary:

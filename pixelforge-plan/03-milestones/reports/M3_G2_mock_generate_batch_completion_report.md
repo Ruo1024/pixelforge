@@ -10762,3 +10762,157 @@ index 462a4a0..02b08b7 100644
 
  ---
 ```
+
+## 2026-06-21 M3 G-4a Mock Runner 必填端口校验
+
+### 本轮实现说明
+
+- 在 `GraphMockRunner` 执行每个节点前读取 `PFNode.get_input_ports()`，对 `required=true` 的输入端口做非空校验。
+- 缺失必填输入时返回结构化错误 `missing_required_input`，阻止后续节点执行和 batch `asset_ids` 替换。
+- 新增集成测试覆盖删除 `Size Spec -> AI Generate.spec` 必需连线后的失败路径，并确认原 batch 队列保持不变。
+- 在 `M3-开发规划.md` 追加 G-4a 小卡，记录该校验在当前 M3 mock runner 闭环里的作用、缺陷和验证入口。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：通过，162/162 tests，1272 asserts。
+- `./pixel/scripts/verify_m3_ux7.sh`：通过。
+
+### 人工测试步骤
+
+1. 启动编辑器后执行 `File > Generate Mock Batch`，确认出现 Object List / Size Spec / AI Generate / Mock Batch 链和 10 张 mock 图。
+2. 删除 `Size Spec -> AI Generate.spec` 这条连线，保留其他节点和 batch。
+3. 选中链上任一剩余节点或 Mock Batch，执行 `File > Run Selected Graph`。
+4. 预期：底部状态显示 graph run failed，已有 batch 缩略图不被新一批结果替换。
+5. 重新连上 `Size Spec -> AI Generate.spec` 后再次执行 `File > Run Selected Graph`，预期 batch 正常刷新为 10 张结果。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/services/graph_mock_runner.gd b/pixel/services/graph_mock_runner.gd
+index b3f9621..1913f7c 100644
+--- a/pixel/services/graph_mock_runner.gd
++++ b/pixel/services/graph_mock_runner.gd
+@@ -61,6 +61,9 @@ func _run_node(
+        return _error("ghost_node", "Cannot run graph with missing node type: %s" % node.get_type())
+
+    var inputs: Dictionary = inputs_by_node.get(node_id, {})
++	var required_inputs := _validate_required_inputs(node, node_id, inputs)
++	if not bool(required_inputs["ok"]):
++		return required_inputs
+    var outputs := {}
+    var asset_ids := []
+    if node.get_type() == "batch":
+@@ -160,6 +163,32 @@ func _coerce_edge_value(
+    return value
+
+
++func _validate_required_inputs(node: PFNode, node_id: String, inputs: Dictionary) -> Dictionary:
++	for port in node.get_input_ports():
++		if not bool(port.get("required", false)):
++			continue
++		var port_name := String(port.get("name", ""))
++		if port_name.is_empty():
++			continue
++		if not inputs.has(port_name) or _is_missing_input(inputs[port_name]):
++			return _error(
++				"missing_required_input", "Node %s requires input port %s" % [node_id, port_name]
++			)
++	return {"ok": true}
++
++
++func _is_missing_input(value: Variant) -> bool:
++	if value == null:
++		return true
++	if value is Array or value is PackedStringArray:
++		return value.is_empty()
++	if value is Dictionary:
++		return value.is_empty()
++	if value is String:
++		return String(value).strip_edges().is_empty()
++	return false
++
++
+ func _topological_order(graph: PFGraph) -> Dictionary:
+    var indegree := {}
+    var outgoing := {}
+diff --git a/pixel/tests/integration/test_graph_mock_runner.gd b/pixel/tests/integration/test_graph_mock_runner.gd
+index ca71790..629adee 100644
+--- a/pixel/tests/integration/test_graph_mock_runner.gd
++++ b/pixel/tests/integration/test_graph_mock_runner.gd
+@@ -52,6 +52,21 @@ func test_mock_generate_chain_can_replace_existing_batch_assets() -> void:
+    assert_ne(second_ids, first_ids)
+
+
++func test_mock_generate_chain_rejects_missing_required_spec_input() -> void:
++	var graph := _make_mock_graph()
++	var asset_library := get_tree().root.get_node("AssetLibrary")
++	var runner := MockRunnerScript.new()
++	var existing_ids := ["asset_existing"]
++	graph.set_node_params("batch_1", {"label": "Mock Batch", "asset_ids": existing_ids})
++	_remove_edge(graph, "size", "spec", "generate", "spec")
++
++	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
++
++	assert_false(bool(result["ok"]))
++	assert_eq(result["error"]["code"], "missing_required_input")
++	assert_eq(graph.get_node_params("batch_1")["asset_ids"], existing_ids)
++
++
+ func test_mock_generate_chain_survives_project_roundtrip_after_materialization() -> void:
+    var project_service := get_tree().root.get_node("ProjectService")
+    var asset_library := get_tree().root.get_node("AssetLibrary")
+@@ -98,3 +113,21 @@ func _make_mock_graph() -> PFGraph:
+    assert_true(bool(graph.add_edge("size", "spec", "generate", "spec")["ok"]))
+    assert_true(bool(graph.add_edge("generate", "images", "batch_1", "in")["ok"]))
+    return graph
++
++
++func _remove_edge(
++	graph: PFGraph, from_node: String, from_port: String, to_node: String, to_port: String
++) -> void:
++	var kept: Array[Dictionary] = []
++	for edge in graph.edges:
++		var from_data: Array = edge.get("from", ["", ""])
++		var to_data: Array = edge.get("to", ["", ""])
++		if (
++			String(from_data[0]) == from_node
++			and String(from_data[1]) == from_port
++			and String(to_data[0]) == to_node
++			and String(to_data[1]) == to_port
++		):
++			continue
++		kept.append(edge)
++	graph.edges = kept
+diff --git a/pixelforge-plan/03-milestones/M3-开发规划.md b/pixelforge-plan/03-milestones/M3-开发规划.md
+index 5e8d7f6..b368ff9 100644
+--- a/pixelforge-plan/03-milestones/M3-开发规划.md
++++ b/pixelforge-plan/03-milestones/M3-开发规划.md
+@@ -406,6 +406,26 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ | 改进空间 | 后续按 `M3-node-graph.md` 补 executor/process/ghost |
+ | 验证入口 | 鼠标搭链、Run、结果落 batch、保存重开一致 |
+
++### G-4a Mock Runner 必填端口校验
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 已经开始编辑节点连线、希望 Run 反映当前图结构的人 |
++| 当前痛点 | 如果必需连线被删，mock runner 仍可能靠节点默认值继续生成，用户以为当前图仍然有效 |
++| 技术选择 | M3 mock runner 在执行每个节点前检查 `get_input_ports()` 中 `required=true` 的端口是否已有非空输入 |
++| 选择原因 | 这是 GRAPH-SCHEMA §4 的最小执行校验，能先堵住断链假运行；不提前实现完整 executor |
++| 优势 | 删除 Size Spec 等必需连线后，Run Selected Graph 会失败并保留原 batch |
++| 缺陷 | 仍不是完整 graph validation UI；暂不做节点红框、错误 tooltip、批量错误列表 |
++| 改进空间 | 进入后续 executor/inspector 后，将错误映射到节点状态和画布提示 |
++| 验证入口 | 删除 `size_spec → ai_generate.spec` 连线后运行，状态失败且 batch 不被替换 |
++
++任务：
++
++- 在 `GraphMockRunner` 执行节点前校验 required input。
++- 缺失 required input 返回结构化 `missing_required_input`。
++- 失败时不物化新 asset，不替换 batch `asset_ids`。
++- 保持可选输入端口（如 object list/text/image/style）仍可缺省。
++
+ ---
+
+ ## 8. 从原 M3 规划继承与降级
+```
