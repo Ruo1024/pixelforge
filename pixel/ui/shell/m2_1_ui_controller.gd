@@ -258,7 +258,7 @@ func run_selected_mock_graph() -> void:
 	if not bool(result.get("ok", false)):
 		var error: Dictionary = result.get("error", {})
 		Log.warn("Selected mock graph run failed", error)
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
+		_status_label.text = _graph_run_failure_status(error)
 		return
 
 	var asset_ids: Array = result["asset_ids"]
@@ -678,6 +678,13 @@ func _on_tool_selection_changed(selection: PFSelection) -> void:
 	_status_label.text = (
 		Strings.STATUS_SELECTION_FORMAT % [bbox.size.x, bbox.size.y, selection.get_selected_count()]
 	)
+
+
+func _graph_run_failure_status(error: Dictionary) -> String:
+	var message := String(error.get("message", "")).strip_edges()
+	if message.is_empty():
+		return Strings.STATUS_GRAPH_RUN_FAILED
+	return Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % message
 
 
 func _project_style_preset() -> Dictionary:

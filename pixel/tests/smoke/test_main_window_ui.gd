@@ -5,6 +5,7 @@ const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
 const ViewportFillPolicy := preload("res://ui/shell/viewport_fill_policy.gd")
 const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
+const Strings := preload("res://ui/shell/strings.gd")
 
 
 func test_main_window_uses_readable_minimum_sizes() -> void:
@@ -258,6 +259,24 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	assert_ne(rerun_asset_ids, first_asset_ids)
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
 
+	graph_data = ProjectService.current_project.graphs[graph_id].duplicate(true)
+	_remove_graph_edge(graph_data, "size", "spec", "generate", "spec")
+	ProjectService.set_graph_data(graph_id, graph_data, true)
+	var stable_asset_ids := rerun_asset_ids.duplicate()
+
+	canvas.select_ids([batch_item_id])
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	assert_eq(
+		_status_label(main).text,
+		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "Node generate requires input port spec"
+	)
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	assert_eq(batch_node["params"]["asset_ids"], stable_asset_ids)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), stable_asset_ids)
+
 
 func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
 	ProjectService.new_project("Batch Shortcut UI")
@@ -344,6 +363,31 @@ func _item_id_for_node(items: Array, node_id: String) -> String:
 		if String(data.get("node_id", "")) == node_id:
 			return String(data.get("id", ""))
 	return ""
+
+
+func _remove_graph_edge(
+	graph_data: Dictionary, from_node: String, from_port: String, to_node: String, to_port: String
+) -> void:
+	var kept_edges := []
+	for raw_edge in graph_data.get("edges", []):
+		if not (raw_edge is Dictionary):
+			continue
+		var edge: Dictionary = raw_edge
+		var from_data: Array = edge.get("from", ["", ""])
+		var to_data: Array = edge.get("to", ["", ""])
+		if (
+			String(from_data[0]) == from_node
+			and String(from_data[1]) == from_port
+			and String(to_data[0]) == to_node
+			and String(to_data[1]) == to_port
+		):
+			continue
+		kept_edges.append(edge)
+	graph_data["edges"] = kept_edges
+
+
+func _status_label(main: Control) -> Label:
+	return main.get_node("Root/BottomBar").get_child(0)
 
 
 func _send_key(controller: Node, keycode: Key) -> bool:

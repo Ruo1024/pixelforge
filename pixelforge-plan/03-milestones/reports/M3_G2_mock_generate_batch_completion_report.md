@@ -10282,6 +10282,174 @@ index e904876..e4eeada 100644
  ## 7. 技术骨架卡
 ```
 
+## 2026-06-21 M3 G-4b Run Selected Graph 失败原因状态
+
+### 本轮实现说明
+
+- 新增集中 UI 文案 `STATUS_GRAPH_RUN_FAILED_DETAIL`，用于 `Run Selected Graph` 的结构化失败详情。
+- `M21UiController.run_selected_mock_graph()` 在 mock runner 返回 `error.message` 时，把具体原因显示到底部状态栏；没有具体 message 的基础失败路径仍保持通用 `Graph run failed`。
+- smoke 测试扩展生成/重跑闭环：删除 `Size Spec -> AI Generate.spec` 必填连线后运行，断言状态栏显示 `Node generate requires input port spec`，并确认 batch 的 `asset_ids` 与画布卡内容不被替换。
+- 在 `M3-开发规划.md` 追加 G-4b 小卡，记录该反馈属于 runner 失败详情的轻量闭环，不提前展开完整错误面板。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：通过，162/162 tests，1276 asserts。
+- `./pixel/scripts/verify_m3_g5.sh`：通过。
+
+### 人工测试步骤
+
+1. 执行 `File > Generate Mock Batch`，确认四节点链和 10 张 mock 图生成。
+2. 删除 `Size Spec -> AI Generate.spec` 连线。
+3. 选中 Mock Batch 或链上任一节点，执行 `File > Run Selected Graph`。
+4. 预期：底部状态栏显示 `Graph run failed: Node generate requires input port spec`。
+5. 预期：原 batch 队列不被替换，缩略图仍保持运行前那一批。
+6. 重新连上 `Size Spec -> AI Generate.spec` 后再运行，预期 batch 正常刷新为 10 张。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index f5a019c..7f0ae0f 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -5,6 +5,7 @@ const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+ const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
+ const ViewportFillPolicy := preload("res://ui/shell/viewport_fill_policy.gd")
+ const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
++const Strings := preload("res://ui/shell/strings.gd")
+
+
+ func test_main_window_uses_readable_minimum_sizes() -> void:
+@@ -258,6 +259,24 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
+     assert_ne(rerun_asset_ids, first_asset_ids)
+     assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
+
++    graph_data = ProjectService.current_project.graphs[graph_id].duplicate(true)
++    _remove_graph_edge(graph_data, "size", "spec", "generate", "spec")
++    ProjectService.set_graph_data(graph_id, graph_data, true)
++    var stable_asset_ids := rerun_asset_ids.duplicate()
++
++    canvas.select_ids([batch_item_id])
++    controller.run_selected_mock_graph()
++    await wait_process_frames(2)
++
++    assert_eq(
++        _status_label(main).text,
++        Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "Node generate requires input port spec"
++    )
++    graph_data = ProjectService.current_project.graphs[graph_id]
++    batch_node = graph_data["nodes"][3]
++    assert_eq(batch_node["params"]["asset_ids"], stable_asset_ids)
++    assert_eq(canvas._get_batch_asset_ids(batch_item_id), stable_asset_ids)
++
+
+ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
+     ProjectService.new_project("Batch Shortcut UI")
+@@ -346,6 +365,31 @@ func _item_id_for_node(items: Array, node_id: String) -> String:
+     return ""
+
+
++func _remove_graph_edge(
++    graph_data: Dictionary, from_node: String, from_port: String, to_node: String, to_port: String
++) -> void:
++    var kept_edges := []
++    for raw_edge in graph_data.get("edges", []):
++        if not (raw_edge is Dictionary):
++            continue
++        var edge: Dictionary = raw_edge
++        var from_data: Array = edge.get("from", ["", ""])
++        var to_data: Array = edge.get("to", ["", ""])
++        if (
++            String(from_data[0]) == from_node
++            and String(from_data[1]) == from_port
++            and String(to_data[0]) == to_node
++            and String(to_data[1]) == to_port
++        ):
++            continue
++        kept_edges.append(edge)
++    graph_data["edges"] = kept_edges
++
++
++func _status_label(main: Control) -> Label:
++    return main.get_node("Root/BottomBar").get_child(0)
++
++
+ func _send_key(controller: Node, keycode: Key) -> bool:
+     var event := InputEventKey.new()
+     event.keycode = keycode
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index 73fa686..4088d8e 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -258,7 +258,7 @@ func run_selected_mock_graph() -> void:
+     if not bool(result.get("ok", false)):
+         var error: Dictionary = result.get("error", {})
+         Log.warn("Selected mock graph run failed", error)
+-        _status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++        _status_label.text = _graph_run_failure_status(error)
+         return
+
+     var asset_ids: Array = result["asset_ids"]
+@@ -680,6 +680,13 @@ func _on_tool_selection_changed(selection: PFSelection) -> void:
+     )
+
+
++func _graph_run_failure_status(error: Dictionary) -> String:
++    var message := String(error.get("message", "")).strip_edges()
++    if message.is_empty():
++        return Strings.STATUS_GRAPH_RUN_FAILED
++    return Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % message
++
++
+ func _project_style_preset() -> Dictionary:
+     var style_data: Variant = ProjectService.current_project.manifest.get("style_preset", {})
+     return style_data if style_data is Dictionary else {}
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index ff4aa1d..1a7517a 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -69,6 +69,7 @@ const STATUS_MOCK_GENERATE_DONE := "Mock batch generated: %d sprites"
+ const STATUS_MOCK_GENERATE_FAILED := "Mock batch generation failed"
+ const STATUS_GRAPH_RUN_DONE := "Graph run complete: %d sprites"
+ const STATUS_GRAPH_RUN_FAILED := "Graph run failed"
++const STATUS_GRAPH_RUN_FAILED_DETAIL := "Graph run failed: %s"
+ const STATUS_GRAPH_RUN_NEEDS_SELECTION := "Select a graph node or batch before running"
+ const STATUS_GRAPH_CONNECT_FAILED := "Graph connection failed: %s"
+ const CLEANUP_TITLE := "Pixel Cleanup"
+diff --git a/pixelforge-plan/03-milestones/M3-开发规划.md b/pixelforge-plan/03-milestones/M3-开发规划.md
+index dc3ff30..3ce829e 100644
+--- a/pixelforge-plan/03-milestones/M3-开发规划.md
++++ b/pixelforge-plan/03-milestones/M3-开发规划.md
+@@ -446,6 +446,26 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ - 失败时不物化新 asset，不替换 batch `asset_ids`。
+ - 保持可选输入端口（如 object list/text/image/style）仍可缺省。
+
++### G-4b Run Selected Graph 失败原因状态
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 删除/重连节点后运行图、需要知道为什么没有刷新的用户 |
++| 当前痛点 | `Run Selected Graph` 失败时只显示通用失败文案，用户不知道是缺线、幽灵节点、空 batch 还是执行错误 |
++| 技术选择 | 保持 mock runner 返回结构化 error；M2.1 controller 在 runner 失败路径把 `error.message` 格式化进底部状态栏 |
++| 选择原因 | 先把已存在的错误信息送到用户眼前，不提前做完整节点红框/错误面板 |
++| 优势 | 删除必填连线后重跑，能直接看到缺哪个节点端口，同时 batch 不被替换 |
++| 缺陷 | 只覆盖 Run Selected Graph 的 runner 失败路径；无定位高亮、无多错误列表 |
++| 改进空间 | 后续接 executor validation 后，映射到节点红框、tooltip 和 inspector 错误列表 |
++| 验证入口 | 删除 `Size Spec -> AI Generate.spec` 后运行，状态栏显示 `Node generate requires input port spec`，batch 队列保持不变 |
++
++任务：
++
++- 新增集中 UI 文案 `STATUS_GRAPH_RUN_FAILED_DETAIL`。
++- Run Selected Graph 的 runner 失败路径显示结构化 error message。
++- 自动化覆盖断开必填 spec 连线后的状态栏文案和 batch 不替换。
++- 其他无选中/无 graph/无 batch 的基础失败路径保持通用文案。
++
+ ---
+
+ ## 8. 从原 M3 规划继承与降级
+```
+
 ## 2026-06-21 M3 UX-7a 吸附热区调优
 
 ### 本轮实现说明
