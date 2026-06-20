@@ -10281,3 +10281,132 @@ index e904876..e4eeada 100644
 
  ## 7. 技术骨架卡
 ```
+
+## 2026-06-21 M3 UX-7a 吸附热区调优
+
+### 本轮实现说明
+
+- 将 graph port 自动吸附从固定 `44px` 圆形阈值调整为“目标端口侧半张卡片 + 32px 外扩”的热区，降低拖线时精确瞄准端口圆点的成本。
+- 吸附候选仍只扫描同一 graph 内的反向端口，并继续通过 `PFGraph.can_connect()` 决定是否可连，避免 UI 层复制连接规则。
+- 命中热区后预览线仍吸附到真实端口锚点；热区内若存在多个兼容候选，则按屏幕距离选择最近端口。
+- 更新 UX-7a 规划卡，把小圆形阈值描述改成半卡片热区策略。
+- 更新 hit policy 测试：兼容连线释放点改为离端口约 129px、但仍在输入侧半卡片热区内，覆盖“无需精确压中端口”的操作闭环。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh` 通过。
+- `./pixel/scripts/run_tests.sh` 通过：160/160 tests passing。
+- `./pixel/scripts/verify_m3_ux7.sh` 通过。
+- `wc -l pixel/ui/canvas/infinite_canvas.gd` 为 996 行，仍低于当前 gdlint `max-file-lines` 1000 行门槛。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 点击已有连线并按 Delete/Backspace 删除一条连线，便于重新连。
+3. 从 Object List 的 `items` 输出端拖到 AI Generate 输入侧半张卡片区域内，故意离左侧端口圆点远一些，松手后应自动吸附并创建连线。
+4. 拖线时观察预览线：进入输入侧热区后，线尾应吸到 AI Generate 的输入端口锚点。
+5. 从 Object List 的 `items` 输出端拖到 Mock Batch 输入侧半张卡片区域内，松手后不应创建不兼容连线。
+6. 执行 `File > Run Selected Graph`，确认连好的链路仍能刷新 batch。
+
+### 本轮完整 diff
+
+以下为本轮提交前的 `git diff --cached --no-color`；报告内制表符展开为空格，便于 Markdown 记录和 whitespace gate。
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd b/pixel/tests/unit/test_canvas_hit_policy.gd
+index cb1f0b8..c0efff8 100644
+--- a/pixel/tests/unit/test_canvas_hit_policy.gd
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd
+@@ -96,7 +96,7 @@ func test_canvas_left_click_on_graph_port_selects_without_dragging_card() -> voi
+    assert_false(canvas._selection.is_dragging_items)
+
+
+-func test_canvas_drag_between_compatible_graph_ports_adds_edge() -> void:
++func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
+    var canvas: Control = _canvas()
+    _set_graph(
+        "graph_hit", [_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")]
+@@ -112,7 +112,7 @@ func test_canvas_drag_between_compatible_graph_ports_adds_edge() -> void:
+        canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
+    )
+    canvas._finish_left_interaction(
+-        canvas.world_to_screen(generate.get_graph_port_anchor("items", true) + Vector2(28, 0))
++        canvas.world_to_screen(generate.get_graph_port_anchor("items", true) + Vector2(126, 28))
+    )
+
+    var graph_data := ProjectService.get_graph_data("graph_hit")
+diff --git a/pixel/ui/canvas/canvas_graph_edge_interaction.gd b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+index 90a634f..9a356c1 100644
+--- a/pixel/ui/canvas/canvas_graph_edge_interaction.gd
++++ b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+@@ -5,7 +5,7 @@ extends RefCounted
+ ## contract: 02-contracts/GRAPH-SCHEMA.md §2；连接校验只委托 PFGraph。
+
+ const GraphScript := preload("res://core/graph/pf_graph.gd")
+-const SNAP_DISTANCE := 44.0
++const SNAP_ZONE_GROW := 32.0
+
+
+ static func begin_drag(port_hit: Dictionary) -> Dictionary:
+@@ -113,14 +113,18 @@ static func snap_target(
+        return {}
+    var graph: PFGraph = GraphScript.from_json(graph_data)
+    var target_is_input := not bool(start.get("is_input", false))
++    var pointer_world: Vector2 = canvas.screen_to_world(screen_position)
+    var best: Dictionary = {}
+-    var best_distance: float = SNAP_DISTANCE + 1.0
++    var best_distance: float = INF
+    for raw_item in items_by_id.values():
+        if not _is_graph_item(raw_item, batch_script, node_script):
+            continue
+        var item: Node = raw_item
+        if item.graph_id != graph_id or item.node_id.is_empty():
+            continue
++        var snap_zone := _port_side_snap_zone(item, target_is_input)
++        if not snap_zone.has_point(pointer_world):
++            continue
+        for port_name in _port_candidates(graph, item.node_id, target_is_input):
+            var candidate := {
+                "item": item,
+@@ -276,3 +280,12 @@ static func _port_candidates(graph: PFGraph, node_id: String, is_input: bool) ->
+
+ static func _is_graph_item(item: Variant, batch_script: Script, node_script: Script) -> bool:
+    return item is Node and (item.get_script() == batch_script or item.get_script() == node_script)
++
++
++static func _port_side_snap_zone(item: Node, is_input: bool) -> Rect2:
++    var bounds: Rect2 = item.get_canvas_bounds()
++    var side_bounds := bounds
++    side_bounds.size.x = bounds.size.x * 0.5
++    if not is_input:
++        side_bounds.position.x += bounds.size.x * 0.5
++    return side_bounds.grow(SNAP_ZONE_GROW)
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index e4eeada..462a4a0 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -310,18 +310,18 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ |---|---|
+ | 服务对象 | 在节点之间频繁连线、但不想精确瞄准小端口的人 |
+ | 当前痛点 | 端口点面积小，拖线时每次都要精准对准圆点，鼠标/触控板操作容易漏连 |
+-| 技术选择 | Graph edge drag 期间扫描同一 graph 内的兼容反向端口，在阈值内自动吸附到端口锚点；松手时按吸附目标连接 |
+-| 选择原因 | 自动吸附比继续放大端口更不破坏视觉密度，也能保留 `PFGraph.can_connect()` 的单点校验 |
++| 技术选择 | Graph edge drag 期间扫描同一 graph 内的兼容反向端口，鼠标进入目标端口侧半张卡片并略外扩的热区后自动吸附到端口锚点；松手时按吸附目标连接 |
++| 选择原因 | 半卡片热区比小圆形阈值更省瞄准精力，又比全局大半径更不容易在密集节点里误吸；同时保留 `PFGraph.can_connect()` 的单点校验 |
+ | 优势 | 降低连线瞄准成本，保留类型不兼容时不误连 |
+-| 缺陷 | 阈值需要实机反馈；节点密集时可能需要候选高亮或可调参数 |
++| 缺陷 | 半卡片外扩范围需要实机反馈；节点密集时可能需要候选高亮或可调参数 |
+ | 改进空间 | 候选端口高亮、吸附半径偏好设置、冲突候选切换、连线失败提示 |
+-| 验证入口 | 从 Object List 输出拖到 AI Generate 输入附近但不压中端口，松手仍连接；拖到不兼容 batch 输入附近不连接 |
++| 验证入口 | 从 Object List 输出拖到 AI Generate 输入侧半张卡片范围内但不压中端口，松手仍连接；拖到不兼容 batch 输入附近不连接 |
+
+ 任务：
+
+ - 吸附只在同一 graph 的反向端口中查找。
+ - 候选必须通过 `PFGraph.can_connect()`，UI 不复制连接规则。
+-- 预览线吸附到真实端口锚点，松手可直接创建 edge。
++- 预览线进入目标端口侧半卡片热区后吸附到真实端口锚点，松手可直接创建 edge。
+ - 不兼容端口、同向端口、跨 graph 端口不吸附不连接。
+
+ ---
+```

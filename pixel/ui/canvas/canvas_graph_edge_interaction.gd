@@ -5,7 +5,7 @@ extends RefCounted
 ## contract: 02-contracts/GRAPH-SCHEMA.md §2；连接校验只委托 PFGraph。
 
 const GraphScript := preload("res://core/graph/pf_graph.gd")
-const SNAP_DISTANCE := 44.0
+const SNAP_ZONE_GROW := 32.0
 
 
 static func begin_drag(port_hit: Dictionary) -> Dictionary:
@@ -113,13 +113,17 @@ static func snap_target(
 		return {}
 	var graph: PFGraph = GraphScript.from_json(graph_data)
 	var target_is_input := not bool(start.get("is_input", false))
+	var pointer_world: Vector2 = canvas.screen_to_world(screen_position)
 	var best: Dictionary = {}
-	var best_distance: float = SNAP_DISTANCE + 1.0
+	var best_distance: float = INF
 	for raw_item in items_by_id.values():
 		if not _is_graph_item(raw_item, batch_script, node_script):
 			continue
 		var item: Node = raw_item
 		if item.graph_id != graph_id or item.node_id.is_empty():
+			continue
+		var snap_zone := _port_side_snap_zone(item, target_is_input)
+		if not snap_zone.has_point(pointer_world):
 			continue
 		for port_name in _port_candidates(graph, item.node_id, target_is_input):
 			var candidate := {
@@ -276,3 +280,12 @@ static func _port_candidates(graph: PFGraph, node_id: String, is_input: bool) ->
 
 static func _is_graph_item(item: Variant, batch_script: Script, node_script: Script) -> bool:
 	return item is Node and (item.get_script() == batch_script or item.get_script() == node_script)
+
+
+static func _port_side_snap_zone(item: Node, is_input: bool) -> Rect2:
+	var bounds: Rect2 = item.get_canvas_bounds()
+	var side_bounds := bounds
+	side_bounds.size.x = bounds.size.x * 0.5
+	if not is_input:
+		side_bounds.position.x += bounds.size.x * 0.5
+	return side_bounds.grow(SNAP_ZONE_GROW)

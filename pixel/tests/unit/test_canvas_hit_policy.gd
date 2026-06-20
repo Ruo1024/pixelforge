@@ -96,7 +96,7 @@ func test_canvas_left_click_on_graph_port_selects_without_dragging_card() -> voi
 	assert_false(canvas._selection.is_dragging_items)
 
 
-func test_canvas_drag_between_compatible_graph_ports_adds_edge() -> void:
+func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 	var canvas: Control = _canvas()
 	_set_graph(
 		"graph_hit", [_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")]
@@ -112,7 +112,7 @@ func test_canvas_drag_between_compatible_graph_ports_adds_edge() -> void:
 		canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
 	)
 	canvas._finish_left_interaction(
-		canvas.world_to_screen(generate.get_graph_port_anchor("items", true) + Vector2(28, 0))
+		canvas.world_to_screen(generate.get_graph_port_anchor("items", true) + Vector2(126, 28))
 	)
 
 	var graph_data := ProjectService.get_graph_data("graph_hit")
