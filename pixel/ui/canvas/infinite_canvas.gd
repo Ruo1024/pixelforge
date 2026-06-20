@@ -145,32 +145,19 @@ func _draw() -> void:
 		>= GRID_MIN_ZOOM
 	):
 		PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
-	GraphEdgeRenderer.draw(
+	GraphEdgeInteraction.draw_edges(
 		self,
+		GraphEdgeRenderer,
 		_items_by_id,
 		CanvasBatchCardScript,
 		CanvasNodeCardScript,
 		EDGE_COLOR,
-		_selected_graph_edge
+		_selected_graph_edge,
+		_graph_edge_drag,
+		_graph_edge_drag_world
 	)
 
-	for item_id in _selection.selected_ids:
-		if not _items_by_id.has(item_id):
-			continue
-		var item: Node = _items_by_id[item_id]
-		var bounds: Rect2 = item.get_canvas_bounds()
-		var screen_rect := _world_rect_to_screen(bounds)
-		draw_rect(screen_rect.grow(2.0), SELECTION_COLOR, false, 2.0)
-
-	if _selection.is_box_selecting:
-		var box: Rect2 = _selection.get_box_rect()
-		draw_rect(box, BOX_COLOR, true)
-		draw_rect(box, Color(1.0, 0.85, 0.25, 1.0), false, 1.0)
-
-	if not _graph_edge_drag.is_empty():
-		GraphEdgeInteraction.draw_preview(
-			self, GraphEdgeRenderer, _graph_edge_drag, _graph_edge_drag_world
-		)
+	SelectionSnapshot.draw_overlay(self, _items_by_id, _selection, SELECTION_COLOR, BOX_COLOR)
 
 	if tool_manager != null:
 		tool_manager.draw_overlay(self, _get_active_tool_target())
@@ -660,7 +647,14 @@ func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if not _graph_edge_drag.is_empty():
-		_graph_edge_drag_world = screen_to_world(event.position)
+		_graph_edge_drag_world = GraphEdgeInteraction.update_drag_world(
+			self,
+			_items_by_id,
+			CanvasBatchCardScript,
+			CanvasNodeCardScript,
+			_graph_edge_drag,
+			event.position
+		)
 		queue_redraw()
 		accept_event()
 	elif _is_panning:
@@ -724,9 +718,15 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
 	if not _graph_edge_drag.is_empty():
 		var start := _graph_edge_drag.duplicate(true)
 		_graph_edge_drag = {}
-		var hit := _hit_at_world(screen_to_world(screen_position))
-		if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
-			GraphEdgeInteraction.try_connect(start, hit, _emit_canvas_changed)
+		GraphEdgeInteraction.connect_at_screen(
+			self,
+			_items_by_id,
+			CanvasBatchCardScript,
+			CanvasNodeCardScript,
+			start,
+			screen_position,
+			_emit_canvas_changed
+		)
 	elif _selection.is_dragging_items:
 		_commit_drag_if_needed()
 		_selection.stop_drag()

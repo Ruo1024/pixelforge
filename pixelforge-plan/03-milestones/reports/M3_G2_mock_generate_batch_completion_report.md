@@ -9952,3 +9952,332 @@ index be5d8eb..55cee4f 100644
 
 
 ```
+
+
+## 2026-06-21 M3 UX-7a 端口连线自动吸附
+
+### 本轮实现说明
+
+- 在 `pixelforge-plan/03-milestones/M3-开发规划.md` 追加 UX-7a 小卡，记录端口连线自动吸附的服务对象、痛点、技术选择、验证入口与后续改进空间。
+- 在 `PFCanvasGraphEdgeInteraction` 内加入同 graph、反向端口、`PFGraph.can_connect()` 校验驱动的吸附候选扫描；拖线时预览线自动吸到最近兼容端口，松手时按吸附目标创建 edge。
+- 将 graph edge 绘制和拖线预览收口到 edge interaction helper，并把 selection overlay 绘制移入 `PFCanvasSelectionSnapshot`，让 `infinite_canvas.gd` 保持在 gdlint 行数软上限内。
+- 将兼容端口拖拽测试改成释放在目标端口附近但不精确压中端口，覆盖自动吸附可用闭环；不兼容端口与删除连线测试继续保留。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh` 通过。
+- `./pixel/scripts/run_tests.sh` 通过：160/160 tests passing。
+- `./pixel/scripts/verify_m3_ux7.sh` 通过。
+- `wc -l pixel/ui/canvas/infinite_canvas.gd` 为 996 行，低于当前 gdlint `max-file-lines` 1000 行门槛。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 可先点击已有连线并按 Delete/Backspace 删除一条连线，便于重新测试。
+3. 从 Object List 的 `items` 输出端拖线到 AI Generate 左侧输入点附近，故意不要精确压中圆点，松手后应自动吸附并创建连线。
+4. 从 Object List 的 `items` 输出端拖到 Mock Batch 输入端附近，松手后不应创建不兼容连线。
+5. 重新执行 `File > Run Selected Graph`，确认可连接的链路仍能生成/刷新 batch。
+
+### 本轮完整 diff
+
+以下为本轮提交前的 `git diff --cached --no-color`；报告内制表符展开为空格，便于 Markdown 记录和 whitespace gate。
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd b/pixel/tests/unit/test_canvas_hit_policy.gd
+index be91f24..cb1f0b8 100644
+--- a/pixel/tests/unit/test_canvas_hit_policy.gd
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd
+@@ -112,7 +112,7 @@ func test_canvas_drag_between_compatible_graph_ports_adds_edge() -> void:
+         canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
+     )
+     canvas._finish_left_interaction(
+-        canvas.world_to_screen(generate.get_graph_port_anchor("items", true))
++        canvas.world_to_screen(generate.get_graph_port_anchor("items", true) + Vector2(28, 0))
+     )
+
+     var graph_data := ProjectService.get_graph_data("graph_hit")
+diff --git a/pixel/ui/canvas/canvas_graph_edge_interaction.gd b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+index 2d801f5..90a634f 100644
+--- a/pixel/ui/canvas/canvas_graph_edge_interaction.gd
++++ b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+@@ -5,6 +5,7 @@ extends RefCounted
+ ## contract: 02-contracts/GRAPH-SCHEMA.md §2；连接校验只委托 PFGraph。
+
+ const GraphScript := preload("res://core/graph/pf_graph.gd")
++const SNAP_DISTANCE := 44.0
+
+
+ static func begin_drag(port_hit: Dictionary) -> Dictionary:
+@@ -63,6 +64,82 @@ static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -
+     return true
+
+
++static func connect_at_screen(
++    canvas: Control,
++    items_by_id: Dictionary,
++    batch_script: Script,
++    node_script: Script,
++    start: Dictionary,
++    screen_position: Vector2,
++    changed: Callable
++) -> bool:
++    var end := snap_target(canvas, items_by_id, batch_script, node_script, start, screen_position)
++    if end.is_empty():
++        return false
++    return try_connect(start, end, changed)
++
++
++static func update_drag_world(
++    canvas: Control,
++    items_by_id: Dictionary,
++    batch_script: Script,
++    node_script: Script,
++    drag_state: Dictionary,
++    screen_position: Vector2
++) -> Vector2:
++    var snap := snap_target(
++        canvas, items_by_id, batch_script, node_script, drag_state, screen_position
++    )
++    if snap.is_empty():
++        drag_state.erase("snap")
++        return canvas.screen_to_world(screen_position)
++    drag_state["snap"] = snap
++    return snap["anchor"]
++
++
++static func snap_target(
++    canvas: Control,
++    items_by_id: Dictionary,
++    batch_script: Script,
++    node_script: Script,
++    start: Dictionary,
++    screen_position: Vector2
++) -> Dictionary:
++    var graph_id := String(start.get("graph_id", ""))
++    if graph_id.is_empty():
++        return {}
++    var graph_data := ProjectService.get_graph_data(graph_id)
++    if graph_data.is_empty():
++        return {}
++    var graph: PFGraph = GraphScript.from_json(graph_data)
++    var target_is_input := not bool(start.get("is_input", false))
++    var best: Dictionary = {}
++    var best_distance: float = SNAP_DISTANCE + 1.0
++    for raw_item in items_by_id.values():
++        if not _is_graph_item(raw_item, batch_script, node_script):
++            continue
++        var item: Node = raw_item
++        if item.graph_id != graph_id or item.node_id.is_empty():
++            continue
++        for port_name in _port_candidates(graph, item.node_id, target_is_input):
++            var candidate := {
++                "item": item,
++                "item_id": item.item_id,
++                "port_name": String(port_name),
++                "is_input": target_is_input,
++                "port_index": -1,
++            }
++            if _resolve_endpoints(graph, start, candidate, item).is_empty():
++                continue
++            var anchor: Vector2 = item.get_graph_port_anchor(String(port_name), target_is_input)
++            var distance: float = canvas.world_to_screen(anchor).distance_to(screen_position)
++            if distance < best_distance:
++                candidate["anchor"] = anchor
++                best = candidate
++                best_distance = distance
++    return best
++
++
+ static func delete_edge(selection: Dictionary, changed: Callable) -> bool:
+     var graph_id := String(selection.get("graph_id", ""))
+     var edge: Dictionary = selection.get("edge", {})
+@@ -111,6 +188,22 @@ static func draw_preview(
+     canvas.draw_polyline(points, Color(0.72, 0.9, 0.95, 0.72), 2.0, true)
+
+
++static func draw_edges(
++    canvas: Control,
++    edge_renderer: Script,
++    items_by_id: Dictionary,
++    batch_script: Script,
++    node_script: Script,
++    color: Color,
++    selected_edge: Dictionary,
++    drag_state: Dictionary,
++    drag_world: Vector2
++) -> void:
++    edge_renderer.draw(canvas, items_by_id, batch_script, node_script, color, selected_edge)
++    if not drag_state.is_empty():
++        draw_preview(canvas, edge_renderer, drag_state, drag_world)
++
++
+ static func _resolve_endpoints(
+     graph: PFGraph, start: Dictionary, end: Dictionary, end_item: Node
+ ) -> Dictionary:
+@@ -168,3 +261,18 @@ static func _input_port_candidates(graph: PFGraph, node_id: String, port_name: S
+     for port in node.get_input_ports():
+         ports.append(String(port.get("name", "")))
+     return ports
++
++
++static func _port_candidates(graph: PFGraph, node_id: String, is_input: bool) -> Array:
++    var node := graph.get_node(node_id)
++    if node == null:
++        return []
++    var specs := node.get_input_ports() if is_input else node.get_output_ports()
++    var ports := []
++    for port in specs:
++        ports.append(String(port.get("name", "")))
++    return ports
++
++
++static func _is_graph_item(item: Variant, batch_script: Script, node_script: Script) -> bool:
++    return item is Node and (item.get_script() == batch_script or item.get_script() == node_script)
+diff --git a/pixel/ui/canvas/canvas_selection_snapshot.gd b/pixel/ui/canvas/canvas_selection_snapshot.gd
+index 7c884d8..81d8b4f 100644
+--- a/pixel/ui/canvas/canvas_selection_snapshot.gd
++++ b/pixel/ui/canvas/canvas_selection_snapshot.gd
+@@ -1,7 +1,7 @@
+ class_name PFCanvasSelectionSnapshot
+ extends RefCounted
+
+-## Small helpers for canvas selection snapshots used by undoable interactions.
++## Small helpers for canvas selection snapshots and overlays.
+
+
+ static func selected_positions(items_by_id: Dictionary, selection: Variant) -> Dictionary:
+@@ -34,3 +34,24 @@ static func ids_from_snapshots(snapshots: Array) -> Array:
+     for snapshot in snapshots:
+         ids.append(String(snapshot["data"]["id"]))
+     return ids
++
++
++static func draw_overlay(
++    canvas: Variant,
++    items_by_id: Dictionary,
++    selection: Variant,
++    selection_color: Color,
++    box_color: Color
++) -> void:
++    for item_id in selection.selected_ids:
++        if not items_by_id.has(item_id):
++            continue
++        var item: Node = items_by_id[item_id]
++        var bounds: Rect2 = item.get_canvas_bounds()
++        var screen_rect: Rect2 = canvas._world_rect_to_screen(bounds)
++        canvas.draw_rect(screen_rect.grow(2.0), selection_color, false, 2.0)
++
++    if selection.is_box_selecting:
++        var box: Rect2 = selection.get_box_rect()
++        canvas.draw_rect(box, box_color, true)
++        canvas.draw_rect(box, Color(1.0, 0.85, 0.25, 1.0), false, 1.0)
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 55cee4f..540a327 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -145,32 +145,19 @@ func _draw() -> void:
+         >= GRID_MIN_ZOOM
+     ):
+         PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+-    GraphEdgeRenderer.draw(
++    GraphEdgeInteraction.draw_edges(
+         self,
++        GraphEdgeRenderer,
+         _items_by_id,
+         CanvasBatchCardScript,
+         CanvasNodeCardScript,
+         EDGE_COLOR,
+-        _selected_graph_edge
++        _selected_graph_edge,
++        _graph_edge_drag,
++        _graph_edge_drag_world
+     )
+
+-    for item_id in _selection.selected_ids:
+-        if not _items_by_id.has(item_id):
+-            continue
+-        var item: Node = _items_by_id[item_id]
+-        var bounds: Rect2 = item.get_canvas_bounds()
+-        var screen_rect := _world_rect_to_screen(bounds)
+-        draw_rect(screen_rect.grow(2.0), SELECTION_COLOR, false, 2.0)
+-
+-    if _selection.is_box_selecting:
+-        var box: Rect2 = _selection.get_box_rect()
+-        draw_rect(box, BOX_COLOR, true)
+-        draw_rect(box, Color(1.0, 0.85, 0.25, 1.0), false, 1.0)
+-
+-    if not _graph_edge_drag.is_empty():
+-        GraphEdgeInteraction.draw_preview(
+-            self, GraphEdgeRenderer, _graph_edge_drag, _graph_edge_drag_world
+-        )
++    SelectionSnapshot.draw_overlay(self, _items_by_id, _selection, SELECTION_COLOR, BOX_COLOR)
+
+     if tool_manager != null:
+         tool_manager.draw_overlay(self, _get_active_tool_target())
+@@ -660,7 +647,14 @@ func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:
+
+ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
+     if not _graph_edge_drag.is_empty():
+-        _graph_edge_drag_world = screen_to_world(event.position)
++        _graph_edge_drag_world = GraphEdgeInteraction.update_drag_world(
++            self,
++            _items_by_id,
++            CanvasBatchCardScript,
++            CanvasNodeCardScript,
++            _graph_edge_drag,
++            event.position
++        )
+         queue_redraw()
+         accept_event()
+     elif _is_panning:
+@@ -724,9 +718,15 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
+     if not _graph_edge_drag.is_empty():
+         var start := _graph_edge_drag.duplicate(true)
+         _graph_edge_drag = {}
+-        var hit := _hit_at_world(screen_to_world(screen_position))
+-        if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
+-            GraphEdgeInteraction.try_connect(start, hit, _emit_canvas_changed)
++        GraphEdgeInteraction.connect_at_screen(
++            self,
++            _items_by_id,
++            CanvasBatchCardScript,
++            CanvasNodeCardScript,
++            start,
++            screen_position,
++            _emit_canvas_changed
++        )
+     elif _selection.is_dragging_items:
+         _commit_drag_if_needed()
+         _selection.stop_drag()
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index e904876..e4eeada 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -304,6 +304,26 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ - 增加 hit debug 开关（可后续落地）。
+ - 端口命中优先于框选，缩略图点击不误触拖卡。
+
++### UX-7a 端口连线自动吸附
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 在节点之间频繁连线、但不想精确瞄准小端口的人 |
++| 当前痛点 | 端口点面积小，拖线时每次都要精准对准圆点，鼠标/触控板操作容易漏连 |
++| 技术选择 | Graph edge drag 期间扫描同一 graph 内的兼容反向端口，在阈值内自动吸附到端口锚点；松手时按吸附目标连接 |
++| 选择原因 | 自动吸附比继续放大端口更不破坏视觉密度，也能保留 `PFGraph.can_connect()` 的单点校验 |
++| 优势 | 降低连线瞄准成本，保留类型不兼容时不误连 |
++| 缺陷 | 阈值需要实机反馈；节点密集时可能需要候选高亮或可调参数 |
++| 改进空间 | 候选端口高亮、吸附半径偏好设置、冲突候选切换、连线失败提示 |
++| 验证入口 | 从 Object List 输出拖到 AI Generate 输入附近但不压中端口，松手仍连接；拖到不兼容 batch 输入附近不连接 |
++
++任务：
++
++- 吸附只在同一 graph 的反向端口中查找。
++- 候选必须通过 `PFGraph.can_connect()`，UI 不复制连接规则。
++- 预览线吸附到真实端口锚点，松手可直接创建 edge。
++- 不兼容端口、同向端口、跨 graph 端口不吸附不连接。
++
+ ---
+
+ ## 7. 技术骨架卡
+```

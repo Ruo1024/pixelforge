@@ -5,6 +5,7 @@ extends RefCounted
 ## contract: 02-contracts/GRAPH-SCHEMA.md §2；连接校验只委托 PFGraph。
 
 const GraphScript := preload("res://core/graph/pf_graph.gd")
+const SNAP_DISTANCE := 44.0
 
 
 static func begin_drag(port_hit: Dictionary) -> Dictionary:
@@ -63,6 +64,82 @@ static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -
 	return true
 
 
+static func connect_at_screen(
+	canvas: Control,
+	items_by_id: Dictionary,
+	batch_script: Script,
+	node_script: Script,
+	start: Dictionary,
+	screen_position: Vector2,
+	changed: Callable
+) -> bool:
+	var end := snap_target(canvas, items_by_id, batch_script, node_script, start, screen_position)
+	if end.is_empty():
+		return false
+	return try_connect(start, end, changed)
+
+
+static func update_drag_world(
+	canvas: Control,
+	items_by_id: Dictionary,
+	batch_script: Script,
+	node_script: Script,
+	drag_state: Dictionary,
+	screen_position: Vector2
+) -> Vector2:
+	var snap := snap_target(
+		canvas, items_by_id, batch_script, node_script, drag_state, screen_position
+	)
+	if snap.is_empty():
+		drag_state.erase("snap")
+		return canvas.screen_to_world(screen_position)
+	drag_state["snap"] = snap
+	return snap["anchor"]
+
+
+static func snap_target(
+	canvas: Control,
+	items_by_id: Dictionary,
+	batch_script: Script,
+	node_script: Script,
+	start: Dictionary,
+	screen_position: Vector2
+) -> Dictionary:
+	var graph_id := String(start.get("graph_id", ""))
+	if graph_id.is_empty():
+		return {}
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	if graph_data.is_empty():
+		return {}
+	var graph: PFGraph = GraphScript.from_json(graph_data)
+	var target_is_input := not bool(start.get("is_input", false))
+	var best: Dictionary = {}
+	var best_distance: float = SNAP_DISTANCE + 1.0
+	for raw_item in items_by_id.values():
+		if not _is_graph_item(raw_item, batch_script, node_script):
+			continue
+		var item: Node = raw_item
+		if item.graph_id != graph_id or item.node_id.is_empty():
+			continue
+		for port_name in _port_candidates(graph, item.node_id, target_is_input):
+			var candidate := {
+				"item": item,
+				"item_id": item.item_id,
+				"port_name": String(port_name),
+				"is_input": target_is_input,
+				"port_index": -1,
+			}
+			if _resolve_endpoints(graph, start, candidate, item).is_empty():
+				continue
+			var anchor: Vector2 = item.get_graph_port_anchor(String(port_name), target_is_input)
+			var distance: float = canvas.world_to_screen(anchor).distance_to(screen_position)
+			if distance < best_distance:
+				candidate["anchor"] = anchor
+				best = candidate
+				best_distance = distance
+	return best
+
+
 static func delete_edge(selection: Dictionary, changed: Callable) -> bool:
 	var graph_id := String(selection.get("graph_id", ""))
 	var edge: Dictionary = selection.get("edge", {})
@@ -109,6 +186,22 @@ static func draw_preview(
 		var t := float(index) / 16.0
 		points.append(edge_renderer._cubic_bezier(start, control_a, control_b, end, t))
 	canvas.draw_polyline(points, Color(0.72, 0.9, 0.95, 0.72), 2.0, true)
+
+
+static func draw_edges(
+	canvas: Control,
+	edge_renderer: Script,
+	items_by_id: Dictionary,
+	batch_script: Script,
+	node_script: Script,
+	color: Color,
+	selected_edge: Dictionary,
+	drag_state: Dictionary,
+	drag_world: Vector2
+) -> void:
+	edge_renderer.draw(canvas, items_by_id, batch_script, node_script, color, selected_edge)
+	if not drag_state.is_empty():
+		draw_preview(canvas, edge_renderer, drag_state, drag_world)
 
 
 static func _resolve_endpoints(
@@ -168,3 +261,18 @@ static func _input_port_candidates(graph: PFGraph, node_id: String, port_name: S
 	for port in node.get_input_ports():
 		ports.append(String(port.get("name", "")))
 	return ports
+
+
+static func _port_candidates(graph: PFGraph, node_id: String, is_input: bool) -> Array:
+	var node := graph.get_node(node_id)
+	if node == null:
+		return []
+	var specs := node.get_input_ports() if is_input else node.get_output_ports()
+	var ports := []
+	for port in specs:
+		ports.append(String(port.get("name", "")))
+	return ports
+
+
+static func _is_graph_item(item: Variant, batch_script: Script, node_script: Script) -> bool:
+	return item is Node and (item.get_script() == batch_script or item.get_script() == node_script)

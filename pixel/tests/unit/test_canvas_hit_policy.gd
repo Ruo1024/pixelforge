@@ -112,7 +112,7 @@ func test_canvas_drag_between_compatible_graph_ports_adds_edge() -> void:
 		canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
 	)
 	canvas._finish_left_interaction(
-		canvas.world_to_screen(generate.get_graph_port_anchor("items", true))
+		canvas.world_to_screen(generate.get_graph_port_anchor("items", true) + Vector2(28, 0))
 	)
 
 	var graph_data := ProjectService.get_graph_data("graph_hit")
