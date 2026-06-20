@@ -107,13 +107,18 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 	var generate: Node = canvas._add_node_direct(
 		_node_item("generate_item", "graph_hit", "generate", Vector2(380, 100))
 	)
+	var target_anchor: Vector2 = generate.get_graph_port_anchor("items", true)
+	var hot_zone_world := target_anchor + Vector2(126, 28)
 
 	canvas._begin_left_interaction(
 		canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
 	)
-	canvas._finish_left_interaction(
-		canvas.world_to_screen(generate.get_graph_port_anchor("items", true) + Vector2(126, 28))
-	)
+	canvas._handle_mouse_motion(_mouse_motion_event(canvas.world_to_screen(hot_zone_world)))
+
+	assert_eq(canvas._graph_edge_drag_world, hot_zone_world)
+	assert_gt(canvas._graph_edge_drag_world.distance_to(target_anchor), 100.0)
+
+	canvas._finish_left_interaction(canvas.world_to_screen(hot_zone_world))
 
 	var graph_data := ProjectService.get_graph_data("graph_hit")
 	assert_eq(
@@ -252,4 +257,10 @@ func _delete_key_event() -> InputEventKey:
 	var event := InputEventKey.new()
 	event.keycode = KEY_DELETE
 	event.pressed = true
+	return event
+
+
+func _mouse_motion_event(position: Vector2) -> InputEventMouseMotion:
+	var event := InputEventMouseMotion.new()
+	event.position = position
 	return event

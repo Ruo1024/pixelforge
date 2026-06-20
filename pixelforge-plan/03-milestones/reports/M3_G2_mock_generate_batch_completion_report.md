@@ -10410,3 +10410,148 @@ index e4eeada..462a4a0 100644
 
  ---
 ```
+
+## 2026-06-21 M3 UX-7a 松开后吸附判定
+
+### 本轮实现说明
+
+- 将 graph port 拖线预览改为始终跟随鼠标当前位置，不再在进入热区时提前吸附到端口锚点。
+- 保留半卡片热区策略，但只在松开鼠标左键后调用 `connect_at_screen()` 扫描兼容端口并连接。
+- `PFCanvasGraphEdgeInteraction.update_drag_world()` 简化为屏幕坐标到世界坐标转换；吸附判定继续集中在 `snap_target()`，并继续委托 `PFGraph.can_connect()` 做连接规则校验。
+- 更新 UX-7a 规划卡，明确“拖动中跟手、松开后判定吸附”的交互口径。
+- 扩展 hit policy 单测：鼠标移动到热区时断言 `_graph_edge_drag_world` 仍是鼠标落点，且离目标端口锚点超过 100px；随后松开仍能创建兼容 edge。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh` 通过。
+- `./pixel/scripts/run_tests.sh` 通过：160/160 tests passing，1260 asserts。
+- `./pixel/scripts/verify_m3_ux7.sh` 通过。
+- `wc -l pixel/ui/canvas/infinite_canvas.gd` 为 989 行，低于当前 gdlint `max-file-lines` 1000 行门槛。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 点击已有连线并按 Delete/Backspace 删除一条连线，便于重新测试。
+3. 从 Object List 的 `items` 输出端拖到 AI Generate 输入侧半张卡片热区内，拖动过程中线尾应持续跟随鼠标，不应提前吸到端口圆点。
+4. 保持鼠标在热区内松开左键，此时应吸附到 AI Generate 输入端口并创建连线。
+5. 从 Object List 的 `items` 输出端拖到 Mock Batch 输入侧热区内并松开，不应创建不兼容连线。
+6. 执行 `File > Run Selected Graph`，确认连好的链路仍能刷新 batch。
+
+### 本轮完整 diff
+
+以下为本轮提交前的 `git diff --cached --no-color`；报告内制表符展开为空格，便于 Markdown 记录和 whitespace gate。
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd b/pixel/tests/unit/test_canvas_hit_policy.gd
+index c0efff8..62b2cd2 100644
+--- a/pixel/tests/unit/test_canvas_hit_policy.gd
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd
+@@ -107,13 +107,18 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
+    var generate: Node = canvas._add_node_direct(
+        _node_item("generate_item", "graph_hit", "generate", Vector2(380, 100))
+    )
++    var target_anchor: Vector2 = generate.get_graph_port_anchor("items", true)
++    var hot_zone_world := target_anchor + Vector2(126, 28)
+
+    canvas._begin_left_interaction(
+        canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
+    )
+-    canvas._finish_left_interaction(
+-        canvas.world_to_screen(generate.get_graph_port_anchor("items", true) + Vector2(126, 28))
+-    )
++    canvas._handle_mouse_motion(_mouse_motion_event(canvas.world_to_screen(hot_zone_world)))
++
++    assert_eq(canvas._graph_edge_drag_world, hot_zone_world)
++    assert_gt(canvas._graph_edge_drag_world.distance_to(target_anchor), 100.0)
++
++    canvas._finish_left_interaction(canvas.world_to_screen(hot_zone_world))
+
+    var graph_data := ProjectService.get_graph_data("graph_hit")
+    assert_eq(
+@@ -253,3 +258,9 @@ func _delete_key_event() -> InputEventKey:
+    event.keycode = KEY_DELETE
+    event.pressed = true
+    return event
++
++
++func _mouse_motion_event(position: Vector2) -> InputEventMouseMotion:
++    var event := InputEventMouseMotion.new()
++    event.position = position
++    return event
+diff --git a/pixel/ui/canvas/canvas_graph_edge_interaction.gd b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+index 9a356c1..89108fa 100644
+--- a/pixel/ui/canvas/canvas_graph_edge_interaction.gd
++++ b/pixel/ui/canvas/canvas_graph_edge_interaction.gd
+@@ -79,22 +79,8 @@ static func connect_at_screen(
+    return try_connect(start, end, changed)
+
+
+-static func update_drag_world(
+-    canvas: Control,
+-    items_by_id: Dictionary,
+-    batch_script: Script,
+-    node_script: Script,
+-    drag_state: Dictionary,
+-    screen_position: Vector2
+-) -> Vector2:
+-    var snap := snap_target(
+-        canvas, items_by_id, batch_script, node_script, drag_state, screen_position
+-    )
+-    if snap.is_empty():
+-        drag_state.erase("snap")
+-        return canvas.screen_to_world(screen_position)
+-    drag_state["snap"] = snap
+-    return snap["anchor"]
++static func update_drag_world(canvas: Control, screen_position: Vector2) -> Vector2:
++    return canvas.screen_to_world(screen_position)
+
+
+ static func snap_target(
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 540a327..9751f92 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -647,14 +647,7 @@ func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:
+
+ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
+    if not _graph_edge_drag.is_empty():
+-        _graph_edge_drag_world = GraphEdgeInteraction.update_drag_world(
+-            self,
+-            _items_by_id,
+-            CanvasBatchCardScript,
+-            CanvasNodeCardScript,
+-            _graph_edge_drag,
+-            event.position
+-        )
++        _graph_edge_drag_world = GraphEdgeInteraction.update_drag_world(self, event.position)
+        queue_redraw()
+        accept_event()
+    elif _is_panning:
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index 462a4a0..02b08b7 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -310,18 +310,18 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ |---|---|
+ | 服务对象 | 在节点之间频繁连线、但不想精确瞄准小端口的人 |
+ | 当前痛点 | 端口点面积小，拖线时每次都要精准对准圆点，鼠标/触控板操作容易漏连 |
+-| 技术选择 | Graph edge drag 期间扫描同一 graph 内的兼容反向端口，鼠标进入目标端口侧半张卡片并略外扩的热区后自动吸附到端口锚点；松手时按吸附目标连接 |
+-| 选择原因 | 半卡片热区比小圆形阈值更省瞄准精力，又比全局大半径更不容易在密集节点里误吸；同时保留 `PFGraph.can_connect()` 的单点校验 |
++| 技术选择 | Graph edge drag 期间预览线保持跟手；松开鼠标左键后扫描同一 graph 内兼容反向端口，若落点在目标端口侧半张卡片并略外扩的热区内，再吸附到端口锚点并连接 |
++| 选择原因 | 松手后判定比靠近即吸附更不打断拖线手感；半卡片热区比小圆形阈值更省瞄准精力，又比全局大半径更不容易在密集节点里误吸；同时保留 `PFGraph.can_connect()` 的单点校验 |
+ | 优势 | 降低连线瞄准成本，保留类型不兼容时不误连 |
+ | 缺陷 | 半卡片外扩范围需要实机反馈；节点密集时可能需要候选高亮或可调参数 |
+ | 改进空间 | 候选端口高亮、吸附半径偏好设置、冲突候选切换、连线失败提示 |
+-| 验证入口 | 从 Object List 输出拖到 AI Generate 输入侧半张卡片范围内但不压中端口，松手仍连接；拖到不兼容 batch 输入附近不连接 |
++| 验证入口 | 从 Object List 输出拖到 AI Generate 输入侧半张卡片范围内但不压中端口，拖动中线尾保持跟手，松开后才吸附并连接；拖到不兼容 batch 输入附近不连接 |
+
+ 任务：
+
+ - 吸附只在同一 graph 的反向端口中查找。
+ - 候选必须通过 `PFGraph.can_connect()`，UI 不复制连接规则。
+-- 预览线进入目标端口侧半卡片热区后吸附到真实端口锚点，松手可直接创建 edge。
++- 预览线拖动中保持跟手；松开鼠标左键后若落点在目标端口侧半卡片热区内，再吸附到真实端口锚点并创建 edge。
+ - 不兼容端口、同向端口、跨 graph 端口不吸附不连接。
+
+ ---
+```

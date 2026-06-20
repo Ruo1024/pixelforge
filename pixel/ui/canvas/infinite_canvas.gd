@@ -647,14 +647,7 @@ func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if not _graph_edge_drag.is_empty():
-		_graph_edge_drag_world = GraphEdgeInteraction.update_drag_world(
-			self,
-			_items_by_id,
-			CanvasBatchCardScript,
-			CanvasNodeCardScript,
-			_graph_edge_drag,
-			event.position
-		)
+		_graph_edge_drag_world = GraphEdgeInteraction.update_drag_world(self, event.position)
 		queue_redraw()
 		accept_event()
 	elif _is_panning:

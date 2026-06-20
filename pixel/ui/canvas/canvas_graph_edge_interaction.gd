@@ -79,22 +79,8 @@ static func connect_at_screen(
 	return try_connect(start, end, changed)
 
 
-static func update_drag_world(
-	canvas: Control,
-	items_by_id: Dictionary,
-	batch_script: Script,
-	node_script: Script,
-	drag_state: Dictionary,
-	screen_position: Vector2
-) -> Vector2:
-	var snap := snap_target(
-		canvas, items_by_id, batch_script, node_script, drag_state, screen_position
-	)
-	if snap.is_empty():
-		drag_state.erase("snap")
-		return canvas.screen_to_world(screen_position)
-	drag_state["snap"] = snap
-	return snap["anchor"]
+static func update_drag_world(canvas: Control, screen_position: Vector2) -> Vector2:
+	return canvas.screen_to_world(screen_position)
 
 
 static func snap_target(
