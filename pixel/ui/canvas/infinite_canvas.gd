@@ -295,13 +295,17 @@ func delete_selected(record_undo: bool = true) -> void:
 	if snapshots.is_empty():
 		return
 
+	var graph_snapshots := GraphItemBridge.graph_deletion_snapshots_for_canvas_snapshots(snapshots)
+
 	var do_delete := func() -> void:
+		GraphItemBridge.apply_graph_deletion_snapshots(graph_snapshots, "after")
 		for snapshot in snapshots:
 			_remove_item_direct(String(snapshot["data"]["id"]))
 		_clear_selection()
 		_emit_canvas_changed()
 
 	var undo_delete := func() -> void:
+		GraphItemBridge.apply_graph_deletion_snapshots(graph_snapshots, "before")
 		for snapshot in snapshots:
 			var data: Dictionary = snapshot["data"]
 			if String(data.get("type", "")) == "sprite":

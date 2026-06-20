@@ -171,6 +171,33 @@ func test_canvas_delete_key_removes_selected_graph_edge() -> void:
 	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [edge])
 
 
+func test_canvas_deleting_graph_node_removes_incident_edges_and_undo_restores() -> void:
+	var canvas: Control = _canvas()
+	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
+	_set_graph(
+		"graph_hit",
+		[_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")],
+		[edge]
+	)
+	canvas._add_node_direct(_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100)))
+	canvas._add_node_direct(_node_item("generate_item", "graph_hit", "generate", Vector2(380, 100)))
+
+	canvas._select_only(["objects_item"])
+	canvas.delete_selected(true)
+
+	var graph_data := ProjectService.get_graph_data("graph_hit")
+	assert_eq(_graph_node_ids(graph_data), ["generate"])
+	assert_eq(graph_data.get("edges", []), [])
+	assert_false(canvas._items_by_id.has("objects_item"))
+
+	UndoService.undo()
+
+	graph_data = ProjectService.get_graph_data("graph_hit")
+	assert_eq(_graph_node_ids(graph_data), ["objects", "generate"])
+	assert_eq(graph_data.get("edges", []), [edge])
+	assert_true(canvas._items_by_id.has("objects_item"))
+
+
 func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]
@@ -245,6 +272,15 @@ func _node_item(
 		"z_index": 0,
 		"locked": false,
 	}
+
+
+func _graph_node_ids(graph_data: Dictionary) -> Array:
+	var result := []
+	for raw_node in graph_data.get("nodes", []):
+		if raw_node is Dictionary:
+			var node_data: Dictionary = raw_node
+			result.append(String(node_data.get("id", "")))
+	return result
 
 
 func _image(color: Color) -> Image:

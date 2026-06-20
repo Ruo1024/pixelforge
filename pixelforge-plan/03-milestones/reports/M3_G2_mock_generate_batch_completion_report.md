@@ -10411,6 +10411,213 @@ index e4eeada..462a4a0 100644
  ---
 ```
 
+## 2026-06-21 M3 UX-7b 删除节点同步清理连线
+
+### 本轮实现说明
+
+- 在 `M3-开发规划.md` 追加 UX-7b 小卡，明确删除 graph 节点时必须同步清理关联连线，避免 graph 中残留不可见悬空 edge。
+- 在 `PFCanvasGraphItemBridge` 增加 graph 删除快照：从 canvas 删除快照中收集 `graph_id/node_id`，通过 `PFGraph.remove_node()` 删除逻辑节点，并复用 core 层的 incident edge 清理。
+- 在 `PFInfiniteCanvas.delete_selected()` 中把 graph 数据快照纳入同一个 Undo 动作：do 阶段应用删除后的 graph，undo 阶段先恢复 graph，再恢复 canvas item。
+- 新增单测覆盖删除 Object List 节点时关联 edge 消失，Undo 后 graph nodes、edge 和 canvas item 同时恢复。
+
+### 验证结果
+
+- `./pixel/scripts/lint.sh` 通过。
+- `./pixel/scripts/run_tests.sh` 通过：161/161 tests passing，1266 asserts。
+- `./pixel/scripts/verify_m3_ux7.sh` 通过。
+- `wc -l pixel/ui/canvas/infinite_canvas.gd` 为 993 行，低于当前 gdlint `max-file-lines` 1000 行门槛。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 确认 Object List / Size Spec / AI Generate / Mock Batch 节点链可见且有连线。
+3. 点击选中 Object List 节点，按 Delete/Backspace 删除。
+4. 预期：Object List 节点消失，与它相连的线也消失；其他节点仍留在画布上。
+5. 按 Undo，预期：Object List 节点和原连线同时恢复。
+6. 选中恢复后的链路任一节点，执行 `File > Run Selected Graph`，确认剩余 graph 数据没有悬空边导致异常。
+
+### 本轮完整 diff
+
+以下为本轮提交前的 `git diff --cached --no-color`；报告内制表符展开为空格，便于 Markdown 记录和 whitespace gate。
+
+```diff
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd b/pixel/tests/unit/test_canvas_hit_policy.gd
+index 62b2cd2..bdcda22 100644
+--- a/pixel/tests/unit/test_canvas_hit_policy.gd
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd
+@@ -171,6 +171,33 @@ func test_canvas_delete_key_removes_selected_graph_edge() -> void:
+    assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [edge])
+
+
++func test_canvas_deleting_graph_node_removes_incident_edges_and_undo_restores() -> void:
++    var canvas: Control = _canvas()
++    var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
++    _set_graph(
++        "graph_hit",
++        [_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")],
++        [edge]
++    )
++    canvas._add_node_direct(_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100)))
++    canvas._add_node_direct(_node_item("generate_item", "graph_hit", "generate", Vector2(380, 100)))
++
++    canvas._select_only(["objects_item"])
++    canvas.delete_selected(true)
++
++    var graph_data := ProjectService.get_graph_data("graph_hit")
++    assert_eq(_graph_node_ids(graph_data), ["generate"])
++    assert_eq(graph_data.get("edges", []), [])
++    assert_false(canvas._items_by_id.has("objects_item"))
++
++    UndoService.undo()
++
++    graph_data = ProjectService.get_graph_data("graph_hit")
++    assert_eq(_graph_node_ids(graph_data), ["objects", "generate"])
++    assert_eq(graph_data.get("edges", []), [edge])
++    assert_true(canvas._items_by_id.has("objects_item"))
++
++
+ func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
+    var canvas: Control = _canvas()
+    var ids := [_register_asset(Color.RED, "red")]
+@@ -247,6 +274,15 @@ func _node_item(
+    }
+
+
++func _graph_node_ids(graph_data: Dictionary) -> Array:
++    var result := []
++    for raw_node in graph_data.get("nodes", []):
++        if raw_node is Dictionary:
++            var node_data: Dictionary = raw_node
++            result.append(String(node_data.get("id", "")))
++    return result
++
++
+ func _image(color: Color) -> Image:
+    var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+    image.fill(color)
+diff --git a/pixel/ui/canvas/canvas_graph_item_bridge.gd b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+index cca71d2..a27a490 100644
+--- a/pixel/ui/canvas/canvas_graph_item_bridge.gd
++++ b/pixel/ui/canvas/canvas_graph_item_bridge.gd
+@@ -5,6 +5,7 @@ extends RefCounted
+ ## contract: 02-contracts/PROJECT-FORMAT.md §4；canvas 只存 node 引用，batch 队列回写 graph params。
+
+ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
++const GraphScript := preload("res://core/graph/pf_graph.gd")
+
+
+ static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
+@@ -25,6 +26,32 @@ static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
+    return false
+
+
++static func graph_deletion_snapshots_for_canvas_snapshots(canvas_snapshots: Array) -> Dictionary:
++    var graph_node_ids := _graph_node_ids_by_graph(canvas_snapshots)
++    var result := {}
++    for graph_id in graph_node_ids.keys():
++        var before := ProjectService.get_graph_data(String(graph_id))
++        if before.is_empty():
++            continue
++        var graph: PFGraph = GraphScript.from_json(before)
++        var changed := false
++        for node_id in graph_node_ids[graph_id]:
++            changed = graph.remove_node(String(node_id)) or changed
++        if changed:
++            result[String(graph_id)] = {"before": before, "after": graph.to_json()}
++    return result
++
++
++static func apply_graph_deletion_snapshots(
++    graph_snapshots: Dictionary, version_key: String
++) -> void:
++    for graph_id in graph_snapshots.keys():
++        var versions: Dictionary = graph_snapshots[graph_id]
++        if not versions.has(version_key):
++            continue
++        ProjectService.set_graph_data(String(graph_id), Dictionary(versions[version_key]))
++
++
+ static func apply_batch_asset_ids(item: Node, asset_ids: Array, asset_library: Node) -> void:
+    for asset_id in item.asset_ids:
+        asset_library.release_ref(asset_id)
+@@ -260,3 +287,22 @@ static func _compare_mode(value: Variant, compare_asset_ids: Array) -> String:
+            CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
+                return String(value)
+    return CanvasBatchCardScript.COMPARE_CURRENT
++
++
++static func _graph_node_ids_by_graph(canvas_snapshots: Array) -> Dictionary:
++    var result := {}
++    for raw_snapshot in canvas_snapshots:
++        if not (raw_snapshot is Dictionary):
++            continue
++        var snapshot: Dictionary = raw_snapshot
++        var data: Dictionary = snapshot.get("data", {})
++        if String(data.get("type", "")) != "node":
++            continue
++        var graph_id := String(data.get("graph_id", ""))
++        var node_id := String(data.get("node_id", ""))
++        if graph_id.is_empty() or node_id.is_empty():
++            continue
++        if not result.has(graph_id):
++            result[graph_id] = []
++        result[graph_id].append(node_id)
++    return result
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 9751f92..63d0243 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -295,13 +295,17 @@ func delete_selected(record_undo: bool = true) -> void:
+    if snapshots.is_empty():
+        return
+
++    var graph_snapshots := GraphItemBridge.graph_deletion_snapshots_for_canvas_snapshots(snapshots)
++
+    var do_delete := func() -> void:
++        GraphItemBridge.apply_graph_deletion_snapshots(graph_snapshots, "after")
+        for snapshot in snapshots:
+            _remove_item_direct(String(snapshot["data"]["id"]))
+        _clear_selection()
+        _emit_canvas_changed()
+
+    var undo_delete := func() -> void:
++        GraphItemBridge.apply_graph_deletion_snapshots(graph_snapshots, "before")
+        for snapshot in snapshots:
+            var data: Dictionary = snapshot["data"]
+            if String(data.get("type", "")) == "sprite":
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index 02b08b7..5e8d7f6 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -324,6 +324,26 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ - 预览线拖动中保持跟手；松开鼠标左键后若落点在目标端口侧半卡片热区内，再吸附到真实端口锚点并创建 edge。
+ - 不兼容端口、同向端口、跨 graph 端口不吸附不连接。
+
++### UX-7b 删除节点同步清理连线
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 在画布上试错搭节点链、删除不需要节点的人 |
++| 当前痛点 | 删除有连线的节点时，如果 graph 里残留悬空 edge，后续保存/重跑会出现不可见脏状态 |
++| 技术选择 | Canvas 删除选中 graph node/batch 视图时，同步从对应 graph 删除逻辑 node；关联 edge 由 `PFGraph.remove_node()` 单点清理 |
++| 选择原因 | 删除节点是基础编辑动作，必须和 graph 数据保持一致；复用 graph core 可避免 UI 重写边过滤规则 |
++| 优势 | 删除节点后不留下悬空连线，Undo 可同时恢复 canvas 视图和 graph 结构 |
++| 缺陷 | M3 仍未做删除确认、批量删除提示和依赖影响预览 |
++| 改进空间 | 删除前高亮受影响 edge、批量删除确认、错误提示、graph 结构 inspector |
++| 验证入口 | 生成 mock 链后删除 Object List 节点，关联连线消失；Undo 后节点和连线同时恢复 |
++
++任务：
++
++- 删除选中 graph 节点视图时同步删除 graph node。
++- 删除 graph node 必须通过 `PFGraph.remove_node()` 清理关联 edge。
++- Undo/Redo 需恢复 graph 数据和 canvas 视图一致性。
++- 非 graph sprite / 旧 batch_card 删除路径不受影响。
++
+ ---
+
+ ## 7. 技术骨架卡
+```
+
 ## 2026-06-21 M3 UX-7a 松开后吸附判定
 
 ### 本轮实现说明

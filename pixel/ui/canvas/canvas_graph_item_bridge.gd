@@ -5,6 +5,7 @@ extends RefCounted
 ## contract: 02-contracts/PROJECT-FORMAT.md §4；canvas 只存 node 引用，batch 队列回写 graph params。
 
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+const GraphScript := preload("res://core/graph/pf_graph.gd")
 
 
 static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
@@ -23,6 +24,32 @@ static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
 		if String(node_data.get("id", "")) == node_id:
 			return String(node_data.get("type", "")) == "batch"
 	return false
+
+
+static func graph_deletion_snapshots_for_canvas_snapshots(canvas_snapshots: Array) -> Dictionary:
+	var graph_node_ids := _graph_node_ids_by_graph(canvas_snapshots)
+	var result := {}
+	for graph_id in graph_node_ids.keys():
+		var before := ProjectService.get_graph_data(String(graph_id))
+		if before.is_empty():
+			continue
+		var graph: PFGraph = GraphScript.from_json(before)
+		var changed := false
+		for node_id in graph_node_ids[graph_id]:
+			changed = graph.remove_node(String(node_id)) or changed
+		if changed:
+			result[String(graph_id)] = {"before": before, "after": graph.to_json()}
+	return result
+
+
+static func apply_graph_deletion_snapshots(
+	graph_snapshots: Dictionary, version_key: String
+) -> void:
+	for graph_id in graph_snapshots.keys():
+		var versions: Dictionary = graph_snapshots[graph_id]
+		if not versions.has(version_key):
+			continue
+		ProjectService.set_graph_data(String(graph_id), Dictionary(versions[version_key]))
 
 
 static func apply_batch_asset_ids(item: Node, asset_ids: Array, asset_library: Node) -> void:
@@ -260,3 +287,22 @@ static func _compare_mode(value: Variant, compare_asset_ids: Array) -> String:
 			CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
 				return String(value)
 	return CanvasBatchCardScript.COMPARE_CURRENT
+
+
+static func _graph_node_ids_by_graph(canvas_snapshots: Array) -> Dictionary:
+	var result := {}
+	for raw_snapshot in canvas_snapshots:
+		if not (raw_snapshot is Dictionary):
+			continue
+		var snapshot: Dictionary = raw_snapshot
+		var data: Dictionary = snapshot.get("data", {})
+		if String(data.get("type", "")) != "node":
+			continue
+		var graph_id := String(data.get("graph_id", ""))
+		var node_id := String(data.get("node_id", ""))
+		if graph_id.is_empty() or node_id.is_empty():
+			continue
+		if not result.has(graph_id):
+			result[graph_id] = []
+		result[graph_id].append(node_id)
+	return result
