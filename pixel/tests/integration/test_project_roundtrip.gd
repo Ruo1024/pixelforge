@@ -56,6 +56,68 @@ func test_project_save_open_roundtrip_matches_manifest_canvas_and_assets() -> vo
 		assert_not_null(asset_library.get_image(asset_id))
 
 
+func test_project_graphs_survive_zip_roundtrip() -> void:
+	var project_service := get_tree().root.get_node("ProjectService")
+	var graph_data := {
+		"graph_version": 1,
+		"id": "graph_main",
+		"name": "M3 Foundation",
+		"nodes":
+		[
+			{
+				"id": "batch_1",
+				"type": "batch",
+				"position": [32, 64],
+				"params": {"asset_ids": ["asset-a", "asset-b"], "label": "Candidates"},
+			},
+		],
+		"edges": [],
+	}
+	var canvas_data := {
+		"camera": {"center": [0, 0], "zoom": 1.0},
+		"items":
+		[
+			{
+				"id": "node_item_1",
+				"type": "node",
+				"node_id": "batch_1",
+				"graph_id": "graph_main",
+				"position": [32, 64],
+				"z_index": 2,
+				"collapsed": false,
+			},
+		],
+	}
+
+	project_service.set_graph_data("graph_main", graph_data)
+	project_service.set_canvas_data(canvas_data)
+
+	var path := "user://tests/graph_roundtrip_m3.pxproj"
+	assert_eq(project_service.save_project(path), OK)
+
+	var unpacked: Dictionary = FileIOScript.zip_unpack(path)
+	assert_true(unpacked["ok"])
+	assert_true(unpacked["files"].has("graphs/graph_main.json"))
+
+	var manifest: Dictionary = FileIOScript.bytes_to_json(unpacked["files"]["manifest.json"])
+	assert_eq(manifest["entries"]["graphs"], ["graph_main"])
+
+	assert_eq(project_service.open_project(path), OK)
+	var loaded_graph: Dictionary = project_service.current_project.graphs["graph_main"]
+	assert_eq(int(loaded_graph["graph_version"]), int(graph_data["graph_version"]))
+	assert_eq(String(loaded_graph["id"]), String(graph_data["id"]))
+	assert_eq(String(loaded_graph["name"]), String(graph_data["name"]))
+	var loaded_node: Dictionary = loaded_graph["nodes"][0]
+	var expected_node: Dictionary = graph_data["nodes"][0]
+	assert_eq(String(loaded_node["id"]), String(expected_node["id"]))
+	assert_eq(String(loaded_node["type"]), String(expected_node["type"]))
+	assert_eq(_int_pair(loaded_node["position"]), _int_pair(expected_node["position"]))
+	assert_eq(loaded_node["params"], expected_node["params"])
+	assert_eq(loaded_graph["edges"], graph_data["edges"])
+	assert_eq(project_service.current_project.canvas["items"][0]["type"], "node")
+	assert_eq(project_service.current_project.canvas["items"][0]["node_id"], "batch_1")
+
+
 func test_project_open_rejects_future_format_version() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var path := "user://tests/future_format.pxproj"
@@ -159,3 +221,7 @@ func _make_item(item_id: String, asset_id: String, position: Vector2, z_index: i
 		"locked": false,
 		"frame_id": null,
 	}
+
+
+func _int_pair(value: Array) -> Array:
+	return [int(value[0]), int(value[1])]

@@ -5,6 +5,7 @@ const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
 const ViewportFillPolicy := preload("res://ui/shell/viewport_fill_policy.gd")
 const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
+const Strings := preload("res://ui/shell/strings.gd")
 
 
 func test_main_window_uses_readable_minimum_sizes() -> void:
@@ -217,3 +218,226 @@ func test_selection_tool_buttons_are_hidden_until_selection_actions_are_wired() 
 			assert_ne(child.text, "W")
 			assert_ne(child.text, "M")
 			assert_ne(child.text, "L")
+
+
+func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
+	ProjectService.new_project("Mock UI")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+
+	assert_eq(canvas.get_item_count(), 4)
+	assert_eq(ProjectService.current_project.graphs.size(), 1)
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+	var batch_node: Dictionary = graph_data["nodes"][3]
+	assert_eq(batch_node["type"], "batch")
+	assert_eq(batch_node["params"]["asset_ids"].size(), 10)
+	var canvas_items: Array = canvas.export_canvas_data()["items"]
+	assert_eq(canvas_items.size(), 4)
+	assert_eq(_node_ids_from_canvas_items(canvas_items), ["objects", "size", "generate", "batch_1"])
+	for canvas_item in canvas_items:
+		assert_eq(canvas_item["type"], "node")
+		assert_eq(canvas_item["graph_id"], graph_id)
+
+	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
+	var first_asset_ids: Array = batch_node["params"]["asset_ids"].duplicate()
+	canvas.select_ids([batch_item_id])
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	var rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
+	assert_eq(rerun_asset_ids.size(), 10)
+	assert_ne(rerun_asset_ids, first_asset_ids)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
+
+	canvas.select_ids([])
+	canvas._selected_graph_edge = {
+		"graph_id": graph_id,
+		"edge": {"from": ["generate", "images"], "to": ["batch_1", "in"]},
+	}
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	var edge_rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
+	assert_eq(edge_rerun_asset_ids.size(), 10)
+	assert_ne(edge_rerun_asset_ids, rerun_asset_ids)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
+	var valid_graph_data := graph_data.duplicate(true)
+
+	canvas.select_ids([])
+	canvas._selected_graph_edge = {"graph_id": "missing_graph", "edge": {}}
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	assert_eq(
+		_status_label(main).text,
+		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % Strings.STATUS_GRAPH_RUN_MISSING_GRAPH
+	)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
+
+	var graph_without_batch := valid_graph_data.duplicate(true)
+	var kept_nodes := []
+	for raw_node in graph_without_batch["nodes"]:
+		var node_data: Dictionary = raw_node
+		if String(node_data.get("type", "")) != "batch":
+			kept_nodes.append(node_data)
+	graph_without_batch["nodes"] = kept_nodes
+	ProjectService.set_graph_data(graph_id, graph_without_batch, true)
+
+	canvas.select_ids([batch_item_id])
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	assert_eq(
+		_status_label(main).text,
+		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % Strings.STATUS_GRAPH_RUN_NO_BATCH
+	)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
+
+	graph_data = valid_graph_data.duplicate(true)
+	_remove_graph_edge(graph_data, "size", "spec", "generate", "spec")
+	ProjectService.set_graph_data(graph_id, graph_data, true)
+	var stable_asset_ids := edge_rerun_asset_ids.duplicate()
+
+	canvas.select_ids([batch_item_id])
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	assert_eq(
+		_status_label(main).text,
+		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "Node generate requires input port spec"
+	)
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	assert_eq(batch_node["params"]["asset_ids"], stable_asset_ids)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), stable_asset_ids)
+
+
+func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
+	ProjectService.new_project("Batch Shortcut UI")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+	canvas.set_camera_zoom(1.0, canvas.size * 0.5)
+	await wait_process_frames(1)
+
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+	var batch_node: Dictionary = graph_data["nodes"][3]
+	var first_asset_id := String(batch_node["params"]["asset_ids"][0])
+	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
+	var batch_card: Node = canvas._items_by_id[batch_item_id]
+
+	canvas.select_ids([batch_item_id])
+	assert_true(batch_card.toggle_asset_at_world(batch_card.position + Vector2(20, 60)))
+	assert_true(_send_key(controller, KEY_K))
+
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	assert_eq(batch_node["params"]["review_states"][first_asset_id], "keep")
+
+	assert_true(_send_key(controller, KEY_R))
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
+
+
+func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
+	ProjectService.new_project("Batch Focus UI")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+	var batch_node: Dictionary = graph_data["nodes"][3]
+	var asset_ids: Array = batch_node["params"]["asset_ids"]
+	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
+
+	canvas.select_ids([batch_item_id])
+	assert_true(_send_key(controller, KEY_RIGHT))
+	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
+
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[0])
+
+	assert_true(_send_key(controller, KEY_RIGHT))
+	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[1]])
+
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[1])
+
+	assert_true(_send_key(controller, KEY_LEFT))
+	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
+
+
+func _node_ids_from_canvas_items(items: Array) -> Array:
+	var node_ids := []
+	for item in items:
+		node_ids.append(String(Dictionary(item).get("node_id", "")))
+	return node_ids
+
+
+func _item_id_for_node(items: Array, node_id: String) -> String:
+	for item in items:
+		var data: Dictionary = item
+		if String(data.get("node_id", "")) == node_id:
+			return String(data.get("id", ""))
+	return ""
+
+
+func _remove_graph_edge(
+	graph_data: Dictionary, from_node: String, from_port: String, to_node: String, to_port: String
+) -> void:
+	var kept_edges := []
+	for raw_edge in graph_data.get("edges", []):
+		if not (raw_edge is Dictionary):
+			continue
+		var edge: Dictionary = raw_edge
+		var from_data: Array = edge.get("from", ["", ""])
+		var to_data: Array = edge.get("to", ["", ""])
+		if (
+			String(from_data[0]) == from_node
+			and String(from_data[1]) == from_port
+			and String(to_data[0]) == to_node
+			and String(to_data[1]) == to_port
+		):
+			continue
+		kept_edges.append(edge)
+	graph_data["edges"] = kept_edges
+
+
+func _status_label(main: Control) -> Label:
+	return main.get_node("Root/BottomBar").get_child(0)
+
+
+func _send_key(controller: Node, keycode: Key) -> bool:
+	var event := InputEventKey.new()
+	event.keycode = keycode
+	event.pressed = true
+	return controller.handle_shortcut(event)

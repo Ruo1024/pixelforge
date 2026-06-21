@@ -1,0 +1,794 @@
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 8529595..4591b44 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -23,3 +23,4 @@
+ - M2.4 Debug 视口盲区修复: 根 Control 覆盖 `expand` 模式暴露的完整可见矩形，避免拉大 Debug/Test Window 后只显示背景。
+ - M2.4 编辑器嵌入式调试修复: 新增本地 Game View 配置脚本，默认禁用 Godot Game embedding；若重新启用 Game bar，则将 Embedded Window Sizing 固定为 `Stretch to Fit`，避免默认 `Fixed Size` 造成居中盲区。
+ - M3 G-1: 新增节点图最小领域模型、内置 batch 节点注册、端口连接矩阵/环检测，以及 `.pxproj` graphs 往返保存骨架。
++- M3 G-2: 新增 object_list / size_spec / ai_generate(mock) 节点和最小 mock runner，可将确定性生成图物化进正式 batch 节点。
+diff --git a/pixel/core/graph/node_registry.gd b/pixel/core/graph/node_registry.gd
+index 900a187..dffea17 100644
+--- a/pixel/core/graph/node_registry.gd
++++ b/pixel/core/graph/node_registry.gd
+@@ -5,13 +5,19 @@ extends RefCounted
+ ## contract: 02-contracts/GRAPH-SCHEMA.md §7；插件与内置节点共用此入口，后注册不得覆盖已注册类型。
+ 
+ const Log := preload("res://core/util/log_util.gd")
++const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
+ const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
++const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
++const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+ 
+ var _scripts := {}
+ 
+ 
+ func _init(register_builtins: bool = true) -> void:
+ 	if register_builtins:
++		register("object_list", ObjectListNodeScript)
++		register("size_spec", SizeSpecNodeScript)
++		register("ai_generate", AiGenerateNodeScript)
+ 		register("batch", BatchNodeScript)
+ 
+ 
+diff --git a/pixel/core/graph/nodes/ai_generate_node.gd b/pixel/core/graph/nodes/ai_generate_node.gd
+new file mode 100644
+index 0000000..7b7a6b3
+--- /dev/null
++++ b/pixel/core/graph/nodes/ai_generate_node.gd
+@@ -0,0 +1,158 @@
++class_name PFAiGenerateNode
++extends PFNode
++
++## Mock AI 生成节点。
++## contract: 02-contracts/GRAPH-SCHEMA.md §5；M3 仅实现 provider_id=mock 的确定性占位图。
++
++const MODEL_ID := "pixel_mock_v1"
++const PROVIDER_MOCK := "mock"
++const DEFAULT_BATCH_SIZE := 1
++const DEFAULT_SEED := 1
++const DEFAULT_SIZE := 32
++
++
++func get_type() -> String:
++	return "ai_generate"
++
++
++func get_display_name() -> String:
++	return "AI Generate"
++
++
++func get_category() -> String:
++	return "generate"
++
++
++func get_input_ports() -> Array[Dictionary]:
++	return [
++		{"name": "style", "type": "style", "required": false},
++		{"name": "text", "type": "text", "required": false},
++		{"name": "items", "type": "text_list", "required": false},
++		{"name": "spec", "type": "spec", "required": true},
++		{"name": "image", "type": "image", "required": false},
++	]
++
++
++func get_output_ports() -> Array[Dictionary]:
++	return [{"name": "images", "type": "image_list"}]
++
++
++func get_param_schema() -> Array[Dictionary]:
++	return [
++		{
++			"key": "provider_id",
++			"label_key": "GRAPH_PARAM_PROVIDER",
++			"kind": KIND_PROVIDER,
++			"default": PROVIDER_MOCK,
++		},
++		{
++			"key": "batch_size",
++			"label_key": "GRAPH_PARAM_BATCH_SIZE",
++			"kind": KIND_INT,
++			"default": DEFAULT_BATCH_SIZE,
++			"min": 1,
++			"max": 16,
++		},
++		{
++			"key": "seed",
++			"label_key": "GRAPH_PARAM_SEED",
++			"kind": KIND_SEED,
++			"default": DEFAULT_SEED,
++			"min": 0,
++			"max": 2147483647,
++		},
++	]
++
++
++func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionary:
++	if String(params.get("provider_id", PROVIDER_MOCK)) != PROVIDER_MOCK:
++		return {
++			"__error":
++			{
++				"code": "unsupported_provider",
++				"message": "M3 mock runner only supports provider_id=mock",
++			},
++		}
++
++	var spec: Dictionary = inputs.get("spec", {})
++	var width := maxi(1, int(spec.get("width", DEFAULT_SIZE)))
++	var height := maxi(1, int(spec.get("height", DEFAULT_SIZE)))
++	var batch_size := maxi(1, int(params.get("batch_size", spec.get("per_subject", 1))))
++	var seed := int(params.get("seed", DEFAULT_SEED))
++	var subjects := _subjects_from_inputs(inputs)
++	var images := []
++	var metadata := []
++
++	for subject in subjects:
++		for _index in range(batch_size):
++			var item_seed := seed + images.size()
++			images.append(_make_mock_image(String(subject), width, height, item_seed))
++			(
++				metadata
++				. append(
++					{
++						"provider": PROVIDER_MOCK,
++						"model": MODEL_ID,
++						"prompt": String(subject),
++						"seed": item_seed,
++						"name": _asset_name(String(subject), item_seed),
++					}
++				)
++			)
++
++	return {"images": images, "metadata": metadata}
++
++
++func _subjects_from_inputs(inputs: Dictionary) -> Array:
++	var result := []
++	if inputs.has("items"):
++		for item in inputs["items"]:
++			var text := String(item).strip_edges()
++			if not text.is_empty():
++				result.append(text)
++	if result.is_empty() and inputs.has("text"):
++		var prompt := String(inputs["text"]).strip_edges()
++		if not prompt.is_empty():
++			result.append(prompt)
++	if result.is_empty():
++		result.append("sprite")
++	return result
++
++
++func _make_mock_image(subject: String, width: int, height: int, seed: int) -> Image:
++	var image := Image.create(width, height, false, Image.FORMAT_RGBA8)
++	var primary := _color_from_seed(subject, seed, 0)
++	var secondary := _color_from_seed(subject, seed, 83)
++	var accent := _color_from_seed(subject, seed, 191)
++	var block := maxi(1, mini(width, height) / 4)
++
++	for y in range(height):
++		for x in range(width):
++			var checker := (int(x / block) + int(y / block) + seed) % 2
++			var color := primary if checker == 0 else secondary
++			if x == y or x == width - y - 1:
++				color = accent
++			image.set_pixel(x, y, color)
++	return image
++
++
++func _color_from_seed(subject: String, seed: int, salt: int) -> Color:
++	var value := _stable_hash("%s:%d:%d" % [subject, seed, salt])
++	var red := 48 + value % 176
++	var green := 48 + int(value / 17) % 176
++	var blue := 48 + int(value / 29) % 176
++	return Color8(red, green, blue, 255)
++
++
++func _stable_hash(text: String) -> int:
++	var value := 2166136261
++	for index in range(text.length()):
++		value = int((value ^ text.unicode_at(index)) * 16777619) & 0x7fffffff
++	return value
++
++
++func _asset_name(subject: String, seed: int) -> String:
++	var normalized := subject.to_snake_case()
++	if normalized.is_empty():
++		normalized = "mock_sprite"
++	return "%s_%d" % [normalized.left(32), seed]
+diff --git a/pixel/core/graph/nodes/ai_generate_node.gd.uid b/pixel/core/graph/nodes/ai_generate_node.gd.uid
+new file mode 100644
+index 0000000..69d0a10
+--- /dev/null
++++ b/pixel/core/graph/nodes/ai_generate_node.gd.uid
+@@ -0,0 +1 @@
++uid://hrul6v4y0a0h
+diff --git a/pixel/core/graph/nodes/object_list_node.gd b/pixel/core/graph/nodes/object_list_node.gd
+new file mode 100644
+index 0000000..d69c465
+--- /dev/null
++++ b/pixel/core/graph/nodes/object_list_node.gd
+@@ -0,0 +1,45 @@
++class_name PFObjectListNode
++extends PFNode
++
++## 批量对象描述输入节点。
++## contract: 02-contracts/GRAPH-SCHEMA.md §5；把多行文本规范化为 text_list 输出。
++
++
++func get_type() -> String:
++	return "object_list"
++
++
++func get_display_name() -> String:
++	return "Object List"
++
++
++func get_category() -> String:
++	return "input"
++
++
++func get_output_ports() -> Array[Dictionary]:
++	return [{"name": "items", "type": "text_list"}]
++
++
++func get_param_schema() -> Array[Dictionary]:
++	return [
++		{
++			"key": "items",
++			"label_key": "GRAPH_PARAM_OBJECT_LIST",
++			"kind": KIND_TEXT_MULTILINE,
++			"default": "",
++		},
++	]
++
++
++func execute(_inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionary:
++	return {"items": PackedStringArray(_split_lines(String(params.get("items", ""))))}
++
++
++func _split_lines(text: String) -> Array:
++	var result := []
++	for raw_line in text.split("\n", false):
++		var line := String(raw_line).strip_edges()
++		if not line.is_empty():
++			result.append(line)
++	return result
+diff --git a/pixel/core/graph/nodes/object_list_node.gd.uid b/pixel/core/graph/nodes/object_list_node.gd.uid
+new file mode 100644
+index 0000000..1915a58
+--- /dev/null
++++ b/pixel/core/graph/nodes/object_list_node.gd.uid
+@@ -0,0 +1 @@
++uid://c14da4hqeydeg
+diff --git a/pixel/core/graph/nodes/size_spec_node.gd b/pixel/core/graph/nodes/size_spec_node.gd
+new file mode 100644
+index 0000000..6ab6c2e
+--- /dev/null
++++ b/pixel/core/graph/nodes/size_spec_node.gd
+@@ -0,0 +1,65 @@
++class_name PFSizeSpecNode
++extends PFNode
++
++## 尺寸规格输入节点。
++## contract: 02-contracts/GRAPH-SCHEMA.md §5；输出生成阶段使用的尺寸与每物体数量建议。
++
++const MIN_SIZE := 1
++const MAX_SIZE := 512
++const DEFAULT_SIZE := 32
++
++
++func get_type() -> String:
++	return "size_spec"
++
++
++func get_display_name() -> String:
++	return "Size Spec"
++
++
++func get_category() -> String:
++	return "input"
++
++
++func get_output_ports() -> Array[Dictionary]:
++	return [{"name": "spec", "type": "spec"}]
++
++
++func get_param_schema() -> Array[Dictionary]:
++	return [
++		{
++			"key": "width",
++			"label_key": "GRAPH_PARAM_WIDTH",
++			"kind": KIND_INT,
++			"default": DEFAULT_SIZE,
++			"min": MIN_SIZE,
++			"max": MAX_SIZE,
++		},
++		{
++			"key": "height",
++			"label_key": "GRAPH_PARAM_HEIGHT",
++			"kind": KIND_INT,
++			"default": DEFAULT_SIZE,
++			"min": MIN_SIZE,
++			"max": MAX_SIZE,
++		},
++		{
++			"key": "per_subject",
++			"label_key": "GRAPH_PARAM_PER_SUBJECT",
++			"kind": KIND_INT,
++			"default": 1,
++			"min": 1,
++			"max": 16,
++		},
++	]
++
++
++func execute(_inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionary:
++	return {
++		"spec":
++		{
++			"width": int(params.get("width", DEFAULT_SIZE)),
++			"height": int(params.get("height", DEFAULT_SIZE)),
++			"per_subject": int(params.get("per_subject", 1)),
++		},
++	}
+diff --git a/pixel/core/graph/nodes/size_spec_node.gd.uid b/pixel/core/graph/nodes/size_spec_node.gd.uid
+new file mode 100644
+index 0000000..c6280e1
+--- /dev/null
++++ b/pixel/core/graph/nodes/size_spec_node.gd.uid
+@@ -0,0 +1 @@
++uid://drnb4lkgp1c67
+diff --git a/pixel/scripts/verify_m3_g2.sh b/pixel/scripts/verify_m3_g2.sh
+new file mode 100755
+index 0000000..080a61c
+--- /dev/null
++++ b/pixel/scripts/verify_m3_g2.sh
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++cd "$(dirname "$0")/.."
++
++./scripts/configure_editor_game_view.sh
++./scripts/lint.sh
++./scripts/run_tests.sh
++./scripts/check_ui_scaling.sh
++./scripts/check_export_templates.sh
++
++if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
++  if git diff --cached --name-only | grep -iE '\.png$|\.jpe?g$' >/dev/null; then
++    echo "Staged image files are not allowed for M3 G-2 commits." >&2
++    exit 1
++  fi
++fi
++
++echo "verify_m3_g2: ok"
+diff --git a/pixel/services/graph_mock_runner.gd b/pixel/services/graph_mock_runner.gd
+new file mode 100644
+index 0000000..bdd4954
+--- /dev/null
++++ b/pixel/services/graph_mock_runner.gd
+@@ -0,0 +1,224 @@
++class_name PFGraphMockRunner
++extends RefCounted
++
++## M3 最小 mock 节点链运行器。
++## contract: 03-milestones/M3-开发规划.md G-2；只跑本地 mock 链并把 image_list 物化进 batch。
++
++const IdUtil := preload("res://core/util/id_util.gd")
++
++
++func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "") -> Dictionary:
++	if graph == null:
++		return _error("missing_graph", "Graph is required")
++	if asset_library == null or not asset_library.has_method("register_image"):
++		return _error("missing_asset_library", "AssetLibrary-compatible object is required")
++
++	var order_result := _topological_order(graph)
++	if not bool(order_result["ok"]):
++		return order_result
++
++	var inputs_by_node := {}
++	var outputs_by_node := {}
++	var materialized_asset_ids := []
++	for node_id in order_result["order"]:
++		var run_result := _run_node(
++			graph, String(node_id), inputs_by_node, outputs_by_node, asset_library, batch_node_id
++		)
++		if not bool(run_result["ok"]):
++			return run_result
++		for asset_id in run_result.get("asset_ids", []):
++			materialized_asset_ids.append(asset_id)
++
++	if materialized_asset_ids.is_empty():
++		return _error("empty_batch", "No generated images reached a batch node")
++	return {"ok": true, "asset_ids": materialized_asset_ids, "graph": graph.to_json()}
++
++
++func _run_node(
++	graph: PFGraph,
++	node_id: String,
++	inputs_by_node: Dictionary,
++	outputs_by_node: Dictionary,
++	asset_library: Node,
++	batch_node_id: String
++) -> Dictionary:
++	var node := graph.get_node(node_id)
++	if node == null:
++		return _error("missing_node", "Graph node is missing")
++	if node.is_ghost():
++		return _error("ghost_node", "Cannot run graph with missing node type: %s" % node.get_type())
++
++	var inputs: Dictionary = inputs_by_node.get(node_id, {})
++	var outputs := {}
++	var asset_ids := []
++	if node.get_type() == "batch":
++		if batch_node_id.is_empty() or batch_node_id == node_id:
++			var materialized := _materialize_batch(
++				graph, node_id, inputs.get("in", []), inputs.get("__metadata", []), asset_library
++			)
++			if not bool(materialized["ok"]):
++				return materialized
++			asset_ids = materialized["asset_ids"]
++			outputs = {"images": _image_array(inputs.get("in", [])), "assets": asset_ids}
++	else:
++		outputs = node.execute(inputs, graph.get_node_params(node_id), {})
++		if outputs.has("__error"):
++			return _error_from_node(outputs["__error"])
++
++	outputs_by_node[node_id] = outputs
++	_propagate_outputs(graph, node_id, inputs_by_node, outputs_by_node)
++	return {"ok": true, "asset_ids": asset_ids}
++
++
++func _materialize_batch(
++	graph: PFGraph, node_id: String, value: Variant, metadata: Variant, asset_library: Node
++) -> Dictionary:
++	var images := _image_array(value)
++	if images.is_empty():
++		return _error("empty_images", "Batch node received no images")
++
++	var metas := _metadata_array(metadata)
++	var asset_ids := []
++	for index in range(images.size()):
++		var meta: Dictionary = metas[index] if index < metas.size() else {}
++		var asset_id: String = asset_library.register_image(
++			images[index],
++			String(meta.get("name", "mock_%03d" % index)),
++			_asset_meta(graph.id, meta)
++		)
++		asset_ids.append(asset_id)
++
++	var params := graph.get_node_params(node_id)
++	var existing: Array = params.get("asset_ids", [])
++	for asset_id in asset_ids:
++		existing.append(asset_id)
++	params["asset_ids"] = existing
++	graph.set_node_params(node_id, params)
++	return {"ok": true, "asset_ids": asset_ids}
++
++
++func _propagate_outputs(
++	graph: PFGraph, node_id: String, inputs_by_node: Dictionary, outputs_by_node: Dictionary
++) -> void:
++	var node := graph.get_node(node_id)
++	var outputs: Dictionary = outputs_by_node.get(node_id, {})
++	for edge in graph.edges:
++		var from_data: Array = edge.get("from", ["", ""])
++		if String(from_data[0]) != node_id:
++			continue
++		var to_data: Array = edge.get("to", ["", ""])
++		var to_node_id := String(to_data[0])
++		var from_port := String(from_data[1])
++		var to_port := String(to_data[1])
++		var target_inputs: Dictionary = inputs_by_node.get(to_node_id, {})
++		target_inputs[to_port] = _coerce_edge_value(
++			outputs.get(from_port, null),
++			node.get_output_port(from_port),
++			graph,
++			to_node_id,
++			to_port
++		)
++		if from_port == "images" and outputs.has("metadata"):
++			target_inputs["__metadata"] = outputs["metadata"]
++		inputs_by_node[to_node_id] = target_inputs
++
++
++func _coerce_edge_value(
++	value: Variant, source_port: Dictionary, graph: PFGraph, to_node_id: String, to_port: String
++) -> Variant:
++	var target := graph.get_node(to_node_id)
++	if target == null:
++		return value
++	var target_port := target.get_input_port(to_port)
++	if (
++		String(source_port.get("type", "")) == "image"
++		and String(target_port.get("type", "")) == "image_list"
++	):
++		return [value]
++	return value
++
++
++func _topological_order(graph: PFGraph) -> Dictionary:
++	var indegree := {}
++	var outgoing := {}
++	for node_id in graph.nodes.keys():
++		indegree[node_id] = 0
++		outgoing[node_id] = []
++	for edge in graph.edges:
++		var from_id := _edge_node(edge, "from")
++		var to_id := _edge_node(edge, "to")
++		if indegree.has(from_id) and indegree.has(to_id):
++			indegree[to_id] = int(indegree[to_id]) + 1
++			outgoing[from_id].append(to_id)
++
++	var ready := []
++	for node_id in indegree.keys():
++		if int(indegree[node_id]) == 0:
++			ready.append(node_id)
++	ready.sort()
++
++	var order := []
++	while not ready.is_empty():
++		var current := String(ready.pop_front())
++		order.append(current)
++		for target_id in outgoing[current]:
++			indegree[target_id] = int(indegree[target_id]) - 1
++			if int(indegree[target_id]) == 0:
++				ready.append(target_id)
++		ready.sort()
++
++	if order.size() != graph.nodes.size():
++		return _error("cycle", "Graph contains a cycle")
++	return {"ok": true, "order": order}
++
++
++func _asset_meta(graph_id: String, meta: Dictionary) -> Dictionary:
++	return {
++		"origin": "generated",
++		"tags": ["mock", "graph"],
++		"provenance":
++		{
++			"provider": meta.get("provider", "mock"),
++			"model": meta.get("model", "pixel_mock_v1"),
++			"prompt": meta.get("prompt", ""),
++			"seed": meta.get("seed", null),
++			"parent_asset": null,
++			"graph_id": graph_id,
++			"created_at": IdUtil.utc_now_iso(),
++		},
++	}
++
++
++func _image_array(value: Variant) -> Array:
++	var result := []
++	if value is Image:
++		result.append(value)
++	elif value is Array:
++		for item in value:
++			if item is Image:
++				result.append(item)
++	return result
++
++
++func _metadata_array(value: Variant) -> Array:
++	var result := []
++	if value is Array:
++		for item in value:
++			if item is Dictionary:
++				result.append(item)
++	return result
++
++
++func _edge_node(edge: Dictionary, key: String) -> String:
++	var data: Array = edge.get(key, ["", ""])
++	return String(data[0])
++
++
++func _error(code: String, message: String) -> Dictionary:
++	return {"ok": false, "error": {"code": code, "message": message}}
++
++
++func _error_from_node(error: Dictionary) -> Dictionary:
++	return _error(
++		String(error.get("code", "node_error")), String(error.get("message", "Node failed"))
++	)
+diff --git a/pixel/services/graph_mock_runner.gd.uid b/pixel/services/graph_mock_runner.gd.uid
+new file mode 100644
+index 0000000..f1ee0e5
+--- /dev/null
++++ b/pixel/services/graph_mock_runner.gd.uid
+@@ -0,0 +1 @@
++uid://b7764obhkxax1
+diff --git a/pixel/tests/integration/test_graph_mock_runner.gd b/pixel/tests/integration/test_graph_mock_runner.gd
+new file mode 100644
+index 0000000..a29d0f7
+--- /dev/null
++++ b/pixel/tests/integration/test_graph_mock_runner.gd
+@@ -0,0 +1,81 @@
++extends "res://addons/gut/test.gd"
++
++const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
++const GraphScript := preload("res://core/graph/pf_graph.gd")
++const MockRunnerScript := preload("res://services/graph_mock_runner.gd")
++const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
++const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
++const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
++
++
++func before_each() -> void:
++	get_tree().root.get_node("ProjectService").new_project("M3 Mock Runner")
++
++
++func test_mock_generate_chain_materializes_images_into_batch_node() -> void:
++	var graph := _make_mock_graph()
++	var asset_library := get_tree().root.get_node("AssetLibrary")
++	var runner := MockRunnerScript.new()
++
++	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
++
++	assert_true(bool(result["ok"]))
++	assert_eq(result["asset_ids"].size(), 10)
++	assert_eq(graph.get_node_params("batch_1")["asset_ids"], result["asset_ids"])
++
++	var first_asset_id := String(result["asset_ids"][0])
++	assert_true(asset_library.has_asset(first_asset_id))
++	assert_eq(asset_library.get_image(first_asset_id).get_size(), Vector2i(12, 10))
++	var meta: Dictionary = asset_library.get_asset_meta(first_asset_id)
++	assert_eq(meta["origin"], "generated")
++	assert_eq(meta["provenance"]["provider"], "mock")
++	assert_eq(meta["provenance"]["graph_id"], "graph_main")
++	assert_eq(meta["provenance"]["seed"], 700)
++
++
++func test_mock_generate_chain_survives_project_roundtrip_after_materialization() -> void:
++	var project_service := get_tree().root.get_node("ProjectService")
++	var asset_library := get_tree().root.get_node("AssetLibrary")
++	var graph := _make_mock_graph()
++	var runner := MockRunnerScript.new()
++	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
++
++	assert_true(bool(result["ok"]))
++	project_service.set_graph_data(graph.id, graph.to_json())
++	var path := "user://tests/m3_mock_graph_roundtrip.pxproj"
++	assert_eq(project_service.save_project(path), OK)
++
++	assert_eq(project_service.open_project(path), OK)
++	var loaded_graph: Dictionary = project_service.current_project.graphs["graph_main"]
++	var loaded_batch: Dictionary = loaded_graph["nodes"][3]
++	assert_eq(loaded_batch["params"]["asset_ids"].size(), 10)
++	assert_true(asset_library.has_asset(String(loaded_batch["params"]["asset_ids"][0])))
++
++
++func _make_mock_graph() -> PFGraph:
++	var graph := GraphScript.new()
++	graph.id = "graph_main"
++	graph.name = "M3 Mock Generate"
++	graph.add_node(
++		ObjectListNodeScript.new(),
++		"objects",
++		{"items": "barrel\nfence\nscarecrow\ncrate\nwell"},
++		Vector2(0, 0)
++	)
++	graph.add_node(
++		SizeSpecNodeScript.new(),
++		"size",
++		{"width": 12, "height": 10, "per_subject": 1},
++		Vector2(220, 0)
++	)
++	graph.add_node(
++		AiGenerateNodeScript.new(),
++		"generate",
++		{"provider_id": "mock", "batch_size": 2, "seed": 700},
++		Vector2(440, 0)
++	)
++	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": "Mock Batch"}, Vector2(660, 0))
++	assert_true(bool(graph.add_edge("objects", "items", "generate", "items")["ok"]))
++	assert_true(bool(graph.add_edge("size", "spec", "generate", "spec")["ok"]))
++	assert_true(bool(graph.add_edge("generate", "images", "batch_1", "in")["ok"]))
++	return graph
+diff --git a/pixel/tests/integration/test_graph_mock_runner.gd.uid b/pixel/tests/integration/test_graph_mock_runner.gd.uid
+new file mode 100644
+index 0000000..d05b924
+--- /dev/null
++++ b/pixel/tests/integration/test_graph_mock_runner.gd.uid
+@@ -0,0 +1 @@
++uid://bbonavi2vk4wl
+diff --git a/pixel/tests/unit/test_graph_mock_generate.gd b/pixel/tests/unit/test_graph_mock_generate.gd
+new file mode 100644
+index 0000000..72f8df7
+--- /dev/null
++++ b/pixel/tests/unit/test_graph_mock_generate.gd
+@@ -0,0 +1,57 @@
++extends "res://addons/gut/test.gd"
++
++const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
++const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
++const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
++
++
++func test_object_list_outputs_trimmed_text_list() -> void:
++	var node := ObjectListNodeScript.new()
++	var result: Dictionary = node.execute(
++		{}, node.validate_params({"items": " barrel\n\n fence \n"}), {}
++	)
++
++	assert_eq(Array(result["items"]), ["barrel", "fence"])
++
++
++func test_size_spec_outputs_dimensions_and_per_subject_count() -> void:
++	var node := SizeSpecNodeScript.new()
++	var result: Dictionary = node.execute(
++		{}, node.validate_params({"width": 16, "height": 24, "per_subject": 3}), {}
++	)
++
++	assert_eq(result["spec"], {"width": 16, "height": 24, "per_subject": 3})
++
++
++func test_ai_generate_mock_is_deterministic_and_uses_incrementing_seeds() -> void:
++	var node := AiGenerateNodeScript.new()
++	var params := node.validate_params({"provider_id": "mock", "batch_size": 2, "seed": 100})
++	var inputs := {
++		"items": PackedStringArray(["barrel", "fence"]),
++		"spec": {"width": 8, "height": 8, "per_subject": 1},
++	}
++
++	var first: Dictionary = node.execute(inputs, params, {})
++	var second: Dictionary = node.execute(inputs, params, {})
++
++	assert_eq(first["images"].size(), 4)
++	assert_eq(
++		first["metadata"].map(func(entry: Dictionary) -> int: return int(entry["seed"])),
++		[100, 101, 102, 103]
++	)
++	assert_eq(_sample_color(first["images"][0]), _sample_color(second["images"][0]))
++	assert_ne(_sample_color(first["images"][0]), _sample_color(first["images"][1]))
++
++
++func test_ai_generate_mock_rejects_non_mock_provider() -> void:
++	var node := AiGenerateNodeScript.new()
++	var result: Dictionary = node.execute(
++		{"spec": {"width": 8, "height": 8}}, {"provider_id": "real_api"}, {}
++	)
++
++	assert_true(result.has("__error"))
++	assert_eq(result["__error"]["code"], "unsupported_provider")
++
++
++func _sample_color(image: Image) -> String:
++	return image.get_pixel(0, 0).to_html(false)
+diff --git a/pixel/tests/unit/test_graph_mock_generate.gd.uid b/pixel/tests/unit/test_graph_mock_generate.gd.uid
+new file mode 100644
+index 0000000..0303264
+--- /dev/null
++++ b/pixel/tests/unit/test_graph_mock_generate.gd.uid
+@@ -0,0 +1 @@
++uid://bumtuw8tdl7rv
+diff --git a/pixel/tests/unit/test_graph_model.gd b/pixel/tests/unit/test_graph_model.gd
+index b81d4b6..adba44e 100644
+--- a/pixel/tests/unit/test_graph_model.gd
++++ b/pixel/tests/unit/test_graph_model.gd
+@@ -38,7 +38,7 @@ func test_node_registry_registers_batch_and_rejects_duplicate_type() -> void:
+ 
+ 	assert_true(registry.has_type("batch"))
+ 	assert_false(registry.register("batch", BatchNodeScript))
+-	assert_eq(registry.get_registered_types(), ["batch"])
++	assert_eq(registry.get_registered_types(), ["ai_generate", "batch", "object_list", "size_spec"])
+ 
+ 
+ func test_connection_matrix_follows_graph_schema_port_rules() -> void:
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index bf47a23..b7bff2a 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -125,3 +125,10 @@ const BATCH_ACTION_QUANTIZE := "Quantize Batch"
+ const BATCH_ACTION_SPLIT := "Split Selected"
+ const BATCH_ACTION_EXPORT := "Export Batch"
+ const BATCH_ACTION_SEND_TO_EDITOR := "Send to Editor"
++const GRAPH_PARAM_OBJECT_LIST := "Objects"
++const GRAPH_PARAM_WIDTH := "Width"
++const GRAPH_PARAM_HEIGHT := "Height"
++const GRAPH_PARAM_PER_SUBJECT := "Per Subject"
++const GRAPH_PARAM_PROVIDER := "Provider"
++const GRAPH_PARAM_BATCH_SIZE := "Batch Size"
++const GRAPH_PARAM_SEED := "Seed"

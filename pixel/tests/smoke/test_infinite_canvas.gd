@@ -1,6 +1,7 @@
 extends "res://addons/gut/test.gd"
 
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
+const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
 const CanvasScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
@@ -147,6 +148,30 @@ func test_canvas_coordinates_use_compensated_logical_scale() -> void:
 	assert_almost_eq(canvas.item_layer.scale.y, expected_scale, 0.001)
 	assert_almost_eq(roundtrip.x, world_position.x, 0.001)
 	assert_almost_eq(roundtrip.y, world_position.y, 0.001)
+
+
+func test_batch_lod_uses_camera_zoom_not_compensated_art_scale() -> void:
+	get_tree().root.get_node("ProjectService").new_project("LOD Test")
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(320, 240)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var ids := [_register_asset(Color.RED, "red")]
+	var card: Node = canvas._add_batch_card(ids, Vector2.ZERO, "Batch", "batch_1", false)
+
+	canvas._set_viewport_scale_factor_for_test(1.5)
+	canvas.set_camera_zoom(0.25, Vector2(160, 120))
+	await wait_process_frames(1)
+
+	assert_almost_eq(canvas._get_art_logical_scale(), 0.333, 0.001)
+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
+
+	canvas.set_camera_zoom(4.0, Vector2(160, 120))
+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
+
+	canvas.set_camera_zoom(1.0, Vector2(160, 120))
+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
 
 
 func test_zoom_anchor_stays_fixed_with_fractional_content_scale() -> void:
@@ -319,6 +344,12 @@ func _make_checker_image(size: int) -> Image:
 		for x in range(size):
 			image.set_pixel(x, y, Color.WHITE if (x + y) % 2 == 0 else Color.BLACK)
 	return image
+
+
+func _register_asset(color: Color, name: String) -> String:
+	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	image.fill(color)
+	return AssetLibrary.register_image(image, name, {"origin": "imported"})
 
 
 func _mouse_button(button: MouseButton, pressed: bool, position: Vector2) -> InputEventMouseButton:

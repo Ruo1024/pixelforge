@@ -10,6 +10,7 @@ const IdUtil := preload("res://core/util/id_util.gd")
 var project_path := ""
 var manifest := {}
 var canvas := {}
+var graphs := {}
 var dirty := false
 
 
@@ -39,6 +40,7 @@ func reset(name: String = "Untitled") -> void:
 		},
 		"items": [],
 	}
+	graphs = {}
 	project_path = ""
 	dirty = false
 

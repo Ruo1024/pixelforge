@@ -22,3 +22,14 @@
 - M2.4 窗口填充修复: 根视口改为 `canvas_items + expand` 记录启动窗口为拉伸基准，窗口拉大时 PixelForge 工作区和画布随窗口缩放填满 Debug 盲区。
 - M2.4 Debug 视口盲区修复: 根 Control 覆盖 `expand` 模式暴露的完整可见矩形，避免拉大 Debug/Test Window 后只显示背景。
 - M2.4 编辑器嵌入式调试修复: 新增本地 Game View 配置脚本，默认禁用 Godot Game embedding；若重新启用 Game bar，则将 Embedded Window Sizing 固定为 `Stretch to Fit`，避免默认 `Fixed Size` 造成居中盲区。
+- M3 G-1: 新增节点图最小领域模型、内置 batch 节点注册、端口连接矩阵/环检测，以及 `.pxproj` graphs 往返保存骨架。
+- M3 G-2: 新增 object_list / size_spec / ai_generate(mock) 节点和最小 mock runner，可将确定性生成图物化进正式 batch 节点。
+- M3 G-3: 新增 PixelOperations 共用服务，批次菜单 Clean/Matte/Outline 复用同一 core 操作，并让 Mock 批次卡以 graph batch 节点引用保存和同步资产队列。
+- M3 G-4: 新增画布轻节点卡与 graph edge 渲染，File > Generate Mock Batch 现在生成可见最小 mock 节点链并落入正式 batch 卡。
+- M3 G-4 follow-up: graph 连线改用命名端口锚点，修正轻节点端口点、batch 输入点与连线端点错位。
+- M3 G-4 follow-up: AI Generate 画布卡将多个逻辑输入折叠为单个视觉输入点，降低基础节点链噪声。
+- M3 G-5: 新增 File > Run Selected Graph 最小重跑入口，选中 mock 节点链任一节点后可替换刷新正式 batch 队列。
+- M3 UX-4: 恢复 batch 语义 LOD 原型，改由 camera zoom 下发 overview/review/inspect，覆盖分数缩放下 25% 进入 overview 的回归路径。
+- M3 UX-7: 新增 CanvasHitPolicy 最小输入仲裁层，统一 batch 缩略图、整卡、sprite 和空白画布命中，避免缩略图点击误触拖卡。
+- M3 UX-4: 撤销隐藏缩略图的 overview 摘要卡路径，25% 缩放保持 review 缩略图可见且可命中，计划中标记该 UX-4 原型不予实际通过。
+- M3 UX-7: CanvasHitPolicy 纳入 graph port 命中，端口优先于 batch 缩略图和整卡拖动，为后续连线交互保留集中入口。

@@ -9,6 +9,7 @@ signal selection_changed(selected_ids: Array)
 signal cleanup_grid_changed(scale: float, offset: Vector2)
 signal batch_context_requested(card_id: String, screen_position: Vector2i)
 signal zoom_changed(zoom_index: int, camera_zoom: float)
+signal graph_connect_failed(reason: String)
 
 const ZOOM_LEVELS := [0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
 const DEFAULT_ZOOM_INDEX := 4
@@ -19,14 +20,24 @@ const GRID_MIN_ZOOM := 4.0
 const SELECTION_COLOR := Color(0.1, 0.85, 0.65, 1.0)
 const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
 const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
+const EDGE_COLOR := Color(0.42, 0.58, 0.62, 0.9)
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
+const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
+const GraphEdgeInteraction := preload("res://ui/canvas/canvas_graph_edge_interaction.gd")
+const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
+const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
+const LODCoordinator := preload("res://ui/canvas/canvas_lod_coordinator.gd")
+const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
 const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
+const SelectionSnapshot := preload("res://ui/canvas/canvas_selection_snapshot.gd")
 const ScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
 const CleanupGridOverlayScript := preload("res://ui/canvas/cleanup_grid_overlay.gd")
 const PixelGridRenderer := preload("res://ui/canvas/canvas_pixel_grid_renderer.gd")
 const ToolInputPolicy := preload("res://ui/canvas/canvas_tool_input_policy.gd")
+const ToolTarget := preload("res://ui/canvas/canvas_tool_target.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const Log := preload("res://core/util/log_util.gd")
@@ -50,6 +61,9 @@ var _is_panning := false
 var _cull_elapsed := 0.0
 var _suppress_change_signal := false
 var _last_wheel_zoom_msec := -1000000
+var _graph_edge_drag := {}
+var _graph_edge_drag_world := Vector2.ZERO
+var _selected_graph_edge := {}
 
 
 func _ready() -> void:
@@ -79,7 +93,7 @@ func _process(delta: float) -> void:
 	if _cull_elapsed >= CULL_INTERVAL_SECONDS:
 		_cull_elapsed = 0.0
 		_update_item_visibility()
-	_update_cleanup_preview_alt_state()
+	_cleanup_preview.update_alt_state()
 	if tool_manager != null and tool_manager.needs_redraw():
 		queue_redraw()
 
@@ -110,7 +124,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 
 	if event.keycode == KEY_DELETE or event.keycode == KEY_BACKSPACE:
-		delete_selected()
+		if not _selected_graph_edge.is_empty():
+			GraphEdgeInteraction.delete_edge(_selected_graph_edge, _emit_canvas_changed)
+			_selected_graph_edge = {}
+			queue_redraw()
+		else:
+			delete_selected()
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_Z and event.ctrl_pressed:
 		if event.shift_pressed:
@@ -126,20 +145,20 @@ func _draw() -> void:
 		ScalePolicy.compute_art_physical_scale(camera_zoom, _resolve_viewport_scale_factor())
 		>= GRID_MIN_ZOOM
 	):
-		_draw_pixel_grid()
+		PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
+	GraphEdgeInteraction.draw_edges(
+		self,
+		GraphEdgeRenderer,
+		_items_by_id,
+		CanvasBatchCardScript,
+		CanvasNodeCardScript,
+		EDGE_COLOR,
+		_selected_graph_edge,
+		_graph_edge_drag,
+		_graph_edge_drag_world
+	)
 
-	for item_id in _selection.selected_ids:
-		if not _items_by_id.has(item_id):
-			continue
-		var item: Node = _items_by_id[item_id]
-		var bounds: Rect2 = item.get_canvas_bounds()
-		var screen_rect := _world_rect_to_screen(bounds)
-		draw_rect(screen_rect.grow(2.0), SELECTION_COLOR, false, 2.0)
-
-	if _selection.is_box_selecting:
-		var box: Rect2 = _selection.get_box_rect()
-		draw_rect(box, BOX_COLOR, true)
-		draw_rect(box, Color(1.0, 0.85, 0.25, 1.0), false, 1.0)
+	SelectionSnapshot.draw_overlay(self, _items_by_id, _selection, SELECTION_COLOR, BOX_COLOR)
 
 	if tool_manager != null:
 		tool_manager.draw_overlay(self, _get_active_tool_target())
@@ -189,14 +208,18 @@ func _add_batch_card(
 	world_position: Vector2 = Vector2.ZERO,
 	label: String = "Batch",
 	item_id: String = "",
-	record_undo: bool = true
+	record_undo: bool = true,
+	graph_id: String = "",
+	node_id: String = ""
 ) -> Node:
 	var data := {
 		"id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
-		"type": "batch_card",
+		"type": "node" if not node_id.is_empty() else "batch_card",
 		"asset_ids": asset_ids.duplicate(),
 		"selected_asset_ids": [],
 		"label": label,
+		"graph_id": graph_id,
+		"node_id": node_id,
 		"position": [int(round(world_position.x)), int(round(world_position.y))],
 		"z_index": _items_by_id.size(),
 		"locked": false,
@@ -220,6 +243,42 @@ func _add_batch_card(
 	return _items_by_id.get(String(data["id"]), null)
 
 
+func _add_graph_node_card(
+	graph_id: String,
+	node_id: String,
+	world_position: Vector2 = Vector2.ZERO,
+	item_id: String = "",
+	record_undo: bool = true
+) -> Node:
+	var data := {
+		"id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
+		"type": "node",
+		"graph_id": graph_id,
+		"node_id": node_id,
+		"position": [int(round(world_position.x)), int(round(world_position.y))],
+		"z_index": _items_by_id.size(),
+		"collapsed": false,
+		"locked": false,
+	}
+
+	var do_add := func() -> void:
+		_add_node_direct(data)
+		_select_only([String(data["id"])])
+		_emit_canvas_changed()
+
+	var undo_add := func() -> void:
+		_remove_item_direct(String(data["id"]))
+		_clear_selection()
+		_emit_canvas_changed()
+
+	if record_undo:
+		UndoService.perform_action("Add node", do_add, undo_add)
+	else:
+		do_add.call()
+
+	return _items_by_id.get(String(data["id"]), null)
+
+
 func delete_selected(record_undo: bool = true) -> void:
 	if _selection.is_empty():
 		return
@@ -237,20 +296,29 @@ func delete_selected(record_undo: bool = true) -> void:
 	if snapshots.is_empty():
 		return
 
+	var graph_snapshots := GraphItemBridge.graph_deletion_snapshots_for_canvas_snapshots(snapshots)
+
 	var do_delete := func() -> void:
+		GraphItemBridge.apply_graph_deletion_snapshots(graph_snapshots, "after")
 		for snapshot in snapshots:
 			_remove_item_direct(String(snapshot["data"]["id"]))
 		_clear_selection()
 		_emit_canvas_changed()
 
 	var undo_delete := func() -> void:
+		GraphItemBridge.apply_graph_deletion_snapshots(graph_snapshots, "before")
 		for snapshot in snapshots:
 			var data: Dictionary = snapshot["data"]
 			if String(data.get("type", "")) == "sprite":
 				_add_sprite_direct(data, snapshot["image"])
-			elif String(data.get("type", "")) == "batch_card":
+			elif (
+				String(data.get("type", "")) == "batch_card"
+				or GraphItemBridge.is_graph_batch_node_data(data)
+			):
 				_add_batch_direct(data)
-		_select_only(_ids_from_snapshots(snapshots))
+			elif String(data.get("type", "")) == "node":
+				_add_node_direct(data)
+		_select_only(SelectionSnapshot.ids_from_snapshots(snapshots))
 		_emit_canvas_changed()
 
 	var memory_cost := 0
@@ -298,6 +366,10 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 			_add_sprite_direct(item_data, image)
 		elif item_type == "batch_card":
 			_add_batch_direct(item_data)
+		elif item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data):
+			_add_batch_direct(item_data)
+		elif item_type == "node":
+			_add_node_direct(item_data)
 
 	_suppress_change_signal = false
 	_update_layer_transform()
@@ -315,6 +387,8 @@ func export_canvas_data() -> Dictionary:
 		if node.get_script() == CanvasItemSpriteScript:
 			items.append(node.to_canvas_data())
 		elif node.get_script() == CanvasBatchCardScript:
+			items.append(node.to_canvas_data())
+		elif node.get_script() == CanvasNodeCardScript:
 			items.append(node.to_canvas_data())
 
 	return {
@@ -407,76 +481,89 @@ func get_selected_sprite_snapshots() -> Array:
 
 
 func _get_active_tool_target() -> Dictionary:
-	var selected_ids: Array = _selection.get_selected_ids()
-	if selected_ids.size() != 1 or not _items_by_id.has(selected_ids[0]):
-		return {}
-	var item: Node = _items_by_id[selected_ids[0]]
-	if item.get_script() != CanvasItemSpriteScript:
-		return {}
-	var image: Image = item.duplicate_image()
-	if image == null:
-		return {}
-	return {
-		"item_id": item.item_id,
-		"asset_id": item.asset_id,
-		"image": image,
-		"image_size": image.get_size(),
-		"world_position": item.position,
-		"scale_factor": item.scale_factor,
-	}
+	return ToolTarget.active_target(_items_by_id, _selection, CanvasItemSpriteScript)
 
 
 func _get_batch_asset_ids(card_id: String, selected_only: bool = false) -> Array:
-	if not _items_by_id.has(card_id):
-		return []
-	var item: Node = _items_by_id[card_id]
-	if item.get_script() != CanvasBatchCardScript:
-		return []
-	if selected_only:
-		return item.get_selected_or_all_asset_ids()
-	return item.asset_ids.duplicate()
+	return BatchOps.get_asset_ids(_items_by_id, card_id, selected_only)
+
+
+func _get_batch_selected_asset_ids(card_id: String) -> Array:
+	return BatchOps.get_selected_asset_ids(_items_by_id, card_id)
+
+
+func _set_batch_review_filter(
+	card_id: String, review_filter: String, record_undo: bool = true
+) -> bool:
+	return BatchOps.set_review_filter(
+		_items_by_id, card_id, review_filter, record_undo, _select_only, _emit_canvas_changed
+	)
+
+
+func _set_batch_review_layout(
+	card_id: String, review_layout: String, record_undo: bool = true
+) -> bool:
+	return BatchOps.set_review_layout(
+		_items_by_id, card_id, review_layout, record_undo, _select_only, _emit_canvas_changed
+	)
 
 
 func _replace_batch_asset_ids(
-	card_id: String, new_asset_ids: Array, record_undo: bool = true
+	card_id: String, new_asset_ids: Array, record_undo: bool = true, compare_asset_ids: Array = []
 ) -> void:
-	if not _items_by_id.has(card_id):
-		return
-	var item: Node = _items_by_id[card_id]
-	if item.get_script() != CanvasBatchCardScript:
-		return
-	var before: Array = item.asset_ids.duplicate()
-	var after := new_asset_ids.duplicate()
-	var do_replace := func() -> void:
-		item.set_asset_ids(after)
-		_select_only([card_id])
-		_emit_canvas_changed()
-	var undo_replace := func() -> void:
-		item.set_asset_ids(before)
-		_select_only([card_id])
-		_emit_canvas_changed()
-	if record_undo:
-		UndoService.perform_action("Replace batch assets", do_replace, undo_replace)
-	else:
-		do_replace.call()
+	BatchOps.replace_asset_ids(
+		_items_by_id,
+		card_id,
+		new_asset_ids,
+		record_undo,
+		compare_asset_ids,
+		_select_only,
+		_emit_canvas_changed
+	)
+
+
+func _set_batch_compare_mode(
+	card_id: String, compare_mode: String, record_undo: bool = true
+) -> bool:
+	return BatchOps.set_compare_mode(
+		_items_by_id, card_id, compare_mode, record_undo, _select_only, _emit_canvas_changed
+	)
+
+
+func _set_batch_review_state(
+	card_id: String, asset_ids: Array, review_state: String, record_undo: bool = true
+) -> int:
+	return BatchOps.set_review_state(
+		_items_by_id,
+		card_id,
+		asset_ids,
+		review_state,
+		record_undo,
+		_select_only,
+		_emit_canvas_changed
+	)
+
+
+func _focus_batch_relative(card_id: String, step: int, record_undo: bool = true) -> Dictionary:
+	return BatchOps.focus_relative(
+		_items_by_id, card_id, step, record_undo, _select_only, _emit_canvas_changed
+	)
 
 
 func _split_batch_selection(card_id: String) -> Node:
-	if not _items_by_id.has(card_id):
+	var spec: Dictionary = BatchOps.split_selection_spec(_items_by_id, card_id)
+	if spec.is_empty():
 		return null
-	var item: Node = _items_by_id[card_id]
-	if item.get_script() != CanvasBatchCardScript:
-		return null
-	var subset: Array = item.get_selected_or_all_asset_ids()
-	if subset.is_empty() or subset.size() == item.asset_ids.size():
-		return null
-	return _add_batch_card(
-		subset,
-		item.position + Vector2(item.get_canvas_bounds().size.x + 24.0, 0.0),
-		"%s subset" % item.label,
-		"",
-		true
+	return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
+
+
+func _split_batch_marked(card_id: String, review_state: String, label_suffix: String) -> Node:
+	var spec: Dictionary = BatchOps.split_marked_spec(
+		_items_by_id, card_id, review_state, label_suffix
 	)
+	if spec.is_empty():
+		return null
+	return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
 
 
 func show_cleanup_preview(
@@ -505,13 +592,13 @@ func move_selected_by(delta: Vector2, record_undo: bool = true) -> void:
 	if _selection.is_empty():
 		return
 
-	var before := _selected_positions()
+	var before := SelectionSnapshot.selected_positions(_items_by_id, _selection)
 	var after := {}
 	var snapped_delta := delta.round()
 	for item_id in before.keys():
 		after[item_id] = (Vector2(before[item_id]) + snapped_delta).round()
 
-	if _positions_equal(before, after):
+	if SelectionSnapshot.positions_equal(before, after):
 		return
 
 	var ids: Array = _selection.get_selected_ids()
@@ -564,7 +651,11 @@ func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:
 
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
-	if _is_panning:
+	if not _graph_edge_drag.is_empty():
+		_graph_edge_drag_world = GraphEdgeInteraction.update_drag_world(self, event.position)
+		queue_redraw()
+		accept_event()
+	elif _is_panning:
 		pan_by_pixels(-event.relative)
 		accept_event()
 	elif _selection.is_dragging_items:
@@ -578,10 +669,20 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 
 func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 	var world_position := screen_to_world(screen_position)
-	var hit_item := _item_at_world(world_position)
+	var hit := _hit_at_world(world_position)
+	var hit_item: Node = hit.get("item", null)
 	if hit_item != null:
+		if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
+			if additive:
+				_selection.toggle(hit_item.item_id, _items_by_id.keys())
+			else:
+				_select_only([hit_item.item_id])
+			_graph_edge_drag = GraphEdgeInteraction.begin_drag(hit)
+			_graph_edge_drag_world = world_position
+			queue_redraw()
+			return
 		if (
-			hit_item.get_script() == CanvasBatchCardScript
+			String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
 			and hit_item.toggle_asset_at_world(world_position)
 		):
 			_select_only([hit_item.item_id])
@@ -593,8 +694,18 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 			_select_only([hit_item.item_id])
 
 		if _selection.has(hit_item.item_id):
-			_selection.start_drag(world_position, _selected_positions())
+			_selection.start_drag(
+				world_position, SelectionSnapshot.selected_positions(_items_by_id, _selection)
+			)
 	else:
+		var edge_hit := GraphEdgeRenderer.hit_edge_at_screen(
+			self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, screen_position
+		)
+		if not edge_hit.is_empty():
+			_selection.clear()
+			_selected_graph_edge = edge_hit
+			queue_redraw()
+			return
 		if not additive:
 			_clear_selection()
 		_selection.start_box(screen_position, additive)
@@ -602,7 +713,22 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 
 
 func _finish_left_interaction(screen_position: Vector2) -> void:
-	if _selection.is_dragging_items:
+	if not _graph_edge_drag.is_empty():
+		var start := _graph_edge_drag.duplicate(true)
+		_graph_edge_drag = {}
+		var result := GraphEdgeInteraction.connect_at_screen(
+			self,
+			_items_by_id,
+			CanvasBatchCardScript,
+			CanvasNodeCardScript,
+			start,
+			screen_position,
+			_emit_canvas_changed
+		)
+		var reason := String(result.get("reason", ""))
+		if not bool(result.get("ok", false)) and not reason.is_empty():
+			graph_connect_failed.emit(reason)
+	elif _selection.is_dragging_items:
 		_commit_drag_if_needed()
 		_selection.stop_drag()
 	elif _selection.is_box_selecting:
@@ -625,8 +751,8 @@ func _drag_selected_to(world_position: Vector2) -> void:
 
 
 func _commit_drag_if_needed() -> void:
-	var after_positions := _selected_positions()
-	if _positions_equal(_selection.drag_start_positions, after_positions):
+	var after_positions := SelectionSnapshot.selected_positions(_items_by_id, _selection)
+	if SelectionSnapshot.positions_equal(_selection.drag_start_positions, after_positions):
 		return
 
 	var before: Dictionary = _selection.drag_start_positions.duplicate(true)
@@ -676,10 +802,21 @@ func _add_sprite_direct(item_data: Dictionary, image: Image) -> Node:
 func _add_batch_direct(item_data: Dictionary) -> Node:
 	var item: Node = CanvasBatchCardScript.new()
 	item.setup_from_data(item_data)
+	item.set_lod_camera_zoom(camera_zoom)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
 	for asset_id in item.asset_ids:
 		AssetLibrary.add_ref(asset_id)
+	_update_item_visibility()
+	queue_redraw()
+	return item
+
+
+func _add_node_direct(item_data: Dictionary) -> Node:
+	var item: Node = CanvasNodeCardScript.new()
+	item.setup_from_data(item_data)
+	item_layer.add_child(item)
+	_items_by_id[item.item_id] = item
 	_update_item_visibility()
 	queue_redraw()
 	return item
@@ -704,62 +841,30 @@ func _remove_item_direct(item_id: String) -> void:
 	queue_redraw()
 
 
-func _item_at_world(world_position: Vector2) -> Node:
-	var children := item_layer.get_children()
-	for index in range(children.size() - 1, -1, -1):
-		var item := children[index]
-		if (
-			(
-				item.get_script() == CanvasItemSpriteScript
-				or item.get_script() == CanvasBatchCardScript
-			)
-			and item.visible
-			and item.contains_world_point(world_position)
-		):
-			return item
-	return null
-
-
-func _selected_positions() -> Dictionary:
-	var positions := {}
-	for item_id in _selection.get_selected_ids():
-		if _items_by_id.has(item_id):
-			positions[item_id] = _items_by_id[item_id].position
-	return positions
+func _hit_at_world(world_position: Vector2) -> Dictionary:
+	return HitPolicy.hit_at_world(
+		item_layer,
+		world_position,
+		CanvasBatchCardScript,
+		CanvasItemSpriteScript,
+		CanvasNodeCardScript
+	)
 
 
 func _apply_positions(positions: Dictionary) -> void:
-	for item_id in positions.keys():
-		if _items_by_id.has(item_id):
-			_items_by_id[item_id].position = Vector2(positions[item_id]).round()
+	SelectionSnapshot.apply_positions(_items_by_id, positions)
 	_sync_cleanup_grid_overlay()
 	queue_redraw()
 
 
-func _positions_equal(left: Dictionary, right: Dictionary) -> bool:
-	if left.size() != right.size():
-		return false
-	for item_id in left.keys():
-		if not right.has(item_id):
-			return false
-		if Vector2(left[item_id]) != Vector2(right[item_id]):
-			return false
-	return true
-
-
 func _select_only(ids: Array) -> void:
+	_selected_graph_edge = {}
 	_selection.select_only(ids, _items_by_id.keys())
 
 
 func _clear_selection() -> void:
+	_selected_graph_edge = {}
 	_selection.clear()
-
-
-func _ids_from_snapshots(snapshots: Array) -> Array:
-	var ids := []
-	for snapshot in snapshots:
-		ids.append(String(snapshot["data"]["id"]))
-	return ids
 
 
 func _set_zoom_to_value(value: float) -> void:
@@ -787,6 +892,7 @@ func _update_layer_transform() -> void:
 		raw_position, viewport_scale_factor
 	)
 	item_layer.scale = Vector2.ONE * art_logical_scale
+	LODCoordinator.sync_batch_camera_zoom(_items_by_id, CanvasBatchCardScript, camera_zoom)
 	_sync_cleanup_grid_overlay()
 	queue_redraw()
 
@@ -829,10 +935,6 @@ func _camera_center_for_snapped_anchor(anchor_world: Vector2, screen_anchor: Vec
 		_get_art_logical_scale(),
 		_resolve_viewport_scale_factor()
 	)
-
-
-func _draw_pixel_grid() -> void:
-	PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
 
 
 func _emit_canvas_changed() -> void:
@@ -879,10 +981,6 @@ func _on_cleanup_grid_changed(scale: float, offset: Vector2) -> void:
 	cleanup_grid_changed.emit(scale, offset)
 
 
-func _update_cleanup_preview_alt_state() -> void:
-	_cleanup_preview.update_alt_state()
-
-
 func _tool_manager_handles(event: InputEvent) -> bool:
 	return ToolInputPolicy.tool_manager_handles(
 		tool_manager, event, self, _get_active_tool_target()
@@ -890,7 +988,7 @@ func _tool_manager_handles(event: InputEvent) -> bool:
 
 
 func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
-	var hit_item := _item_at_world(screen_to_world(screen_position))
+	var hit_item: Node = _hit_at_world(screen_to_world(screen_position)).get("item", null)
 	if hit_item == null or hit_item.get_script() != CanvasBatchCardScript:
 		return
 	_select_only([hit_item.item_id])

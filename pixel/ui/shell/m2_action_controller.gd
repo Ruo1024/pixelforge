@@ -7,11 +7,9 @@ extends RefCounted
 
 const Strings := preload("res://ui/shell/strings.gd")
 const TaskScript := preload("res://services/pf_task.gd")
-const IdUtil := preload("res://core/util/id_util.gd")
 const Matting := preload("res://core/pixel/matting.gd")
 const Segmenter := preload("res://core/pixel/segmenter.gd")
-const Outliner := preload("res://core/pixel/outliner.gd")
-const Pipeline := preload("res://core/pixel/pipeline.gd")
+const PixelOperations := preload("res://services/pixel_operations.gd")
 const ErrorHelper := preload("res://ui/dialogs/error_helper.gd")
 
 const CLEANUP_RESULT_GAP := 8
@@ -151,21 +149,11 @@ func _matting_work(task_ref: Variant) -> Dictionary:
 		if task_ref.cancel_requested:
 			return {"canceled": true, "items": results}
 		var item: Dictionary = items[index]
-		var matting_result: Dictionary = Matting.matte(item["image"], params)
-		(
-			results
-			. append(
-				{
-					"source_data": item["data"],
-					"image": matting_result["image"],
-					"suffix": "matte",
-					"tags": ["matting"],
-					"provenance_key": "matting",
-					"report": _json_safe(matting_result),
-					"warning": String(matting_result.get("warning", "")),
-				}
-			)
+		var operation_result: Dictionary = PixelOperations.apply_image(
+			PixelOperations.OP_MATTING, item["image"], params
 		)
+		operation_result["source_data"] = item["data"]
+		results.append(operation_result)
 		task_ref.report_progress(float(index + 1) / float(items.size()), "matting")
 	return {"canceled": false, "items": results}
 
@@ -215,20 +203,11 @@ func _outline_work(task_ref: Variant) -> Dictionary:
 		if task_ref.cancel_requested:
 			return {"canceled": true, "items": results}
 		var item: Dictionary = items[index]
-		var output: Image = Outliner.add_outline(item["image"], params)
-		(
-			results
-			. append(
-				{
-					"source_data": item["data"],
-					"image": output,
-					"suffix": "outline",
-					"tags": ["outline"],
-					"provenance_key": "outline",
-					"report": _json_safe(params),
-				}
-			)
+		var operation_result: Dictionary = PixelOperations.apply_image(
+			PixelOperations.OP_OUTLINE, item["image"], params
 		)
+		operation_result["source_data"] = item["data"]
+		results.append(operation_result)
 		task_ref.report_progress(float(index + 1) / float(items.size()), "outline")
 	return {"canceled": false, "items": results}
 
@@ -236,104 +215,49 @@ func _outline_work(task_ref: Variant) -> Dictionary:
 func _batch_cleanup_work(task_ref: Variant) -> Dictionary:
 	var asset_ids: Array = task_ref.payload["asset_ids"]
 	var params: Dictionary = task_ref.payload["extra"].get("params", {})
-	var results := []
-	for index in range(asset_ids.size()):
-		if task_ref.cancel_requested:
-			return {
-				"canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
-			}
-		var asset_id := String(asset_ids[index])
-		var image := AssetLibrary.get_image(asset_id)
-		if image == null:
-			continue
-		var pipeline_result := Pipeline.apply(image, params)
-		(
-			results
-			. append(
-				{
-					"parent_asset": asset_id,
-					"image": pipeline_result["image"],
-					"name_suffix": "clean",
-					"origin": "edited",
-					"tags": ["cleanup"],
-					"provenance_key": "cleanup",
-					"report":
-					_json_safe(
-						{
-							"source_asset": asset_id,
-							"params": params,
-							"report": pipeline_result.get("report", {}),
-						}
-					),
-				}
-			)
-		)
-		task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_cleanup")
-	return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
+	var result := PixelOperations.apply_to_assets(
+		asset_ids,
+		AssetLibrary,
+		PixelOperations.OP_CLEANUP,
+		params,
+		func() -> bool: return task_ref.cancel_requested,
+		func(ratio: float, _operation: String) -> void:
+			task_ref.report_progress(ratio, "batch_cleanup")
+	)
+	result["card_id"] = String(task_ref.payload["card_id"])
+	return result
 
 
 func _batch_matte_work(task_ref: Variant) -> Dictionary:
 	var asset_ids: Array = task_ref.payload["asset_ids"]
 	var params: Dictionary = _matte_params(task_ref.payload["extra"].get("params", {}))
-	var results := []
-	for index in range(asset_ids.size()):
-		if task_ref.cancel_requested:
-			return {
-				"canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
-			}
-		var asset_id := String(asset_ids[index])
-		var image := AssetLibrary.get_image(asset_id)
-		if image == null:
-			continue
-		var matting_result: Dictionary = Matting.matte(image, params)
-		(
-			results
-			. append(
-				{
-					"parent_asset": asset_id,
-					"image": matting_result["image"],
-					"name_suffix": "matte",
-					"origin": "edited",
-					"tags": ["matting"],
-					"provenance_key": "matting",
-					"report": _json_safe(matting_result),
-					"warning": String(matting_result.get("warning", "")),
-				}
-			)
-		)
-		task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_matting")
-	return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
+	var result := PixelOperations.apply_to_assets(
+		asset_ids,
+		AssetLibrary,
+		PixelOperations.OP_MATTING,
+		params,
+		func() -> bool: return task_ref.cancel_requested,
+		func(ratio: float, _operation: String) -> void:
+			task_ref.report_progress(ratio, "batch_matting")
+	)
+	result["card_id"] = String(task_ref.payload["card_id"])
+	return result
 
 
 func _batch_outline_work(task_ref: Variant) -> Dictionary:
 	var asset_ids: Array = task_ref.payload["asset_ids"]
 	var params: Dictionary = _outline_params(task_ref.payload["extra"].get("params", {}))
-	var results := []
-	for index in range(asset_ids.size()):
-		if task_ref.cancel_requested:
-			return {
-				"canceled": true, "card_id": String(task_ref.payload["card_id"]), "items": results
-			}
-		var asset_id := String(asset_ids[index])
-		var image := AssetLibrary.get_image(asset_id)
-		if image == null:
-			continue
-		(
-			results
-			. append(
-				{
-					"parent_asset": asset_id,
-					"image": Outliner.add_outline(image, params),
-					"name_suffix": "outline",
-					"origin": "edited",
-					"tags": ["outline"],
-					"provenance_key": "outline",
-					"report": _json_safe(params),
-				}
-			)
-		)
-		task_ref.report_progress(float(index + 1) / float(asset_ids.size()), "batch_outline")
-	return {"canceled": false, "card_id": String(task_ref.payload["card_id"]), "items": results}
+	var result := PixelOperations.apply_to_assets(
+		asset_ids,
+		AssetLibrary,
+		PixelOperations.OP_OUTLINE,
+		params,
+		func() -> bool: return task_ref.cancel_requested,
+		func(ratio: float, _operation: String) -> void:
+			task_ref.report_progress(ratio, "batch_outline")
+	)
+	result["card_id"] = String(task_ref.payload["card_id"])
+	return result
 
 
 func _on_generated_asset_task_finished(result: Variant, done_status: String) -> void:
@@ -356,30 +280,8 @@ func _on_generated_asset_task_finished(result: Variant, done_status: String) -> 
 		var source_width := _source_width_for_canvas_data(source_data, output)
 		var placement_index := int(placement_offsets.get(parent_asset_id, 0))
 		placement_offsets[parent_asset_id] = placement_index + 1
-
-		var provenance_key := String(item_result.get("provenance_key", "operation"))
-		var provenance := {
-			"provider": null,
-			"model": null,
-			"prompt": "",
-			"seed": null,
-			"parent_asset": parent_asset_id,
-			"graph_id": null,
-			"created_at": IdUtil.utc_now_iso(),
-		}
-		provenance[provenance_key] = _json_safe(item_result.get("report", {}))
-
-		var asset_id := (
-			AssetLibrary
-			. register_image(
-				output,
-				"%s_%s" % [parent_asset_id.left(8), String(item_result.get("suffix", "m2"))],
-				{
-					"origin": "edited",
-					"tags": item_result.get("tags", []),
-					"provenance": provenance,
-				}
-			)
+		var asset_id := PixelOperations.register_result_asset(
+			AssetLibrary, parent_asset_id, item_result
 		)
 		var world_position := (
 			source_position
@@ -429,49 +331,23 @@ func _on_batch_task_finished(result: Variant, done_status: String) -> void:
 		ErrorHelper.show_matte_error(_dialog_parent, first_warning)
 
 	var new_asset_ids: Array[String] = []
+	var source_asset_ids: Array[String] = []
 	for item_result in result.get("items", []):
 		var parent_asset_id := String(item_result.get("parent_asset", ""))
-		var output: Image = item_result["image"]
-		var provenance_key := String(item_result.get("provenance_key", "operation"))
-		var provenance := {
-			"provider": null,
-			"model": null,
-			"prompt": "",
-			"seed": null,
-			"parent_asset": parent_asset_id,
-			"graph_id": null,
-			"created_at": IdUtil.utc_now_iso(),
-		}
-		provenance[provenance_key] = _json_safe(item_result.get("report", {}))
-		var asset_id := (
-			AssetLibrary
-			. register_image(
-				output,
-				(
-					"%s_%s"
-					% [parent_asset_id.left(8), String(item_result.get("name_suffix", "batch"))]
-				),
-				{
-					"origin": String(item_result.get("origin", "edited")),
-					"tags": item_result.get("tags", []),
-					"provenance": provenance,
-				}
-			)
+		var asset_id := PixelOperations.register_result_asset(
+			AssetLibrary, parent_asset_id, item_result
 		)
 		new_asset_ids.append(asset_id)
+		source_asset_ids.append(parent_asset_id)
 
-	_canvas._replace_batch_asset_ids(String(result.get("card_id", "")), new_asset_ids, true)
+	_canvas._replace_batch_asset_ids(
+		String(result.get("card_id", "")), new_asset_ids, true, source_asset_ids
+	)
 	_status_label.text = done_status
 
 
 func _matte_params(params: Dictionary) -> Dictionary:
-	if params.is_empty():
-		return {"mode": Matting.MODE_FLOOD, "tolerance": 12.0, "feather": 0}
-	return {
-		"mode": String(params.get("mode", Matting.MODE_FLOOD)),
-		"tolerance": float(params.get("tolerance", 12.0)),
-		"feather": int(params.get("feather", 0)),
-	}
+	return PixelOperations.normalize_matte_params(params)
 
 
 func _slice_params(params: Dictionary) -> Dictionary:
@@ -494,14 +370,7 @@ func _slice_params(params: Dictionary) -> Dictionary:
 
 
 func _outline_params(params: Dictionary) -> Dictionary:
-	if params.is_empty():
-		return {"type": Outliner.TYPE_OUTER, "color": Color.BLACK, "corner": Outliner.CORNER_CROSS}
-	return {
-		"type": String(params.get("type", Outliner.TYPE_OUTER)),
-		"color": params.get("color", Color.BLACK),
-		"corner": String(params.get("corner", Outliner.CORNER_CROSS)),
-		"colored": bool(params.get("colored", false)),
-	}
+	return PixelOperations.normalize_outline_params(params)
 
 
 func _first_warning(items: Array) -> String:
@@ -536,29 +405,3 @@ static func _source_width_for_canvas_data(data: Dictionary, fallback_image: Imag
 
 static func _rect_to_array(rect: Rect2i) -> Array:
 	return [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
-
-
-static func _json_safe(value: Variant) -> Variant:
-	match typeof(value):
-		TYPE_DICTIONARY:
-			var output := {}
-			for key in Dictionary(value).keys():
-				output[String(key)] = _json_safe(Dictionary(value)[key])
-			return output
-		TYPE_ARRAY:
-			var output := []
-			for item in Array(value):
-				output.append(_json_safe(item))
-			return output
-		TYPE_VECTOR2:
-			var vector := Vector2(value)
-			return [vector.x, vector.y]
-		TYPE_VECTOR2I:
-			var vector_i := Vector2i(value)
-			return [vector_i.x, vector_i.y]
-		TYPE_RECT2I:
-			return _rect_to_array(Rect2i(value))
-		TYPE_COLOR:
-			return Color(value).to_html(true)
-		_:
-			return value
