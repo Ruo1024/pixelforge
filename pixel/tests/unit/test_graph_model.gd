@@ -74,6 +74,20 @@ func test_cycle_detection_blocks_back_edges() -> void:
 	assert_false(bool(graph.can_connect("b", "out", "a", "in")["ok"]))
 
 
+func test_input_port_allows_only_one_source_edge() -> void:
+	var graph := GraphScript.new()
+	graph.add_node(PortNode.new("source_a", "", "image"), "source_a")
+	graph.add_node(PortNode.new("source_b", "", "image"), "source_b")
+	graph.add_node(PortNode.new("target", "image", ""), "target")
+
+	assert_true(bool(graph.add_edge("source_a", "out", "target", "in")["ok"]))
+
+	var result := graph.can_connect("source_b", "out", "target", "in")
+	assert_false(bool(result["ok"]))
+	assert_eq(String(result["reason"]), "Input port already has a connection")
+	assert_eq(graph.edges, [{"from": ["source_a", "out"], "to": ["target", "in"]}])
+
+
 func test_batch_node_asset_ids_roundtrip_through_graph_json() -> void:
 	var graph := GraphScript.new()
 	var node_id := graph.add_node(

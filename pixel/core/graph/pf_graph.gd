@@ -112,6 +112,8 @@ func can_connect(
 		var source: PFNode = nodes[from_node]["node"]
 		var target: PFNode = nodes[to_node]["node"]
 		result = _validate_connect_ports(source, from_port, target, to_port)
+	if bool(result["ok"]) and _input_port_has_source(to_node, to_port):
+		result = _connect_result(false, "Input port already has a connection")
 	if bool(result["ok"]) and _would_create_cycle(from_node, to_node):
 		result = _connect_result(false, "Connection would create a cycle")
 	return result
@@ -225,6 +227,14 @@ func _has_path(start_node: String, target_node: String) -> bool:
 func _has_edge(candidate: Dictionary) -> bool:
 	for edge in edges:
 		if edge == candidate:
+			return true
+	return false
+
+
+func _input_port_has_source(node_id: String, port_name: String) -> bool:
+	for edge in edges:
+		var to_data: Array = edge.get("to", ["", ""])
+		if String(to_data[0]) == node_id and String(to_data[1]) == port_name:
 			return true
 	return false
 

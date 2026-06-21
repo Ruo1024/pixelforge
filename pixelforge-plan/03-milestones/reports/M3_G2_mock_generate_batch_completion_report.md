@@ -10279,7 +10279,7 @@ index e904876..e4eeada 100644
 +
  ---
 
- ## 7. 技术骨架卡
+## 7. 技术骨架卡
 ```
 
 ## 2026-06-21 M3 G-4b Run Selected Graph 失败原因状态
@@ -11415,4 +11415,119 @@ index b368ff9..dc3ff30 100644
  ---
 
  ## 7. 技术骨架卡
+```
+
+## 2026-06-21 M3 G-4c Graph 输入端口单来源约束
+
+### 本轮实现说明
+
+- 在 `PFGraph.can_connect()` 中新增目标输入端口占用检查：同一个输入端口已有来源边时，第二条连接会被拒绝并返回 `Input port already has a connection`。
+- 保持已有连接语义不变：类型匹配、`image -> image_list` 自动包装、环检测、输出端口扇出仍按原逻辑运行。
+- 新增 `test_input_port_allows_only_one_source_edge`，覆盖第二条兼容来源边被拒绝且原 edge 不变。
+- 在 `M3-开发规划.md` 追加 G-4c 小卡，记录该约束服务于 mock runner 当前“一口一值”的稳定运行语义，后续再补替换已有连线等交互。
+
+### 验证结果
+
+- `./pixel/scripts/run_tests.sh -gtest=res://tests/unit/test_graph_model.gd`：通过；脚本实际执行全套 GUT，163/163 tests，1280 asserts。
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/verify_m3_ux7.sh`：通过。
+- `./pixel/scripts/verify_m3_g5.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：通过，163/163 tests，1280 asserts。
+
+备注：GUT 退出时仍有既有 orphan/leak/resource-in-use 提示，但测试汇总为通过；本轮未新增图片、未触碰保留目录。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 保持默认 `AI Generate.images -> Mock Batch.in` 连线不动。
+3. 尝试再从另一个兼容 `image_list` 输出端拖到同一个 `Mock Batch.in` 输入端口附近并松开。
+4. 预期不会新增第二条进入 `Mock Batch.in` 的 edge，状态栏显示 `Graph connection failed: Input port already has a connection`。
+5. 删除原有进入 `Mock Batch.in` 的连线后，再重新连接，预期可以成功；随后执行 `File > Run Selected Graph`，batch 仍正常刷新为 10 张。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/core/graph/pf_graph.gd b/pixel/core/graph/pf_graph.gd
+index ab349cb..4628548 100644
+--- a/pixel/core/graph/pf_graph.gd
++++ b/pixel/core/graph/pf_graph.gd
+@@ -112,6 +112,8 @@ func can_connect(
+      var source: PFNode = nodes[from_node]["node"]
+      var target: PFNode = nodes[to_node]["node"]
+      result = _validate_connect_ports(source, from_port, target, to_port)
++ if bool(result["ok"]) and _input_port_has_source(to_node, to_port):
++     result = _connect_result(false, "Input port already has a connection")
+  if bool(result["ok"]) and _would_create_cycle(from_node, to_node):
+      result = _connect_result(false, "Connection would create a cycle")
+  return result
+@@ -229,6 +231,14 @@ func _has_edge(candidate: Dictionary) -> bool:
+  return false
+
+
++func _input_port_has_source(node_id: String, port_name: String) -> bool:
++    for edge in edges:
++        var to_data: Array = edge.get("to", ["", ""])
++        if String(to_data[0]) == node_id and String(to_data[1]) == port_name:
++            return true
++    return false
++
++
+ func _edge_from_node(edge: Dictionary) -> String:
+  var from_data: Array = edge.get("from", ["", ""])
+  return String(from_data[0])
+diff --git a/pixel/tests/unit/test_graph_model.gd b/pixel/tests/unit/test_graph_model.gd
+index adba44e..bc0e2a3 100644
+--- a/pixel/tests/unit/test_graph_model.gd
++++ b/pixel/tests/unit/test_graph_model.gd
+@@ -74,6 +74,20 @@ func test_cycle_detection_blocks_back_edges() -> void:
+  assert_false(bool(graph.can_connect("b", "out", "a", "in")["ok"]))
+
+
++func test_input_port_allows_only_one_source_edge() -> void:
++    var graph := GraphScript.new()
++    graph.add_node(PortNode.new("source_a", "", "image"), "source_a")
++    graph.add_node(PortNode.new("source_b", "", "image"), "source_b")
++    graph.add_node(PortNode.new("target", "image", ""), "target")
++
++    assert_true(bool(graph.add_edge("source_a", "out", "target", "in")["ok"]))
++
++    var result := graph.can_connect("source_b", "out", "target", "in")
++    assert_false(bool(result["ok"]))
++    assert_eq(String(result["reason"]), "Input port already has a connection")
++    assert_eq(graph.edges, [{"from": ["source_a", "out"], "to": ["target", "in"]}])
++
++
+ func test_batch_node_asset_ids_roundtrip_through_graph_json() -> void:
+  var graph := GraphScript.new()
+  var node_id := graph.add_node(
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index 3ce829e..e88a7fd 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -466,6 +466,25 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ - 自动化覆盖断开必填 spec 连线后的状态栏文案和 batch 不替换。
+ - 其他无选中/无 graph/无 batch 的基础失败路径保持通用文案。
+
++### G-4c Graph 输入端口单来源约束
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 手动搭链并希望图运行语义稳定的人 |
++| 当前痛点 | 同一输入端口如果允许多条来源边，M3 mock runner 会按边遍历顺序覆盖输入，画布看似多连但运行结果不确定 |
++| 技术选择 | `PFGraph.can_connect()` 在类型校验后检查目标输入端口是否已有来源边 |
++| 选择原因 | 输入端口 v1 语义是一口一值，先堵住不稳定连接，不提前做 merge/select 等复杂节点 |
++| 优势 | 连线失败能复用现有状态栏反馈，runner 不再收到隐式覆盖输入 |
++| 缺陷 | 尚未提供“替换已有连线”的一键交互；用户需要先删除旧线再重连 |
++| 改进空间 | 后续可在端口附近加替换提示、节点红框和 inspector 连接列表 |
++| 验证入口 | 给同一输入端口接第二条兼容线，应不新增 edge，并返回 `Input port already has a connection` |
++
++任务：
++
++- `PFGraph.can_connect()` 拒绝目标输入端口已有来源边的连接。
++- 保持同一输出端口扇出到多个目标的能力。
++- 自动化覆盖第二条兼容来源边被拒绝且原 edge 不变。
++
+ ---
+
+ ## 8. 从原 M3 规划继承与降级
 ```
