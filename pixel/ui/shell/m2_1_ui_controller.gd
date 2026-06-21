@@ -244,13 +244,17 @@ func run_selected_mock_graph() -> void:
 	var graph_id := String(binding["graph_id"])
 	var graph_data := ProjectService.get_graph_data(graph_id)
 	if graph_data.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
+		_status_label.text = _graph_run_failure_status(
+			{"message": Strings.STATUS_GRAPH_RUN_MISSING_GRAPH}
+		)
 		return
 
 	var graph := GraphScript.from_json(graph_data)
 	var batch_node_id := _first_batch_node_id(graph)
 	if batch_node_id.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
+		_status_label.text = _graph_run_failure_status(
+			{"message": Strings.STATUS_GRAPH_RUN_NO_BATCH}
+		)
 		return
 
 	var runner := GraphMockRunnerScript.new()
@@ -265,7 +269,9 @@ func run_selected_mock_graph() -> void:
 	var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if batch_card_id.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
+		_status_label.text = _graph_run_failure_status(
+			{"message": Strings.STATUS_GRAPH_RUN_MISSING_BATCH_CARD}
+		)
 		return
 	_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
 	_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()

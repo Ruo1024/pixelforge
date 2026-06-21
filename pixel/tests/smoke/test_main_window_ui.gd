@@ -273,8 +273,39 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	assert_eq(edge_rerun_asset_ids.size(), 10)
 	assert_ne(edge_rerun_asset_ids, rerun_asset_ids)
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
+	var valid_graph_data := graph_data.duplicate(true)
 
-	graph_data = ProjectService.current_project.graphs[graph_id].duplicate(true)
+	canvas.select_ids([])
+	canvas._selected_graph_edge = {"graph_id": "missing_graph", "edge": {}}
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	assert_eq(
+		_status_label(main).text,
+		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % Strings.STATUS_GRAPH_RUN_MISSING_GRAPH
+	)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
+
+	var graph_without_batch := valid_graph_data.duplicate(true)
+	var kept_nodes := []
+	for raw_node in graph_without_batch["nodes"]:
+		var node_data: Dictionary = raw_node
+		if String(node_data.get("type", "")) != "batch":
+			kept_nodes.append(node_data)
+	graph_without_batch["nodes"] = kept_nodes
+	ProjectService.set_graph_data(graph_id, graph_without_batch, true)
+
+	canvas.select_ids([batch_item_id])
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	assert_eq(
+		_status_label(main).text,
+		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % Strings.STATUS_GRAPH_RUN_NO_BATCH
+	)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
+
+	graph_data = valid_graph_data.duplicate(true)
 	_remove_graph_edge(graph_data, "size", "spec", "generate", "spec")
 	ProjectService.set_graph_data(graph_id, graph_data, true)
 	var stable_asset_ids := edge_rerun_asset_ids.duplicate()

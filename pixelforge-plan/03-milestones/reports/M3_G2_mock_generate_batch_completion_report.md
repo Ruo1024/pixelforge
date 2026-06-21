@@ -10450,6 +10450,162 @@ index dc3ff30..3ce829e 100644
  ## 8. 从原 M3 规划继承与降级
 ```
 
+## 2026-06-22 M3 G-4e Run Selected Graph 基础失败原因补齐
+
+### 本轮实现说明
+
+- 为 `Run Selected Graph` 的非 runner 基础失败路径补充集中原因文案：选中的 graph 丢失、graph 没有 batch 节点、找不到对应 batch 卡。
+- `M21UiController.run_selected_mock_graph()` 继续复用 `STATUS_GRAPH_RUN_FAILED_DETAIL`，让这些基础失败也显示为 `Graph run failed: ...`。
+- 扩展 mock graph smoke：覆盖选中缺失 graph edge 后运行、移除 graph batch 节点后运行，均显示具体原因且不替换现有 batch 队列。
+- 在 `M3-开发规划.md` 追加 G-4e 小卡，记录这是状态栏诊断补齐，不提前实现错误面板或节点红框。
+
+### 验证结果
+
+- `./pixel/scripts/run_tests.sh -gtest=res://tests/smoke/test_main_window_ui.gd`：通过；脚本实际执行全套 GUT，163/163 tests，1287 asserts。
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/verify_m3_ux7.sh`：通过。
+- `./pixel/scripts/verify_m3_g5.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：通过，163/163 tests，1287 asserts。
+
+备注：GUT 退出时仍有既有 orphan/leak/resource-in-use 提示，但测试汇总为通过；本轮未新增图片、未触碰保留目录。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 正常选中 Mock Batch 或连线执行 `File > Run Selected Graph`，确认仍能刷新 10 张。
+3. 若通过调试/测试构造缺失 graph 选择，预期状态栏显示 `Graph run failed: Selected graph is missing`。
+4. 若通过调试/测试构造没有 batch 节点的 graph，预期状态栏显示 `Graph run failed: Graph has no batch node`。
+5. 上述失败情况下，原 Mock Batch 队列保持不变。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 099b474..10bee49 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -273,8 +273,39 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
+  assert_eq(edge_rerun_asset_ids.size(), 10)
+  assert_ne(edge_rerun_asset_ids, rerun_asset_ids)
+  assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
++ var valid_graph_data := graph_data.duplicate(true)
+
+- graph_data = ProjectService.current_project.graphs[graph_id].duplicate(true)
++ canvas.select_ids([])
++ canvas._selected_graph_edge = {"graph_id": "missing_graph", "edge": {}}
++ controller.run_selected_mock_graph()
++ await wait_process_frames(2)
++
++ assert_eq(
++     _status_label(main).text,
++     Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % Strings.STATUS_GRAPH_RUN_MISSING_GRAPH
++ )
++ assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
++
++ var graph_without_batch := valid_graph_data.duplicate(true)
++ var kept_nodes := []
++ for raw_node in graph_without_batch["nodes"]:
++     var node_data: Dictionary = raw_node
++     if String(node_data.get("type", "")) != "batch":
++         kept_nodes.append(node_data)
++ graph_without_batch["nodes"] = kept_nodes
++ ProjectService.set_graph_data(graph_id, graph_without_batch, true)
++
++ canvas.select_ids([batch_item_id])
++ controller.run_selected_mock_graph()
++ await wait_process_frames(2)
++
++ assert_eq(
++     _status_label(main).text,
++     Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % Strings.STATUS_GRAPH_RUN_NO_BATCH
++ )
++ assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
++
++ graph_data = valid_graph_data.duplicate(true)
+  _remove_graph_edge(graph_data, "size", "spec", "generate", "spec")
+  ProjectService.set_graph_data(graph_id, graph_data, true)
+  var stable_asset_ids := edge_rerun_asset_ids.duplicate()
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index 3a1669c..032c55e 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -244,13 +244,17 @@ func run_selected_mock_graph() -> void:
+  var graph_id := String(binding["graph_id"])
+  var graph_data := ProjectService.get_graph_data(graph_id)
+  if graph_data.is_empty():
+-     _status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++     _status_label.text = _graph_run_failure_status(
++         {"message": Strings.STATUS_GRAPH_RUN_MISSING_GRAPH}
++     )
+      return
+
+  var graph := GraphScript.from_json(graph_data)
+  var batch_node_id := _first_batch_node_id(graph)
+  if batch_node_id.is_empty():
+-     _status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++     _status_label.text = _graph_run_failure_status(
++         {"message": Strings.STATUS_GRAPH_RUN_NO_BATCH}
++     )
+      return
+
+  var runner := GraphMockRunnerScript.new()
+@@ -265,7 +269,9 @@ func run_selected_mock_graph() -> void:
+  var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
+  ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+  if batch_card_id.is_empty():
+-     _status_label.text = Strings.STATUS_GRAPH_RUN_FAILED
++     _status_label.text = _graph_run_failure_status(
++         {"message": Strings.STATUS_GRAPH_RUN_MISSING_BATCH_CARD}
++     )
+      return
+  _canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
+  _status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index 1a7517a..735863a 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -71,6 +71,9 @@ const STATUS_GRAPH_RUN_DONE := "Graph run complete: %d sprites"
+ const STATUS_GRAPH_RUN_FAILED := "Graph run failed"
+ const STATUS_GRAPH_RUN_FAILED_DETAIL := "Graph run failed: %s"
+ const STATUS_GRAPH_RUN_NEEDS_SELECTION := "Select a graph node or batch before running"
++const STATUS_GRAPH_RUN_MISSING_GRAPH := "Selected graph is missing"
++const STATUS_GRAPH_RUN_NO_BATCH := "Graph has no batch node"
++const STATUS_GRAPH_RUN_MISSING_BATCH_CARD := "Batch card is missing"
+ const STATUS_GRAPH_CONNECT_FAILED := "Graph connection failed: %s"
+ const CLEANUP_TITLE := "Pixel Cleanup"
+ const CLEANUP_SELECTED_FORMAT := "%d selected"
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index 17e52d1..6c3375e 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -504,6 +504,25 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ - `M21UiController._selected_graph_binding()` 支持从 selected edge 获取 `graph_id`。
+ - 自动化覆盖选中 edge 后运行 mock graph 并替换 batch 队列。
+
++### G-4e Run Selected Graph 基础失败原因补齐
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 运行 graph 失败后需要知道是选择问题、图数据问题还是输出容器问题的人 |
++| 当前痛点 | runner 内部失败已有详细原因，但 graph 丢失、无 batch 节点、batch 卡缺失仍只显示 `Graph run failed` |
++| 技术选择 | 继续复用 `STATUS_GRAPH_RUN_FAILED_DETAIL`，为非 runner 基础失败路径补集中原因文案 |
++| 选择原因 | 不提前做错误面板，只把已有分支的语义送到底部状态栏 |
++| 优势 | 失败更可诊断，尤其适合用户删除/恢复节点和 graph 卡后的快速试错 |
++| 缺陷 | 仍无节点红框、错误列表、自动修复建议 |
++| 改进空间 | 后续 executor validation 接入后，把这些原因映射到节点状态和 inspector |
++| 验证入口 | 选中缺失 graph edge 或移除 graph batch 节点后运行，状态栏分别显示具体原因且不替换 batch |
++
++任务：
++
++- 新增集中失败原因文案：缺失 graph、无 batch 节点、batch 卡缺失。
++- `Run Selected Graph` 的基础失败分支复用详细失败状态格式。
++- 自动化覆盖缺失 graph 与无 batch 节点时 batch 队列不变。
++
+ ---
+
+ ## 8. 从原 M3 规划继承与降级
+```
+
 ## 2026-06-22 M3 G-4d 选中连线也可 Run Selected Graph
 
 ### 本轮实现说明
