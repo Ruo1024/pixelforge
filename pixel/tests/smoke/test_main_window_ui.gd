@@ -259,10 +259,25 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	assert_ne(rerun_asset_ids, first_asset_ids)
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
 
+	canvas.select_ids([])
+	canvas._selected_graph_edge = {
+		"graph_id": graph_id,
+		"edge": {"from": ["generate", "images"], "to": ["batch_1", "in"]},
+	}
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	graph_data = ProjectService.current_project.graphs[graph_id]
+	batch_node = graph_data["nodes"][3]
+	var edge_rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
+	assert_eq(edge_rerun_asset_ids.size(), 10)
+	assert_ne(edge_rerun_asset_ids, rerun_asset_ids)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
+
 	graph_data = ProjectService.current_project.graphs[graph_id].duplicate(true)
 	_remove_graph_edge(graph_data, "size", "spec", "generate", "spec")
 	ProjectService.set_graph_data(graph_id, graph_data, true)
-	var stable_asset_ids := rerun_asset_ids.duplicate()
+	var stable_asset_ids := edge_rerun_asset_ids.duplicate()
 
 	canvas.select_ids([batch_item_id])
 	controller.run_selected_mock_graph()

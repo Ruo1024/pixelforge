@@ -770,6 +770,10 @@ func _selected_graph_binding() -> Dictionary:
 		if graph_id.is_empty() or node_id.is_empty():
 			continue
 		return {"item_id": String(item_data["id"]), "graph_id": graph_id, "node_id": node_id}
+	var selected_edge: Dictionary = _canvas._selected_graph_edge.duplicate(true)
+	var edge_graph_id := String(selected_edge.get("graph_id", ""))
+	if not edge_graph_id.is_empty():
+		return {"item_id": "", "graph_id": edge_graph_id, "node_id": ""}
 	return {}
 
 

@@ -10450,6 +10450,114 @@ index dc3ff30..3ce829e 100644
  ## 8. 从原 M3 规划继承与降级
 ```
 
+## 2026-06-22 M3 G-4d 选中连线也可 Run Selected Graph
+
+### 本轮实现说明
+
+- `M21UiController._selected_graph_binding()` 在没有选中节点/批次时，回退读取 canvas 当前选中的 graph edge，并用 edge 的 `graph_id` 作为 `Run Selected Graph` 的运行目标。
+- 选中 graph edge 后执行 `Run Selected Graph` 会重跑当前 mock graph，并替换原 batch 队列，避免“点中线后运行却提示未选择 graph”的割裂体验。
+- 扩展 `test_mock_generate_menu_action_creates_visible_batch_and_graph`，覆盖 batch 选中重跑、edge 选中重跑、断开必填 spec 后失败且 batch 不替换三段连续闭环。
+- 在 `M3-开发规划.md` 追加 G-4d 小卡，记录这只是运行入口交接补齐，不提前做 edge inspector 或详情面板。
+
+### 验证结果
+
+- `./pixel/scripts/run_tests.sh -gtest=res://tests/smoke/test_main_window_ui.gd`：通过；脚本实际执行全套 GUT，163/163 tests，1283 asserts。
+- `./pixel/scripts/lint.sh`：通过。
+- `./pixel/scripts/verify_m3_ux7.sh`：通过。
+- `./pixel/scripts/verify_m3_g5.sh`：通过。
+- `./pixel/scripts/run_tests.sh`：通过，163/163 tests，1283 asserts。
+
+备注：GUT 退出时仍有既有 orphan/leak/resource-in-use 提示，但测试汇总为通过；本轮未新增图片、未触碰保留目录。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`。
+2. 点击 `AI Generate.images -> Mock Batch.in` 连线，确认连线进入选中态。
+3. 执行 `File > Run Selected Graph`。
+4. 预期：状态栏显示 `Graph run complete: 10 sprites`，Mock Batch 队列被替换为新一批 10 张，而不是追加。
+5. 再选中 Mock Batch 或任一节点执行 `Run Selected Graph`，预期仍正常刷新；断开必填 `Size Spec -> AI Generate.spec` 后运行仍显示具体失败原因且不替换 batch。
+
+### 本轮完整 diff
+
+```diff
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 7f0ae0f..099b474 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -259,10 +259,25 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
+  assert_ne(rerun_asset_ids, first_asset_ids)
+  assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
+
++ canvas.select_ids([])
++ canvas._selected_graph_edge = {
++     "graph_id": graph_id,
++     "edge": {"from": ["generate", "images"], "to": ["batch_1", "in"]},
++ }
++ controller.run_selected_mock_graph()
++ await wait_process_frames(2)
++
++ graph_data = ProjectService.current_project.graphs[graph_id]
++ batch_node = graph_data["nodes"][3]
++ var edge_rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
++ assert_eq(edge_rerun_asset_ids.size(), 10)
++ assert_ne(edge_rerun_asset_ids, rerun_asset_ids)
++ assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
++
+  graph_data = ProjectService.current_project.graphs[graph_id].duplicate(true)
+  _remove_graph_edge(graph_data, "size", "spec", "generate", "spec")
+  ProjectService.set_graph_data(graph_id, graph_data, true)
+- var stable_asset_ids := rerun_asset_ids.duplicate()
++ var stable_asset_ids := edge_rerun_asset_ids.duplicate()
+
+  canvas.select_ids([batch_item_id])
+  controller.run_selected_mock_graph()
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index 4088d8e..3a1669c 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -770,6 +770,10 @@ func _selected_graph_binding() -> Dictionary:
+      if graph_id.is_empty() or node_id.is_empty():
+          continue
+      return {"item_id": String(item_data["id"]), "graph_id": graph_id, "node_id": node_id}
++ var selected_edge: Dictionary = _canvas._selected_graph_edge.duplicate(true)
++ var edge_graph_id := String(selected_edge.get("graph_id", ""))
++ if not edge_graph_id.is_empty():
++     return {"item_id": "", "graph_id": edge_graph_id, "node_id": ""}
+  return {}
+
+
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index e88a7fd..17e52d1 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -485,6 +485,25 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ - 保持同一输出端口扇出到多个目标的能力。
+ - 自动化覆盖第二条兼容来源边被拒绝且原 edge 不变。
+
++### G-4d 选中连线也可 Run Selected Graph
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 通过点击连线检查 graph 结构、随后想直接重跑当前链路的人 |
++| 当前痛点 | 连线已经可被选中删除，但 `Run Selected Graph` 只认节点/批次选择；用户选中 edge 后运行会误以为没有选中 graph |
++| 技术选择 | Run Selected Graph 在无节点选择时回退读取 canvas 当前选中 edge 的 `graph_id` |
++| 选择原因 | 不改变执行器，只补齐已有 edge selection 与运行入口之间的交接 |
++| 优势 | 点线检查、删除、重跑都留在同一画布语义里，减少模式切换 |
++| 缺陷 | 仍不做 edge inspector、edge 详情面板或定位高亮 |
++| 改进空间 | 后续 inspector 可显示 edge 两端端口、连接类型和错误状态 |
++| 验证入口 | 选中 `AI Generate.images -> Mock Batch.in` 连线后执行 `Run Selected Graph`，batch 正常刷新为 10 张 |
++
++任务：
++
++- 复用 `PFInfiniteCanvas` 当前选中 graph edge 状态。
++- `M21UiController._selected_graph_binding()` 支持从 selected edge 获取 `graph_id`。
++- 自动化覆盖选中 edge 后运行 mock graph 并替换 batch 队列。
++
+ ---
+
+ ## 8. 从原 M3 规划继承与降级
+```
+
 ## 2026-06-21 M3 UX-7a 吸附热区调优
 
 ### 本轮实现说明
