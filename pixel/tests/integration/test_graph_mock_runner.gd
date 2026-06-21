@@ -67,6 +67,25 @@ func test_mock_generate_chain_rejects_missing_required_spec_input() -> void:
 	assert_eq(graph.get_node_params("batch_1")["asset_ids"], existing_ids)
 
 
+func test_mock_generate_chain_rejects_loaded_invalid_edge_before_run() -> void:
+	var graph := _make_mock_graph()
+	var asset_library := get_tree().root.get_node("AssetLibrary")
+	var runner := MockRunnerScript.new()
+	var existing_ids := ["asset_existing"]
+	graph.set_node_params("batch_1", {"label": "Mock Batch", "asset_ids": existing_ids})
+	_remove_edge(graph, "generate", "images", "batch_1", "in")
+	graph.edges.append({"from": ["objects", "items"], "to": ["batch_1", "in"]})
+
+	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
+
+	assert_false(bool(result["ok"]))
+	assert_eq(result["error"]["code"], "invalid_edge")
+	assert_string_contains(
+		String(result["error"]["message"]), "Cannot connect text_list to image_list"
+	)
+	assert_eq(graph.get_node_params("batch_1")["asset_ids"], existing_ids)
+
+
 func test_mock_generate_chain_survives_project_roundtrip_after_materialization() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var asset_library := get_tree().root.get_node("AssetLibrary")

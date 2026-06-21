@@ -92,13 +92,13 @@ func get_node_params(node_id: String) -> Dictionary:
 
 
 func add_edge(from_node: String, from_port: String, to_node: String, to_port: String) -> Dictionary:
-	var result := can_connect(from_node, from_port, to_node, to_port)
-	if not bool(result["ok"]):
-		return result
-
 	var edge := {"from": [from_node, from_port], "to": [to_node, to_port]}
 	if _has_edge(edge):
 		return {"ok": false, "reason": "Connection already exists", "auto_wrap": false}
+
+	var result := can_connect(from_node, from_port, to_node, to_port)
+	if not bool(result["ok"]):
+		return result
 
 	edges.append(edge)
 	return result
@@ -117,6 +117,63 @@ func can_connect(
 	if bool(result["ok"]) and _would_create_cycle(from_node, to_node):
 		result = _connect_result(false, "Connection would create a cycle")
 	return result
+
+
+func validate_edges() -> Array[Dictionary]:
+	var errors: Array[Dictionary] = []
+	var seen_edges := {}
+	var seen_inputs := {}
+	for index in range(edges.size()):
+		var edge := _normalize_edge(edges[index])
+		var edge_key := _edge_key(edge)
+		if seen_edges.has(edge_key):
+			errors.append(
+				_edge_validation_error(index, edge, "duplicate_edge", "Connection already exists")
+			)
+			continue
+		seen_edges[edge_key] = true
+
+		var from_node := _edge_from_node(edge)
+		var to_node := _edge_to_node(edge)
+		if not nodes.has(from_node):
+			errors.append(
+				_edge_validation_error(
+					index, edge, "missing_endpoint", "Source node does not exist"
+				)
+			)
+			continue
+		if not nodes.has(to_node):
+			errors.append(
+				_edge_validation_error(
+					index, edge, "missing_endpoint", "Target node does not exist"
+				)
+			)
+			continue
+
+		var source: PFNode = nodes[from_node]["node"]
+		var target: PFNode = nodes[to_node]["node"]
+		if source.is_ghost() or target.is_ghost():
+			continue
+
+		var from_port := _edge_from_port(edge)
+		var to_port := _edge_to_port(edge)
+		var port_result := _validate_connect_ports(source, from_port, target, to_port)
+		if not bool(port_result["ok"]):
+			errors.append(
+				_edge_validation_error(index, edge, "invalid_port", String(port_result["reason"]))
+			)
+			continue
+
+		var input_key := _input_key(to_node, to_port)
+		if seen_inputs.has(input_key):
+			errors.append(
+				_edge_validation_error(
+					index, edge, "input_already_connected", "Input port already has a connection"
+				)
+			)
+			continue
+		seen_inputs[input_key] = true
+	return errors
 
 
 func to_json() -> Dictionary:
@@ -247,6 +304,43 @@ func _edge_from_node(edge: Dictionary) -> String:
 func _edge_to_node(edge: Dictionary) -> String:
 	var to_data: Array = edge.get("to", ["", ""])
 	return String(to_data[0])
+
+
+func _edge_from_port(edge: Dictionary) -> String:
+	var from_data: Array = edge.get("from", ["", ""])
+	return String(from_data[1])
+
+
+func _edge_to_port(edge: Dictionary) -> String:
+	var to_data: Array = edge.get("to", ["", ""])
+	return String(to_data[1])
+
+
+func _edge_key(edge: Dictionary) -> String:
+	return (
+		"%s/%s>%s/%s"
+		% [
+			_edge_from_node(edge),
+			_edge_from_port(edge),
+			_edge_to_node(edge),
+			_edge_to_port(edge),
+		]
+	)
+
+
+func _input_key(node_id: String, port_name: String) -> String:
+	return "%s/%s" % [node_id, port_name]
+
+
+func _edge_validation_error(
+	index: int, edge: Dictionary, code: String, message: String
+) -> Dictionary:
+	return {
+		"code": code,
+		"message": message,
+		"edge": edge.duplicate(true),
+		"index": index,
+	}
 
 
 func _connect_result(ok: bool, reason: String, auto_wrap: bool = false) -> Dictionary:

@@ -88,6 +88,45 @@ func test_input_port_allows_only_one_source_edge() -> void:
 	assert_eq(graph.edges, [{"from": ["source_a", "out"], "to": ["target", "in"]}])
 
 
+func test_duplicate_edge_reports_duplicate_connection_reason() -> void:
+	var graph := GraphScript.new()
+	graph.add_node(PortNode.new("source", "", "image"), "source")
+	graph.add_node(PortNode.new("target", "image", ""), "target")
+
+	assert_true(bool(graph.add_edge("source", "out", "target", "in")["ok"]))
+
+	var result := graph.add_edge("source", "out", "target", "in")
+	assert_false(bool(result["ok"]))
+	assert_eq(String(result["reason"]), "Connection already exists")
+	assert_eq(graph.edges, [{"from": ["source", "out"], "to": ["target", "in"]}])
+
+
+func test_output_port_can_fan_out_to_multiple_inputs() -> void:
+	var graph := GraphScript.new()
+	graph.add_node(PortNode.new("source", "", "image"), "source")
+	graph.add_node(PortNode.new("target_a", "image", ""), "target_a")
+	graph.add_node(PortNode.new("target_b", "image", ""), "target_b")
+
+	assert_true(bool(graph.add_edge("source", "out", "target_a", "in")["ok"]))
+	assert_true(bool(graph.add_edge("source", "out", "target_b", "in")["ok"]))
+	assert_eq(graph.edges.size(), 2)
+
+
+func test_validate_edges_reports_loaded_invalid_type_without_dropping_edge() -> void:
+	var graph := GraphScript.new()
+	graph.add_node(PortNode.new("source", "", "text_list"), "source")
+	graph.add_node(PortNode.new("target", "image_list", ""), "target")
+	var invalid_edge := {"from": ["source", "out"], "to": ["target", "in"]}
+	graph.edges.append(invalid_edge)
+
+	var errors := graph.validate_edges()
+
+	assert_eq(errors.size(), 1)
+	assert_eq(String(errors[0]["code"]), "invalid_port")
+	assert_eq(String(errors[0]["message"]), "Cannot connect text_list to image_list")
+	assert_eq(graph.edges, [invalid_edge])
+
+
 func test_batch_node_asset_ids_roundtrip_through_graph_json() -> void:
 	var graph := GraphScript.new()
 	var node_id := graph.add_node(

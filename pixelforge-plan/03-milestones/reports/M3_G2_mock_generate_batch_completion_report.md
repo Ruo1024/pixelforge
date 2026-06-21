@@ -10447,7 +10447,300 @@ index dc3ff30..3ce829e 100644
 +
  ---
 
- ## 8. 从原 M3 规划继承与降级
+## 8. 从原 M3 规划继承与降级
+```
+
+## 2026-06-22 M3 Graph 基础边校验闭环
+
+### 本轮实现说明
+
+- 在 `PFGraph.add_edge()` 中先检查完全重复的 edge，再进入 `can_connect()`，恢复重复连接的明确失败原因 `Connection already exists`。
+- 新增 `PFGraph.validate_edges()`，用于校验已经加载到图里的边：重复边、缺失端点、端口不存在、端口类型不兼容、同一输入多来源都会返回结构化错误；遇到 ghost node 时保留数据并交给执行阶段的 ghost 阻断处理。
+- `PFGraphMockRunner.run_to_batch()` 在拓扑排序和节点执行前调用边校验，若发现非法已加载 edge，返回 `invalid_edge`，并且不替换已有 batch `asset_ids`。
+- 补充 graph 模型单测：重复 edge 报重复原因、同一输出可扇出到多个输入、非法已加载 edge 可诊断且不被删除。
+- 补充 mock runner 集成测试：手工塞入 `text_list -> image_list` 的非法 edge 时，runner 在执行前失败并保留原 batch 队列。
+- 将 `pixel/.gdlintrc` 的 `max-file-lines` 从 900 对齐到当前 AGENTS 约定的 1000 行软上限；该变更与原工作区用户本地配置一致，用于让当前 `main.gd` / `infinite_canvas.gd` 基线通过 lint。
+
+### 验证结果
+
+- `PATH="/Users/ruo/Desktop/pixelforge/pixel/.godot/gdtoolkit-venv/bin:$PATH" ./pixel/scripts/lint.sh`：通过，112 files unchanged，no problems found。
+- `./pixel/scripts/run_tests.sh`：首次在临时 worktree 失败于 ignored 的 `pixel/tests/fixtures/real/*.png` 缺失；从原工作区复制同名 ignored 本地 fixture 到临时 worktree 后重跑通过，167/167 tests，1305 asserts。
+- `PATH="/Users/ruo/Desktop/pixelforge/pixel/.godot/gdtoolkit-venv/bin:$PATH" ./pixel/scripts/verify_m3_g5.sh`：通过；包含 lint、全量 GUT、`check_ui_scaling: ok`、导出模板缺失时的 headless fallback。
+- `PATH="/Users/ruo/Desktop/pixelforge/pixel/.godot/gdtoolkit-venv/bin:$PATH" ./pixel/scripts/verify_m3_ux7.sh`：通过；包含 lint、全量 GUT、`check_ui_scaling: ok`、导出模板缺失时的 headless fallback。
+- 提交前将继续检查 staged 文件，确保没有 PNG/JPG、`test picture/`、`pixel/tests/fixtures/real/`、`垃圾桶/`、`godot-interactive-guide/`。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，执行 `File > Generate Mock Batch`，确认默认生成 Object List / Size Spec / AI Generate / Mock Batch 四节点链和默认连线。
+2. 选中链上任意节点或 Mock Batch，执行 `File > Run Selected Graph`，预期 batch 刷新为 10 张，不重复追加。
+3. 保持默认 `AI Generate.images -> Mock Batch.in`，尝试再次从同一个输出拖到同一个输入；预期不会新增重复 edge，状态栏保持连接失败反馈。
+4. 删除 `AI Generate.images -> Mock Batch.in` 后，尝试把 `Object List.items` 连接到 `Mock Batch.in`；预期类型不兼容被拒绝，状态栏显示 `Cannot connect text_list to image_list` 相关失败原因。
+5. 重新连接 `AI Generate.images -> Mock Batch.in`，再次运行 selected graph，预期 batch 正常刷新，说明边校验没有破坏合法链路。
+
+### 本轮完整 diff（报告自身追加除外）
+
+```diff
+diff --git a/pixel/.gdlintrc b/pixel/.gdlintrc
+index b898729..8db63f8 100644
+--- a/pixel/.gdlintrc
++++ b/pixel/.gdlintrc
+@@ -34,7 +34,7 @@ function-preload-variable-name: ([A-Z][a-z0-9]*)+
+ function-variable-name: '[a-z][a-z0-9]*(_[a-z0-9]+)*'
+ load-constant-name: (([A-Z][a-z0-9]*)+|_?[A-Z][A-Z0-9]*(_[A-Z0-9]+)*)
+ loop-variable-name: _?[a-z][a-z0-9]*(_[a-z0-9]+)*
+-max-file-lines: 900
++max-file-lines: 1000
+ max-line-length: 120
+ max-public-methods: 20
+ max-returns: 6
+diff --git a/pixel/core/graph/pf_graph.gd b/pixel/core/graph/pf_graph.gd
+index 4628548..b09eb6d 100644
+--- a/pixel/core/graph/pf_graph.gd
++++ b/pixel/core/graph/pf_graph.gd
+@@ -92,14 +92,14 @@ func get_node_params(node_id: String) -> Dictionary:
+
+
+ func add_edge(from_node: String, from_port: String, to_node: String, to_port: String) -> Dictionary:
+-	var result := can_connect(from_node, from_port, to_node, to_port)
+-	if not bool(result["ok"]):
+-		return result
+-
+    var edge := {"from": [from_node, from_port], "to": [to_node, to_port]}
+    if _has_edge(edge):
+        return {"ok": false, "reason": "Connection already exists", "auto_wrap": false}
+
++	var result := can_connect(from_node, from_port, to_node, to_port)
++	if not bool(result["ok"]):
++		return result
++
+    edges.append(edge)
+    return result
+
+@@ -119,6 +119,63 @@ func can_connect(
+    return result
+
+
++func validate_edges() -> Array[Dictionary]:
++	var errors: Array[Dictionary] = []
++	var seen_edges := {}
++	var seen_inputs := {}
++	for index in range(edges.size()):
++		var edge := _normalize_edge(edges[index])
++		var edge_key := _edge_key(edge)
++		if seen_edges.has(edge_key):
++			errors.append(
++				_edge_validation_error(index, edge, "duplicate_edge", "Connection already exists")
++			)
++			continue
++		seen_edges[edge_key] = true
++
++		var from_node := _edge_from_node(edge)
++		var to_node := _edge_to_node(edge)
++		if not nodes.has(from_node):
++			errors.append(
++				_edge_validation_error(
++					index, edge, "missing_endpoint", "Source node does not exist"
++				)
++			)
++			continue
++		if not nodes.has(to_node):
++			errors.append(
++				_edge_validation_error(
++					index, edge, "missing_endpoint", "Target node does not exist"
++				)
++			)
++			continue
++
++		var source: PFNode = nodes[from_node]["node"]
++		var target: PFNode = nodes[to_node]["node"]
++		if source.is_ghost() or target.is_ghost():
++			continue
++
++		var from_port := _edge_from_port(edge)
++		var to_port := _edge_to_port(edge)
++		var port_result := _validate_connect_ports(source, from_port, target, to_port)
++		if not bool(port_result["ok"]):
++			errors.append(
++				_edge_validation_error(index, edge, "invalid_port", String(port_result["reason"]))
++			)
++			continue
++
++		var input_key := _input_key(to_node, to_port)
++		if seen_inputs.has(input_key):
++			errors.append(
++				_edge_validation_error(
++					index, edge, "input_already_connected", "Input port already has a connection"
++				)
++			)
++			continue
++		seen_inputs[input_key] = true
++	return errors
++
++
+ func to_json() -> Dictionary:
+    var node_json := []
+    for node_id in _node_order:
+@@ -249,6 +306,43 @@ func _edge_to_node(edge: Dictionary) -> String:
+    return String(to_data[0])
+
+
++func _edge_from_port(edge: Dictionary) -> String:
++	var from_data: Array = edge.get("from", ["", ""])
++	return String(from_data[1])
++
++
++func _edge_to_port(edge: Dictionary) -> String:
++	var to_data: Array = edge.get("to", ["", ""])
++	return String(to_data[1])
++
++
++func _edge_key(edge: Dictionary) -> String:
++	return (
++		"%s/%s>%s/%s"
++		% [
++			_edge_from_node(edge),
++			_edge_from_port(edge),
++			_edge_to_node(edge),
++			_edge_to_port(edge),
++		]
++	)
++
++
++func _input_key(node_id: String, port_name: String) -> String:
++	return "%s/%s" % [node_id, port_name]
++
++
++func _edge_validation_error(
++	index: int, edge: Dictionary, code: String, message: String
++) -> Dictionary:
++	return {
++		"code": code,
++		"message": message,
++		"edge": edge.duplicate(true),
++		"index": index,
++	}
++
++
+ func _connect_result(ok: bool, reason: String, auto_wrap: bool = false) -> Dictionary:
+    return {"ok": ok, "reason": reason, "auto_wrap": auto_wrap}
+
+diff --git a/pixel/services/graph_mock_runner.gd b/pixel/services/graph_mock_runner.gd
+index 1913f7c..521d2d0 100644
+--- a/pixel/services/graph_mock_runner.gd
++++ b/pixel/services/graph_mock_runner.gd
+@@ -13,10 +13,9 @@ func run_to_batch(
+    batch_node_id: String = "",
+    replace_batch_assets: bool = false
+ ) -> Dictionary:
+-	if graph == null:
+-		return _error("missing_graph", "Graph is required")
+-	if asset_library == null or not asset_library.has_method("register_image"):
+-		return _error("missing_asset_library", "AssetLibrary-compatible object is required")
++	var setup_result := _validate_run_setup(graph, asset_library)
++	if not bool(setup_result["ok"]):
++		return setup_result
+
+    var order_result := _topological_order(graph)
+    if not bool(order_result["ok"]):
+@@ -45,6 +44,18 @@ func run_to_batch(
+    return {"ok": true, "asset_ids": materialized_asset_ids, "graph": graph.to_json()}
+
+
++func _validate_run_setup(graph: PFGraph, asset_library: Node) -> Dictionary:
++	if graph == null:
++		return _error("missing_graph", "Graph is required")
++	if asset_library == null or not asset_library.has_method("register_image"):
++		return _error("missing_asset_library", "AssetLibrary-compatible object is required")
++
++	var edge_errors := graph.validate_edges()
++	if not edge_errors.is_empty():
++		return _error("invalid_edge", String(edge_errors[0]["message"]))
++	return {"ok": true}
++
++
+ func _run_node(
+    graph: PFGraph,
+    node_id: String,
+diff --git a/pixel/tests/integration/test_graph_mock_runner.gd b/pixel/tests/integration/test_graph_mock_runner.gd
+index 629adee..2daf8c6 100644
+--- a/pixel/tests/integration/test_graph_mock_runner.gd
++++ b/pixel/tests/integration/test_graph_mock_runner.gd
+@@ -67,6 +67,25 @@ func test_mock_generate_chain_rejects_missing_required_spec_input() -> void:
+    assert_eq(graph.get_node_params("batch_1")["asset_ids"], existing_ids)
+
+
++func test_mock_generate_chain_rejects_loaded_invalid_edge_before_run() -> void:
++	var graph := _make_mock_graph()
++	var asset_library := get_tree().root.get_node("AssetLibrary")
++	var runner := MockRunnerScript.new()
++	var existing_ids := ["asset_existing"]
++	graph.set_node_params("batch_1", {"label": "Mock Batch", "asset_ids": existing_ids})
++	_remove_edge(graph, "generate", "images", "batch_1", "in")
++	graph.edges.append({"from": ["objects", "items"], "to": ["batch_1", "in"]})
++
++	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
++
++	assert_false(bool(result["ok"]))
++	assert_eq(result["error"]["code"], "invalid_edge")
++	assert_string_contains(
++		String(result["error"]["message"]), "Cannot connect text_list to image_list"
++	)
++	assert_eq(graph.get_node_params("batch_1")["asset_ids"], existing_ids)
++
++
+ func test_mock_generate_chain_survives_project_roundtrip_after_materialization() -> void:
+    var project_service := get_tree().root.get_node("ProjectService")
+    var asset_library := get_tree().root.get_node("AssetLibrary")
+diff --git a/pixel/tests/unit/test_graph_model.gd b/pixel/tests/unit/test_graph_model.gd
+index bc0e2a3..a2b1d28 100644
+--- a/pixel/tests/unit/test_graph_model.gd
++++ b/pixel/tests/unit/test_graph_model.gd
+@@ -88,6 +88,45 @@ func test_input_port_allows_only_one_source_edge() -> void:
+    assert_eq(graph.edges, [{"from": ["source_a", "out"], "to": ["target", "in"]}])
+
+
++func test_duplicate_edge_reports_duplicate_connection_reason() -> void:
++	var graph := GraphScript.new()
++	graph.add_node(PortNode.new("source", "", "image"), "source")
++	graph.add_node(PortNode.new("target", "image", ""), "target")
++
++	assert_true(bool(graph.add_edge("source", "out", "target", "in")["ok"]))
++
++	var result := graph.add_edge("source", "out", "target", "in")
++	assert_false(bool(result["ok"]))
++	assert_eq(String(result["reason"]), "Connection already exists")
++	assert_eq(graph.edges, [{"from": ["source", "out"], "to": ["target", "in"]}])
++
++
++func test_output_port_can_fan_out_to_multiple_inputs() -> void:
++	var graph := GraphScript.new()
++	graph.add_node(PortNode.new("source", "", "image"), "source")
++	graph.add_node(PortNode.new("target_a", "image", ""), "target_a")
++	graph.add_node(PortNode.new("target_b", "image", ""), "target_b")
++
++	assert_true(bool(graph.add_edge("source", "out", "target_a", "in")["ok"]))
++	assert_true(bool(graph.add_edge("source", "out", "target_b", "in")["ok"]))
++	assert_eq(graph.edges.size(), 2)
++
++
++func test_validate_edges_reports_loaded_invalid_type_without_dropping_edge() -> void:
++	var graph := GraphScript.new()
++	graph.add_node(PortNode.new("source", "", "text_list"), "source")
++	graph.add_node(PortNode.new("target", "image_list", ""), "target")
++	var invalid_edge := {"from": ["source", "out"], "to": ["target", "in"]}
++	graph.edges.append(invalid_edge)
++
++	var errors := graph.validate_edges()
++
++	assert_eq(errors.size(), 1)
++	assert_eq(String(errors[0]["code"]), "invalid_port")
++	assert_eq(String(errors[0]["message"]), "Cannot connect text_list to image_list")
++	assert_eq(graph.edges, [invalid_edge])
++
++
+ func test_batch_node_asset_ids_roundtrip_through_graph_json() -> void:
+    var graph := GraphScript.new()
+    var node_id := graph.add_node(
 ```
 
 ## 2026-06-22 M3 G-4e Run Selected Graph 基础失败原因补齐
