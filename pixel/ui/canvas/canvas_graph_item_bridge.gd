@@ -35,10 +35,20 @@ static func graph_deletion_snapshots_for_canvas_snapshots(canvas_snapshots: Arra
 			continue
 		var graph: PFGraph = GraphScript.from_json(before)
 		var changed := false
+		var before_edge_count := graph.edges.size()
+		var removed_node_count := 0
 		for node_id in graph_node_ids[graph_id]:
-			changed = graph.remove_node(String(node_id)) or changed
+			var removed := graph.remove_node(String(node_id))
+			if removed:
+				removed_node_count += 1
+			changed = removed or changed
 		if changed:
-			result[String(graph_id)] = {"before": before, "after": graph.to_json()}
+			result[String(graph_id)] = {
+				"before": before,
+				"after": graph.to_json(),
+				"removed_nodes": removed_node_count,
+				"removed_edges": before_edge_count - graph.edges.size(),
+			}
 	return result
 
 
@@ -50,6 +60,16 @@ static func apply_graph_deletion_snapshots(
 		if not versions.has(version_key):
 			continue
 		ProjectService.set_graph_data(String(graph_id), Dictionary(versions[version_key]))
+
+
+static func deletion_counts(graph_snapshots: Dictionary) -> Dictionary:
+	var removed_nodes := 0
+	var removed_edges := 0
+	for graph_id in graph_snapshots.keys():
+		var versions: Dictionary = graph_snapshots[graph_id]
+		removed_nodes += int(versions.get("removed_nodes", 0))
+		removed_edges += int(versions.get("removed_edges", 0))
+	return {"nodes": removed_nodes, "edges": removed_edges}
 
 
 static func apply_batch_asset_ids(item: Node, asset_ids: Array, asset_library: Node) -> void:

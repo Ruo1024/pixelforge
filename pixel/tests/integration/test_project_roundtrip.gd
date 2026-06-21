@@ -118,6 +118,42 @@ func test_project_graphs_survive_zip_roundtrip() -> void:
 	assert_eq(project_service.current_project.canvas["items"][0]["node_id"], "batch_1")
 
 
+func test_project_open_normalizes_graph_edge_schema() -> void:
+	var project_service := get_tree().root.get_node("ProjectService")
+	var graph_data := {
+		"graph_version": 1,
+		"id": "graph_dirty_edges",
+		"name": "Dirty Edges",
+		"nodes":
+		[
+			{"id": "objects", "type": "object_list", "position": [0, 0], "params": {}},
+			{"id": "generate", "type": "ai_generate", "position": [100, 0], "params": {}},
+		],
+		"edges":
+		[
+			{"from": ["objects"], "to": ["generate", "items", "ignored"]},
+			"not-a-dictionary",
+			{"from": ["objects", "items"], "to": ["generate", "items"]},
+		],
+	}
+
+	project_service.set_graph_data("graph_dirty_edges", graph_data)
+	project_service.set_canvas_data({"camera": {"center": [0, 0], "zoom": 1.0}, "items": []})
+
+	var path := "user://tests/graph_dirty_edges_m3.pxproj"
+	assert_eq(project_service.save_project(path), OK)
+	assert_eq(project_service.open_project(path), OK)
+
+	var loaded_graph: Dictionary = project_service.current_project.graphs["graph_dirty_edges"]
+	assert_eq(
+		loaded_graph["edges"],
+		[
+			{"from": ["objects", ""], "to": ["generate", "items"]},
+			{"from": ["objects", "items"], "to": ["generate", "items"]},
+		]
+	)
+
+
 func test_project_open_rejects_future_format_version() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var path := "user://tests/future_format.pxproj"

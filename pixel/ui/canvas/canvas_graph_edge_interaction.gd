@@ -51,6 +51,10 @@ static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -
 	if not bool(result.get("ok", false)):
 		return _connect_result(false, String(result.get("reason", "")))
 
+	var edge := {
+		"from": [endpoints["source_node"], endpoints["source_port"]],
+		"to": [endpoints["target_node"], endpoints["target_port"]],
+	}
 	var after := graph.to_json()
 	UndoService.perform_action(
 		"Connect graph ports",
@@ -61,7 +65,9 @@ static func try_connect(start: Dictionary, end: Dictionary, changed: Callable) -
 			ProjectService.set_graph_data(graph_id, before)
 			changed.call()
 	)
-	return _connect_result(true, "")
+	var connect_result := _connect_result(true, "")
+	connect_result["edge"] = edge
+	return connect_result
 
 
 static func connect_at_screen(
@@ -149,24 +155,25 @@ static func _target_at_screen(
 	return best
 
 
-static func delete_edge(selection: Dictionary, changed: Callable) -> bool:
+static func delete_edge(selection: Dictionary, changed: Callable) -> Dictionary:
 	var graph_id := String(selection.get("graph_id", ""))
 	var edge: Dictionary = selection.get("edge", {})
 	if graph_id.is_empty() or edge.is_empty():
-		return false
+		return _connect_result(false, "")
 	var before := ProjectService.get_graph_data(graph_id)
 	if before.is_empty():
-		return false
+		return _connect_result(false, "")
 	var after := before.duplicate(true)
 	var edges := []
 	var removed := false
+	var edge_key := _edge_key(edge)
 	for raw_edge in before.get("edges", []):
-		if raw_edge is Dictionary and Dictionary(raw_edge) == edge and not removed:
+		if raw_edge is Dictionary and _edge_key(raw_edge) == edge_key and not removed:
 			removed = true
 			continue
 		edges.append(raw_edge)
 	if not removed:
-		return false
+		return _connect_result(false, "")
 	after["edges"] = edges
 	UndoService.perform_action(
 		"Delete graph edge",
@@ -177,7 +184,9 @@ static func delete_edge(selection: Dictionary, changed: Callable) -> bool:
 			ProjectService.set_graph_data(graph_id, before)
 			changed.call()
 	)
-	return true
+	var result := _connect_result(true, "")
+	result["edge"] = edge
+	return result
 
 
 static func draw_preview(
@@ -297,6 +306,24 @@ static func _port_side_snap_zone(item: Node, is_input: bool) -> Rect2:
 	if not is_input:
 		side_bounds.position.x += bounds.size.x * 0.5
 	return side_bounds.grow(SNAP_ZONE_GROW)
+
+
+static func _edge_key(edge: Dictionary) -> String:
+	var from_data := _edge_endpoint(edge.get("from", []))
+	var to_data := _edge_endpoint(edge.get("to", []))
+	return "%s/%s>%s/%s" % [from_data[0], from_data[1], to_data[0], to_data[1]]
+
+
+static func _edge_endpoint(value: Variant) -> Array:
+	var endpoint := ["", ""]
+	if not (value is Array):
+		return endpoint
+	var source: Array = value
+	if source.size() >= 1:
+		endpoint[0] = String(source[0])
+	if source.size() >= 2:
+		endpoint[1] = String(source[1])
+	return endpoint
 
 
 static func _connect_result(ok: bool, reason: String) -> Dictionary:

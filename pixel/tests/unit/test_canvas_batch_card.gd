@@ -5,6 +5,7 @@ const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
+const Strings := preload("res://ui/shell/strings.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
@@ -530,6 +531,75 @@ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
 
 	assert_eq(reloaded_canvas.get_item_count(), 1)
 	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
+
+
+func test_graph_node_card_marks_ghost_node_status() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	(
+		ProjectService
+		. set_graph_data(
+			"graph_ghost",
+			{
+				"graph_version": 1,
+				"id": "graph_ghost",
+				"name": "Ghost",
+				"nodes":
+				[
+					{
+						"id": "plugin_1",
+						"type": "missing.plugin_node",
+						"params": {"seed": 7},
+						"position": [0, 0],
+					},
+				],
+				"edges": [],
+			},
+			false
+		)
+	)
+
+	var node_card: Node = canvas._add_graph_node_card(
+		"graph_ghost", "plugin_1", Vector2(24, 32), "node_item_ghost", false
+	)
+
+	assert_true(node_card._is_ghost)
+	assert_eq(node_card._status_badge, Strings.GRAPH_NODE_BADGE_MISSING)
+	assert_eq(node_card._summary, Strings.GRAPH_NODE_GHOST_SUMMARY)
+
+
+func test_graph_cards_mark_loaded_invalid_edge_status() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var ids := [_register_asset(Color.RED, "red")]
+	var graph := GraphScript.new()
+	graph.id = "graph_invalid_edge_badge"
+	graph.add_node(ObjectListNodeScript.new(), "objects", {"items": "barrel"}, Vector2(24, 32))
+	graph.add_node(
+		BatchNodeScript.new(),
+		"batch_1",
+		{"label": "Candidates", "asset_ids": ids},
+		Vector2(320, 32)
+	)
+	graph.edges.append({"from": ["objects", "items"], "to": ["batch_1", "in"]})
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+
+	var node_card: Node = canvas._add_graph_node_card(
+		graph.id, "objects", Vector2(24, 32), "node_item_objects", false
+	)
+	var batch_card: Node = canvas._add_batch_card(
+		ids, Vector2(320, 32), "Candidates", "node_item_batch", false, graph.id, "batch_1"
+	)
+
+	assert_true(node_card._has_edge_error)
+	assert_eq(node_card._status_badge, Strings.GRAPH_NODE_BADGE_EDGE_ERROR)
+	assert_true(batch_card._has_graph_edge_error)
 
 
 func test_ai_generate_inputs_share_single_canvas_anchor() -> void:

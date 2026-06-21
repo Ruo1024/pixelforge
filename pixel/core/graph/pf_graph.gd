@@ -176,6 +176,15 @@ func validate_edges() -> Array[Dictionary]:
 	return errors
 
 
+func validate_edges_for_node(node_id: String) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for error in validate_edges():
+		var edge: Dictionary = error.get("edge", {})
+		if _edge_from_node(edge) == node_id or _edge_to_node(edge) == node_id:
+			result.append(error)
+	return result
+
+
 func to_json() -> Dictionary:
 	var node_json := []
 	for node_id in _node_order:
@@ -224,12 +233,22 @@ func _node_to_json(node_id: String) -> Dictionary:
 
 
 func _normalize_edge(edge: Dictionary) -> Dictionary:
-	var from_data: Array = edge.get("from", ["", ""])
-	var to_data: Array = edge.get("to", ["", ""])
 	return {
-		"from": [String(from_data[0]), String(from_data[1])],
-		"to": [String(to_data[0]), String(to_data[1])],
+		"from": _normalize_edge_endpoint(edge.get("from", [])),
+		"to": _normalize_edge_endpoint(edge.get("to", [])),
 	}
+
+
+func _normalize_edge_endpoint(value: Variant) -> Array:
+	var endpoint := ["", ""]
+	if not (value is Array):
+		return endpoint
+	var source: Array = value
+	if source.size() >= 1:
+		endpoint[0] = String(source[0])
+	if source.size() >= 2:
+		endpoint[1] = String(source[1])
+	return endpoint
 
 
 func _validate_connect_endpoints(from_node: String, to_node: String) -> Dictionary:

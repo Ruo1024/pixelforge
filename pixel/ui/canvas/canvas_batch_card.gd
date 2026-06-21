@@ -5,6 +5,7 @@ extends Node2D
 ## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
 
 const IdUtil := preload("res://core/util/id_util.gd")
+const GraphScript := preload("res://core/graph/pf_graph.gd")
 const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 
@@ -17,6 +18,7 @@ const THUMB_GAP := 12
 const MIN_CARD_HEIGHT := 216
 const BACKGROUND := Color(0.16, 0.17, 0.18, 0.96)
 const BORDER := Color(0.52, 0.62, 0.72, 1.0)
+const EDGE_ERROR_BORDER := Color(0.94, 0.5, 0.22, 1.0)
 const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
 const THUMB_BACKGROUND := Color(0.08, 0.085, 0.09, 1.0)
 const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
@@ -49,6 +51,7 @@ const CHECKER_LIGHT := Color(0.18, 0.19, 0.2, 1.0)
 const CHECKER_DARK := Color(0.1, 0.105, 0.11, 1.0)
 const INSPECT_GRID := Color(1.0, 1.0, 1.0, 0.16)
 const HINT_BACKGROUND := Color(0.02, 0.025, 0.03, 0.78)
+const BADGE_BACKGROUND := Color(0.12, 0.08, 0.06, 0.92)
 
 var item_id := ""
 var graph_id := ""
@@ -68,12 +71,14 @@ var _thumbnail_textures := {}
 var _asset_hints := {}
 var _font: Font = null
 var _lod_camera_zoom := 1.0
+var _has_graph_edge_error := false
 
 
 func setup_from_data(data: Dictionary) -> void:
 	item_id = String(data.get("id", IdUtil.uuid_v4()))
 	graph_id = String(data.get("graph_id", ""))
 	node_id = String(data.get("node_id", ""))
+	_has_graph_edge_error = _graph_has_edge_error()
 	var graph_node_data := _resolve_graph_batch_node_data()
 	var graph_params: Dictionary = graph_node_data.get("params", {})
 	label = String(graph_params.get("label", data.get("label", "Batch")))
@@ -361,7 +366,7 @@ func _draw() -> void:
 	_font = ThemeDB.fallback_font if _font == null else _font
 	var card_rect := Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, _card_height()))
 	draw_rect(card_rect, BACKGROUND, true)
-	draw_rect(card_rect, BORDER, false, 1.0)
+	draw_rect(card_rect, _border_color(), false, 1.0)
 	draw_rect(
 		Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
 	)
@@ -384,6 +389,7 @@ func _draw() -> void:
 			18,
 			Color(0.9, 0.92, 0.92, 1.0)
 		)
+		_draw_graph_status_badge()
 
 	if review_layout == LAYOUT_FOCUS:
 		_draw_focus_layout(visible_ids)
@@ -605,6 +611,38 @@ func _draw_graph_ports() -> void:
 		draw_circle(_graph_port_position(index, INPUT_PORTS.size(), true), 5.0, PORT_IN)
 	for index in range(OUTPUT_PORTS.size()):
 		draw_circle(_graph_port_position(index, OUTPUT_PORTS.size(), false), 5.0, PORT_OUT)
+
+
+func _border_color() -> Color:
+	return EDGE_ERROR_BORDER if _has_graph_edge_error else BORDER
+
+
+func _draw_graph_status_badge() -> void:
+	if not _has_graph_edge_error or _font == null:
+		return
+	var badge_size := Vector2(78, 18)
+	var badge_rect := Rect2(Vector2(CARD_WIDTH - PADDING - badge_size.x, 11), badge_size)
+	draw_rect(badge_rect, BADGE_BACKGROUND, true)
+	draw_rect(badge_rect, EDGE_ERROR_BORDER, false, 1.0)
+	draw_string(
+		_font,
+		badge_rect.position + Vector2(5, 13),
+		Strings.GRAPH_NODE_BADGE_EDGE_ERROR,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		badge_rect.size.x - 10,
+		11,
+		EDGE_ERROR_BORDER
+	)
+
+
+func _graph_has_edge_error() -> bool:
+	if graph_id.is_empty() or node_id.is_empty():
+		return false
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	if graph_data.is_empty():
+		return false
+	var graph: PFGraph = GraphScript.from_json(graph_data)
+	return not graph.validate_edges_for_node(node_id).is_empty()
 
 
 func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:

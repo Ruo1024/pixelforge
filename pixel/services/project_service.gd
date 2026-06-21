@@ -16,6 +16,7 @@ const ProjectModel := preload("res://services/pf_project.gd")
 const FileIOScript := preload("res://infra/file_io.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const AppInfo := preload("res://core/util/app_info.gd")
+const GraphScript := preload("res://core/graph/pf_graph.gd")
 const Log := preload("res://core/util/log_util.gd")
 const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
 const MIGRATIONS: Array = []
@@ -276,8 +277,15 @@ func _load_graphs_from_files(files: Dictionary, manifest: Dictionary) -> Diction
 		var graph_data: Variant = FileIOScript.bytes_to_json(files[path])
 		if not (graph_data is Dictionary):
 			return {"ok": false, "error": ERR_PARSE_ERROR, "graphs": {}}
-		graphs[graph_id] = graph_data
+		graphs[graph_id] = _normalize_graph_data(graph_id, graph_data)
 	return {"ok": true, "error": OK, "graphs": graphs}
+
+
+func _normalize_graph_data(graph_id: String, graph_data: Dictionary) -> Dictionary:
+	var graph: PFGraph = GraphScript.from_json(graph_data)
+	if not graph_data.has("id") or graph.id.is_empty():
+		graph.id = graph_id
+	return graph.to_json()
 
 
 func _manifest_graph_ids(manifest: Dictionary, files: Dictionary) -> Array:

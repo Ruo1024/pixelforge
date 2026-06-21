@@ -454,6 +454,7 @@ func _connect_services() -> void:
 	_canvas.selection_changed.connect(_on_canvas_selection_changed)
 	_canvas.cleanup_grid_changed.connect(_on_cleanup_grid_changed)
 	_canvas.graph_connect_failed.connect(_on_canvas_graph_connect_failed)
+	_canvas.graph_status.connect(_on_canvas_graph_status)
 	_cleanup_inspector.apply_requested.connect(_apply_cleanup_to_selection)
 	_cleanup_inspector.preview_requested.connect(_request_cleanup_preview)
 	_cleanup_inspector.cancel_requested.connect(_cancel_cleanup_task)
@@ -562,6 +563,49 @@ func _on_canvas_selection_changed(selected_ids: Array) -> void:
 
 func _on_canvas_graph_connect_failed(reason: String) -> void:
 	_status_label.text = Strings.STATUS_GRAPH_CONNECT_FAILED % reason
+
+
+func _on_canvas_graph_status(event: Dictionary) -> void:
+	var event_type := String(event.get("type", ""))
+	match event_type:
+		"connect_succeeded":
+			_status_label.text = (
+				Strings.STATUS_GRAPH_CONNECT_DONE % _graph_edge_status_parts(event.get("edge", {}))
+			)
+		"edge_selected":
+			_status_label.text = (
+				Strings.STATUS_GRAPH_EDGE_SELECTED % _graph_edge_status_parts(event.get("edge", {}))
+			)
+		"edge_deleted":
+			_status_label.text = (
+				Strings.STATUS_GRAPH_EDGE_DELETED % _graph_edge_status_parts(event.get("edge", {}))
+			)
+		"nodes_deleted":
+			_status_label.text = (
+				Strings.STATUS_GRAPH_NODES_DELETED
+				% [int(event.get("nodes", 0)), int(event.get("edges", 0))]
+			)
+
+
+func _graph_edge_status_parts(edge: Variant) -> Array:
+	if not (edge is Dictionary):
+		return ["", "", "", ""]
+	var edge_data: Dictionary = edge
+	var from_data := _graph_edge_endpoint(edge_data.get("from", []))
+	var to_data := _graph_edge_endpoint(edge_data.get("to", []))
+	return [String(from_data[0]), String(from_data[1]), String(to_data[0]), String(to_data[1])]
+
+
+func _graph_edge_endpoint(value: Variant) -> Array:
+	var endpoint := ["", ""]
+	if not (value is Array):
+		return endpoint
+	var source: Array = value
+	if source.size() >= 1:
+		endpoint[0] = String(source[0])
+	if source.size() >= 2:
+		endpoint[1] = String(source[1])
+	return endpoint
 
 
 func _apply_cleanup_to_selection(params: Dictionary) -> void:

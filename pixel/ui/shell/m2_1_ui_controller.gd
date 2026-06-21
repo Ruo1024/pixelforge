@@ -250,6 +250,10 @@ func run_selected_mock_graph() -> void:
 		return
 
 	var graph := GraphScript.from_json(graph_data)
+	var ghost_error := _first_ghost_node_error(graph)
+	if not ghost_error.is_empty():
+		_status_label.text = _graph_run_failure_status(ghost_error)
+		return
 	var batch_node_id := _first_batch_node_id(graph)
 	if batch_node_id.is_empty():
 		_status_label.text = _graph_run_failure_status(
@@ -763,6 +767,17 @@ func _first_batch_node_id(graph: PFGraph) -> String:
 		if node != null and node.get_type() == "batch":
 			return String(node_id)
 	return ""
+
+
+func _first_ghost_node_error(graph: PFGraph) -> Dictionary:
+	for node_id in graph.nodes.keys():
+		var node: PFNode = graph.get_node(String(node_id))
+		if node != null and node.is_ghost():
+			return {
+				"code": "ghost_node",
+				"message": Strings.STATUS_GRAPH_RUN_MISSING_NODE_TYPE % node.get_type(),
+			}
+	return {}
 
 
 func _selected_graph_binding() -> Dictionary:

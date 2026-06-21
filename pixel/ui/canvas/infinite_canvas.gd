@@ -10,6 +10,7 @@ signal cleanup_grid_changed(scale: float, offset: Vector2)
 signal batch_context_requested(card_id: String, screen_position: Vector2i)
 signal zoom_changed(zoom_index: int, camera_zoom: float)
 signal graph_connect_failed(reason: String)
+signal graph_status(event: Dictionary)
 
 const ZOOM_LEVELS := [0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
 const DEFAULT_ZOOM_INDEX := 4
@@ -125,7 +126,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 	if event.keycode == KEY_DELETE or event.keycode == KEY_BACKSPACE:
 		if not _selected_graph_edge.is_empty():
-			GraphEdgeInteraction.delete_edge(_selected_graph_edge, _emit_canvas_changed)
+			var delete_result := GraphEdgeInteraction.delete_edge(
+				_selected_graph_edge, _emit_canvas_changed
+			)
+			if bool(delete_result.get("ok", false)):
+				graph_status.emit({"type": "edge_deleted", "edge": delete_result.get("edge", {})})
 			_selected_graph_edge = {}
 			queue_redraw()
 		else:
@@ -297,6 +302,7 @@ func delete_selected(record_undo: bool = true) -> void:
 		return
 
 	var graph_snapshots := GraphItemBridge.graph_deletion_snapshots_for_canvas_snapshots(snapshots)
+	var graph_delete_counts := GraphItemBridge.deletion_counts(graph_snapshots)
 
 	var do_delete := func() -> void:
 		GraphItemBridge.apply_graph_deletion_snapshots(graph_snapshots, "after")
@@ -304,6 +310,17 @@ func delete_selected(record_undo: bool = true) -> void:
 			_remove_item_direct(String(snapshot["data"]["id"]))
 		_clear_selection()
 		_emit_canvas_changed()
+		if int(graph_delete_counts.get("nodes", 0)) > 0:
+			(
+				graph_status
+				. emit(
+					{
+						"type": "nodes_deleted",
+						"nodes": int(graph_delete_counts.get("nodes", 0)),
+						"edges": int(graph_delete_counts.get("edges", 0)),
+					}
+				)
+			)
 
 	var undo_delete := func() -> void:
 		GraphItemBridge.apply_graph_deletion_snapshots(graph_snapshots, "before")
@@ -704,6 +721,7 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 		if not edge_hit.is_empty():
 			_selection.clear()
 			_selected_graph_edge = edge_hit
+			graph_status.emit({"type": "edge_selected", "edge": edge_hit.get("edge", {})})
 			queue_redraw()
 			return
 		if not additive:
@@ -726,7 +744,9 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
 			_emit_canvas_changed
 		)
 		var reason := String(result.get("reason", ""))
-		if not bool(result.get("ok", false)) and not reason.is_empty():
+		if bool(result.get("ok", false)):
+			graph_status.emit({"type": "connect_succeeded", "edge": result.get("edge", {})})
+		elif not reason.is_empty():
 			graph_connect_failed.emit(reason)
 	elif _selection.is_dragging_items:
 		_commit_drag_if_needed()
