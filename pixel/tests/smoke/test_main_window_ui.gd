@@ -416,7 +416,41 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
 	var object_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "objects")
 	canvas.select_ids([object_item_id])
-	var node_id: String = controller.add_graph_node_to_selected_graph("size_spec")
+	var tab_event := InputEventKey.new()
+	tab_event.keycode = KEY_TAB
+	tab_event.pressed = true
+	canvas._gui_input(tab_event)
+	await wait_process_frames(1)
+
+	assert_true(controller._graph_quick_add_menu.visible)
+	assert_eq(controller._graph_quick_add_menu.item_count, 3)
+	assert_eq(
+		[
+			controller._graph_quick_add_menu.get_item_text(0),
+			controller._graph_quick_add_menu.get_item_text(1),
+			controller._graph_quick_add_menu.get_item_text(2),
+		],
+		["AI Generate", "Object List", "Size Spec"]
+	)
+
+	var existing_node_ids := {}
+	for node_data in ProjectService.current_project.graphs[graph_id]["nodes"]:
+		existing_node_ids[String(node_data.get("id", ""))] = true
+	var size_menu_id := -1
+	for menu_id in controller._graph_add_types:
+		if String(controller._graph_add_types[menu_id]) == "size_spec":
+			size_menu_id = int(menu_id)
+			break
+	assert_gte(size_menu_id, 0)
+	controller._graph_quick_add_menu.id_pressed.emit(size_menu_id)
+	controller._graph_quick_add_menu.hide()
+
+	var node_id := ""
+	for node_data in ProjectService.current_project.graphs[graph_id]["nodes"]:
+		var candidate_id := String(node_data.get("id", ""))
+		if not existing_node_ids.has(candidate_id):
+			node_id = candidate_id
+			break
 
 	assert_false(node_id.is_empty())
 	assert_true(
@@ -442,6 +476,16 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 			func(node: Dictionary) -> bool: return String(node.get("id", "")) == node_id
 		)
 	)
+	controller._graph_quick_add_menu.hide()
+	canvas.select_ids([])
+	tab_event = InputEventKey.new()
+	tab_event.keycode = KEY_TAB
+	tab_event.pressed = true
+	canvas._gui_input(tab_event)
+	await wait_process_frames(1)
+
+	assert_false(controller._graph_quick_add_menu.visible)
+	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_ADD_NEEDS_SELECTION)
 
 
 func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:

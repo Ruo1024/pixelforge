@@ -31,6 +31,7 @@
 - M3 G-5: 新增 File > Run Selected Graph 最小重跑入口，选中 mock 节点链任一节点后可替换刷新正式 batch 队列。
 - M3 G-4f: 新增 schema 驱动的选中节点参数编辑入口，Object List、Size Spec 与 Mock Generate 参数可撤销修改并参与重跑。
 - M3 G-4g: 新增注册表驱动的 Add Graph Node 子菜单，可在当前 graph 旁落下新节点并整体撤销/重做。
+- M3 G-4h: 画布获得焦点时可按 Tab 在鼠标处打开同一注册表驱动的节点添加菜单。
 - M3 UX-4: 恢复 batch 语义 LOD 原型，改由 camera zoom 下发 overview/review/inspect，覆盖分数缩放下 25% 进入 overview 的回归路径。
 - M3 UX-7: 新增 CanvasHitPolicy 最小输入仲裁层，统一 batch 缩略图、整卡、sprite 和空白画布命中，避免缩略图点击误触拖卡。
 - M3 UX-4: 撤销隐藏缩略图的 overview 摘要卡路径，25% 缩放保持 review 缩略图可见且可命中，计划中标记该 UX-4 原型不予实际通过。

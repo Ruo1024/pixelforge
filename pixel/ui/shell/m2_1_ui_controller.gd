@@ -80,6 +80,7 @@ var _slice_dialog: ConfirmationDialog = null
 var _outline_dialog: ConfirmationDialog = null
 var _graph_node_params_dialog: ConfirmationDialog = null
 var _graph_add_menu: PopupMenu = null
+var _graph_quick_add_menu: PopupMenu = null
 var _graph_add_types := {}
 var _batch_menu: PopupMenu = null
 var _batch_menu_card_id := ""
@@ -107,6 +108,7 @@ func setup(
 	_create_batch_menu()
 	_init_tools()
 	_canvas.batch_context_requested.connect(_show_batch_menu)
+	_canvas.graph_quick_add_requested.connect(show_graph_quick_add_menu)
 
 
 func add_file_menu(parent: Control) -> void:
@@ -385,6 +387,18 @@ func add_graph_node_to_selected_graph(type_name: String) -> String:
 	return node_id
 
 
+func show_graph_quick_add_menu(screen_position: Vector2i) -> bool:
+	if _selected_graph_binding().is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_ADD_NEEDS_SELECTION
+		return false
+	if _graph_quick_add_menu == null:
+		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		return false
+	_graph_quick_add_menu.position = screen_position
+	_graph_quick_add_menu.popup()
+	return true
+
+
 func show_onboarding_if_needed() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
@@ -428,6 +442,8 @@ func _create_graph_node_params_dialog() -> void:
 func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
 	_graph_add_menu = PopupMenu.new()
 	_graph_add_menu.name = "GraphNodeAddMenu"
+	_graph_quick_add_menu = PopupMenu.new()
+	_graph_quick_add_menu.name = "GraphNodeQuickAddMenu"
 	_graph_add_types.clear()
 	var registry := NodeRegistryScript.new()
 	var menu_id := GRAPH_ADD_MENU_ID_START
@@ -436,9 +452,12 @@ func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
 		if node == null or node.get_type() == "batch":
 			continue
 		_graph_add_menu.add_item(node.get_display_name(), menu_id)
+		_graph_quick_add_menu.add_item(node.get_display_name(), menu_id)
 		_graph_add_types[menu_id] = node.get_type()
 		menu_id += 1
 	_graph_add_menu.id_pressed.connect(_on_graph_add_menu_pressed)
+	_graph_quick_add_menu.id_pressed.connect(_on_graph_add_menu_pressed)
+	add_child(_graph_quick_add_menu)
 	parent_menu.add_child(_graph_add_menu)
 	parent_menu.add_submenu_item(Strings.MENU_ADD_GRAPH_NODE, _graph_add_menu.name)
 

@@ -8,6 +8,7 @@ signal canvas_changed
 signal selection_changed(selected_ids: Array)
 signal cleanup_grid_changed(scale: float, offset: Vector2)
 signal batch_context_requested(card_id: String, screen_position: Vector2i)
+signal graph_quick_add_requested(screen_position: Vector2i)
 signal zoom_changed(zoom_index: int, camera_zoom: float)
 signal graph_connect_failed(reason: String)
 signal graph_status(event: Dictionary)
@@ -108,7 +109,10 @@ func _notification(what: int) -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
-	if _tool_manager_handles(event):
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB:
+		graph_quick_add_requested.emit(Vector2i(get_screen_position() + get_local_mouse_position()))
+		accept_event()
+	elif _tool_manager_handles(event):
 		accept_event()
 		queue_redraw()
 	elif event is InputEventMouseButton:

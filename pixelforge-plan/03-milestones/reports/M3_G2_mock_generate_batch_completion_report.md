@@ -13875,7 +13875,7 @@ index 735863a..f73eaba 100644
 |---|---|---|---|
 | 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
 | 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 全量 176/176；定向 smoke 覆盖菜单、新增、Undo/Redo |
-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按上方步骤验证原生菜单层级、落点和连线手感 |
+| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户于 2026-07-09 确认 G-4g 原生菜单层级、落点、Undo/Redo 与连线重跑通过 |
 | 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 复用既有 NodeRegistry、PFGraph 与 canvas node 引用契约 |
 | TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件静态检索无输出 |
 | 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 单节点 Dictionary/CanvasItem 更新，无新重计算路径 |
@@ -14168,4 +14168,254 @@ index ca24f47..be5e555 100644
  | 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 复用既有 `get_param_schema()` 与 graph 参数契约 |
  | TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件静态检索无输出 |
  | 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 本轮仅轻量 UI/Dictionary 更新 |
+```
+
+## 2026-07-09 M3 G-4h 画布 Tab 快速添加节点
+
+### 本轮实现说明
+
+- G-4g 人工验收已由用户确认通过，原报告 DoD 状态同步更新为 `通过`。
+- `PFInfiniteCanvas` 获得焦点时按 `Tab`，会在当前鼠标屏幕位置发出 graph 快速添加请求；事件在画布内消费，不会由 shell 全局抢占参数输入控件的 Tab。
+- 新增独立 `GraphNodeQuickAddMenu`，与 File > Add Graph Node 子菜单在同一次 NodeRegistry 遍历中构建，并共用同一个节点类型映射和添加回调。
+- 快速菜单继续复用 G-4g 的 graph 选择、相邻落点、状态栏、Undo/Redo 事务；未选择 graph 时不弹菜单，并显示既有选择提示。
+- 本卡没有修改 graph schema、项目格式或节点类型，只补画布内的快捷入口。
+
+### 验证结果
+
+- `PATH="/Users/ruo/Desktop/pixelforge/pixel/.godot/gdtoolkit-venv/bin:$PATH" ./pixel/scripts/lint.sh`：通过，113 个 GDScript 文件零问题。
+- 定向 `test_main_window_ui.gd`：通过，`20/20 tests`、`172 asserts`。
+- `./pixel/scripts/verify_m3_ux7.sh`：通过；全量 GUT `176/176 tests`、`1363 asserts`，并通过 `check_ui_scaling` 与 headless startup gate。
+- `git diff --check`：通过。
+
+### 人工测试步骤
+
+1. 启动当前 main 工作区 PixelForge，执行 `File > Generate Mock Batch`。
+2. 在画布上单击 `Object List` 节点，确保画布获得焦点；把鼠标移动到画布中希望打开菜单的位置。
+3. 按 `Tab`；预期鼠标处弹出 `AI Generate / Object List / Size Spec` 三项菜单，不显示 Batch。
+4. 选择 `Size Spec`；预期新卡仍按当前原型落在所选 Object List 右侧并成为当前选择，状态栏显示 `Graph node added: Size Spec`。
+5. 执行 Undo / Redo；预期新增 graph node 与画布卡同步移除、恢复。
+6. 单击空白画布清除 graph 选择，再按 `Tab`；预期不弹菜单，状态栏提示先选择 graph 节点或 batch。
+7. 选中节点并打开 `File > Edit Selected Graph Node...`，点击任一参数输入框后按 `Tab`；预期焦点在参数控件间移动，不弹 graph 快速菜单。
+
+### DoD 核查
+
+| 项 | 核查内容 | 状态 | 证据/路径 |
+|---|---|---|---|
+| 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
+| 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 20/20；全量 176/176 |
+| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户验证原生 PopupMenu 位置、Tab 焦点隔离和连续操作手感 |
+| 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 仅新增交互入口，复用既有 NodeRegistry、PFGraph 和 canvas node 引用契约 |
+| TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件未新增 TODO/FIXME/HACK |
+| 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | Tab 仅遍历当前选择并打开 3 项 PopupMenu，无持续计算路径 |
+| 跨平台 | 目标平台验证结果已记录 | 延期登记 | macOS headless 已过；原生 PopupMenu 仍需本机人工验证 |
+| 出口门控 | CI 绿灯或本地 agent 验证绿灯 | 通过 | `verify_m3_ux7.sh` |
+
+### 本轮完整 diff（报告本节自身追加除外）
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index b75b60a..813afee 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -31,6 +31,7 @@
+ - M3 G-5: 新增 File > Run Selected Graph 最小重跑入口，选中 mock 节点链任一节点后可替换刷新正式 batch 队列。
+ - M3 G-4f: 新增 schema 驱动的选中节点参数编辑入口，Object List、Size Spec 与 Mock Generate 参数可撤销修改并参与重跑。
+ - M3 G-4g: 新增注册表驱动的 Add Graph Node 子菜单，可在当前 graph 旁落下新节点并整体撤销/重做。
++- M3 G-4h: 画布获得焦点时可按 Tab 在鼠标处打开同一注册表驱动的节点添加菜单。
+ - M3 UX-4: 恢复 batch 语义 LOD 原型，改由 camera zoom 下发 overview/review/inspect，覆盖分数缩放下 25% 进入 overview 的回归路径。
+ - M3 UX-7: 新增 CanvasHitPolicy 最小输入仲裁层，统一 batch 缩略图、整卡、sprite 和空白画布命中，避免缩略图点击误触拖卡。
+ - M3 UX-4: 撤销隐藏缩略图的 overview 摘要卡路径，25% 缩放保持 review 缩略图可见且可命中，计划中标记该 UX-4 原型不予实际通过。
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index bfc285d..b2a098f 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -416,7 +416,41 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
+    var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+    var object_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "objects")
+    canvas.select_ids([object_item_id])
+-	var node_id: String = controller.add_graph_node_to_selected_graph("size_spec")
++	var tab_event := InputEventKey.new()
++	tab_event.keycode = KEY_TAB
++	tab_event.pressed = true
++	canvas._gui_input(tab_event)
++	await wait_process_frames(1)
++
++	assert_true(controller._graph_quick_add_menu.visible)
++	assert_eq(controller._graph_quick_add_menu.item_count, 3)
++	assert_eq(
++		[
++			controller._graph_quick_add_menu.get_item_text(0),
++			controller._graph_quick_add_menu.get_item_text(1),
++			controller._graph_quick_add_menu.get_item_text(2),
++		],
++		["AI Generate", "Object List", "Size Spec"]
++	)
++
++	var existing_node_ids := {}
++	for node_data in ProjectService.current_project.graphs[graph_id]["nodes"]:
++		existing_node_ids[String(node_data.get("id", ""))] = true
++	var size_menu_id := -1
++	for menu_id in controller._graph_add_types:
++		if String(controller._graph_add_types[menu_id]) == "size_spec":
++			size_menu_id = int(menu_id)
++			break
++	assert_gte(size_menu_id, 0)
++	controller._graph_quick_add_menu.id_pressed.emit(size_menu_id)
++	controller._graph_quick_add_menu.hide()
++
++	var node_id := ""
++	for node_data in ProjectService.current_project.graphs[graph_id]["nodes"]:
++		var candidate_id := String(node_data.get("id", ""))
++		if not existing_node_ids.has(candidate_id):
++			node_id = candidate_id
++			break
+
+    assert_false(node_id.is_empty())
+    assert_true(
+@@ -442,6 +476,16 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
+            func(node: Dictionary) -> bool: return String(node.get("id", "")) == node_id
+        )
+    )
++	controller._graph_quick_add_menu.hide()
++	canvas.select_ids([])
++	tab_event = InputEventKey.new()
++	tab_event.keycode = KEY_TAB
++	tab_event.pressed = true
++	canvas._gui_input(tab_event)
++	await wait_process_frames(1)
++
++	assert_false(controller._graph_quick_add_menu.visible)
++	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_ADD_NEEDS_SELECTION)
+
+
+ func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 6ae92ed..7114f5a 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -8,6 +8,7 @@ signal canvas_changed
+ signal selection_changed(selected_ids: Array)
+ signal cleanup_grid_changed(scale: float, offset: Vector2)
+ signal batch_context_requested(card_id: String, screen_position: Vector2i)
++signal graph_quick_add_requested(screen_position: Vector2i)
+ signal zoom_changed(zoom_index: int, camera_zoom: float)
+ signal graph_connect_failed(reason: String)
+ signal graph_status(event: Dictionary)
+@@ -108,7 +109,10 @@ func _notification(what: int) -> void:
+
+
+func _gui_input(event: InputEvent) -> void:
+-	if _tool_manager_handles(event):
++	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB:
++		graph_quick_add_requested.emit(Vector2i(get_screen_position() + get_local_mouse_position()))
++		accept_event()
++	elif _tool_manager_handles(event):
+        accept_event()
+        queue_redraw()
+    elif event is InputEventMouseButton:
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index d4a1499..56e9647 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -80,6 +80,7 @@ var _slice_dialog: ConfirmationDialog = null
+ var _outline_dialog: ConfirmationDialog = null
+ var _graph_node_params_dialog: ConfirmationDialog = null
+ var _graph_add_menu: PopupMenu = null
++var _graph_quick_add_menu: PopupMenu = null
+ var _graph_add_types := {}
+ var _batch_menu: PopupMenu = null
+ var _batch_menu_card_id := ""
+@@ -107,6 +108,7 @@ func setup(
+    _create_batch_menu()
+    _init_tools()
+    _canvas.batch_context_requested.connect(_show_batch_menu)
++	_canvas.graph_quick_add_requested.connect(show_graph_quick_add_menu)
+
+
+func add_file_menu(parent: Control) -> void:
+@@ -385,6 +387,18 @@ func add_graph_node_to_selected_graph(type_name: String) -> String:
+    return node_id
+
+
++func show_graph_quick_add_menu(screen_position: Vector2i) -> bool:
++	if _selected_graph_binding().is_empty():
++		_status_label.text = Strings.STATUS_GRAPH_ADD_NEEDS_SELECTION
++		return false
++	if _graph_quick_add_menu == null:
++		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
++		return false
++	_graph_quick_add_menu.position = screen_position
++	_graph_quick_add_menu.popup()
++	return true
++
++
+ func show_onboarding_if_needed() -> void:
+    if DisplayServer.get_name() == "headless":
+        return
+@@ -428,6 +442,8 @@ func _create_graph_node_params_dialog() -> void:
+ func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
+    _graph_add_menu = PopupMenu.new()
+    _graph_add_menu.name = "GraphNodeAddMenu"
++	_graph_quick_add_menu = PopupMenu.new()
++	_graph_quick_add_menu.name = "GraphNodeQuickAddMenu"
+    _graph_add_types.clear()
+    var registry := NodeRegistryScript.new()
+    var menu_id := GRAPH_ADD_MENU_ID_START
+@@ -436,9 +452,12 @@ func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
+        if node == null or node.get_type() == "batch":
+            continue
+        _graph_add_menu.add_item(node.get_display_name(), menu_id)
++		_graph_quick_add_menu.add_item(node.get_display_name(), menu_id)
+        _graph_add_types[menu_id] = node.get_type()
+        menu_id += 1
+    _graph_add_menu.id_pressed.connect(_on_graph_add_menu_pressed)
++	_graph_quick_add_menu.id_pressed.connect(_on_graph_add_menu_pressed)
++	add_child(_graph_quick_add_menu)
+    parent_menu.add_child(_graph_add_menu)
+    parent_menu.add_submenu_item(Strings.MENU_ADD_GRAPH_NODE, _graph_add_menu.name)
+
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index 71b5231..71fb976 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -563,6 +563,26 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ - 添加操作进入全局 Undo/Redo，逻辑节点和画布卡保持一致。
+ - 自动化覆盖新增、撤销、重做和状态栏反馈。
+
++### G-4h 画布 Tab 快速添加节点
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 正在画布上调整已有 graph、希望不离开当前视觉上下文快速添加节点的人 |
++| 当前痛点 | G-4g 已能从 File 菜单添加节点，但搭链时需要反复移动到窗口顶部，打断画布内的连续操作 |
++| 技术选择 | 画布获得焦点后按 `Tab`，在当前鼠标位置弹出与 File 菜单同源的 NodeRegistry 节点菜单 |
++| 选择原因 | 先补 M3 节点规格要求的画布快捷入口；复用既有注册表、添加事务和状态反馈，不提前实现搜索框、分类或空白建图 |
++| 优势 | File 与 Tab 两个入口共享节点类型和添加逻辑；Tab 只在画布焦点内生效，不抢参数输入控件的按键 |
++| 缺陷 | 菜单仍是平铺列表，节点落点继续采用相对当前选中卡偏移，不直接落在鼠标世界坐标 |
++| 改进空间 | 搜索、分类、最近使用、鼠标落点放置、右键空白菜单、从空白创建 graph |
++| 验证入口 | 选中 Object List 并保持画布焦点，按 Tab；鼠标处显示 AI Generate / Object List / Size Spec，选择后沿用 G-4g 的添加与 Undo/Redo |
++
++任务：
++
++- 画布焦点内的 `Tab` 发出快速添加请求，不影响其他输入控件。
++- 快速菜单和 File 子菜单从同一 NodeRegistry 构建并共用添加回调。
++- 未选择 graph 时不弹菜单，状态栏提示先选择 graph 节点或 batch。
++- 自动化覆盖 Tab 请求、菜单内容和无选择反馈。
++
+ ---
+
+ ## 8. 从原 M3 规划继承与降级
+diff --git a/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md b/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
+index 1b7e7be..3cdc2c6 100644
+--- a/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
++++ b/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
+@@ -13875,7 +13875,7 @@ index 735863a..f73eaba 100644
+ |---|---|---|---|
+ | 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
+ | 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 全量 176/176；定向 smoke 覆盖菜单、新增、Undo/Redo |
+-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按上方步骤验证原生菜单层级、落点和连线手感 |
++| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户于 2026-07-09 确认 G-4g 原生菜单层级、落点、Undo/Redo 与连线重跑通过 |
+ | 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 复用既有 NodeRegistry、PFGraph 与 canvas node 引用契约 |
+ | TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件静态检索无输出 |
+ | 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 单节点 Dictionary/CanvasItem 更新，无新重计算路径 |
 ```
