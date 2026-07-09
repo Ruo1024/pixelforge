@@ -664,7 +664,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		_is_panning = event.pressed
 		accept_event()
 	elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-		_emit_batch_context_if_hit(event.position)
+		_emit_context_request(event.position)
 		accept_event()
 	elif event.button_index == MOUSE_BUTTON_LEFT:
 		grab_focus()
@@ -1025,11 +1025,12 @@ func _tool_manager_handles(event: InputEvent) -> bool:
 	)
 
 
-func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
+func _emit_context_request(screen_position: Vector2) -> void:
 	var hit_item: Node = _hit_at_world(screen_to_world(screen_position)).get("item", null)
-	if hit_item == null or hit_item.get_script() != CanvasBatchCardScript:
+	var popup_position := Vector2i(get_screen_position()) + Vector2i(screen_position)
+	if hit_item != null and hit_item.get_script() == CanvasBatchCardScript:
+		_select_only([hit_item.item_id])
+		batch_context_requested.emit(hit_item.item_id, popup_position)
 		return
-	_select_only([hit_item.item_id])
-	batch_context_requested.emit(
-		hit_item.item_id, Vector2i(get_screen_position()) + Vector2i(screen_position)
-	)
+	if hit_item == null:
+		graph_quick_add_requested.emit(popup_position)

@@ -244,6 +244,34 @@ func test_canvas_hit_policy_reports_empty_space() -> void:
 	assert_eq(hit["item_id"], "")
 
 
+func test_canvas_right_click_routes_batch_before_empty_graph_quick_add() -> void:
+	var canvas: Control = _canvas()
+	var ids := [_register_asset(Color.RED, "red")]
+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
+	var batch_requests := []
+	var graph_requests := []
+	canvas.batch_context_requested.connect(
+		func(card_id: String, screen_position: Vector2i) -> void:
+			batch_requests.append([card_id, screen_position])
+	)
+	canvas.graph_quick_add_requested.connect(
+		func(screen_position: Vector2i) -> void: graph_requests.append(screen_position)
+	)
+
+	canvas._handle_mouse_button(
+		_right_click_event(canvas.world_to_screen(card.position + Vector2(4, 4)))
+	)
+
+	assert_eq(batch_requests.size(), 1)
+	assert_eq(batch_requests[0][0], "batch_1")
+	assert_eq(graph_requests, [])
+
+	canvas._handle_mouse_button(_right_click_event(Vector2(500, 500)))
+
+	assert_eq(batch_requests.size(), 1)
+	assert_eq(graph_requests.size(), 1)
+
+
 func _canvas() -> Control:
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(512, 512)
@@ -324,4 +352,12 @@ func _delete_key_event() -> InputEventKey:
 func _mouse_motion_event(position: Vector2) -> InputEventMouseMotion:
 	var event := InputEventMouseMotion.new()
 	event.position = position
+	return event
+
+
+func _right_click_event(position: Vector2) -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_RIGHT
+	event.position = position
+	event.pressed = true
 	return event

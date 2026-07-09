@@ -14203,7 +14203,7 @@ index ca24f47..be5e555 100644
 |---|---|---|---|
 | 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
 | 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 20/20；全量 176/176 |
-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户验证原生 PopupMenu 位置、Tab 焦点隔离和连续操作手感 |
+| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户于 2026-07-09 确认 G-4h PopupMenu 位置、Tab 焦点隔离和连续操作通过 |
 | 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 仅新增交互入口，复用既有 NodeRegistry、PFGraph 和 canvas node 引用契约 |
 | TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件未新增 TODO/FIXME/HACK |
 | 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | Tab 仅遍历当前选择并打开 3 项 PopupMenu，无持续计算路径 |
@@ -14418,4 +14418,152 @@ index 1b7e7be..3cdc2c6 100644
  | 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 复用既有 NodeRegistry、PFGraph 与 canvas node 引用契约 |
  | TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件静态检索无输出 |
  | 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 单节点 Dictionary/CanvasItem 更新，无新重计算路径 |
+```
+
+## 2026-07-09 M3 G-4i 右键空白画布快速添加节点
+
+### 本轮实现说明
+
+- G-4h 人工验收已由用户确认通过，原报告 DoD 状态同步更新为 `通过`。
+- 画布右键入口统一经过 `_emit_context_request()`：命中 batch 时继续选择该卡并打开原批次菜单；命中空白时转发给 G-4h 的 graph 快速添加菜单。
+- 命中普通 graph node 或 sprite 时不触发空白添加菜单，为后续元素专属上下文菜单保留交互空间。
+- 空白右键菜单继续复用既有 graph 选择校验、NodeRegistry 菜单、添加状态与 Undo/Redo，不复制 graph 规则或添加事务。
+- 本卡没有修改 graph schema、项目格式或 UI 字符串。
+
+### 验证结果
+
+- `PATH="/Users/ruo/Desktop/pixelforge/pixel/.godot/gdtoolkit-venv/bin:$PATH" ./pixel/scripts/lint.sh`：通过，113 个 GDScript 文件零问题。
+- 定向 `test_canvas_hit_policy.gd`：通过，`13/13 tests`、`52 asserts`。
+- `./pixel/scripts/verify_m3_ux7.sh`：通过；全量 GUT `177/177 tests`、`1368 asserts`，并通过 `check_ui_scaling` 与 headless startup gate。
+- `git diff --check`：通过。
+
+### 人工测试步骤
+
+1. 启动当前 main 工作区 PixelForge，执行 `File > Generate Mock Batch`。
+2. 单击选中 `Object List`，随后在未被卡片覆盖的空白画布处单击右键。
+3. 预期右键位置弹出 `AI Generate / Object List / Size Spec`，选择 `Size Spec` 后仍按当前原型在 Object List 右侧新增卡片。
+4. 执行 Undo / Redo，确认新增 graph node 与画布卡同步移除、恢复。
+5. 在 `Mock Batch` 卡内单击右键；预期仍显示 Clean Batch、Matte Batch、Outline Batch 等批次菜单，不显示节点添加菜单。
+6. 在普通 graph node 本体或独立 sprite 上单击右键；预期不弹节点添加菜单。
+7. 单击空白画布清除选择，再次右键空白处；预期不弹菜单，状态栏提示先选择 graph 节点或 batch。
+
+### DoD 核查
+
+| 项 | 核查内容 | 状态 | 证据/路径 |
+|---|---|---|---|
+| 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
+| 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 13/13；全量 177/177 |
+| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户验证原生右键菜单位置、batch 优先级和不同元素命中手感 |
+| 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 仅新增右键路由，复用既有 NodeRegistry、PFGraph 与 canvas node 引用契约 |
+| TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件未新增 TODO/FIXME/HACK |
+| 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 单次右键只执行既有画布命中和 PopupMenu 路由 |
+| 跨平台 | 目标平台验证结果已记录 | 延期登记 | macOS headless 已过；原生右键 PopupMenu 仍需本机人工验证 |
+| 出口门控 | CI 绿灯或本地 agent 验证绿灯 | 通过 | `verify_m3_ux7.sh` |
+
+### 本轮完整 diff（报告本节自身追加除外，`--unified=0`）
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 813afee..47a831f 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -34,0 +35 @@
++- M3 G-4i: 右键空白画布可打开 graph 快速添加菜单，同时保留批次卡右键菜单优先级。
+diff --git a/pixel/tests/unit/test_canvas_hit_policy.gd b/pixel/tests/unit/test_canvas_hit_policy.gd
+index bcd3f26..fe5e246 100644
+--- a/pixel/tests/unit/test_canvas_hit_policy.gd
++++ b/pixel/tests/unit/test_canvas_hit_policy.gd
+@@ -246,0 +247,28 @@ func test_canvas_hit_policy_reports_empty_space() -> void:
++func test_canvas_right_click_routes_batch_before_empty_graph_quick_add() -> void:
++	var canvas: Control = _canvas()
++	var ids := [_register_asset(Color.RED, "red")]
++	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
++	var batch_requests := []
++	var graph_requests := []
++	canvas.batch_context_requested.connect(
++		func(card_id: String, screen_position: Vector2i) -> void:
++			batch_requests.append([card_id, screen_position])
++	)
++	canvas.graph_quick_add_requested.connect(
++		func(screen_position: Vector2i) -> void: graph_requests.append(screen_position)
++	)
++
++	canvas._handle_mouse_button(
++		_right_click_event(canvas.world_to_screen(card.position + Vector2(4, 4)))
++	)
++
++	assert_eq(batch_requests.size(), 1)
++	assert_eq(batch_requests[0][0], "batch_1")
++	assert_eq(graph_requests, [])
++
++	canvas._handle_mouse_button(_right_click_event(Vector2(500, 500)))
++
++	assert_eq(batch_requests.size(), 1)
++	assert_eq(graph_requests.size(), 1)
++
++
+@@ -327,0 +356,8 @@ func _mouse_motion_event(position: Vector2) -> InputEventMouseMotion:
++
++
++func _right_click_event(position: Vector2) -> InputEventMouseButton:
++	var event := InputEventMouseButton.new()
++	event.button_index = MOUSE_BUTTON_RIGHT
++	event.position = position
++	event.pressed = true
++	return event
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 7114f5a..4ab026e 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -667 +667 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
+-		_emit_batch_context_if_hit(event.position)
++		_emit_context_request(event.position)
+@@ -1028 +1028 @@ func _tool_manager_handles(event: InputEvent) -> bool:
+-func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
++func _emit_context_request(screen_position: Vector2) -> void:
+@@ -1030 +1030,4 @@ func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
+-	if hit_item == null or hit_item.get_script() != CanvasBatchCardScript:
++	var popup_position := Vector2i(get_screen_position()) + Vector2i(screen_position)
++	if hit_item != null and hit_item.get_script() == CanvasBatchCardScript:
++		_select_only([hit_item.item_id])
++		batch_context_requested.emit(hit_item.item_id, popup_position)
+@@ -1032,4 +1035,2 @@ func _emit_batch_context_if_hit(screen_position: Vector2) -> void:
+-	_select_only([hit_item.item_id])
+-	batch_context_requested.emit(
+-		hit_item.item_id, Vector2i(get_screen_position()) + Vector2i(screen_position)
+-	)
++	if hit_item == null:
++		graph_quick_add_requested.emit(popup_position)
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index 71fb976..3db503d 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -585,0 +586,20 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
++### G-4i 右键空白画布快速添加节点
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 主要使用鼠标搭建已有 graph、希望直接从画布空白处唤出节点菜单的人 |
++| 当前痛点 | G-4h 已补 Tab 入口，但鼠标用户仍需切换到键盘；节点规格要求的右键添加路径尚未接通 |
++| 技术选择 | 右键命中批次卡时继续打开批次菜单；右键命中空白画布时转发到既有 graph 快速添加菜单 |
++| 选择原因 | 复用 CanvasHitPolicy 命中结果和 G-4h 菜单，不新增第二套 registry/添加逻辑；先只占用空白画布右键，给节点/sprite 专属菜单保留空间 |
++| 优势 | 鼠标与 Tab 入口一致；批次高频处理菜单不受影响；未选 graph 时继续给出明确状态栏反馈 |
++| 缺陷 | 右键节点本体和 sprite 暂不弹添加菜单；新节点仍落在所选 graph 卡右侧而非右键世界坐标 |
++| 改进空间 | 节点本体上下文菜单、鼠标落点放置、搜索/分类、最近使用、空白建图 |
++| 验证入口 | 选中 Object List 后右键空白画布，出现三项节点菜单；右键 Mock Batch 仍出现批次处理菜单 |
++
++任务：
++
++- 统一右键路由：batch 命中优先，空白画布回退到 graph 快速添加。
++- sprite 与普通 graph node 命中不触发空白添加菜单。
++- 快速添加继续复用 G-4h 的选择校验、节点菜单和添加回调。
++- 自动化覆盖 batch 优先级和空白右键请求。
++
+diff --git a/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md b/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
+index 33ffd29..e42b350 100644
+--- a/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
++++ b/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
+@@ -14206 +14206 @@ index ca24f47..be5e555 100644
+-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户验证原生 PopupMenu 位置、Tab 焦点隔离和连续操作手感 |
++| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户于 2026-07-09 确认 G-4h PopupMenu 位置、Tab 焦点隔离和连续操作通过 |
 ```
