@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PixelForge M3 UX 反馈验收清单</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f6f8;
+    color: #1d232b;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    border-bottom: 1px solid #dfe4ea;
+    background: rgba(245, 246, 248, 0.96);
+    backdrop-filter: blur(6px);
+  }
+  .top, .wrap { max-width: 1120px; margin: 0 auto; padding: 14px 18px; }
+  .wrap { padding-bottom: 88px; }
+  h1 { margin: 0 0 4px; font-size: 18px; }
+  .sub { margin: 0; color: #5b6470; font-size: 12.5px; }
+  .meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 8px;
+    margin: 12px 0 4px;
+  }
+  .meta label { display: flex; flex-direction: column; gap: 3px; color: #5b6470; font-size: 12px; }
+  input, select, textarea, button {
+    font: inherit;
+  }
+  .meta input, select, textarea {
+    border: 1px solid #cfd7e2;
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: #fff;
+    color: #1d232b;
+  }
+  .bar-row, .toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 9px;
+  }
+  .progress {
+    flex: 1 1 260px;
+    min-width: 220px;
+    height: 12px;
+    border-radius: 999px;
+    background: #e5e9ef;
+    overflow: hidden;
+    display: flex;
+  }
+  .progress i { display: block; height: 100%; }
+  .pass { background: #22a06b; }
+  .fail { background: #dc4c3e; }
+  .proto { background: #7c5cff; }
+  .na { background: #98a2b3; }
+  .counts { font-size: 12px; color: #47505c; white-space: nowrap; }
+  .btn {
+    border: 1px solid #cbd3dd;
+    background: #fff;
+    color: #1d232b;
+    padding: 6px 11px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12.5px;
+  }
+  .btn:hover { background: #eef2f6; }
+  .btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+  .btn.primary:hover { background: #1d4ed8; }
+  .callout {
+    margin: 14px 0;
+    padding: 12px 14px;
+    border: 1px solid #bdd3f4;
+    background: #edf5ff;
+    border-radius: 12px;
+  }
+  .callout h2 { margin: 0 0 6px; font-size: 14px; }
+  .callout p { margin: 5px 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; color: #47505c; font-size: 12.5px; }
+  .pill, .tag {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .tag.UX-CRITICAL { background: #ffe1dd; color: #a93220; }
+  .tag.M3-PROTOTYPE { background: #ebe5ff; color: #5d3fc6; }
+  .tag.FEEDBACK { background: #dff7ea; color: #176d45; }
+  .tag.DESIGN-DEBT { background: #fff1cd; color: #8a5b05; }
+  .tag.TECH-BACKBONE { background: #dbeafe; color: #1f5fbf; }
+  .tag.ITERATION-HOOK { background: #e7eef6; color: #475467; }
+  section { margin: 22px 0; }
+  section > h2 {
+    margin: 0 0 9px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #dfe4ea;
+    font-size: 15px;
+    scroll-margin-top: 150px;
+  }
+  .item {
+    margin: 9px 0;
+    padding: 12px;
+    border: 1px solid #e0e5ec;
+    border-left-width: 4px;
+    border-radius: 12px;
+    background: #fff;
+  }
+  .item.pass { border-left-color: #22a06b; background: #fbfffd; }
+  .item.fail { border-left-color: #dc4c3e; background: #fffdfc; }
+  .item.proto { border-left-color: #7c5cff; background: #fdfcff; }
+  .item.na { border-left-color: #98a2b3; background: #fcfcfd; }
+  .item-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 7px; }
+  .item-title { font-weight: 700; margin-right: 4px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 7px;
+    margin: 8px 0;
+  }
+  .cell {
+    padding: 7px 8px;
+    border: 1px solid #edf0f4;
+    border-radius: 9px;
+    background: #fafbfc;
+  }
+  .cell b { display: block; margin-bottom: 2px; color: #344054; font-size: 12px; }
+  .cell span { color: #5b6470; font-size: 12.5px; }
+  .seg { display: inline-flex; border: 1px solid #cfd7e2; border-radius: 9px; overflow: hidden; margin-top: 8px; }
+  .seg button {
+    border: 0;
+    border-right: 1px solid #dfe4ea;
+    background: #fff;
+    padding: 6px 11px;
+    cursor: pointer;
+    color: #364152;
+    font-size: 12.5px;
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"][data-v="pass"] { background: #22a06b; color: #fff; }
+  .seg button[aria-pressed="true"][data-v="fail"] { background: #dc4c3e; color: #fff; }
+  .seg button[aria-pressed="true"][data-v="proto"] { background: #7c5cff; color: #fff; }
+  .seg button[aria-pressed="true"][data-v="na"] { background: #98a2b3; color: #fff; }
+  .notes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .notes label, .feedback label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: #415166;
+    font-size: 12px;
+    font-weight: 650;
+  }
+  .notes textarea, .feedback textarea {
+    min-height: 62px;
+    resize: vertical;
+    line-height: 1.45;
+  }
+  .feedback {
+    margin-top: 11px;
+    border: 1px solid #cbd5e1;
+    background: #f8fbff;
+    border-radius: 12px;
+    padding: 11px 12px;
+  }
+  .hidden { display: none !important; }
+  .saved { color: #22a06b; font-size: 11.5px; margin-left: 6px; }
+  .modal-bg {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    padding: 20px;
+    background: rgba(20, 24, 30, .42);
+  }
+  .modal-bg.open { display: flex; }
+  .modal {
+    width: min(840px, 100%);
+    max-height: 84vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 14px 44px rgba(0, 0, 0, .25);
+  }
+  .modal h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid #e0e5ec; font-size: 14px; }
+  .modal-body { padding: 12px 16px; overflow: auto; }
+  .modal textarea {
+    width: 100%;
+    min-height: 360px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 16px; border-top: 1px solid #e0e5ec; }
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <h1>PixelForge M3 UX 反馈验收清单</h1>
+    <p class="sub">用于 M3 体验关键技术原型层验收。每项记录“通过 / 未过 / 原型待迭代 / N.A.”，并导出 Markdown/JSON 回填到 reports。<span id="savedTip" class="saved"></span></p>
+    <div class="bar-row">
+      <div class="progress" title="通过 / 未过 / 原型待迭代 / N.A.">
+        <i class="pass" id="barPass" style="width:0%"></i>
+        <i class="fail" id="barFail" style="width:0%"></i>
+        <i class="proto" id="barProto" style="width:0%"></i>
+        <i class="na" id="barNa" style="width:0%"></i>
+      </div>
+      <div class="counts" id="counts">-</div>
+    </div>
+    <div class="toolbar">
+      <select id="filter">
+        <option value="all">显示全部</option>
+        <option value="untested">仅未测</option>
+        <option value="fail">仅未过</option>
+        <option value="proto">仅原型待迭代</option>
+        <option value="UX-CRITICAL">仅 UX-CRITICAL</option>
+        <option value="M3-PROTOTYPE">仅 M3-PROTOTYPE</option>
+        <option value="FEEDBACK">仅 FEEDBACK</option>
+        <option value="DESIGN-DEBT">仅 DESIGN-DEBT</option>
+        <option value="TECH-BACKBONE">仅 TECH-BACKBONE</option>
+      </select>
+      <button class="btn primary" id="btnExport">导出验收结果</button>
+      <button class="btn" id="btnReset">清空填写</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="meta">
+    <label>验收人 <input id="m_reviewer" placeholder="姓名"></label>
+    <label>平台 / 输入设备 <input id="m_platform" placeholder="如 macOS 13寸 + 触控板 / Win 150% + 鼠标"></label>
+    <label>日期 <input id="m_date" placeholder="2026-__-__"></label>
+    <label>轮次 / commit <input id="m_build" placeholder="M3 UX 第_轮 / commit"></label>
+  </div>
+
+  <div class="callout">
+    <h2>使用规则</h2>
+    <p>本清单不是“最终设计打勾表”，而是 M3 体验关键技术原型层的反馈工具。`未过` 与 `原型待迭代` 必须导出并进入后续报告与 `M3-设计债台账.md`。</p>
+    <p>验收时优先记录真实手感：看不清、滑不动、误触、找不到图、无法判断处理结果、需要口头指导。</p>
+  </div>
+
+  <div class="legend">
+    <span class="pill pass">通过</span>
+    <span class="pill fail">未过</span>
+    <span class="pill proto">原型待迭代</span>
+    <span class="pill na">N.A.</span>
+  </div>
+
+  <div id="app"></div>
+</main>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h2>导出验收结果</h2>
+    <div class="modal-body"><textarea id="exportText" readonly></textarea></div>
+    <div class="modal-foot">
+      <button class="btn" id="btnCopyJson">复制 JSON</button>
+      <button class="btn primary" id="btnCopyMd">复制 Markdown</button>
+      <button class="btn" id="btnCloseModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+var STORAGE_KEY = "pf_m3_ux_acceptance_v1";
+var STATUS = [
+  ["pass", "通过"],
+  ["fail", "未过"],
+  ["proto", "原型待迭代"],
+  ["na", "N.A."]
+];
+
+var SECTIONS = [
+  {
+    id: "nav",
+    title: "导航手感",
+    items: [
+      {
+        id: "nav-1",
+        title: "触控板双指平移与鼠标平移都能稳定移动画布",
+        tags: ["UX-CRITICAL", "M3-PROTOTYPE", "FEEDBACK", "ITERATION-HOOK"],
+        service: "用触控板或鼠标在大画布中反复移动、审阅素材的人",
+        pain: "双指滑动速率怪、方向感差；平移容易误拖素材",
+        tech: "CanvasNavigationPolicy 统一 pan gesture、Space drag、中键/可选右键拖拽",
+        action: "用 50 元素画布连续平移 5 分钟，记录误触、速度、方向感"
+      },
+      {
+        id: "nav-2",
+        title: "缩放以指针所在世界坐标为锚点，连续缩放后不迷路",
+        tags: ["UX-CRITICAL", "M3-PROTOTYPE", "FEEDBACK"],
+        service: "在局部细节和全局批次之间频繁切换的人",
+        pain: "缩放后还要重新找内容，滚轮跳档造成空间断裂",
+        tech: "统一 wheel / magnify gesture / slider 的锚点缩放与速度限幅",
+        action: "连续缩放 10 次，锚点漂移不超过 1 屏幕像素；录屏看是否突兀"
+      },
+      {
+        id: "nav-3",
+        title: "Fit All / Fit Selection / Focus New Import 能快速回到内容",
+        tags: ["UX-CRITICAL", "FEEDBACK"],
+        service: "导入或整理大画布后找不到内容的人",
+        pain: "图去了哪里、当前选区在哪里，需要手动滚很久",
+        tech: "相机 zoom-to-bounds 命令，带 200-320ms 空间连续动画",
+        action: "导入一批图、框选若干图、移动到远处后分别聚焦，目标完整进视口"
+      }
+    ]
+  },
+  {
+    id: "display",
+    title: "导入与显示尺寸",
+    items: [
+      {
+        id: "display-1",
+        title: "不同尺寸图片导入后可调成可比较大小",
+        tags: ["UX-CRITICAL", "M3-PROTOTYPE", "FEEDBACK"],
+        service: "导入 16px 小图、长条图、大参考图并横向比较的人",
+        pain: "小图看不见，大图压倒画布；整数 scale_factor 没有审阅语义",
+        tech: "source_size 与 display_bounds 分离，支持 Actual Pixels / Fit Compare / Custom Size",
+        action: "导入 16x16、32x64、256x128，调成同高度比较，导出源像素不变"
+      },
+      {
+        id: "display-2",
+        title: "导入后自动铺开并聚焦，但不破坏已有工作上下文",
+        tags: ["UX-CRITICAL", "M3-PROTOTYPE", "FEEDBACK"],
+        service: "多轮导入参考图和候选图的人",
+        pain: "新图落点不清楚，自动聚焦又可能把用户带离当前工作区",
+        tech: "导入事务记录 bounds；空画布自动 focus，非空画布提供 Focus New Import",
+        action: "空画布和已有内容两种场景分别导入，确认新图可找到且上下文不被强行打断"
+      }
+    ]
+  },
+  {
+    id: "batch-layout",
+    title: "批次卡布局",
+    items: [
+      {
+        id: "batch-layout-1",
+        title: "批次卡不再是固定大格子，50 张仍能自然审阅",
+        tags: ["UX-CRITICAL", "DESIGN-DEBT", "M3-PROTOTYPE", "FEEDBACK"],
+        service: "一次从 12-50 张候选图中筛选可用素材的人",
+        pain: "固定卡宽和缩略图只是把僵硬格子放大，长宽比不同仍难比",
+        tech: "BatchReviewLayout：contact sheet / focus / compact，卡宽和缩略密度可保存",
+        action: "13 寸屏和大屏各看 50 张，记录是否能看出主要差异"
+      },
+      {
+        id: "batch-layout-2",
+        title: "焦点图与缩略列表能支持逐张审阅",
+        tags: ["UX-CRITICAL", "M3-PROTOTYPE"],
+        service: "需要逐张查看细节，又不想离开批次上下文的人",
+        pain: "只看格子很难判断细节，放大全卡又丢失批次方向感",
+        tech: "focus 模式：单张大图 + filmstrip 或缩略列表",
+        action: "用键盘上一张/下一张浏览 20 张，焦点状态保存重开仍一致"
+      }
+    ]
+  },
+  {
+    id: "lod",
+    title: "LOD 语义缩放",
+    items: [
+      {
+        id: "lod-1",
+        title: "overview / review / inspect 三档信息逐步出现",
+        tags: ["UX-CRITICAL", "M3-PROTOTYPE", "FEEDBACK", "ITERATION-HOOK"],
+        service: "在全局结构和像素细节之间切换的人",
+        pain: "当前只有像素网格阈值，没有卡片/节点/批次显示详略节奏",
+        tech: "CanvasLODProfile 集中计算 LOD，sprite/batch/node/edge 共用",
+        action: "三个 zoom 档截图，检查文字不重叠、图不糊、布局不跳"
+      },
+      {
+        id: "lod-2",
+        title: "高缩放下像素清晰，透明棋盘/网格不干扰审阅",
+        tags: ["UX-CRITICAL", "M3-PROTOTYPE"],
+        service: "检查真像素边缘、透明背景、清洗结果的人",
+        pain: "模糊或辅助线过密会直接破坏像素判断",
+        tech: "NEAREST 渲染 + inspect LOD 显示像素网格/透明棋盘/尺寸提示",
+        action: "检查 16px 和 32px 图的高缩放截图，确认颜色集合不被插值污染"
+      }
+    ]
+  },
+  {
+    id: "review",
+    title: "批次审阅",
+    items: [
+      {
+        id: "review-1",
+        title: "50 张候选能快速 keep/reject/flag 并过滤",
+        tags: ["UX-CRITICAL", "FEEDBACK"],
+        service: "从一批候选中快速挑出可用素材的人",
+        pain: "只有勾选，没有审阅状态和键盘节奏",
+        tech: "BatchReviewState：keep / reject / flag / focus_asset_id / filter",
+        action: "2 分钟内从 50 张挑出 8 张，过滤只看 keep，再拆成新批次"
+      },
+      {
+        id: "review-2",
+        title: "拆小批次保留来源、顺序、状态，原批次不变",
+        tags: ["UX-CRITICAL", "TECH-BACKBONE"],
+        service: "把满意图收窄成下一轮加工对象的人",
+        pain: "拆分如果丢 provenance 或改坏原批次，会破坏批量工作流",
+        tech: "子 batch 引用 keep 集合 asset_id，保留 parent/provenance 和相对顺序",
+        action: "拆小批次后保存重开，原批次、子批次、状态和顺序一致"
+      }
+    ]
+  },
+  {
+    id: "compare",
+    title: "前后对比",
+    items: [
+      {
+        id: "compare-1",
+        title: "整批处理后能快速 A/B 判断是否变好",
+        tags: ["UX-CRITICAL", "DESIGN-DEBT", "FEEDBACK"],
+        service: "清洗/抠图/描边后要判断算法结果的人",
+        pain: "处理后直接替换视觉内容，原图只在 provenance 里，无法判断收益",
+        tech: "批次处理生成 version pair，提供 A/B 切换或并排对比原型",
+        action: "Clean/Matte/Outline 后指出至少 3 张变好和 1 张变差/失败"
+      },
+      {
+        id: "compare-2",
+        title: "失败项、跳过项、处理中状态可见",
+        tags: ["UX-CRITICAL", "FEEDBACK"],
+        service: "批量处理时需要知道哪里失败、是否要重跑的人",
+        pain: "批任务完成反馈太粗，用户不知道哪张出问题",
+        tech: "batch 卡显示 per-item status：queued/running/done/failed/skipped",
+        action: "构造一张失败输入，确认失败项有状态和错误提示，其他结果保留"
+      }
+    ]
+  },
+  {
+    id: "actions",
+    title: "批次动作与导出",
+    items: [
+      {
+        id: "actions-1",
+        title: "批次动作有参数、样本预览、N/总数进度和取消",
+        tags: ["UX-CRITICAL", "TECH-BACKBONE", "FEEDBACK"],
+        service: "整批加工前需要先确认参数是否合适的人",
+        pain: "固定参数会让用户只能执行后猜结果，不合适再撤销",
+        tech: "统一批次动作壳：params dialog + 1-3 张 sample preview + progress + cancel",
+        action: "调清洗参数看样本预览，再整批执行，进度能回答第几张"
+      },
+      {
+        id: "actions-2",
+        title: "导出保持 1:1 真像素，显示尺寸不污染产物",
+        tags: ["UX-CRITICAL", "TECH-BACKBONE"],
+        service: "把素材导入游戏引擎的人",
+        pain: "画布显示缩放如果污染导出，会破坏像素素材可信度",
+        tech: "exporter 使用源图/处理输出像素，不读 display_bounds 做预放大",
+        action: "调大显示尺寸后导出 PNG，像素尺寸和颜色集合仍与源图/处理结果一致"
+      }
+    ]
+  },
+  {
+    id: "graph",
+    title: "最小节点闭环",
+    items: [
+      {
+        id: "graph-1",
+        title: "Graph 最小核只服务 batch 持久化，不抢 UX 地基",
+        tags: ["TECH-BACKBONE"],
+        service: "让 batch 从临时 UI 数据变成可保存、可生成的一等节点",
+        pain: "临时 batch_card 无法支撑节点链和逻辑/视图分离",
+        tech: "PFNode/PFGraph/NodeRegistry 最小核 + batch 节点 + graphs 保存打开",
+        action: "graph batch asset_ids round-trip，canvas node 引用对账"
+      },
+      {
+        id: "graph-2",
+        title: "Mock generate 最小链能落入同一 batch 工作台",
+        tags: ["TECH-BACKBONE", "M3-PROTOTYPE"],
+        service: "没有 API key 也能验证生成→审阅→加工的人",
+        pain: "等真实 provider 会阻塞节点体验验证",
+        tech: "object_list → size_spec → ai_generate(mock) → batch",
+        action: "5 个 object × batch_size 2 生成 10 张确定性占位图，落入正式 batch"
+      },
+      {
+        id: "graph-3",
+        title: "节点、batch、sprite 共存时不互抢输入",
+        tags: ["UX-CRITICAL", "TECH-BACKBONE", "FEEDBACK"],
+        service: "在同一画布里拖卡、连节点、框选、平移的人",
+        pain: "端口、缩略图、卡片、框选、平移都可能争抢鼠标事件",
+        tech: "CanvasHitPolicy：端口 > resize handle > 缩略图 > 卡边框 > sprite > 框选 > 空白 pan",
+        action: "录屏验证拖卡、点图、框选、平移、拖端口互不误触"
+      }
+    ]
+  }
+];
+
+var state = load();
+
+function load() {
+  try {
+    var raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return { meta: {}, items: {}, feedback: {} };
+}
+
+function save() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+  var tip = document.getElementById("savedTip");
+  tip.textContent = "已保存";
+  clearTimeout(save._timer);
+  save._timer = setTimeout(function(){ tip.textContent = ""; }, 1000);
+}
+
+function allItems() {
+  var result = [];
+  SECTIONS.forEach(function(section) {
+    section.items.forEach(function(item) { result.push(item); });
+  });
+  return result;
+}
+
+function getRecord(id) {
+  if (!state.items[id]) state.items[id] = {};
+  return state.items[id];
+}
+
+function setStatus(id, value) {
+  var record = getRecord(id);
+  record.status = record.status === value ? "" : value;
+  save();
+  render();
+}
+
+function setField(id, key, value) {
+  getRecord(id)[key] = value;
+  save();
+  updateProgress();
+}
+
+function setFeedback(id, value) {
+  state.feedback[id] = value;
+  save();
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"]/g, function(ch) {
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch];
+  });
+}
+
+function itemMatchesFilter(item) {
+  var filter = document.getElementById("filter").value;
+  var status = (state.items[item.id] || {}).status || "";
+  if (filter === "all") return true;
+  if (filter === "untested") return status === "";
+  if (filter === "fail" || filter === "proto") return status === filter;
+  return item.tags.indexOf(filter) !== -1;
+}
+
+function updateProgress() {
+  var items = allItems();
+  var total = items.length;
+  var counts = { pass: 0, fail: 0, proto: 0, na: 0, untested: 0 };
+  items.forEach(function(item) {
+    var status = (state.items[item.id] || {}).status || "";
+    if (status) counts[status] += 1;
+    else counts.untested += 1;
+  });
+  document.getElementById("barPass").style.width = (counts.pass / total * 100) + "%";
+  document.getElementById("barFail").style.width = (counts.fail / total * 100) + "%";
+  document.getElementById("barProto").style.width = (counts.proto / total * 100) + "%";
+  document.getElementById("barNa").style.width = (counts.na / total * 100) + "%";
+  document.getElementById("counts").textContent =
+    "已测 " + (total - counts.untested) + "/" + total +
+    " · 通过 " + counts.pass +
+    " · 未过 " + counts.fail +
+    " · 原型待迭代 " + counts.proto +
+    " · N.A. " + counts.na +
+    " · 未测 " + counts.untested;
+}
+
+function render() {
+  var app = document.getElementById("app");
+  app.innerHTML = "";
+
+  SECTIONS.forEach(function(section) {
+    var visible = section.items.filter(itemMatchesFilter);
+    if (visible.length === 0 && document.getElementById("filter").value !== "all") return;
+
+    var sec = document.createElement("section");
+    sec.id = section.id;
+    var heading = document.createElement("h2");
+    heading.textContent = section.title;
+    sec.appendChild(heading);
+
+    visible.forEach(function(item) {
+      var record = state.items[item.id] || {};
+      var status = record.status || "";
+      var card = document.createElement("article");
+      card.className = "item " + status;
+
+      var head = document.createElement("div");
+      head.className = "item-head";
+      head.innerHTML = '<span class="item-title">' + escapeHtml(item.title) + '</span>' +
+        item.tags.map(function(tag) { return '<span class="tag ' + tag + '">' + tag + '</span>'; }).join("");
+      card.appendChild(head);
+
+      var grid = document.createElement("div");
+      grid.className = "grid";
+      [
+        ["服务对象", item.service],
+        ["当前痛点", item.pain],
+        ["技术选择", item.tech],
+        ["体验验收动作", item.action]
+      ].forEach(function(pair) {
+        var cell = document.createElement("div");
+        cell.className = "cell";
+        cell.innerHTML = "<b>" + escapeHtml(pair[0]) + "</b><span>" + escapeHtml(pair[1]) + "</span>";
+        grid.appendChild(cell);
+      });
+      card.appendChild(grid);
+
+      var seg = document.createElement("div");
+      seg.className = "seg";
+      STATUS.forEach(function(pair) {
+        var button = document.createElement("button");
+        button.setAttribute("data-v", pair[0]);
+        button.setAttribute("aria-pressed", status === pair[0] ? "true" : "false");
+        button.textContent = pair[1];
+        button.onclick = function() { setStatus(item.id, pair[0]); };
+        seg.appendChild(button);
+      });
+      card.appendChild(seg);
+
+      var notes = document.createElement("div");
+      notes.className = "notes";
+      [
+        ["result", "实测结果 / 现象 / 复现步骤"],
+        ["iteration", "下一轮迭代建议 / 设计债归因"]
+      ].forEach(function(pair) {
+        var label = document.createElement("label");
+        label.textContent = pair[1];
+        var textarea = document.createElement("textarea");
+        textarea.value = record[pair[0]] || "";
+        textarea.placeholder = pair[1] + "...";
+        textarea.oninput = function() { setField(item.id, pair[0], textarea.value); };
+        label.appendChild(textarea);
+        notes.appendChild(label);
+      });
+      card.appendChild(notes);
+      sec.appendChild(card);
+    });
+
+    var feedback = document.createElement("div");
+    feedback.className = "feedback";
+    var label = document.createElement("label");
+    label.textContent = "本模块自由反馈";
+    var textarea = document.createElement("textarea");
+    textarea.value = state.feedback[section.id] || "";
+    textarea.placeholder = "记录整体手感、额外问题、优先级建议、未覆盖场景...";
+    textarea.oninput = function() { setFeedback(section.id, textarea.value); };
+    label.appendChild(textarea);
+    feedback.appendChild(label);
+    sec.appendChild(feedback);
+    app.appendChild(sec);
+  });
+
+  updateProgress();
+}
+
+["reviewer", "platform", "date", "build"].forEach(function(key) {
+  var input = document.getElementById("m_" + key);
+  input.value = state.meta[key] || "";
+  input.oninput = function() {
+    state.meta[key] = input.value;
+    save();
+  };
+});
+
+document.getElementById("filter").onchange = render;
+
+function statusLabel(value) {
+  return {"pass":"通过","fail":"未过","proto":"原型待迭代","na":"N.A.","":"未测"}[value || ""] || "未测";
+}
+
+function oneLine(value) {
+  return String(value || "").replace(/\n/g, " ").replace(/\|/g, "/").trim();
+}
+
+function buildMarkdown() {
+  var lines = [];
+  var meta = state.meta || {};
+  var items = allItems();
+  var counts = { pass: 0, fail: 0, proto: 0, na: 0, untested: 0 };
+  items.forEach(function(item) {
+    var status = (state.items[item.id] || {}).status || "";
+    if (status) counts[status] += 1;
+    else counts.untested += 1;
+  });
+
+  lines.push("# PixelForge M3 UX 反馈验收结果");
+  lines.push("");
+  lines.push("- 验收人: " + (meta.reviewer || ""));
+  lines.push("- 平台 / 输入设备: " + (meta.platform || ""));
+  lines.push("- 日期: " + (meta.date || ""));
+  lines.push("- 轮次 / commit: " + (meta.build || ""));
+  lines.push("- 统计: 共 " + items.length + " 项 | 通过 " + counts.pass + " | 未过 " + counts.fail + " | 原型待迭代 " + counts.proto + " | N.A. " + counts.na + " | 未测 " + counts.untested);
+  lines.push("");
+
+  var attention = items.filter(function(item) {
+    var status = (state.items[item.id] || {}).status || "";
+    return status === "fail" || status === "proto";
+  });
+  if (attention.length > 0) {
+    lines.push("## M3 设计债候选（必须回填 M3-设计债台账.md）");
+    lines.push("");
+    attention.forEach(function(item) {
+      var record = state.items[item.id] || {};
+      lines.push("- [" + statusLabel(record.status) + "] " + item.title + " (" + item.tags.join(", ") + ")");
+      if (record.result) lines.push("  - 实测: " + oneLine(record.result));
+      if (record.iteration) lines.push("  - 下一轮: " + oneLine(record.iteration));
+    });
+    lines.push("");
+  }
+
+  lines.push("## 明细");
+  SECTIONS.forEach(function(section) {
+    lines.push("");
+    lines.push("### " + section.title);
+    lines.push("");
+    lines.push("| 标记 | 验收项 | 结果 | 实测 | 下一轮 |");
+    lines.push("|---|---|---|---|---|");
+    section.items.forEach(function(item) {
+      var record = state.items[item.id] || {};
+      lines.push("| " + item.tags.join(", ") + " | " + oneLine(item.title) + " | " + statusLabel(record.status) + " | " + oneLine(record.result) + " | " + oneLine(record.iteration) + " |");
+    });
+    if ((state.feedback[section.id] || "").trim()) {
+      lines.push("");
+      lines.push("> 模块反馈: " + oneLine(state.feedback[section.id]));
+    }
+  });
+  return lines.join("\n");
+}
+
+function buildJson() {
+  return JSON.stringify({ meta: state.meta, items: state.items, feedback: state.feedback }, null, 2);
+}
+
+var modal = document.getElementById("modalBg");
+var exportText = document.getElementById("exportText");
+
+document.getElementById("btnExport").onclick = function() {
+  exportText.value = buildMarkdown();
+  modal.classList.add("open");
+};
+document.getElementById("btnCloseModal").onclick = function() {
+  modal.classList.remove("open");
+};
+modal.onclick = function(event) {
+  if (event.target === modal) modal.classList.remove("open");
+};
+document.getElementById("btnCopyMd").onclick = function() {
+  exportText.value = buildMarkdown();
+  copyExport();
+};
+document.getElementById("btnCopyJson").onclick = function() {
+  exportText.value = buildJson();
+  copyExport();
+};
+
+function copyExport() {
+  exportText.select();
+  try { document.execCommand("copy"); } catch (e) {}
+  if (navigator.clipboard) navigator.clipboard.writeText(exportText.value).catch(function(){});
+}
+
+document.getElementById("btnReset").onclick = function() {
+  if (!confirm("确定清空所有验收勾选、实测结果、迭代建议和模块反馈？")) return;
+  state = { meta: {}, items: {}, feedback: {} };
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  ["reviewer", "platform", "date", "build"].forEach(function(key) {
+    document.getElementById("m_" + key).value = "";
+  });
+  render();
+};
+
+render();
+</script>
+</body>
+</html>

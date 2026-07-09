@@ -1,5 +1,14 @@
 # M3 — 节点工作流（功能3a：画布原生轻节点 + 批次内容节点，暂用 Mock 生成）
 
+> **2026-06-17 施工定位更新**：本文件保留为 M3 节点系统的**功能规格参考**，不再作为施工顺序。实际施工顺序以 `M3-开发规划.md` 为准：先做 UX-First 体验关键技术原型层，再接最小节点闭环。本文中的 graph schema、executor、节点清单、batch 双身份等技术要求仍有效；但完整 executor、全套 process 节点、复杂缓存、select 暂停、幽灵节点完整体验等不再默认挤进 M3 前半段。
+>
+> **范围标记**：
+> - **M3 必做骨架**：`PFNode/PFGraph/NodeRegistry` 最小核、`batch` 节点物化队列、`.pxproj graphs/` 持久化、mock `ai_generate` 最小链、画布节点与 batch/sprite 共存。
+> - **M3 后段视体验地基情况接入**：`can_connect` 全矩阵、端口/连线层、自动检查器、Run/Cancel UI、部分 executor 语义。
+> - **M3.5 或后续**：完整 1GB LRU 缓存、全套 process 节点、select 暂停交互、复杂批量 map、幽灵节点完整产品化、选区兜底。
+>
+> **执行铁律**：任何节点 UI、端口命中、batch 展示和运行反馈，都必须复用 `M3-开发规划.md` 中的 `CanvasNavigationPolicy`、`CanvasLODProfile`、`BatchReviewLayout`、`CanvasHitPolicy` 等 UX 关键技术原则，不允许另起一套“节点专用手感”。
+
 > 目标：图模型 + 执行器 + **画布原生轻节点（自绘端口/连线）** + **批次内容节点** + **整批菜单处理**，全部长在 PFInfiniteCanvas 上。AI 生成节点先用 mock provider 占位，M4 接真。
 > 依赖：M0–M2（process 类节点直接包装 M1/M2 算法；批次卡复用画布选择/拖拽/undo）。
 > 先例依据：节点改为**画布自绘**（统一画布决策，取代独立 GraphEdit 面板——见 04-research/无限画布架构审阅.md 顶部决策更新）；连线交互手感参照 Lorien / GraphEdit，但不复用其 GraphNode 容器。

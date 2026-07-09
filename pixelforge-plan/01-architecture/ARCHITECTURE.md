@@ -153,6 +153,9 @@ class_name PFTask
 - **UI 缩放**：界面缩放由 `Window.content_scale_factor`（启动按 `_resolve_interface_scale()` 检测）统一驱动，所有 Control 尺寸/字号写逻辑常量、由 factor 等比放大，禁止 `_scaled_int()` 与组件级 `ui_scale` 注入。画布美术不随 chrome 二次放大：设备倍率 `F_canvas = max(1, round(F))`，净美术放大 = `camera_zoom × F_canvas`（整数对齐、NEAREST 硬边）。新增 UI 不需要任何缩放接线；`scripts/check_ui_scaling.sh` 做静态守护，合法例外用 `# scale-exempt:` 放行。
 - PixelForge 的编辑器调试默认禁用 Godot Game embedding（全局 editor setting `run/window_placement/game_embed_mode=2`，可运行 `pixel/scripts/configure_editor_game_view.sh` 设置），让 Play 行为接近导出后的独立桌面窗口。若临时启用 Game bar 调试，内嵌 Game View 必须使用 `Stretch to Fit`（本地 `.godot/editor/project_metadata.cfg` 的 `embed_size_mode=2`）；默认 `Fixed Size` 会按项目基准分辨率居中显示并暴露外圈盲区，这是编辑器调试视图设置，不应在产品窗口代码中补偿。
 
+- **文件行数**：单文件软上限约 1000 行（gdlint `max-file-lines: 1000`）。这是**软目标不是硬指标**——不要为压行数而把内聚逻辑拆散、牺牲可读性；只有当拆分本身让代码更清晰时才拆（按职责拆，不按行数）。
+- **功能「完成」的定义**：每个功能须声明它在使用体验闭环（见 PRODUCT「统领原则·使用体验闭环优先」）中的角色——入口/反馈/出口/交接——且**在闭环里走通**才算完成；孤立单测绿 ≠ 完成。**Why**：缩放滑条等就是因为没被当成闭环的一部分设计、用时才补，导致全项目打补丁。
+
 ## 6. 测试策略摘要（详见 05-quality/QUALITY.md）
 
 - core 层：纯单元测试，目标行覆盖 ≥80%。算法用 `tests/fixtures/` 合成样本（程序生成已知答案的伪像素图）做黄金测试。
