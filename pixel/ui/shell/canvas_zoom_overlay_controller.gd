@@ -2,7 +2,7 @@ class_name PFCanvasZoomOverlayController
 extends RefCounted
 
 ## 主窗口缩放 overlay 接线器。
-## 职责：把 PFCanvasZoomControl 挂到主窗口，并同步滑条输入与画布缩放状态。
+## 职责：把 PFCanvasZoomControl 挂到画布，并同步滑条输入与画布缩放状态。
 
 const CanvasZoomControlScript := preload("res://ui/canvas/canvas_zoom_control.gd")
 const InfiniteCanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
@@ -12,7 +12,7 @@ var zoom_control: Control = null
 var _canvas: Control = null
 
 
-func setup(parent: Control, canvas: Control, bottom_left_margin: int) -> void:
+func setup(canvas: Control, bottom_left_margin: int) -> void:
 	_canvas = canvas
 
 	zoom_control = CanvasZoomControlScript.new()
@@ -20,7 +20,7 @@ func setup(parent: Control, canvas: Control, bottom_left_margin: int) -> void:
 	zoom_control.configure_levels(InfiniteCanvasScript.ZOOM_LEVELS.size())
 	zoom_control.set_bottom_left_margin(bottom_left_margin)
 	zoom_control.zoom_index_requested.connect(_on_zoom_index_requested)
-	parent.add_child(zoom_control)
+	_canvas.add_child(zoom_control)
 
 	_canvas.zoom_changed.connect(_sync_from_canvas)
 	_sync_from_canvas(_canvas.zoom_index, _canvas.camera_zoom)

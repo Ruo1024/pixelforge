@@ -14453,7 +14453,7 @@ index 1b7e7be..3cdc2c6 100644
 |---|---|---|---|
 | 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
 | 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 13/13；全量 177/177 |
-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户验证原生右键菜单位置、batch 优先级和不同元素命中手感 |
+| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户于 2026-07-09 确认 G-4i 右键菜单位置、batch 优先级和不同元素命中通过 |
 | 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 仅新增右键路由，复用既有 NodeRegistry、PFGraph 与 canvas node 引用契约 |
 | TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件未新增 TODO/FIXME/HACK |
 | 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 单次右键只执行既有画布命中和 PopupMenu 路由 |
@@ -14566,4 +14566,93 @@ index 33ffd29..e42b350 100644
 @@ -14206 +14206 @@ index ca24f47..be5e555 100644
 -| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户验证原生 PopupMenu 位置、Tab 焦点隔离和连续操作手感 |
 +| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户于 2026-07-09 确认 G-4h PopupMenu 位置、Tab 焦点隔离和连续操作通过 |
+```
+
+## 2026-07-09 M3 UI 修复：缩放栏与状态提示栏重叠
+
+### 本轮实现说明
+
+- G-4i 人工验收已由用户确认通过，原报告 DoD 状态同步更新为 `通过`。
+- 根因：ZoomControl 原先直接挂在主窗口，并以窗口底边 `12px` 为锚点；BottomBar 同时占据窗口底部 `32px`，因此两者在垂直方向固定重叠。
+- 修复：ZoomControl 改为 PFInfiniteCanvas 的直接子控件，仍使用统一 Control 逻辑尺寸和 `Window.content_scale_factor`；其 Bottom Left 锚点现在相对画布边界，天然位于 BottomBar 上方，不引入手动缩放或状态栏高度补偿。
+- 主窗口 smoke 新增几何回归：ZoomControl 必须属于 canvas，且其全局底边不得超过 BottomBar 的全局顶边。
+- 本轮没有新增 UI 字符串，也没有修改画布世界坐标、相机缩放或项目格式。
+
+### 验证结果
+
+- `PATH="/Users/ruo/Desktop/pixelforge/pixel/.godot/gdtoolkit-venv/bin:$PATH" ./pixel/scripts/lint.sh`：通过，113 个 GDScript 文件零问题。
+- 定向 `test_main_window_ui.gd`：通过，`20/20 tests`、`173 asserts`。
+- `./pixel/scripts/verify_m3_ux7.sh`：通过；全量 GUT `177/177 tests`、`1369 asserts`，并通过 `check_ui_scaling` 与 headless startup gate。
+- `git diff --check`：通过。
+
+### 人工测试步骤
+
+1. 重新启动当前 main 工作区 PixelForge。
+2. 在未选择 graph 的情况下右键空白画布，使底部状态栏显示 `Select a graph node or batch before adding a node`。
+3. 观察左下角：缩放控件应完整位于画布区域内，底部状态提示栏应在其下方独立显示，两者不重叠。
+4. 拖动缩放滑条，确认缩放数值和画布缩放仍正常。
+5. 调整窗口大小到较小尺寸并恢复较大尺寸，确认两者始终不重叠，状态文字仍可读。
+
+### DoD 核查
+
+| 项 | 核查内容 | 状态 | 证据/路径 |
+|---|---|---|---|
+| 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
+| 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 20/20；全量 177/177；新增非重叠几何断言 |
+| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按原问题场景复测真实窗口下的视觉间距 |
+| 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 仅修复 UI 父子布局，不影响数据或跨模块接口 |
+| TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件未新增 TODO/FIXME/HACK |
+| 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 仅改变 Control 父节点，无新增持续计算 |
+| 跨平台 | 目标平台验证结果已记录 | 延期登记 | macOS headless 已过；真实窗口视觉需本机复核 |
+| 出口门控 | CI 绿灯或本地 agent 验证绿灯 | 通过 | `verify_m3_ux7.sh` |
+
+### 本轮完整 diff（报告本节自身追加除外，`--unified=0`）
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 47a831f..83213c7 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -35,0 +36 @@
++- M3 UI fix: 缩放控件改为锚定画布边界，避免覆盖窗口底部状态提示栏。
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index b2a098f..c478896 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -37 +37,2 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
+-	var zoom_control: Control = main.get_node("ZoomControl")
++	var zoom_control: Control = canvas.get_node("ZoomControl")
++	var bottom_bar: Control = main.get_node("Root/BottomBar")
+@@ -41 +42 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
+-	assert_eq(zoom_control.get_parent(), main)
++	assert_eq(zoom_control.get_parent(), canvas)
+@@ -42,0 +44 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
++	assert_lte(zoom_control.get_global_rect().end.y, bottom_bar.get_global_rect().position.y)
+diff --git a/pixel/ui/shell/canvas_zoom_overlay_controller.gd b/pixel/ui/shell/canvas_zoom_overlay_controller.gd
+index 87f4957..0d3e537 100644
+--- a/pixel/ui/shell/canvas_zoom_overlay_controller.gd
++++ b/pixel/ui/shell/canvas_zoom_overlay_controller.gd
+@@ -5 +5 @@ extends RefCounted
+-## 职责：把 PFCanvasZoomControl 挂到主窗口，并同步滑条输入与画布缩放状态。
++## 职责：把 PFCanvasZoomControl 挂到画布，并同步滑条输入与画布缩放状态。
+@@ -15 +15 @@ var _canvas: Control = null
+-func setup(parent: Control, canvas: Control, bottom_left_margin: int) -> void:
++func setup(canvas: Control, bottom_left_margin: int) -> void:
+@@ -23 +23 @@ func setup(parent: Control, canvas: Control, bottom_left_margin: int) -> void:
+-	parent.add_child(zoom_control)
++	_canvas.add_child(zoom_control)
+diff --git a/pixel/ui/shell/main.gd b/pixel/ui/shell/main.gd
+index bf9158c..b0acf29 100644
+--- a/pixel/ui/shell/main.gd
++++ b/pixel/ui/shell/main.gd
+@@ -405 +405 @@ func _build_ui() -> void:
+-	_zoom_overlay.setup(self, _canvas, ZOOM_CONTROL_MARGIN)
++	_zoom_overlay.setup(_canvas, ZOOM_CONTROL_MARGIN)
+diff --git a/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md b/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
+index 77206b2..f7253c6 100644
+--- a/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
++++ b/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
+@@ -14456 +14456 @@ index 1b7e7be..3cdc2c6 100644
+-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户验证原生右键菜单位置、batch 优先级和不同元素命中手感 |
++| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户于 2026-07-09 确认 G-4i 右键菜单位置、batch 优先级和不同元素命中通过 |
 ```

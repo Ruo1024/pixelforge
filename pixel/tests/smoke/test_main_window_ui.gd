@@ -34,12 +34,14 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
 	await wait_process_frames(2)
 
 	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
-	var zoom_control: Control = main.get_node("ZoomControl")
+	var zoom_control: Control = canvas.get_node("ZoomControl")
+	var bottom_bar: Control = main.get_node("Root/BottomBar")
 	var slider: HSlider = zoom_control.get_node("ZoomRow/ZoomSlider")
 	var label: Label = zoom_control.get_node("ZoomRow/ZoomLabel")
 
-	assert_eq(zoom_control.get_parent(), main)
+	assert_eq(zoom_control.get_parent(), canvas)
 	assert_gt(zoom_control.z_index, canvas.item_layer.z_index)
+	assert_lte(zoom_control.get_global_rect().end.y, bottom_bar.get_global_rect().position.y)
 	assert_eq(int(slider.value), canvas.zoom_index)
 	assert_eq(label.text, "100%")
 

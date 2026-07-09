@@ -402,7 +402,7 @@ func _build_ui() -> void:
 	_add_toolbar_button(top_bar, Strings.ACTION_SLICE, _m2_1_ui.open_slice_dialog)
 	_add_toolbar_button(top_bar, Strings.ACTION_OUTLINE, _m2_1_ui.open_outline_dialog)
 	_zoom_overlay = ZoomOverlayControllerScript.new()
-	_zoom_overlay.setup(self, _canvas, ZOOM_CONTROL_MARGIN)
+	_zoom_overlay.setup(_canvas, ZOOM_CONTROL_MARGIN)
 
 
 func _add_toolbar_button(parent: Control, text: String, callback: Callable) -> void:
