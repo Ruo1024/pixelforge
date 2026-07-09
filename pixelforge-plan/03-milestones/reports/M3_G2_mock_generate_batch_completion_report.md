@@ -307,7 +307,7 @@ const BATCH_ACTION_OUTLINE := "Outline Batch"
 |---|---|---|---|
 | 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
 | 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 23/23；其余可运行全仓 168/168 |
-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按上方步骤验证对话框布局和实际操作节奏 |
+| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 2026-07-09 用户实机确认通过 |
 | 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 复用既有 `get_param_schema()` 与 graph 参数契约 |
 | TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件静态检索无输出 |
 | 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 本轮仅轻量 UI/Dictionary 更新 |
@@ -13839,4 +13839,333 @@ index 735863a..f73eaba 100644
  const CLEANUP_TITLE := "Pixel Cleanup"
  const CLEANUP_SELECTED_FORMAT := "%d selected"
  const CLEANUP_PRESET_PRIOR_FORMAT := "Preset prior: %dpx"
+```
+
+## 2026-07-09 M3 G-4g 向当前 Graph 添加节点
+
+### 本轮实现说明
+
+- G-4f 参数编辑人工验收已由用户确认通过，报告 DoD 状态同步更新为 `通过`。
+- `File` 菜单新增 `Add Graph Node` 子菜单，菜单项由 `PFNodeRegistry.get_registered_types()` 动态生成，当前显示 AI Generate、Object List 与 Size Spec。
+- 用户选中 graph 任一节点、batch 或 edge 后，可把普通轻节点添加到同一 graph；新节点默认落在选中卡右侧，edge 选择时落在视口中心。
+- 新增逻辑节点和画布 node 引用作为一个全局 Undo 动作提交，Undo/Redo 会同步移除/恢复 graph 数据与画布卡。
+- batch 暂不出现在添加子菜单中，继续由生成/输出路径创建，避免在本卡扩大空 batch 物化与专用卡渲染范围。
+
+### 验证结果
+
+- `PATH="/Users/ruo/Desktop/pixelforge/pixel/.godot/gdtoolkit-venv/bin:$PATH" ./pixel/scripts/lint.sh`：通过，113 个 GDScript 文件零问题。
+- 定向 smoke + graph model：通过，`30/30 tests`、`294 asserts`。
+- 最终主窗口 smoke：通过，`20/20 tests`、`166 asserts`。
+- `verify_m3_ux7.sh`：通过；全量 GUT `176/176 tests`、`1355 asserts`，并通过 `check_ui_scaling` 与 headless startup gate。
+- `git diff --cached --check`：通过。
+
+### 人工测试步骤
+
+1. 重新运行当前主工作区 PixelForge，执行 `File > Generate Mock Batch`。
+2. 单击 Object List 节点，展开 `File > Add Graph Node`；预期子菜单显示 `AI Generate / Object List / Size Spec`，不显示 Batch。
+3. 点击 `Size Spec`；预期新 Size Spec 卡出现在所选节点右侧，成为当前选择，状态栏显示 `Graph node added: Size Spec`。
+4. 执行 `Cmd+Z`；预期新卡消失。执行 Redo；预期同一张卡和 graph node 恢复。
+5. 保持新卡选中，执行 `File > Edit Selected Graph Node...`，修改尺寸后 Apply；预期摘要同步更新。
+6. 删除原 `Size Spec -> AI Generate` 连线，把新增 Size Spec 连到 AI Generate，再执行 `Run Selected Graph`；预期 graph 正常运行并刷新原 batch。
+7. 选中空白画布后展开 Add Graph Node 并点击节点类型；预期不新增节点，状态栏提示先选择 graph 节点或 batch。
+
+### DoD 核查
+
+| 项 | 核查内容 | 状态 | 证据/路径 |
+|---|---|---|---|
+| 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
+| 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 全量 176/176；定向 smoke 覆盖菜单、新增、Undo/Redo |
+| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按上方步骤验证原生菜单层级、落点和连线手感 |
+| 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 复用既有 NodeRegistry、PFGraph 与 canvas node 引用契约 |
+| TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件静态检索无输出 |
+| 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 单节点 Dictionary/CanvasItem 更新，无新重计算路径 |
+| 跨平台 | 目标平台验证结果已记录 | 延期登记 | macOS headless 已过；原生菜单交互需实机复核 |
+| 出口门控 | CI 绿灯或本地 agent 验证绿灯 | 通过 | `verify_m3_ux7.sh` |
+
+### 本轮完整 diff（报告本节自身追加除外）
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 3a699ca..b75b60a 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -30,6 +30,7 @@
+ - M3 G-4 follow-up: AI Generate 画布卡将多个逻辑输入折叠为单个视觉输入点，降低基础节点链噪声。
+ - M3 G-5: 新增 File > Run Selected Graph 最小重跑入口，选中 mock 节点链任一节点后可替换刷新正式 batch 队列。
+ - M3 G-4f: 新增 schema 驱动的选中节点参数编辑入口，Object List、Size Spec 与 Mock Generate 参数可撤销修改并参与重跑。
++- M3 G-4g: 新增注册表驱动的 Add Graph Node 子菜单，可在当前 graph 旁落下新节点并整体撤销/重做。
+ - M3 UX-4: 恢复 batch 语义 LOD 原型，改由 camera zoom 下发 overview/review/inspect，覆盖分数缩放下 25% 进入 overview 的回归路径。
+ - M3 UX-7: 新增 CanvasHitPolicy 最小输入仲裁层，统一 batch 缩略图、整卡、sprite 和空白画布命中，避免缩略图点击误触拖卡。
+ - M3 UX-4: 撤销隐藏缩略图的 overview 摘要卡路径，25% 缩放保持 review 缩略图可见且可命中，计划中标记该 UX-4 原型不予实际通过。
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 60f7099..bfc285d 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -391,6 +391,59 @@ func test_selected_graph_node_params_are_undoable_and_affect_rerun() -> void:
+     assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_RUN_DONE % 4)
+
+
++func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
++    ProjectService.new_project("Graph Add UI")
++    var main: Control = MainScript.new()
++    main.size = Vector2(1280, 800)
++    add_child_autofree(main)
++    await wait_process_frames(2)
++
++    var controller: Node = main.get_node("M21UiController")
++    var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
++    controller.generate_mock_batch()
++    await wait_process_frames(2)
++
++    assert_eq(controller._graph_add_menu.item_count, 3)
++    assert_eq(
++        [
++            controller._graph_add_menu.get_item_text(0),
++            controller._graph_add_menu.get_item_text(1),
++            controller._graph_add_menu.get_item_text(2),
++        ],
++        ["AI Generate", "Object List", "Size Spec"]
++    )
++
++    var graph_id := String(ProjectService.current_project.graphs.keys()[0])
++    var object_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "objects")
++    canvas.select_ids([object_item_id])
++    var node_id: String = controller.add_graph_node_to_selected_graph("size_spec")
++
++    assert_false(node_id.is_empty())
++    assert_true(
++        ProjectService.current_project.graphs[graph_id]["nodes"].any(
++            func(node: Dictionary) -> bool: return String(node.get("id", "")) == node_id
++        )
++    )
++    assert_false(_item_id_for_node(canvas.export_canvas_data()["items"], node_id).is_empty())
++    assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_ADD_DONE % "Size Spec")
++
++    assert_true(UndoService.undo())
++    assert_true(_item_id_for_node(canvas.export_canvas_data()["items"], node_id).is_empty())
++    assert_false(
++        ProjectService.current_project.graphs[graph_id]["nodes"].any(
++            func(node: Dictionary) -> bool: return String(node.get("id", "")) == node_id
++        )
++    )
++
++    assert_true(UndoService.redo())
++    assert_false(_item_id_for_node(canvas.export_canvas_data()["items"], node_id).is_empty())
++    assert_true(
++        ProjectService.current_project.graphs[graph_id]["nodes"].any(
++            func(node: Dictionary) -> bool: return String(node.get("id", "")) == node_id
++        )
++    )
++
++
+ func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
+     ProjectService.new_project("Batch Focus UI")
+     var main: Control = MainScript.new()
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index 0684477..d4a1499 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -20,6 +20,7 @@ const OnboardingScript := preload("res://ui/dialogs/onboarding.gd")
+ const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+ const Pipeline := preload("res://core/pixel/pipeline.gd")
+ const GraphScript := preload("res://core/graph/pf_graph.gd")
++const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
+ const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+ const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
+ const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+@@ -40,6 +41,7 @@ const FILE_MENU_EDIT_SELECTED_GRAPH_NODE := 3
+ const FILE_MENU_NEW := 4
+ const FILE_MENU_OPEN := 5
+ const FILE_MENU_SAVE := 6
++const GRAPH_ADD_MENU_ID_START := 100
+ const BATCH_MENU_CLEANUP := 0
+ const BATCH_MENU_MATTE := 1
+ const BATCH_MENU_OUTLINE := 2
+@@ -77,6 +79,8 @@ var _matte_dialog: ConfirmationDialog = null
+ var _slice_dialog: ConfirmationDialog = null
+ var _outline_dialog: ConfirmationDialog = null
+ var _graph_node_params_dialog: ConfirmationDialog = null
++var _graph_add_menu: PopupMenu = null
++var _graph_add_types := {}
+ var _batch_menu: PopupMenu = null
+ var _batch_menu_card_id := ""
+
+@@ -115,6 +119,7 @@ func add_file_menu(parent: Control) -> void:
+     popup.add_item(Strings.MENU_IMPORT_IMAGES, FILE_MENU_IMPORT_IMAGES)
+     popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
+     popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
++    _add_graph_node_submenu(popup)
+     popup.add_item(Strings.MENU_EDIT_SELECTED_GRAPH_NODE, FILE_MENU_EDIT_SELECTED_GRAPH_NODE)
+     popup.add_separator()
+     popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
+@@ -341,6 +346,45 @@ func apply_graph_node_params(graph_id: String, node_id: String, params: Dictiona
+     return true
+
+
++func add_graph_node_to_selected_graph(type_name: String) -> String:
++    var binding := _selected_graph_binding()
++    var graph_id := String(binding.get("graph_id", ""))
++    if graph_id.is_empty():
++        _status_label.text = Strings.STATUS_GRAPH_ADD_NEEDS_SELECTION
++        return ""
++    var registry := NodeRegistryScript.new()
++    var node: PFNode = registry.create(type_name)
++    if node == null or node.get_type() == "batch":
++        _status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
++        return ""
++    var graph_data := ProjectService.get_graph_data(graph_id)
++    if graph_data.is_empty():
++        _status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
++        return ""
++    var graph := GraphScript.from_json(graph_data)
++    var world_position := _graph_node_add_position(binding)
++    var node_id := "%s_%s" % [type_name, IdUtil.uuid_v4().left(8)]
++    var item_id := IdUtil.uuid_v4()
++    if graph.add_node(node, node_id, {}, world_position).is_empty():
++        _status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
++        return ""
++
++    var before := graph_data.duplicate(true)
++    var after := graph.to_json()
++    var do_add := func() -> void:
++        ProjectService.set_graph_data(graph_id, after, true)
++        _canvas._add_graph_node_card(graph_id, node_id, world_position, item_id, false)
++        _canvas.select_ids([item_id])
++    var undo_add := func() -> void:
++        _canvas._remove_item_direct(item_id)
++        ProjectService.set_graph_data(graph_id, before, true)
++        _canvas.select_ids([])
++        _canvas._emit_canvas_changed()
++    UndoService.perform_action("Add graph node", do_add, undo_add)
++    _status_label.text = Strings.STATUS_GRAPH_ADD_DONE % node.get_display_name()
++    return node_id
++
++
+ func show_onboarding_if_needed() -> void:
+     if DisplayServer.get_name() == "headless":
+         return
+@@ -381,6 +425,24 @@ func _create_graph_node_params_dialog() -> void:
+     add_child(_graph_node_params_dialog)
+
+
++func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
++    _graph_add_menu = PopupMenu.new()
++    _graph_add_menu.name = "GraphNodeAddMenu"
++    _graph_add_types.clear()
++    var registry := NodeRegistryScript.new()
++    var menu_id := GRAPH_ADD_MENU_ID_START
++    for type_name in registry.get_registered_types():
++        var node: PFNode = registry.create(String(type_name))
++        if node == null or node.get_type() == "batch":
++            continue
++        _graph_add_menu.add_item(node.get_display_name(), menu_id)
++        _graph_add_types[menu_id] = node.get_type()
++        menu_id += 1
++    _graph_add_menu.id_pressed.connect(_on_graph_add_menu_pressed)
++    parent_menu.add_child(_graph_add_menu)
++    parent_menu.add_submenu_item(Strings.MENU_ADD_GRAPH_NODE, _graph_add_menu.name)
++
++
+ func _create_batch_menu() -> void:
+     _batch_menu = PopupMenu.new()
+     _batch_menu.add_item(Strings.BATCH_ACTION_CLEANUP, BATCH_MENU_CLEANUP)
+@@ -441,6 +503,14 @@ func _on_file_menu_pressed(id: int) -> void:
+             _save_project_callback.call()
+
+
++func _on_graph_add_menu_pressed(id: int) -> void:
++    var type_name := String(_graph_add_types.get(id, ""))
++    if type_name.is_empty():
++        _status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
++        return
++    add_graph_node_to_selected_graph(type_name)
++
++
+ func _on_import_files_selected(files: PackedStringArray) -> void:
+     _import_image_files(files, _canvas.get_mouse_world_position())
+
+@@ -766,6 +836,17 @@ func _graph_run_failure_status(error: Dictionary) -> String:
+     return Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % message
+
+
++func _graph_node_add_position(binding: Dictionary) -> Vector2:
++    var item_id := String(binding.get("item_id", ""))
++    for item in _canvas.export_canvas_data()["items"]:
++        var item_data: Dictionary = item
++        if String(item_data.get("id", "")) != item_id:
++            continue
++        var raw_position: Variant = item_data.get("position", [0, 0])
++        return Vector2(float(raw_position[0]), float(raw_position[1])) + Vector2(280, 0)
++    return _canvas.screen_to_world(_canvas.size * 0.5)
++
++
+ func _project_style_preset() -> Dictionary:
+     var style_data: Variant = ProjectService.current_project.manifest.get("style_preset", {})
+     return style_data if style_data is Dictionary else {}
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index 468ab94..4fd8721 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -17,6 +17,7 @@ const MENU_FILE := "File"
+ const MENU_IMPORT_IMAGES := "Import Images..."
+ const MENU_GENERATE_MOCK_BATCH := "Generate Mock Batch"
+ const MENU_RUN_SELECTED_GRAPH := "Run Selected Graph"
++const MENU_ADD_GRAPH_NODE := "Add Graph Node"
+ const MENU_EDIT_SELECTED_GRAPH_NODE := "Edit Selected Graph Node..."
+ const STATUS_READY := "Ready"
+ const STATUS_SAVED := "Saved"
+@@ -85,6 +86,9 @@ const STATUS_GRAPH_EDIT_NEEDS_SELECTION := "Select an editable graph node"
+ const STATUS_GRAPH_EDIT_NOT_AVAILABLE := "Selected graph node has no editable parameters"
+ const STATUS_GRAPH_EDIT_FAILED := "Graph node parameters could not be updated"
+ const STATUS_GRAPH_EDIT_DONE := "Graph node parameters updated"
++const STATUS_GRAPH_ADD_NEEDS_SELECTION := "Select a graph node or batch before adding a node"
++const STATUS_GRAPH_ADD_FAILED := "Graph node could not be added"
++const STATUS_GRAPH_ADD_DONE := "Graph node added: %s"
+ const GRAPH_NODE_MISSING_DISPLAY := "Missing: %s"
+ const GRAPH_NODE_GHOST_SUMMARY := "Install the missing node type to run"
+ const GRAPH_NODE_BADGE_MISSING := "Missing"
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index 195d5d4..71b5231 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -543,6 +543,26 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ - 参数修改进入全局 Undo/Redo。
+ - 自动化覆盖 schema 控件生成、参数保存、撤销重做及重跑结果变化。
+
++### G-4g 向当前 Graph 添加节点
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 已有一条 mock graph、希望逐步调整结构而不是每次重新生成固定链的人 |
++| 当前痛点 | 当前只能编辑或重连自动生成的四节点链，无法从注册表向现有 graph 增加节点 |
++| 技术选择 | File 菜单增加注册表驱动的 `Add Graph Node` 子菜单；选中 graph 任一节点、batch 或 edge 后，在相邻位置物化新逻辑节点与画布卡 |
++| 选择原因 | 先补“添加一个节点→编辑参数→手动连线”的最小结构编辑闭环，不提前实现搜索、分类折叠和右键/Tab 完整浏览器 |
++| 优势 | 菜单自动读取 NodeRegistry；新增注册节点无需再写节点类型分支；添加操作可整体 Undo/Redo |
++| 缺陷 | 本卡只开放普通轻节点，batch 仍由生成/输出路径创建；落点策略只是相邻偏移原型 |
++| 改进空间 | 右键/Tab 搜索菜单、分类标题、视口避让、自动打开参数 inspector、从空白创建 graph |
++| 验证入口 | 选中 Object List，通过 Add Graph Node 添加 Size Spec；新卡出现在右侧，Undo/Redo 同步移除/恢复 graph node 与画布卡 |
++
++任务：
++
++- Add Graph Node 子菜单从 NodeRegistry 读取当前普通节点类型，不硬编码菜单项。
++- 添加时同时更新 graph 数据与 canvas node 引用，并选中新节点。
++- 添加操作进入全局 Undo/Redo，逻辑节点和画布卡保持一致。
++- 自动化覆盖新增、撤销、重做和状态栏反馈。
+
+ ---
+
+ ## 8. 从原 M3 规划继承与降级
+diff --git a/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md b/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
+index ca24f47..be5e555 100644
+--- a/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
++++ b/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
+@@ -307,7 +307,7 @@ const BATCH_ACTION_OUTLINE := "Outline Batch"
+ |---|---|---|---|
+ | 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
+ | 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 23/23；其余可运行全仓 168/168 |
+-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按上方步骤验证对话框布局和实际操作节奏 |
++| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 2026-07-09 用户实机确认通过 |
+ | 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 复用既有 `get_param_schema()` 与 graph 参数契约 |
+ | TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件静态检索无输出 |
+ | 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 本轮仅轻量 UI/Dictionary 更新 |
 ```

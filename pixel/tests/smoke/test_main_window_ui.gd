@@ -391,6 +391,59 @@ func test_selected_graph_node_params_are_undoable_and_affect_rerun() -> void:
 	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_RUN_DONE % 4)
 
 
+func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
+	ProjectService.new_project("Graph Add UI")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+
+	assert_eq(controller._graph_add_menu.item_count, 3)
+	assert_eq(
+		[
+			controller._graph_add_menu.get_item_text(0),
+			controller._graph_add_menu.get_item_text(1),
+			controller._graph_add_menu.get_item_text(2),
+		],
+		["AI Generate", "Object List", "Size Spec"]
+	)
+
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var object_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "objects")
+	canvas.select_ids([object_item_id])
+	var node_id: String = controller.add_graph_node_to_selected_graph("size_spec")
+
+	assert_false(node_id.is_empty())
+	assert_true(
+		ProjectService.current_project.graphs[graph_id]["nodes"].any(
+			func(node: Dictionary) -> bool: return String(node.get("id", "")) == node_id
+		)
+	)
+	assert_false(_item_id_for_node(canvas.export_canvas_data()["items"], node_id).is_empty())
+	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_ADD_DONE % "Size Spec")
+
+	assert_true(UndoService.undo())
+	assert_true(_item_id_for_node(canvas.export_canvas_data()["items"], node_id).is_empty())
+	assert_false(
+		ProjectService.current_project.graphs[graph_id]["nodes"].any(
+			func(node: Dictionary) -> bool: return String(node.get("id", "")) == node_id
+		)
+	)
+
+	assert_true(UndoService.redo())
+	assert_false(_item_id_for_node(canvas.export_canvas_data()["items"], node_id).is_empty())
+	assert_true(
+		ProjectService.current_project.graphs[graph_id]["nodes"].any(
+			func(node: Dictionary) -> bool: return String(node.get("id", "")) == node_id
+		)
+	)
+
+
 func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
 	ProjectService.new_project("Batch Focus UI")
 	var main: Control = MainScript.new()

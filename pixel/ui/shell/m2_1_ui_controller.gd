@@ -20,6 +20,7 @@ const OnboardingScript := preload("res://ui/dialogs/onboarding.gd")
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
+const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
@@ -40,6 +41,7 @@ const FILE_MENU_EDIT_SELECTED_GRAPH_NODE := 3
 const FILE_MENU_NEW := 4
 const FILE_MENU_OPEN := 5
 const FILE_MENU_SAVE := 6
+const GRAPH_ADD_MENU_ID_START := 100
 const BATCH_MENU_CLEANUP := 0
 const BATCH_MENU_MATTE := 1
 const BATCH_MENU_OUTLINE := 2
@@ -77,6 +79,8 @@ var _matte_dialog: ConfirmationDialog = null
 var _slice_dialog: ConfirmationDialog = null
 var _outline_dialog: ConfirmationDialog = null
 var _graph_node_params_dialog: ConfirmationDialog = null
+var _graph_add_menu: PopupMenu = null
+var _graph_add_types := {}
 var _batch_menu: PopupMenu = null
 var _batch_menu_card_id := ""
 
@@ -115,6 +119,7 @@ func add_file_menu(parent: Control) -> void:
 	popup.add_item(Strings.MENU_IMPORT_IMAGES, FILE_MENU_IMPORT_IMAGES)
 	popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
 	popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
+	_add_graph_node_submenu(popup)
 	popup.add_item(Strings.MENU_EDIT_SELECTED_GRAPH_NODE, FILE_MENU_EDIT_SELECTED_GRAPH_NODE)
 	popup.add_separator()
 	popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
@@ -341,6 +346,45 @@ func apply_graph_node_params(graph_id: String, node_id: String, params: Dictiona
 	return true
 
 
+func add_graph_node_to_selected_graph(type_name: String) -> String:
+	var binding := _selected_graph_binding()
+	var graph_id := String(binding.get("graph_id", ""))
+	if graph_id.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_ADD_NEEDS_SELECTION
+		return ""
+	var registry := NodeRegistryScript.new()
+	var node: PFNode = registry.create(type_name)
+	if node == null or node.get_type() == "batch":
+		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		return ""
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	if graph_data.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		return ""
+	var graph := GraphScript.from_json(graph_data)
+	var world_position := _graph_node_add_position(binding)
+	var node_id := "%s_%s" % [type_name, IdUtil.uuid_v4().left(8)]
+	var item_id := IdUtil.uuid_v4()
+	if graph.add_node(node, node_id, {}, world_position).is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		return ""
+
+	var before := graph_data.duplicate(true)
+	var after := graph.to_json()
+	var do_add := func() -> void:
+		ProjectService.set_graph_data(graph_id, after, true)
+		_canvas._add_graph_node_card(graph_id, node_id, world_position, item_id, false)
+		_canvas.select_ids([item_id])
+	var undo_add := func() -> void:
+		_canvas._remove_item_direct(item_id)
+		ProjectService.set_graph_data(graph_id, before, true)
+		_canvas.select_ids([])
+		_canvas._emit_canvas_changed()
+	UndoService.perform_action("Add graph node", do_add, undo_add)
+	_status_label.text = Strings.STATUS_GRAPH_ADD_DONE % node.get_display_name()
+	return node_id
+
+
 func show_onboarding_if_needed() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
@@ -379,6 +423,24 @@ func _create_graph_node_params_dialog() -> void:
 	_graph_node_params_dialog.name = "GraphNodeParamsDialog"
 	_graph_node_params_dialog.params_confirmed.connect(apply_graph_node_params)
 	add_child(_graph_node_params_dialog)
+
+
+func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
+	_graph_add_menu = PopupMenu.new()
+	_graph_add_menu.name = "GraphNodeAddMenu"
+	_graph_add_types.clear()
+	var registry := NodeRegistryScript.new()
+	var menu_id := GRAPH_ADD_MENU_ID_START
+	for type_name in registry.get_registered_types():
+		var node: PFNode = registry.create(String(type_name))
+		if node == null or node.get_type() == "batch":
+			continue
+		_graph_add_menu.add_item(node.get_display_name(), menu_id)
+		_graph_add_types[menu_id] = node.get_type()
+		menu_id += 1
+	_graph_add_menu.id_pressed.connect(_on_graph_add_menu_pressed)
+	parent_menu.add_child(_graph_add_menu)
+	parent_menu.add_submenu_item(Strings.MENU_ADD_GRAPH_NODE, _graph_add_menu.name)
 
 
 func _create_batch_menu() -> void:
@@ -439,6 +501,14 @@ func _on_file_menu_pressed(id: int) -> void:
 			_open_project_callback.call()
 		FILE_MENU_SAVE:
 			_save_project_callback.call()
+
+
+func _on_graph_add_menu_pressed(id: int) -> void:
+	var type_name := String(_graph_add_types.get(id, ""))
+	if type_name.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		return
+	add_graph_node_to_selected_graph(type_name)
 
 
 func _on_import_files_selected(files: PackedStringArray) -> void:
@@ -764,6 +834,17 @@ func _graph_run_failure_status(error: Dictionary) -> String:
 	if message.is_empty():
 		return Strings.STATUS_GRAPH_RUN_FAILED
 	return Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % message
+
+
+func _graph_node_add_position(binding: Dictionary) -> Vector2:
+	var item_id := String(binding.get("item_id", ""))
+	for item in _canvas.export_canvas_data()["items"]:
+		var item_data: Dictionary = item
+		if String(item_data.get("id", "")) != item_id:
+			continue
+		var raw_position: Variant = item_data.get("position", [0, 0])
+		return Vector2(float(raw_position[0]), float(raw_position[1])) + Vector2(280, 0)
+	return _canvas.screen_to_world(_canvas.size * 0.5)
 
 
 func _project_style_preset() -> Dictionary:
