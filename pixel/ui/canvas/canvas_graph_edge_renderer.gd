@@ -5,6 +5,11 @@ extends RefCounted
 ## contract: 02-contracts/GRAPH-SCHEMA.md §1；连线来自 graphs，不写入 canvas.json。
 
 const EDGE_HIT_DISTANCE := 8.0
+const SELECTED_EDGE_COLOR := Color(0.95, 0.86, 0.32, 1.0)
+const INVALID_EDGE_COLOR := Color(0.96, 0.28, 0.22, 1.0)
+const INVALID_SELECTED_EDGE_COLOR := Color(1.0, 0.42, 0.34, 1.0)
+
+const GraphScript := preload("res://core/graph/pf_graph.gd")
 
 
 static func draw(
@@ -18,14 +23,17 @@ static func draw(
 	var graph_items := _graph_items_by_node(items_by_id, batch_script, node_script)
 	for graph_id in graph_items.keys():
 		var graph_data := ProjectService.get_graph_data(String(graph_id))
+		var graph: PFGraph = GraphScript.from_json(graph_data)
+		var invalid_indices := _invalid_edge_indices(graph.validate_edges())
 		var items_by_node: Dictionary = graph_items[graph_id]
-		for edge in graph_data.get("edges", []):
-			if edge is Dictionary:
-				var edge_data := Dictionary(edge)
-				var edge_color := color
-				if _edge_matches(String(graph_id), edge_data, selected_edge):
-					edge_color = Color(0.95, 0.86, 0.32, 1.0)
-				_draw_edge_if_visible(canvas, edge_data, items_by_node, edge_color)
+		for index in range(graph.edges.size()):
+			var edge_data := graph.edges[index]
+			var is_invalid := invalid_indices.has(index)
+			var edge_color := INVALID_EDGE_COLOR if is_invalid else color
+			if _edge_matches(String(graph_id), edge_data, selected_edge):
+				edge_color = INVALID_SELECTED_EDGE_COLOR if is_invalid else SELECTED_EDGE_COLOR
+			var edge_width := 3.0 if is_invalid else 2.0
+			_draw_edge_if_visible(canvas, edge_data, items_by_node, edge_color, edge_width)
 
 
 static func hit_edge_at_screen(
@@ -38,11 +46,9 @@ static func hit_edge_at_screen(
 	var graph_items := _graph_items_by_node(items_by_id, batch_script, node_script)
 	for graph_id in graph_items.keys():
 		var graph_data := ProjectService.get_graph_data(String(graph_id))
+		var graph: PFGraph = GraphScript.from_json(graph_data)
 		var items_by_node: Dictionary = graph_items[graph_id]
-		for edge in graph_data.get("edges", []):
-			if not (edge is Dictionary):
-				continue
-			var edge_data := Dictionary(edge)
+		for edge_data in graph.edges:
 			var points := _edge_points(canvas, edge_data, items_by_node)
 			if (
 				points.size() > 1
@@ -53,7 +59,7 @@ static func hit_edge_at_screen(
 
 
 static func _draw_edge_if_visible(
-	canvas: Control, edge: Dictionary, items_by_node: Dictionary, color: Color
+	canvas: Control, edge: Dictionary, items_by_node: Dictionary, color: Color, width: float
 ) -> void:
 	var from_data: Array = edge.get("from", ["", ""])
 	var to_data: Array = edge.get("to", ["", ""])
@@ -67,7 +73,8 @@ static func _draw_edge_if_visible(
 		String(from_data[1]),
 		items_by_node[to_node],
 		String(to_data[1]),
-		color
+		color,
+		width
 	)
 
 
@@ -77,7 +84,8 @@ static func _draw_graph_edge(
 	from_port: String,
 	to_item: Node,
 	to_port: String,
-	color: Color
+	color: Color,
+	width: float
 ) -> void:
 	var start_world: Variant = _edge_anchor_world(from_item, from_port, false)
 	var end_world: Variant = _edge_anchor_world(to_item, to_port, true)
@@ -86,7 +94,7 @@ static func _draw_graph_edge(
 	var start: Vector2 = canvas.world_to_screen(start_world)
 	var end: Vector2 = canvas.world_to_screen(end_world)
 	var points := _bezier_points(start, end)
-	canvas.draw_polyline(points, color, 2.0, true)
+	canvas.draw_polyline(points, color, width, true)
 
 
 static func _edge_points(
@@ -165,6 +173,13 @@ static func _edge_matches(graph_id: String, edge: Dictionary, selected_edge: Dic
 		graph_id == String(selected_edge.get("graph_id", ""))
 		and edge == selected_edge.get("edge", {})
 	)
+
+
+static func _invalid_edge_indices(errors: Array[Dictionary]) -> Dictionary:
+	var result := {}
+	for error in errors:
+		result[int(error.get("index", -1))] = true
+	return result
 
 
 static func _cubic_bezier(a: Vector2, b: Vector2, c: Vector2, d: Vector2, t: float) -> Vector2:

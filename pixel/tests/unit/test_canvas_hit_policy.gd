@@ -99,6 +99,8 @@ func test_canvas_left_click_on_graph_port_selects_without_dragging_card() -> voi
 
 func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 	var canvas: Control = _canvas()
+	var status_events := []
+	canvas.graph_status.connect(func(event: Dictionary) -> void: status_events.append(event))
 	_set_graph(
 		"graph_hit", [_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")]
 	)
@@ -125,6 +127,8 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 	assert_eq(
 		graph_data.get("edges", []), [{"from": ["objects", "items"], "to": ["generate", "items"]}]
 	)
+	assert_eq(String(status_events[0]["type"]), "connect_succeeded")
+	assert_eq(status_events[0]["edge"], {"from": ["objects", "items"], "to": ["generate", "items"]})
 
 
 func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> void:
@@ -157,6 +161,8 @@ func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> vo
 
 func test_canvas_delete_key_removes_selected_graph_edge() -> void:
 	var canvas: Control = _canvas()
+	var status_events := []
+	canvas.graph_status.connect(func(event: Dictionary) -> void: status_events.append(event))
 	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
 	_set_graph(
 		"graph_hit",
@@ -174,15 +180,21 @@ func test_canvas_delete_key_removes_selected_graph_edge() -> void:
 	)
 
 	canvas._begin_left_interaction(canvas.world_to_screen(edge_midpoint), false)
+	assert_eq(String(status_events[0]["type"]), "edge_selected")
+	assert_eq(status_events[0]["edge"], edge)
 	canvas._unhandled_key_input(_delete_key_event())
 
 	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
+	assert_eq(String(status_events[1]["type"]), "edge_deleted")
+	assert_eq(status_events[1]["edge"], edge)
 	UndoService.undo()
 	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [edge])
 
 
 func test_canvas_deleting_graph_node_removes_incident_edges_and_undo_restores() -> void:
 	var canvas: Control = _canvas()
+	var status_events := []
+	canvas.graph_status.connect(func(event: Dictionary) -> void: status_events.append(event))
 	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
 	_set_graph(
 		"graph_hit",
@@ -199,6 +211,9 @@ func test_canvas_deleting_graph_node_removes_incident_edges_and_undo_restores() 
 	assert_eq(_graph_node_ids(graph_data), ["generate"])
 	assert_eq(graph_data.get("edges", []), [])
 	assert_false(canvas._items_by_id.has("objects_item"))
+	assert_eq(String(status_events[0]["type"]), "nodes_deleted")
+	assert_eq(int(status_events[0]["nodes"]), 1)
+	assert_eq(int(status_events[0]["edges"]), 1)
 
 	UndoService.undo()
 

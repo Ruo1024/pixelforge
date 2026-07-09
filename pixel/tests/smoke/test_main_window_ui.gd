@@ -396,6 +396,98 @@ func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
 	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
 
 
+func test_graph_status_events_update_status_bar() -> void:
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
+
+	canvas.graph_status.emit({"type": "edge_selected", "edge": edge})
+	assert_eq(
+		_status_label(main).text,
+		Strings.STATUS_GRAPH_EDGE_SELECTED % ["objects", "items", "generate", "items"]
+	)
+
+	canvas.graph_status.emit({"type": "edge_deleted", "edge": edge})
+	assert_eq(
+		_status_label(main).text,
+		Strings.STATUS_GRAPH_EDGE_DELETED % ["objects", "items", "generate", "items"]
+	)
+
+	canvas.graph_status.emit({"type": "connect_succeeded", "edge": edge})
+	assert_eq(
+		_status_label(main).text,
+		Strings.STATUS_GRAPH_CONNECT_DONE % ["objects", "items", "generate", "items"]
+	)
+
+
+func test_run_selected_graph_reports_ghost_node_type() -> void:
+	ProjectService.new_project("Ghost Graph UI")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	(
+		ProjectService
+		. set_graph_data(
+			"graph_ghost",
+			{
+				"graph_version": 1,
+				"id": "graph_ghost",
+				"name": "Ghost Graph",
+				"nodes":
+				[
+					{
+						"id": "plugin_1",
+						"type": "missing.plugin_node",
+						"position": [0, 0],
+						"params": {"seed": 9},
+					},
+					{
+						"id": "batch_1",
+						"type": "batch",
+						"position": [300, 0],
+						"params": {"label": "Ghost Batch", "asset_ids": []},
+					},
+				],
+				"edges": [],
+			},
+			false
+		)
+	)
+	(
+		canvas
+		. load_canvas_data(
+			{
+				"camera": {"center": [0, 0], "zoom": 1.0},
+				"items":
+				[
+					_node_item("ghost_item", "graph_ghost", "plugin_1", Vector2(0, 0)),
+					_node_item("batch_item", "graph_ghost", "batch_1", Vector2(300, 0)),
+				],
+			}
+		)
+	)
+
+	canvas.select_ids(["ghost_item"])
+	controller.run_selected_mock_graph()
+	await wait_process_frames(1)
+
+	assert_eq(
+		_status_label(main).text,
+		(
+			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
+			% (Strings.STATUS_GRAPH_RUN_MISSING_NODE_TYPE % "missing.plugin_node")
+		)
+	)
+
+
 func _node_ids_from_canvas_items(items: Array) -> Array:
 	var node_ids := []
 	for item in items:
@@ -430,6 +522,20 @@ func _remove_graph_edge(
 			continue
 		kept_edges.append(edge)
 	graph_data["edges"] = kept_edges
+
+
+func _node_item(
+	item_id: String, graph_id: String, node_id: String, position: Vector2
+) -> Dictionary:
+	return {
+		"id": item_id,
+		"type": "node",
+		"graph_id": graph_id,
+		"node_id": node_id,
+		"position": [int(position.x), int(position.y)],
+		"z_index": 0,
+		"locked": false,
+	}
 
 
 func _status_label(main: Control) -> Label:

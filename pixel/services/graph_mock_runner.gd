@@ -13,10 +13,9 @@ func run_to_batch(
 	batch_node_id: String = "",
 	replace_batch_assets: bool = false
 ) -> Dictionary:
-	if graph == null:
-		return _error("missing_graph", "Graph is required")
-	if asset_library == null or not asset_library.has_method("register_image"):
-		return _error("missing_asset_library", "AssetLibrary-compatible object is required")
+	var setup_result := _validate_run_setup(graph, asset_library)
+	if not bool(setup_result["ok"]):
+		return setup_result
 
 	var order_result := _topological_order(graph)
 	if not bool(order_result["ok"]):
@@ -43,6 +42,18 @@ func run_to_batch(
 	if materialized_asset_ids.is_empty():
 		return _error("empty_batch", "No generated images reached a batch node")
 	return {"ok": true, "asset_ids": materialized_asset_ids, "graph": graph.to_json()}
+
+
+func _validate_run_setup(graph: PFGraph, asset_library: Node) -> Dictionary:
+	if graph == null:
+		return _error("missing_graph", "Graph is required")
+	if asset_library == null or not asset_library.has_method("register_image"):
+		return _error("missing_asset_library", "AssetLibrary-compatible object is required")
+
+	var edge_errors := graph.validate_edges()
+	if not edge_errors.is_empty():
+		return _error("invalid_edge", String(edge_errors[0]["message"]))
+	return {"ok": true}
 
 
 func _run_node(

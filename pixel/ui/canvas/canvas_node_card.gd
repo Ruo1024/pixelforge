@@ -5,7 +5,9 @@ extends Node2D
 ## contract: 02-contracts/PROJECT-FORMAT.md §4；只保存 graph/node 引用，节点逻辑从 graphs 读取。
 
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
+const GraphScript := preload("res://core/graph/pf_graph.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
+const Strings := preload("res://ui/shell/strings.gd")
 
 const CARD_SIZE := Vector2(220, 116)
 const HEADER_HEIGHT := 32
@@ -14,6 +16,8 @@ const BACKGROUND := Color(0.13, 0.145, 0.155, 0.98)
 const HEADER := Color(0.22, 0.27, 0.3, 1.0)
 const BORDER := Color(0.56, 0.64, 0.66, 1.0)
 const GHOST_BORDER := Color(0.8, 0.36, 0.36, 1.0)
+const EDGE_ERROR_BORDER := Color(0.94, 0.5, 0.22, 1.0)
+const BADGE_BACKGROUND := Color(0.12, 0.08, 0.06, 0.92)
 const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
 const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
 const PORT_HIT_RADIUS := 10.0
@@ -33,6 +37,8 @@ var _output_ports: Array[String] = []
 var _visible_input_ports: Array[String] = []
 var _visible_output_ports: Array[String] = []
 var _is_ghost := false
+var _has_edge_error := false
+var _status_badge := ""
 var _font: Font = null
 
 
@@ -96,7 +102,7 @@ func _draw() -> void:
 	var rect := Rect2(Vector2.ZERO, CARD_SIZE)
 	draw_rect(rect, BACKGROUND, true)
 	draw_rect(Rect2(Vector2.ZERO, Vector2(CARD_SIZE.x, HEADER_HEIGHT)), HEADER, true)
-	draw_rect(rect, GHOST_BORDER if _is_ghost else BORDER, false, 1.4)
+	draw_rect(rect, _border_color(), false, 1.4)
 	_draw_ports()
 	if _font == null:
 		return
@@ -109,6 +115,7 @@ func _draw() -> void:
 		16,
 		Color(0.92, 0.94, 0.94, 1.0)
 	)
+	_draw_status_badge()
 	draw_string(
 		_font,
 		Vector2(PADDING, 54),
@@ -161,18 +168,22 @@ func _resolve_graph_node() -> void:
 	var node_data := _find_node_data()
 	_node_type = String(node_data.get("type", "missing"))
 	_summary = _summarize_params(node_data.get("params", {}))
+	_has_edge_error = _graph_has_edge_error()
+	_status_badge = ""
 
 	var registry := NodeRegistryScript.new()
 	var node: PFNode = registry.create(_node_type)
 	if node == null:
 		_is_ghost = true
-		_display_name = "Missing: %s" % _node_type
+		_display_name = Strings.GRAPH_NODE_MISSING_DISPLAY % _node_type
+		_summary = Strings.GRAPH_NODE_GHOST_SUMMARY
 		_input_count = 0
 		_output_count = 0
 		_input_ports = []
 		_output_ports = []
 		_visible_input_ports = []
 		_visible_output_ports = []
+		_status_badge = Strings.GRAPH_NODE_BADGE_MISSING
 		return
 
 	_display_name = node.get_display_name()
@@ -183,6 +194,8 @@ func _resolve_graph_node() -> void:
 	_input_count = _visible_input_ports.size()
 	_output_count = _visible_output_ports.size()
 	_is_ghost = false
+	if _has_edge_error:
+		_status_badge = Strings.GRAPH_NODE_BADGE_EDGE_ERROR
 
 
 func _visible_input_ports_for_node(node_type: String, port_names: Array[String]) -> Array[String]:
@@ -208,6 +221,42 @@ func _find_node_data() -> Dictionary:
 		if String(node_data.get("id", "")) == node_id:
 			return node_data
 	return {"id": node_id, "type": "missing", "params": {}}
+
+
+func _graph_has_edge_error() -> bool:
+	if graph_id.is_empty() or node_id.is_empty():
+		return false
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	if graph_data.is_empty():
+		return false
+	var graph: PFGraph = GraphScript.from_json(graph_data)
+	return not graph.validate_edges_for_node(node_id).is_empty()
+
+
+func _border_color() -> Color:
+	if _is_ghost:
+		return GHOST_BORDER
+	if _has_edge_error:
+		return EDGE_ERROR_BORDER
+	return BORDER
+
+
+func _draw_status_badge() -> void:
+	if _status_badge.is_empty() or _font == null:
+		return
+	var badge_size := Vector2(72, 18)
+	var badge_rect := Rect2(Vector2(CARD_SIZE.x - PADDING - badge_size.x, 8), badge_size)
+	draw_rect(badge_rect, BADGE_BACKGROUND, true)
+	draw_rect(badge_rect, _border_color(), false, 1.0)
+	draw_string(
+		_font,
+		badge_rect.position + Vector2(5, 13),
+		_status_badge,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		badge_rect.size.x - 10,
+		11,
+		_border_color()
+	)
 
 
 func _summarize_params(params: Variant) -> String:
