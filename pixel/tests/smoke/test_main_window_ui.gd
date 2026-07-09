@@ -359,6 +359,38 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
 	assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
 
 
+func test_selected_graph_node_params_are_undoable_and_affect_rerun() -> void:
+	ProjectService.new_project("Graph Params UI")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var canvas_items: Array = canvas.export_canvas_data()["items"]
+	var object_item_id := _item_id_for_node(canvas_items, "objects")
+	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
+	var object_card: Node = canvas._items_by_id[object_item_id]
+	canvas.select_ids([object_item_id])
+
+	assert_true(controller.apply_graph_node_params(graph_id, "objects", {"items": "tree\nrock"}))
+	assert_eq(object_card._summary, "2 objects")
+	assert_true(UndoService.undo())
+	assert_eq(object_card._summary, "5 objects")
+	assert_true(UndoService.redo())
+	assert_eq(object_card._summary, "2 objects")
+
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id).size(), 4)
+	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_RUN_DONE % 4)
+
+
 func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
 	ProjectService.new_project("Batch Focus UI")
 	var main: Control = MainScript.new()

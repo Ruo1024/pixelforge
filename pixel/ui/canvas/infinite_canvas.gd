@@ -284,6 +284,20 @@ func _add_graph_node_card(
 	return _items_by_id.get(String(data["id"]), null)
 
 
+func _refresh_graph_node_card(graph_id: String, node_id: String) -> bool:
+	var refreshed := false
+	for item in _items_by_id.values():
+		if item.get_script() != CanvasNodeCardScript:
+			continue
+		if item.graph_id != graph_id or item.node_id != node_id:
+			continue
+		item.refresh_from_graph()
+		refreshed = true
+	if refreshed:
+		queue_redraw()
+	return refreshed
+
+
 func delete_selected(record_undo: bool = true) -> void:
 	if _selection.is_empty():
 		return

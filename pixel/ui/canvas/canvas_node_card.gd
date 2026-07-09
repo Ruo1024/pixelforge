@@ -80,6 +80,11 @@ func is_graph_node() -> bool:
 	return not graph_id.is_empty() and not node_id.is_empty()
 
 
+func refresh_from_graph() -> void:
+	_resolve_graph_node()
+	queue_redraw()
+
+
 func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
 	var count := _input_count if is_input else _output_count
 	if count <= 0:

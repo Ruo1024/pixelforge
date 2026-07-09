@@ -3,6 +3,9 @@ extends "res://addons/gut/test.gd"
 const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
 const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
 const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
+const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
+const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 const Matting := preload("res://core/pixel/matting.gd")
 const Outliner := preload("res://core/pixel/outliner.gd")
 
@@ -45,6 +48,29 @@ func test_outline_dialog_exposes_core_params() -> void:
 	assert_eq(params["type"], Outliner.TYPE_OUTER)
 	assert_eq(params["corner"], Outliner.CORNER_CROSS)
 	assert_eq(params["color"], Color.BLACK)
+
+
+func test_graph_node_params_dialog_builds_controls_from_node_schema() -> void:
+	var dialog: ConfirmationDialog = GraphNodeParamsDialogScript.new()
+	add_child_autofree(dialog)
+	await wait_process_frames(1)
+
+	dialog.configure_for_node(
+		"graph_test", "objects", ObjectListNodeScript.new(), {"items": "barrel\nfence"}
+	)
+	assert_eq(dialog.get_param_value("items"), "barrel\nfence")
+	assert_true(dialog.set_param_value("items", "tree\nrock\nwell"))
+	assert_eq(dialog.get_params()["items"], "tree\nrock\nwell")
+
+	dialog.configure_for_node(
+		"graph_test",
+		"size",
+		SizeSpecNodeScript.new(),
+		{"width": 32, "height": 24, "per_subject": 2}
+	)
+	assert_true(dialog.set_param_value("width", 48))
+	assert_eq(dialog.get_params()["width"], 48)
+	assert_eq(dialog.get_params()["height"], 24)
 
 
 func _make_source_image() -> Image:

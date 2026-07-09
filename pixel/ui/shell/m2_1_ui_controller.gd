@@ -15,6 +15,7 @@ const LassoToolScript := preload("res://ui/tools/lasso_tool.gd")
 const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
 const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
 const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
+const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
 const OnboardingScript := preload("res://ui/dialogs/onboarding.gd")
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
@@ -35,9 +36,10 @@ const TOOL_BUTTON_SIZE := 84
 const FILE_MENU_IMPORT_IMAGES := 0
 const FILE_MENU_GENERATE_MOCK_BATCH := 1
 const FILE_MENU_RUN_SELECTED_GRAPH := 2
-const FILE_MENU_NEW := 3
-const FILE_MENU_OPEN := 4
-const FILE_MENU_SAVE := 5
+const FILE_MENU_EDIT_SELECTED_GRAPH_NODE := 3
+const FILE_MENU_NEW := 4
+const FILE_MENU_OPEN := 5
+const FILE_MENU_SAVE := 6
 const BATCH_MENU_CLEANUP := 0
 const BATCH_MENU_MATTE := 1
 const BATCH_MENU_OUTLINE := 2
@@ -59,6 +61,7 @@ const BATCH_MENU_COMPARE_SPLIT := 17
 const BATCH_MENU_LAYOUT_CONTACT := 18
 const BATCH_MENU_LAYOUT_FOCUS := 19
 const SELECTION_TOOLS_VISIBLE := false
+const EDITABLE_GRAPH_NODE_TYPES := ["object_list", "size_spec", "ai_generate"]
 
 var _canvas: Control = null
 var _cleanup_inspector: Control = null
@@ -73,6 +76,7 @@ var _import_dialog: FileDialog = null
 var _matte_dialog: ConfirmationDialog = null
 var _slice_dialog: ConfirmationDialog = null
 var _outline_dialog: ConfirmationDialog = null
+var _graph_node_params_dialog: ConfirmationDialog = null
 var _batch_menu: PopupMenu = null
 var _batch_menu_card_id := ""
 
@@ -95,6 +99,7 @@ func setup(
 	_save_project_callback = save_project_callback
 	_create_import_dialog()
 	_create_m2_dialogs()
+	_create_graph_node_params_dialog()
 	_create_batch_menu()
 	_init_tools()
 	_canvas.batch_context_requested.connect(_show_batch_menu)
@@ -110,6 +115,7 @@ func add_file_menu(parent: Control) -> void:
 	popup.add_item(Strings.MENU_IMPORT_IMAGES, FILE_MENU_IMPORT_IMAGES)
 	popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
 	popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
+	popup.add_item(Strings.MENU_EDIT_SELECTED_GRAPH_NODE, FILE_MENU_EDIT_SELECTED_GRAPH_NODE)
 	popup.add_separator()
 	popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
 	popup.add_item(Strings.ACTION_OPEN, FILE_MENU_OPEN)
@@ -281,6 +287,60 @@ func run_selected_mock_graph() -> void:
 	_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
 
 
+func edit_selected_graph_node() -> void:
+	var binding := _selected_graph_binding()
+	var node_id := String(binding.get("node_id", ""))
+	if binding.is_empty() or node_id.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_EDIT_NEEDS_SELECTION
+		return
+	var graph_id := String(binding["graph_id"])
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	var graph := GraphScript.from_json(graph_data)
+	var node: PFNode = graph.get_node(node_id)
+	if (
+		node == null
+		or node.is_ghost()
+		or not EDITABLE_GRAPH_NODE_TYPES.has(node.get_type())
+		or node.get_param_schema().is_empty()
+	):
+		_status_label.text = Strings.STATUS_GRAPH_EDIT_NOT_AVAILABLE
+		return
+	_graph_node_params_dialog.configure_for_node(
+		graph_id, node_id, node, graph.get_node_params(node_id)
+	)
+	_graph_node_params_dialog.popup_centered()
+
+
+func apply_graph_node_params(graph_id: String, node_id: String, params: Dictionary) -> bool:
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	if graph_data.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_EDIT_FAILED
+		return false
+	var graph := GraphScript.from_json(graph_data)
+	var node: PFNode = graph.get_node(node_id)
+	if node == null or node.is_ghost():
+		_status_label.text = Strings.STATUS_GRAPH_EDIT_FAILED
+		return false
+	var merged_params := graph.get_node_params(node_id)
+	merged_params.merge(params, true)
+	if not graph.set_node_params(node_id, merged_params):
+		_status_label.text = Strings.STATUS_GRAPH_EDIT_FAILED
+		return false
+
+	var before := graph_data.duplicate(true)
+	var after := graph.to_json()
+	var apply_snapshot := func(snapshot: Dictionary) -> void:
+		ProjectService.set_graph_data(graph_id, snapshot, true)
+		_canvas._refresh_graph_node_card(graph_id, node_id)
+	UndoService.perform_action(
+		"Edit graph node parameters",
+		func() -> void: apply_snapshot.call(after),
+		func() -> void: apply_snapshot.call(before)
+	)
+	_status_label.text = Strings.STATUS_GRAPH_EDIT_DONE
+	return true
+
+
 func show_onboarding_if_needed() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
@@ -312,6 +372,13 @@ func _create_m2_dialogs() -> void:
 	_outline_dialog = OutlineDialogScript.new()
 	_outline_dialog.params_confirmed.connect(_m2_actions.outline_selection_with_params)
 	add_child(_outline_dialog)
+
+
+func _create_graph_node_params_dialog() -> void:
+	_graph_node_params_dialog = GraphNodeParamsDialogScript.new()
+	_graph_node_params_dialog.name = "GraphNodeParamsDialog"
+	_graph_node_params_dialog.params_confirmed.connect(apply_graph_node_params)
+	add_child(_graph_node_params_dialog)
 
 
 func _create_batch_menu() -> void:
@@ -364,6 +431,8 @@ func _on_file_menu_pressed(id: int) -> void:
 			generate_mock_batch()
 		FILE_MENU_RUN_SELECTED_GRAPH:
 			run_selected_mock_graph()
+		FILE_MENU_EDIT_SELECTED_GRAPH_NODE:
+			edit_selected_graph_node()
 		FILE_MENU_NEW:
 			_new_project_callback.call()
 		FILE_MENU_OPEN:

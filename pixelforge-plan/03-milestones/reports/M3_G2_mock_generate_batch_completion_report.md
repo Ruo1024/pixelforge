@@ -270,6 +270,612 @@ const BATCH_ACTION_MATTE := "Matte Batch"
 const BATCH_ACTION_OUTLINE := "Outline Batch"
 ```
 
+## 2026-07-09 M3 G-4f 选中节点参数编辑最小闭环
+
+### 本轮实现说明
+
+- 新增 `File > Edit Selected Graph Node...`，选中 Object List、Size Spec 或 AI Generate 后可直接修改当前参数。
+- 新增 schema 驱动的 `PFGraphNodeParamsDialog`，按 `get_param_schema()` 生成多行文本、整数、浮点、布尔、枚举、provider 与 seed 控件；没有节点专用字段 UI。
+- Apply 后参数统一经 `PFGraph.set_node_params()` 校验，写回项目 graph 并刷新画布节点摘要。
+- 参数修改进入全局 Undo/Redo；撤销与重做会同步恢复 graph 数据和节点卡摘要。
+- Object List 改为两行并重跑后，默认 batch size=2 的 Mock Batch 会从 10 张变为 4 张，走通“改输入→重跑→落 batch”的可操作闭环。
+- 在 `M3-开发规划.md` 登记 G-4f；本轮仍是对话框原型，不提前扩展常驻 inspector、palette 控件或 provider service。
+
+### 验证结果
+
+- `PATH="/Users/ruo/Desktop/pixelforge/pixel/.godot/gdtoolkit-venv/bin:$PATH" ./pixel/scripts/lint.sh`：通过，113 个 GDScript 文件无需格式调整且 gdlint 零问题。
+- 变更定向 GUT：通过，`23/23 tests`、`169 asserts`；覆盖 schema 控件生成、参数保存、Undo/Redo、节点摘要刷新与重跑 batch 数量变化。
+- 除 `tests/integration/test_cleanup_pipeline.gd` 外的全仓 GUT：通过，`168/168 tests`、`1319 asserts`。该脚本在临时 main worktree 中依赖 gitignore 且禁止提交的 `pixel/tests/fixtures/real/`，未复制受限图片；此前集中全量运行唯一失败也仅为该 fixture 缺失。
+- `./pixel/scripts/check_ui_scaling.sh`：通过。
+- `./pixel/scripts/check_export_templates.sh`：通过 headless startup gate；本机未安装 Godot 4.6.3 export templates。
+- `git diff --cached --check`：通过。
+
+### 人工测试步骤
+
+1. 启动 PixelForge，新建空项目，执行 `File > Generate Mock Batch`，确认出现 Object List、Size Spec、AI Generate 和 Mock Batch。
+2. 单击 Object List 节点，执行 `File > Edit Selected Graph Node...`，确认对话框标题为 `Object List Parameters`，并显示当前五行对象。
+3. 把 Objects 改为两行，例如 `tree` 与 `rock`，点击 Apply；预期状态栏显示 `Graph node parameters updated`，节点摘要从 `5 objects` 变为 `2 objects`。
+4. 按 `Cmd+Z`，预期摘要恢复 `5 objects`；再执行 Redo，预期恢复 `2 objects`。
+5. 保持该节点选中，执行 `File > Run Selected Graph`；预期 Mock Batch 刷新为 4 张，状态栏显示 `Graph run complete: 4 sprites`。
+6. 选中 Size Spec，打开同一入口，把 Width/Height 改为 `48/24` 并 Apply；重跑后预期新缩略图比例随尺寸变化。
+7. 选中 AI Generate，确认 Provider、Batch Size、Seed 均由 schema 显示；把 Batch Size 改为 1 后重跑，预期两行对象生成 2 张。
+8. 选中 Mock Batch 或空白处执行编辑入口，预期不打开错误参数面板，而在状态栏给出不可编辑/需选择节点提示。
+
+### DoD 核查
+
+| 项 | 核查内容 | 状态 | 证据/路径 |
+|---|---|---|---|
+| 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
+| 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 23/23；其余可运行全仓 168/168 |
+| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按上方步骤验证对话框布局和实际操作节奏 |
+| 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 复用既有 `get_param_schema()` 与 graph 参数契约 |
+| TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件静态检索无输出 |
+| 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 本轮仅轻量 UI/Dictionary 更新 |
+| 跨平台 | 目标平台验证结果已记录 | 延期登记 | macOS headless 已过；对话框视觉需实机复核 |
+| 出口门控 | CI 绿灯或本地 agent 验证绿灯 | 通过 | lint、定向测试、168 项回归、缩放守护、headless gate |
+
+### 本轮完整 diff（报告自身追加除外）
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 3e28865..3a699ca 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -29,6 +29,7 @@
+ - M3 G-4 follow-up: graph 连线改用命名端口锚点，修正轻节点端口点、batch 输入点与连线端点错位。
+ - M3 G-4 follow-up: AI Generate 画布卡将多个逻辑输入折叠为单个视觉输入点，降低基础节点链噪声。
+ - M3 G-5: 新增 File > Run Selected Graph 最小重跑入口，选中 mock 节点链任一节点后可替换刷新正式 batch 队列。
++- M3 G-4f: 新增 schema 驱动的选中节点参数编辑入口，Object List、Size Spec 与 Mock Generate 参数可撤销修改并参与重跑。
+ - M3 UX-4: 恢复 batch 语义 LOD 原型，改由 camera zoom 下发 overview/review/inspect，覆盖分数缩放下 25% 进入 overview 的回归路径。
+ - M3 UX-7: 新增 CanvasHitPolicy 最小输入仲裁层，统一 batch 缩略图、整卡、sprite 和空白画布命中，避免缩略图点击误触拖卡。
+ - M3 UX-4: 撤销隐藏缩略图的 overview 摘要卡路径，25% 缩放保持 review 缩略图可见且可命中，计划中标记该 UX-4 原型不予实际通过。
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index 73a3f35..60f7099 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -359,6 +359,38 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
+     assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
+
+
++func test_selected_graph_node_params_are_undoable_and_affect_rerun() -> void:
++    ProjectService.new_project("Graph Params UI")
++    var main: Control = MainScript.new()
++    main.size = Vector2(1280, 800)
++    add_child_autofree(main)
++    await wait_process_frames(2)
++
++    var controller: Node = main.get_node("M21UiController")
++    var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
++    controller.generate_mock_batch()
++    await wait_process_frames(2)
++
++    var graph_id := String(ProjectService.current_project.graphs.keys()[0])
++    var canvas_items: Array = canvas.export_canvas_data()["items"]
++    var object_item_id := _item_id_for_node(canvas_items, "objects")
++    var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
++    var object_card: Node = canvas._items_by_id[object_item_id]
++    canvas.select_ids([object_item_id])
++
++    assert_true(controller.apply_graph_node_params(graph_id, "objects", {"items": "tree\nrock"}))
++    assert_eq(object_card._summary, "2 objects")
++    assert_true(UndoService.undo())
++    assert_eq(object_card._summary, "5 objects")
++    assert_true(UndoService.redo())
++    assert_eq(object_card._summary, "2 objects")
++
++    controller.run_selected_mock_graph()
++    await wait_process_frames(2)
++    assert_eq(canvas._get_batch_asset_ids(batch_item_id).size(), 4)
++    assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_RUN_DONE % 4)
++
++
+ func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
+     ProjectService.new_project("Batch Focus UI")
+     var main: Control = MainScript.new()
+diff --git a/pixel/tests/unit/test_m2_1_dialogs.gd b/pixel/tests/unit/test_m2_1_dialogs.gd
+index 72cfeea..eef0f21 100644
+--- a/pixel/tests/unit/test_m2_1_dialogs.gd
++++ b/pixel/tests/unit/test_m2_1_dialogs.gd
+@@ -3,6 +3,9 @@ extends "res://addons/gut/test.gd"
+ const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
+ const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
+ const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
++const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
++const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
++const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+ const Matting := preload("res://core/pixel/matting.gd")
+ const Outliner := preload("res://core/pixel/outliner.gd")
+
+@@ -47,6 +50,29 @@ func test_outline_dialog_exposes_core_params() -> void:
+     assert_eq(params["color"], Color.BLACK)
+
+
++func test_graph_node_params_dialog_builds_controls_from_node_schema() -> void:
++    var dialog: ConfirmationDialog = GraphNodeParamsDialogScript.new()
++    add_child_autofree(dialog)
++    await wait_process_frames(1)
++
++    dialog.configure_for_node(
++        "graph_test", "objects", ObjectListNodeScript.new(), {"items": "barrel\nfence"}
++    )
++    assert_eq(dialog.get_param_value("items"), "barrel\nfence")
++    assert_true(dialog.set_param_value("items", "tree\nrock\nwell"))
++    assert_eq(dialog.get_params()["items"], "tree\nrock\nwell")
++
++    dialog.configure_for_node(
++        "graph_test",
++        "size",
++        SizeSpecNodeScript.new(),
++        {"width": 32, "height": 24, "per_subject": 2}
++    )
++    assert_true(dialog.set_param_value("width", 48))
++    assert_eq(dialog.get_params()["width"], 48)
++    assert_eq(dialog.get_params()["height"], 24)
++
++
+ func _make_source_image() -> Image:
+     var image := Image.create(6, 6, false, Image.FORMAT_RGBA8)
+     image.fill(Color.TRANSPARENT)
+diff --git a/pixel/ui/canvas/canvas_node_card.gd b/pixel/ui/canvas/canvas_node_card.gd
+index e3c343b..f5f3c22 100644
+--- a/pixel/ui/canvas/canvas_node_card.gd
++++ b/pixel/ui/canvas/canvas_node_card.gd
+@@ -80,6 +80,11 @@ func is_graph_node() -> bool:
+     return not graph_id.is_empty() and not node_id.is_empty()
+
+
++func refresh_from_graph() -> void:
++    _resolve_graph_node()
++    queue_redraw()
++
++
+ func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
+     var count := _input_count if is_input else _output_count
+     if count <= 0:
+diff --git a/pixel/ui/canvas/infinite_canvas.gd b/pixel/ui/canvas/infinite_canvas.gd
+index 988cac1..6ae92ed 100644
+--- a/pixel/ui/canvas/infinite_canvas.gd
++++ b/pixel/ui/canvas/infinite_canvas.gd
+@@ -284,6 +284,20 @@ func _add_graph_node_card(
+     return _items_by_id.get(String(data["id"]), null)
+
+
++func _refresh_graph_node_card(graph_id: String, node_id: String) -> bool:
++    var refreshed := false
++    for item in _items_by_id.values():
++        if item.get_script() != CanvasNodeCardScript:
++            continue
++        if item.graph_id != graph_id or item.node_id != node_id:
++            continue
++        item.refresh_from_graph()
++        refreshed = true
++    if refreshed:
++        queue_redraw()
++    return refreshed
++
++
+ func delete_selected(record_undo: bool = true) -> void:
+     if _selection.is_empty():
+         return
+diff --git a/pixel/ui/dialogs/graph_node_params_dialog.gd b/pixel/ui/dialogs/graph_node_params_dialog.gd
+new file mode 100644
+index 0000000..0a0fae0
+--- /dev/null
++++ b/pixel/ui/dialogs/graph_node_params_dialog.gd
+@@ -0,0 +1,195 @@
++class_name PFGraphNodeParamsDialog
++extends ConfirmationDialog
++
++## Graph 节点参数对话框。
++## contract: 02-contracts/GRAPH-SCHEMA.md §3；控件只由 get_param_schema() 生成。
++
++signal params_confirmed(graph_id: String, node_id: String, params: Dictionary)
++
++const Strings := preload("res://ui/shell/strings.gd")
++
++const DIALOG_WIDTH := 480
++const DIALOG_HEIGHT := 420
++const CONTROL_HEIGHT := 30
++const MULTILINE_HEIGHT := 150
++const ROOT_SEPARATION := 8
++const ROW_SEPARATION := 2
++const FLEXIBLE_WIDTH := 0
++
++var _graph_id := ""
++var _node_id := ""
++var _node: PFNode = null
++var _base_params := {}
++var _fields := {}
++var _root: VBoxContainer = null
++var _built := false
++
++
++func _ready() -> void:
++    _ensure_built()
++
++
++func configure_for_node(
++    graph_id: String, node_id: String, node: PFNode, params: Dictionary
++) -> void:
++    _ensure_built()
++    _graph_id = graph_id
++    _node_id = node_id
++    _node = node
++    _base_params = params.duplicate(true)
++    title = Strings.DIALOG_GRAPH_NODE_PARAMS_TITLE % node.get_display_name()
++    _clear_fields()
++    for schema in node.get_param_schema():
++        _add_schema_field(schema, _base_params.get(schema.get("key", ""), schema.get("default")))
++
++
++func get_params() -> Dictionary:
++    var result := _base_params.duplicate(true)
++    for key in _fields.keys():
++        result[String(key)] = _control_value(_fields[key])
++    return _node.validate_params(result) if _node != null else result
++
++
++func set_param_value(key: String, value: Variant) -> bool:
++    if not _fields.has(key):
++        return false
++    _set_control_value(_fields[key], value)
++    return true
++
++
++func get_param_value(key: String) -> Variant:
++    if not _fields.has(key):
++        return null
++    return _control_value(_fields[key])
++
++
++func _ensure_built() -> void:
++    if _built:
++        return
++    _built = true
++    ok_button_text = Strings.DIALOG_APPLY
++    cancel_button_text = Strings.DIALOG_CANCEL
++    min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
++    _root = VBoxContainer.new()
++    _root.add_theme_constant_override("separation", ROOT_SEPARATION)
++    add_child(_root)
++    confirmed.connect(_emit_params)
++
++
++func _emit_params() -> void:
++    params_confirmed.emit(_graph_id, _node_id, get_params())
++
++
++func _clear_fields() -> void:
++    _fields.clear()
++    for child in _root.get_children():
++        _root.remove_child(child)
++        child.free()
++
++
++func _add_schema_field(schema: Dictionary, value: Variant) -> void:
++    var key := String(schema.get("key", ""))
++    if key.is_empty():
++        return
++    var row := VBoxContainer.new()
++    row.add_theme_constant_override("separation", ROW_SEPARATION)
++    var label := Label.new()
++    label.text = _label_text(schema)
++    row.add_child(label)
++    var control := _make_control(schema, value)
++    row.add_child(control)
++    _root.add_child(row)
++    _fields[key] = control
++
++
++func _make_control(schema: Dictionary, value: Variant) -> Control:
++    var kind := String(schema.get("kind", ""))
++    match kind:
++        PFNode.KIND_INT, PFNode.KIND_FLOAT, PFNode.KIND_SEED:
++            var spin := SpinBox.new()
++            spin.min_value = float(schema.get("min", -2147483648))
++            spin.max_value = float(schema.get("max", 2147483647))
++            spin.step = 1.0 if kind != PFNode.KIND_FLOAT else 0.01
++            spin.value = float(value)
++            spin.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
++            return spin
++        PFNode.KIND_BOOL:
++            var check := CheckBox.new()
++            check.button_pressed = bool(value)
++            return check
++        PFNode.KIND_TEXT_MULTILINE:
++            var edit := TextEdit.new()
++            edit.text = String(value)
++            edit.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, MULTILINE_HEIGHT)
++            return edit
++        PFNode.KIND_ENUM, PFNode.KIND_PROVIDER:
++            var options := OptionButton.new()
++            var values: Array = schema.get("options", [])
++            if values.is_empty():
++                values = [String(value)]
++            for option in values:
++                options.add_item(String(option))
++            var selected := values.find(value)
++            options.select(maxi(0, selected))
++            options.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
++            return options
++        _:
++            var edit := LineEdit.new()
++            edit.text = String(value)
++            edit.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
++            return edit
++
++
++func _control_value(control: Control) -> Variant:
++    if control is SpinBox:
++        return float(control.value) if control.step < 1.0 else int(control.value)
++    if control is CheckBox:
++        return control.button_pressed
++    if control is TextEdit:
++        return control.text
++    if control is OptionButton:
++        return control.get_item_text(control.selected)
++    if control is LineEdit:
++        return control.text
++    return null
++
++
++func _set_control_value(control: Control, value: Variant) -> void:
++    if control is SpinBox:
++        control.value = float(value)
++    elif control is CheckBox:
++        control.button_pressed = bool(value)
++    elif control is TextEdit:
++        control.text = String(value)
++    elif control is OptionButton:
++        var index := -1
++        for option_index in range(control.item_count):
++            if control.get_item_text(option_index) == String(value):
++                index = option_index
++                break
++        if index < 0:
++            control.add_item(String(value))
++            index = control.item_count - 1
++        control.select(index)
++    elif control is LineEdit:
++        control.text = String(value)
++
++
++func _label_text(schema: Dictionary) -> String:
++    var label_key := String(schema.get("label_key", ""))
++    var labels := {
++        "GRAPH_PARAM_OBJECT_LIST": Strings.GRAPH_PARAM_OBJECT_LIST,
++        "GRAPH_PARAM_WIDTH": Strings.GRAPH_PARAM_WIDTH,
++        "GRAPH_PARAM_HEIGHT": Strings.GRAPH_PARAM_HEIGHT,
++        "GRAPH_PARAM_PER_SUBJECT": Strings.GRAPH_PARAM_PER_SUBJECT,
++        "GRAPH_PARAM_PROVIDER": Strings.GRAPH_PARAM_PROVIDER,
++        "GRAPH_PARAM_BATCH_SIZE": Strings.GRAPH_PARAM_BATCH_SIZE,
++        "GRAPH_PARAM_SEED": Strings.GRAPH_PARAM_SEED,
++        "BATCH_DEFAULT_LABEL": Strings.BATCH_DEFAULT_LABEL,
++    }
++    return String(
++        labels.get(
++            label_key,
++            Strings.GRAPH_PARAM_UNKNOWN_FORMAT % String(schema.get("key", "")).capitalize()
++        )
++    )
+diff --git a/pixel/ui/dialogs/graph_node_params_dialog.gd.uid b/pixel/ui/dialogs/graph_node_params_dialog.gd.uid
+new file mode 100644
+index 0000000..c10ff1a
+--- /dev/null
++++ b/pixel/ui/dialogs/graph_node_params_dialog.gd.uid
+@@ -0,0 +1 @@
++uid://bx5ydoi2fordf
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index 3e050ee..0684477 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -15,6 +15,7 @@ const LassoToolScript := preload("res://ui/tools/lasso_tool.gd")
+ const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
+ const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
+ const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
++const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
+ const OnboardingScript := preload("res://ui/dialogs/onboarding.gd")
+ const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+ const Pipeline := preload("res://core/pixel/pipeline.gd")
+@@ -35,9 +36,10 @@ const TOOL_BUTTON_SIZE := 84
+ const FILE_MENU_IMPORT_IMAGES := 0
+ const FILE_MENU_GENERATE_MOCK_BATCH := 1
+ const FILE_MENU_RUN_SELECTED_GRAPH := 2
+-const FILE_MENU_NEW := 3
+-const FILE_MENU_OPEN := 4
+-const FILE_MENU_SAVE := 5
++const FILE_MENU_EDIT_SELECTED_GRAPH_NODE := 3
++const FILE_MENU_NEW := 4
++const FILE_MENU_OPEN := 5
++const FILE_MENU_SAVE := 6
+ const BATCH_MENU_CLEANUP := 0
+ const BATCH_MENU_MATTE := 1
+ const BATCH_MENU_OUTLINE := 2
+@@ -59,6 +61,7 @@ const BATCH_MENU_COMPARE_SPLIT := 17
+ const BATCH_MENU_LAYOUT_CONTACT := 18
+ const BATCH_MENU_LAYOUT_FOCUS := 19
+ const SELECTION_TOOLS_VISIBLE := false
++const EDITABLE_GRAPH_NODE_TYPES := ["object_list", "size_spec", "ai_generate"]
+
+ var _canvas: Control = null
+ var _cleanup_inspector: Control = null
+@@ -73,6 +76,7 @@ var _import_dialog: FileDialog = null
+ var _matte_dialog: ConfirmationDialog = null
+ var _slice_dialog: ConfirmationDialog = null
+ var _outline_dialog: ConfirmationDialog = null
++var _graph_node_params_dialog: ConfirmationDialog = null
+ var _batch_menu: PopupMenu = null
+ var _batch_menu_card_id := ""
+
+@@ -95,6 +99,7 @@ func setup(
+     _save_project_callback = save_project_callback
+     _create_import_dialog()
+     _create_m2_dialogs()
++    _create_graph_node_params_dialog()
+     _create_batch_menu()
+     _init_tools()
+     _canvas.batch_context_requested.connect(_show_batch_menu)
+@@ -110,6 +115,7 @@ func add_file_menu(parent: Control) -> void:
+     popup.add_item(Strings.MENU_IMPORT_IMAGES, FILE_MENU_IMPORT_IMAGES)
+     popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
+     popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
++    popup.add_item(Strings.MENU_EDIT_SELECTED_GRAPH_NODE, FILE_MENU_EDIT_SELECTED_GRAPH_NODE)
+     popup.add_separator()
+     popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
+     popup.add_item(Strings.ACTION_OPEN, FILE_MENU_OPEN)
+@@ -281,6 +287,60 @@ func run_selected_mock_graph() -> void:
+     _status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
+
+
++func edit_selected_graph_node() -> void:
++    var binding := _selected_graph_binding()
++    var node_id := String(binding.get("node_id", ""))
++    if binding.is_empty() or node_id.is_empty():
++        _status_label.text = Strings.STATUS_GRAPH_EDIT_NEEDS_SELECTION
++        return
++    var graph_id := String(binding["graph_id"])
++    var graph_data := ProjectService.get_graph_data(graph_id)
++    var graph := GraphScript.from_json(graph_data)
++    var node: PFNode = graph.get_node(node_id)
++    if (
++        node == null
++        or node.is_ghost()
++        or not EDITABLE_GRAPH_NODE_TYPES.has(node.get_type())
++        or node.get_param_schema().is_empty()
++    ):
++        _status_label.text = Strings.STATUS_GRAPH_EDIT_NOT_AVAILABLE
++        return
++    _graph_node_params_dialog.configure_for_node(
++        graph_id, node_id, node, graph.get_node_params(node_id)
++    )
++    _graph_node_params_dialog.popup_centered()
++
++
++func apply_graph_node_params(graph_id: String, node_id: String, params: Dictionary) -> bool:
++    var graph_data := ProjectService.get_graph_data(graph_id)
++    if graph_data.is_empty():
++        _status_label.text = Strings.STATUS_GRAPH_EDIT_FAILED
++        return false
++    var graph := GraphScript.from_json(graph_data)
++    var node: PFNode = graph.get_node(node_id)
++    if node == null or node.is_ghost():
++        _status_label.text = Strings.STATUS_GRAPH_EDIT_FAILED
++        return false
++    var merged_params := graph.get_node_params(node_id)
++    merged_params.merge(params, true)
++    if not graph.set_node_params(node_id, merged_params):
++        _status_label.text = Strings.STATUS_GRAPH_EDIT_FAILED
++        return false
++
++    var before := graph_data.duplicate(true)
++    var after := graph.to_json()
++    var apply_snapshot := func(snapshot: Dictionary) -> void:
++        ProjectService.set_graph_data(graph_id, snapshot, true)
++        _canvas._refresh_graph_node_card(graph_id, node_id)
++    UndoService.perform_action(
++        "Edit graph node parameters",
++        func() -> void: apply_snapshot.call(after),
++        func() -> void: apply_snapshot.call(before)
++    )
++    _status_label.text = Strings.STATUS_GRAPH_EDIT_DONE
++    return true
++
++
+ func show_onboarding_if_needed() -> void:
+     if DisplayServer.get_name() == "headless":
+         return
+@@ -314,6 +374,13 @@ func _create_m2_dialogs() -> void:
+     add_child(_outline_dialog)
+
+
++func _create_graph_node_params_dialog() -> void:
++    _graph_node_params_dialog = GraphNodeParamsDialogScript.new()
++    _graph_node_params_dialog.name = "GraphNodeParamsDialog"
++    _graph_node_params_dialog.params_confirmed.connect(apply_graph_node_params)
++    add_child(_graph_node_params_dialog)
++
++
+ func _create_batch_menu() -> void:
+     _batch_menu = PopupMenu.new()
+     _batch_menu.add_item(Strings.BATCH_ACTION_CLEANUP, BATCH_MENU_CLEANUP)
+@@ -364,6 +431,8 @@ func _on_file_menu_pressed(id: int) -> void:
+             generate_mock_batch()
+         FILE_MENU_RUN_SELECTED_GRAPH:
+             run_selected_mock_graph()
++        FILE_MENU_EDIT_SELECTED_GRAPH_NODE:
++            edit_selected_graph_node()
+         FILE_MENU_NEW:
+             _new_project_callback.call()
+         FILE_MENU_OPEN:
+diff --git a/pixel/ui/shell/strings.gd b/pixel/ui/shell/strings.gd
+index f73eaba..468ab94 100644
+--- a/pixel/ui/shell/strings.gd
++++ b/pixel/ui/shell/strings.gd
+@@ -17,6 +17,7 @@ const MENU_FILE := "File"
+ const MENU_IMPORT_IMAGES := "Import Images..."
+ const MENU_GENERATE_MOCK_BATCH := "Generate Mock Batch"
+ const MENU_RUN_SELECTED_GRAPH := "Run Selected Graph"
++const MENU_EDIT_SELECTED_GRAPH_NODE := "Edit Selected Graph Node..."
+ const STATUS_READY := "Ready"
+ const STATUS_SAVED := "Saved"
+ const STATUS_DIRTY := "Unsaved changes"
+@@ -80,6 +81,10 @@ const STATUS_GRAPH_CONNECT_DONE := "Graph connection added: %s.%s -> %s.%s"
+ const STATUS_GRAPH_EDGE_SELECTED := "Graph edge selected: %s.%s -> %s.%s"
+ const STATUS_GRAPH_EDGE_DELETED := "Graph edge deleted: %s.%s -> %s.%s"
+ const STATUS_GRAPH_NODES_DELETED := "Graph nodes deleted: %d nodes, %d edges removed"
++const STATUS_GRAPH_EDIT_NEEDS_SELECTION := "Select an editable graph node"
++const STATUS_GRAPH_EDIT_NOT_AVAILABLE := "Selected graph node has no editable parameters"
++const STATUS_GRAPH_EDIT_FAILED := "Graph node parameters could not be updated"
++const STATUS_GRAPH_EDIT_DONE := "Graph node parameters updated"
+ const GRAPH_NODE_MISSING_DISPLAY := "Missing: %s"
+ const GRAPH_NODE_GHOST_SUMMARY := "Install the missing node type to run"
+ const GRAPH_NODE_BADGE_MISSING := "Missing"
+@@ -125,6 +130,7 @@ const DIALOG_CANCEL := "Cancel"
+ const DIALOG_MATTE_TITLE := "Matte Background"
+ const DIALOG_SLICE_TITLE := "Slice Sprites"
+ const DIALOG_OUTLINE_TITLE := "Outline Sprite"
++const DIALOG_GRAPH_NODE_PARAMS_TITLE := "%s Parameters"
+ const DIALOG_MATTE_NON_FLAT_TITLE := "Background Not Uniform"
+ const DIALOG_MATTE_NON_FLAT_BODY := (
+     "The background is not a solid color.\n\n"
+@@ -196,3 +202,4 @@ const GRAPH_PARAM_PER_SUBJECT := "Per Subject"
+ const GRAPH_PARAM_PROVIDER := "Provider"
+ const GRAPH_PARAM_BATCH_SIZE := "Batch Size"
+ const GRAPH_PARAM_SEED := "Seed"
++const GRAPH_PARAM_UNKNOWN_FORMAT := "%s"
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index 6c3375e..195d5d4 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -523,6 +523,26 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
+ - `Run Selected Graph` 的基础失败分支复用详细失败状态格式。
+ - 自动化覆盖缺失 graph 与无 batch 节点时 batch 队列不变。
+
++### G-4f 选中节点参数编辑最小闭环
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 已生成最小 mock 节点链、希望改变对象列表、尺寸或生成数量后重跑的人 |
++| 当前痛点 | 节点参数仍是硬编码默认值；用户只能重复生成相同输入，节点链尚不能承载真实意图 |
++| 技术选择 | File 菜单提供选中节点参数编辑入口；对话框完全按 `get_param_schema()` 生成现有控件，保存经 `PFGraph.set_node_params()` 校验并进入全局 Undo |
++| 选择原因 | 先走通“改输入→卡片更新→重跑落 batch”的最小闭环，同时为后续常驻 inspector 验证 schema 控件映射 |
++| 优势 | Object List、Size Spec、Mock Generate 的当前参数可直接操作；新增参数无需节点专用对话框代码 |
++| 缺陷 | 本卡仍是模态原型入口，不是最终右侧 inspector；不新增 palette、复杂 enum 或 provider 注册表 |
++| 改进空间 | 迁移为选中节点常驻 inspector、实时 dirty 状态、参数搜索、seed 骰子按钮和 provider service 下拉 |
++| 验证入口 | 选中 Object List，改为两行对象并 Apply；Undo/Redo 后卡片计数同步；Run Selected Graph 后 batch 从 10 张变为 4 张 |
++
++任务：
++
++- 支持当前 schema 中 `text/text_multiline/int/float/bool/enum/provider/seed` 的通用控件。
++- 参数保存通过 graph core 校验，写回项目并刷新节点卡摘要。
++- 参数修改进入全局 Undo/Redo。
++- 自动化覆盖 schema 控件生成、参数保存、撤销重做及重跑结果变化。
++
+ ---
+
+ ## 8. 从原 M3 规划继承与降级
+```
+
 ## 2026-06-20 M3 G-4 follow-up: graph port drag-to-connect
 
 ### 本轮实现说明
