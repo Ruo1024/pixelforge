@@ -14599,7 +14599,7 @@ index 33ffd29..e42b350 100644
 |---|---|---|---|
 | 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
 | 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 20/20；全量 177/177；新增非重叠几何断言 |
-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按原问题场景复测真实窗口下的视觉间距 |
+| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户继续开发前确认缩放栏与状态提示栏的真实窗口布局通过 |
 | 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 仅修复 UI 父子布局，不影响数据或跨模块接口 |
 | TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件未新增 TODO/FIXME/HACK |
 | 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 仅改变 Control 父节点，无新增持续计算 |
@@ -14655,4 +14655,171 @@ index 77206b2..f7253c6 100644
 @@ -14456 +14456 @@ index 1b7e7be..3cdc2c6 100644
 -| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户验证原生右键菜单位置、batch 优先级和不同元素命中手感 |
 +| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户于 2026-07-09 确认 G-4i 右键菜单位置、batch 优先级和不同元素命中通过 |
+```
+
+## 2026-07-09 M3 G-4j 快速添加节点按鼠标位置落点
+
+### 本轮实现说明
+
+- 缩放栏与状态提示栏重叠修复已由用户继续开发前确认通过，上一节人工测试状态同步更新为 `通过`。
+- Tab 或右键打开 graph 快速添加菜单时，控制器会立即把菜单呼出屏幕坐标转换为画布世界坐标；系统后续为 PopupMenu 做边缘避让不会改变节点落点。
+- 快速菜单选中节点类型后，既有添加事务使用该世界坐标同时写入 graph node position 与 canvas node position，并继续保留 Undo/Redo。
+- File > Add Graph Node 保持原有“所选 graph 卡右侧 280 世界单位”落点，避免改变已有菜单语义。
+- 本卡不扩展搜索、分类、空白建图、智能避让或节点重叠处理，也没有新增 UI 字符串和项目格式。
+
+### 验证结果
+
+- `PATH="/Users/ruo/Desktop/pixelforge/pixel/.godot/gdtoolkit-venv/bin:$PATH" ./pixel/scripts/lint.sh`：通过，113 个 GDScript 文件零问题。
+- 定向 `test_main_window_ui.gd`：通过，`20/20 tests`、`177 asserts`。
+- `./pixel/scripts/verify_m3_ux7.sh`：通过；全量 GUT `177/177 tests`、`1373 asserts`。
+- `check_ui_scaling.sh`：通过。
+- headless startup gate：通过。
+- `git diff --check`：通过。
+
+### 人工测试步骤
+
+1. 启动当前 main 工作区 PixelForge，执行 `File > Generate Mock Batch`。
+2. 单击 Object List 节点，然后平移画布，并用左下角缩放控件切换到非 100% 缩放。
+3. 把鼠标移到远离 Object List 的空白位置，按 `Tab`，选择 `Size Spec`。
+4. 预期：新 Size Spec 卡片左上角出现在刚才菜单的呼出位置附近，而不是固定出现在 Object List 右侧；卡片被选中，状态栏显示添加成功。
+5. 执行 Undo 和 Redo；预期卡片消失后在同一位置恢复。
+6. 再选择 graph 中任一节点，在另一处空白位置右键并添加 `Object List`；预期同样按右键位置落点。
+7. 最后通过 `File > Add Graph Node > AI Generate` 添加节点；预期 File 菜单路径仍把新节点放在所选卡右侧，而不是最近一次快速菜单位置。
+
+### DoD 核查
+
+| 项 | 核查内容 | 状态 | 证据/路径 |
+|---|---|---|---|
+| 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
+| 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 20/20、177 asserts；全量 177/177、1373 asserts |
+| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户验证真实窗口下 Tab/右键落点和 File 相邻落点手感 |
+| 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 仅实现既有快速添加入口的落点语义，不改变 graph/project schema |
+| TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件未新增 TODO/FIXME/HACK |
+| 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 每次菜单打开只执行一次坐标转换 |
+| 跨平台 | 目标平台验证结果已记录 | 延期登记 | macOS headless 已过；原生 PopupMenu 与实际鼠标落点需本机复核 |
+| 出口门控 | CI 绿灯或本地 agent 验证绿灯 | 通过 | `verify_m3_ux7.sh` |
+
+### 本轮完整 diff（本报告本节自身追加除外，`--unified=0`）
+
+```diff
+diff --git a/pixel/CHANGELOG.md b/pixel/CHANGELOG.md
+index 83213c7..0282da3 100644
+--- a/pixel/CHANGELOG.md
++++ b/pixel/CHANGELOG.md
+@@ -36,0 +37 @@
++- M3 G-4j: Tab/右键快速添加的 Graph 节点会落在菜单呼出位置对应的画布世界坐标。
+diff --git a/pixel/tests/smoke/test_main_window_ui.gd b/pixel/tests/smoke/test_main_window_ui.gd
+index c478896..15e862f 100644
+--- a/pixel/tests/smoke/test_main_window_ui.gd
++++ b/pixel/tests/smoke/test_main_window_ui.gd
+@@ -440,0 +441,6 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
++	controller._graph_quick_add_menu.hide()
++	var requested_world_position := Vector2(840, 360)
++	var requested_screen_position := Vector2i(
++		canvas.get_screen_position() + canvas.world_to_screen(requested_world_position)
++	)
++	assert_true(controller.show_graph_quick_add_menu(requested_screen_position))
+@@ -463 +469,9 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
+-	assert_false(_item_id_for_node(canvas.export_canvas_data()["items"], node_id).is_empty())
++	var added_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], node_id)
++	assert_false(added_item_id.is_empty())
++	assert_eq(
++		_item_data_for_id(canvas.export_canvas_data()["items"], added_item_id)["position"],
++		[840, 360]
++	)
++	var graph_nodes: Array = ProjectService.current_project.graphs[graph_id]["nodes"]
++	var added_node_data := _node_data_for_id(graph_nodes, node_id)
++	assert_eq(added_node_data["position"], [840, 360])
+@@ -491,0 +506,12 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
++	canvas.select_ids([object_item_id])
++	var object_item_data := _item_data_for_id(canvas.export_canvas_data()["items"], object_item_id)
++	var object_position: Array = object_item_data["position"]
++	var file_node_id: String = controller.add_graph_node_to_selected_graph("size_spec")
++	var file_node_data := _node_data_for_id(
++		ProjectService.current_project.graphs[graph_id]["nodes"], file_node_id
++	)
++	assert_eq(
++		file_node_data["position"],
++		[int(object_position[0]) + 280, int(object_position[1])],
++	)
++
+@@ -636,0 +663,16 @@ func _item_id_for_node(items: Array, node_id: String) -> String:
++func _item_data_for_id(items: Array, item_id: String) -> Dictionary:
++	for item in items:
++		var data: Dictionary = item
++		if String(data.get("id", "")) == item_id:
++			return data
++	return {}
++
++
++func _node_data_for_id(nodes: Array, node_id: String) -> Dictionary:
++	for node in nodes:
++		var data: Dictionary = node
++		if String(data.get("id", "")) == node_id:
++			return data
++	return {}
++
++
+diff --git a/pixel/ui/shell/m2_1_ui_controller.gd b/pixel/ui/shell/m2_1_ui_controller.gd
+index 56e9647..4e28120 100644
+--- a/pixel/ui/shell/m2_1_ui_controller.gd
++++ b/pixel/ui/shell/m2_1_ui_controller.gd
+@@ -84,0 +85 @@ var _graph_add_types := {}
++var _graph_quick_add_world_position := Vector2.ZERO
+@@ -351 +352,3 @@ func apply_graph_node_params(graph_id: String, node_id: String, params: Dictiona
+-func add_graph_node_to_selected_graph(type_name: String) -> String:
++func add_graph_node_to_selected_graph(
++	type_name: String, requested_world_position: Variant = null
++) -> String:
+@@ -367,0 +371,3 @@ func add_graph_node_to_selected_graph(type_name: String) -> String:
++	if requested_world_position is Vector2:
++		var requested_position: Vector2 = requested_world_position
++		world_position = requested_position.round()
+@@ -396,0 +403,2 @@ func show_graph_quick_add_menu(screen_position: Vector2i) -> bool:
++	var local_screen_position := Vector2(screen_position) - _canvas.get_screen_position()
++	_graph_quick_add_world_position = _canvas.screen_to_world(local_screen_position).round()
+@@ -459 +467 @@ func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
+-	_graph_quick_add_menu.id_pressed.connect(_on_graph_add_menu_pressed)
++	_graph_quick_add_menu.id_pressed.connect(_on_graph_quick_add_menu_pressed)
+@@ -532,0 +541,8 @@ func _on_graph_add_menu_pressed(id: int) -> void:
++func _on_graph_quick_add_menu_pressed(id: int) -> void:
++	var type_name := String(_graph_add_types.get(id, ""))
++	if type_name.is_empty():
++		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
++		return
++	add_graph_node_to_selected_graph(type_name, _graph_quick_add_world_position)
++
++
+diff --git "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md" "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+index 3db503d..baaa25b 100644
+--- "a/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
++++ "b/pixelforge-plan/03-milestones/M3-\345\274\200\345\217\221\350\247\204\345\210\222.md"
+@@ -605,0 +606,20 @@ M3 新增 `M3-UX反馈验收清单.html`，参考 M2.2 验收 HTML 的机制：
++### G-4j 快速添加节点按鼠标位置落点
++
++| 字段 | 内容 |
++|---|---|
++| 服务对象 | 在画布空白处用 Tab 或右键连续搭建 graph、希望节点出现在当前工作位置的人 |
++| 当前痛点 | 快速菜单虽然在鼠标处打开，但新增节点仍固定落在所选卡右侧，菜单位置与结果位置脱节 |
++| 技术选择 | 快速菜单打开时把屏幕坐标转换并保存为画布世界坐标；选择节点类型后把该坐标交给既有 graph/canvas 原子添加事务 |
++| 选择原因 | 复用 G-4g 的注册表、Undo/Redo 和双数据写入，只修正快速入口的落点语义；File 菜单仍保留相邻落点 |
++| 优势 | Tab 与右键添加结果直接出现在用户正在操作的位置；平移和缩放后仍按世界坐标准确落点 |
++| 缺陷 | 节点左上角对齐鼠标位置，暂不做卡片居中、视口边缘避让或与现有卡片防重叠 |
++| 改进空间 | 搜索/分类菜单、智能避让、对齐吸附、最近使用和空白建图 |
++| 验证入口 | 平移并缩放画布后，在远离所选节点的空白处按 Tab 或右键添加 Size Spec；新卡应出现在菜单呼出位置，Undo/Redo 后位置不变 |
++
++任务：
++
++- 快速菜单记录呼出点对应的画布世界坐标，不使用弹窗经系统避让后的坐标。
++- Tab 与右键快速入口共用该落点；File 子菜单继续使用所选 graph 卡右侧相邻落点。
++- 新节点的 graph position 与 canvas node position 保持一致并随 Undo/Redo 恢复。
++- 自动化覆盖屏幕坐标到世界坐标转换和双数据落点一致性。
++
+diff --git a/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md b/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
+index 1730bed..e26a904 100644
+--- a/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
++++ b/pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md
+@@ -14602 +14602 @@ index 33ffd29..e42b350 100644
+-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按原问题场景复测真实窗口下的视觉间距 |
++| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户继续开发前确认缩放栏与状态提示栏的真实窗口布局通过 |
 ```

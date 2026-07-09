@@ -82,6 +82,7 @@ var _graph_node_params_dialog: ConfirmationDialog = null
 var _graph_add_menu: PopupMenu = null
 var _graph_quick_add_menu: PopupMenu = null
 var _graph_add_types := {}
+var _graph_quick_add_world_position := Vector2.ZERO
 var _batch_menu: PopupMenu = null
 var _batch_menu_card_id := ""
 
@@ -348,7 +349,9 @@ func apply_graph_node_params(graph_id: String, node_id: String, params: Dictiona
 	return true
 
 
-func add_graph_node_to_selected_graph(type_name: String) -> String:
+func add_graph_node_to_selected_graph(
+	type_name: String, requested_world_position: Variant = null
+) -> String:
 	var binding := _selected_graph_binding()
 	var graph_id := String(binding.get("graph_id", ""))
 	if graph_id.is_empty():
@@ -365,6 +368,9 @@ func add_graph_node_to_selected_graph(type_name: String) -> String:
 		return ""
 	var graph := GraphScript.from_json(graph_data)
 	var world_position := _graph_node_add_position(binding)
+	if requested_world_position is Vector2:
+		var requested_position: Vector2 = requested_world_position
+		world_position = requested_position.round()
 	var node_id := "%s_%s" % [type_name, IdUtil.uuid_v4().left(8)]
 	var item_id := IdUtil.uuid_v4()
 	if graph.add_node(node, node_id, {}, world_position).is_empty():
@@ -394,6 +400,8 @@ func show_graph_quick_add_menu(screen_position: Vector2i) -> bool:
 	if _graph_quick_add_menu == null:
 		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
 		return false
+	var local_screen_position := Vector2(screen_position) - _canvas.get_screen_position()
+	_graph_quick_add_world_position = _canvas.screen_to_world(local_screen_position).round()
 	_graph_quick_add_menu.position = screen_position
 	_graph_quick_add_menu.popup()
 	return true
@@ -456,7 +464,7 @@ func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
 		_graph_add_types[menu_id] = node.get_type()
 		menu_id += 1
 	_graph_add_menu.id_pressed.connect(_on_graph_add_menu_pressed)
-	_graph_quick_add_menu.id_pressed.connect(_on_graph_add_menu_pressed)
+	_graph_quick_add_menu.id_pressed.connect(_on_graph_quick_add_menu_pressed)
 	add_child(_graph_quick_add_menu)
 	parent_menu.add_child(_graph_add_menu)
 	parent_menu.add_submenu_item(Strings.MENU_ADD_GRAPH_NODE, _graph_add_menu.name)
@@ -528,6 +536,14 @@ func _on_graph_add_menu_pressed(id: int) -> void:
 		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
 		return
 	add_graph_node_to_selected_graph(type_name)
+
+
+func _on_graph_quick_add_menu_pressed(id: int) -> void:
+	var type_name := String(_graph_add_types.get(id, ""))
+	if type_name.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		return
+	add_graph_node_to_selected_graph(type_name, _graph_quick_add_world_position)
 
 
 func _on_import_files_selected(files: PackedStringArray) -> void:

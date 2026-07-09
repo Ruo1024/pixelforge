@@ -438,6 +438,12 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	var existing_node_ids := {}
 	for node_data in ProjectService.current_project.graphs[graph_id]["nodes"]:
 		existing_node_ids[String(node_data.get("id", ""))] = true
+	controller._graph_quick_add_menu.hide()
+	var requested_world_position := Vector2(840, 360)
+	var requested_screen_position := Vector2i(
+		canvas.get_screen_position() + canvas.world_to_screen(requested_world_position)
+	)
+	assert_true(controller.show_graph_quick_add_menu(requested_screen_position))
 	var size_menu_id := -1
 	for menu_id in controller._graph_add_types:
 		if String(controller._graph_add_types[menu_id]) == "size_spec":
@@ -460,7 +466,15 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 			func(node: Dictionary) -> bool: return String(node.get("id", "")) == node_id
 		)
 	)
-	assert_false(_item_id_for_node(canvas.export_canvas_data()["items"], node_id).is_empty())
+	var added_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], node_id)
+	assert_false(added_item_id.is_empty())
+	assert_eq(
+		_item_data_for_id(canvas.export_canvas_data()["items"], added_item_id)["position"],
+		[840, 360]
+	)
+	var graph_nodes: Array = ProjectService.current_project.graphs[graph_id]["nodes"]
+	var added_node_data := _node_data_for_id(graph_nodes, node_id)
+	assert_eq(added_node_data["position"], [840, 360])
 	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_ADD_DONE % "Size Spec")
 
 	assert_true(UndoService.undo())
@@ -488,6 +502,18 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 
 	assert_false(controller._graph_quick_add_menu.visible)
 	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_ADD_NEEDS_SELECTION)
+
+	canvas.select_ids([object_item_id])
+	var object_item_data := _item_data_for_id(canvas.export_canvas_data()["items"], object_item_id)
+	var object_position: Array = object_item_data["position"]
+	var file_node_id: String = controller.add_graph_node_to_selected_graph("size_spec")
+	var file_node_data := _node_data_for_id(
+		ProjectService.current_project.graphs[graph_id]["nodes"], file_node_id
+	)
+	assert_eq(
+		file_node_data["position"],
+		[int(object_position[0]) + 280, int(object_position[1])],
+	)
 
 
 func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
@@ -632,6 +658,22 @@ func _item_id_for_node(items: Array, node_id: String) -> String:
 		if String(data.get("node_id", "")) == node_id:
 			return String(data.get("id", ""))
 	return ""
+
+
+func _item_data_for_id(items: Array, item_id: String) -> Dictionary:
+	for item in items:
+		var data: Dictionary = item
+		if String(data.get("id", "")) == item_id:
+			return data
+	return {}
+
+
+func _node_data_for_id(nodes: Array, node_id: String) -> Dictionary:
+	for node in nodes:
+		var data: Dictionary = node
+		if String(data.get("id", "")) == node_id:
+			return data
+	return {}
 
 
 func _remove_graph_edge(
