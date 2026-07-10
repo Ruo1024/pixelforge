@@ -141,6 +141,11 @@ func set_cleanup_running(running: bool) -> void:
 		_cancel_button.disabled = not running
 
 
+func cancel_pending_preview() -> void:
+	if _preview_timer != null:
+		_preview_timer.stop()
+
+
 func set_manual_grid_from_overlay(scale: float, offset: Vector2) -> void:
 	_suppress_param_signal = true
 	_scale_spin.value = scale

@@ -12,11 +12,11 @@ const AppInfo := preload("res://core/util/app_info.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Log := preload("res://core/util/log_util.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
-const Exporter := preload("res://services/exporter.gd")
 const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
 const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
 const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
 const ProjectLifecycleGuardScript := preload("res://ui/shell/project_lifecycle_guard.gd")
+const ExportFlowControllerScript := preload("res://ui/shell/export_flow_controller.gd")
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
 const ScaleAudit := preload("res://ui/shell/scale_audit.gd")
@@ -42,7 +42,6 @@ const SCALE_MONITOR_INTERVAL_SECONDS := 0.25
 const SCALE_RESOLVE_DEBOUNCE_SECONDS := 0.35
 
 var _project_filters := PackedStringArray(["*.pxproj ; PixelForge Project"])
-var _png_filters := PackedStringArray(["*.png ; PNG Image"])
 var _interface_scale := 1.0
 var _window_pixel_scale := 1.0
 var _canvas: Control = null
@@ -51,10 +50,8 @@ var _title_label: Label = null
 var _status_label: Label = null
 var _save_dialog: FileDialog = null
 var _open_dialog: FileDialog = null
-var _export_dialog: FileDialog = null
 var _recovery_dialog: ConfirmationDialog = null
 var _pending_recovery_path := ""
-var _pending_export_snapshots: Array = []
 var _cleanup_task_id := ""
 var _preview_task_id := ""
 var _preview_token := 0
@@ -62,6 +59,7 @@ var _m2_actions: Variant = null
 var _m2_1_ui: Variant = null
 var _zoom_overlay: RefCounted = null
 var _lifecycle_guard: Node = null
+var _export_flow: Node = null
 var _live_rescale_enabled := true
 var _scale_monitor_elapsed := 0.0
 var _rescale_debounce_elapsed := 0.0
@@ -394,7 +392,7 @@ func _build_ui() -> void:
 		_show_open_dialog,
 		_save_current_project
 	)
-	_m2_1_ui.export_snapshots_requested.connect(_on_export_snapshots_requested)
+	_m2_1_ui.export_snapshots_requested.connect(_export_flow.request_export)
 	_m2_1_ui.add_file_menu(top_bar)
 	_m2_1_ui.add_tool_buttons(top_bar)
 	_add_toolbar_button(top_bar, Strings.ACTION_BATCH, _m2_1_ui.batch_selected_sprites)
@@ -434,15 +432,6 @@ func _create_file_dialogs() -> void:
 	_save_dialog.file_selected.connect(_save_project_path)
 	add_child(_save_dialog)
 
-	_export_dialog = FileDialog.new()
-	DialogScalePolicy.configure_file_dialog(_export_dialog)
-	_export_dialog.title = Strings.DIALOG_EXPORT_PNG
-	_export_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	_export_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
-	_export_dialog.filters = _png_filters
-	_export_dialog.file_selected.connect(_export_png_path)
-	add_child(_export_dialog)
-
 	_recovery_dialog = ConfirmationDialog.new()
 	_recovery_dialog.name = "RecoveryDialog"
 	_recovery_dialog.title = Strings.DIALOG_RECOVERY
@@ -456,6 +445,11 @@ func _create_file_dialogs() -> void:
 	_lifecycle_guard.action_ready.connect(_on_lifecycle_action_ready)
 	_lifecycle_guard.save_requested.connect(_save_for_pending_lifecycle_action)
 	_save_dialog.canceled.connect(_on_save_dialog_canceled)
+
+	_export_flow = ExportFlowControllerScript.new()
+	_export_flow.name = "ExportFlowController"
+	add_child(_export_flow)
+	_export_flow.setup(self, _status_label.get_parent(), _status_label)
 
 
 func _connect_services() -> void:
@@ -692,6 +686,8 @@ func _apply_cleanup_to_selection(params: Dictionary) -> void:
 	)
 	task.finished.connect(_on_cleanup_finished)
 	task.canceled.connect(_on_cleanup_canceled)
+	task.failed.connect(_on_cleanup_failed)
+	task.progress_reported.connect(_on_cleanup_progress)
 	_cleanup_task_id = TaskQueue.submit(task)
 	_cleanup_inspector.set_cleanup_running(true)
 	_status_label.text = Strings.STATUS_CLEANUP_QUEUED
@@ -726,7 +722,11 @@ func _on_cleanup_finished(result: Variant) -> void:
 	_cleanup_task_id = ""
 	_cleanup_inspector.set_cleanup_running(false)
 	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
-	if not (result is Dictionary) or bool(result.get("canceled", false)):
+	if not (result is Dictionary):
+		_status_label.text = Strings.STATUS_TASK_FAILED
+		return
+	if bool(result.get("canceled", false)):
+		_status_label.text = Strings.STATUS_CLEANUP_CANCELED
 		return
 
 	var reports := []
@@ -778,8 +778,23 @@ func _on_cleanup_finished(result: Variant) -> void:
 
 	if not reports.is_empty():
 		_cleanup_inspector.show_report(reports[0])
+	_cleanup_inspector.cancel_pending_preview()
+	_preview_token += 1
+	_cancel_preview_task()
 	_canvas.clear_cleanup_preview()
 	_status_label.text = Strings.STATUS_CLEANUP_DONE
+
+
+func _on_cleanup_progress(_task_id: String, ratio: float, _message: String) -> void:
+	_status_label.text = (
+		Strings.STATUS_TASK_RUNNING_FORMAT % [Strings.TASK_CLEANUP, int(round(ratio * 100.0))]
+	)
+
+
+func _on_cleanup_failed(_error: Dictionary) -> void:
+	_cleanup_task_id = ""
+	_cleanup_inspector.set_cleanup_running(false)
+	_status_label.text = Strings.STATUS_TASK_FAILED
 
 
 func _on_cleanup_canceled() -> void:
@@ -806,6 +821,7 @@ func _request_cleanup_preview(params: Dictionary) -> void:
 	var effective_params := _cleanup_params_with_project_style(params)
 	_cancel_preview_task()
 	_preview_token += 1
+	var preview_token := _preview_token
 	var task := (
 		TaskScript
 		. new(
@@ -813,13 +829,14 @@ func _request_cleanup_preview(params: Dictionary) -> void:
 			{
 				"item": snapshots[0],
 				"params": effective_params,
-				"token": _preview_token,
+				"token": preview_token,
 			},
 			_cleanup_preview_work
 		)
 	)
 	task.finished.connect(_on_cleanup_preview_finished)
-	task.canceled.connect(func() -> void: pass)
+	task.canceled.connect(func() -> void: _on_cleanup_preview_canceled(preview_token))
+	task.progress_reported.connect(_on_cleanup_preview_progress)
 	_preview_task_id = TaskQueue.submit(task)
 	_status_label.text = Strings.STATUS_PREVIEW_QUEUED
 
@@ -834,6 +851,7 @@ func _cancel_preview_task() -> void:
 func _cleanup_preview_work(task_ref: Variant) -> Dictionary:
 	var item: Dictionary = task_ref.payload["item"]
 	var params: Dictionary = task_ref.payload["params"]
+	task_ref.report_progress(0.05, "preview")
 	var pipeline_result := Pipeline.apply(item["image"], params)
 	if task_ref.cancel_requested:
 		return {"canceled": true, "token": int(task_ref.payload["token"])}
@@ -841,6 +859,7 @@ func _cleanup_preview_work(task_ref: Variant) -> Dictionary:
 	var source_image: Image = item["image"]
 	var preview_image: Image = pipeline_result["image"]
 	var fitted_preview := _fit_preview_to_source(preview_image, source_image.get_size())
+	task_ref.report_progress(1.0, "preview")
 	return {
 		"canceled": false,
 		"token": int(task_ref.payload["token"]),
@@ -852,6 +871,8 @@ func _cleanup_preview_work(task_ref: Variant) -> Dictionary:
 
 func _on_cleanup_preview_finished(result: Variant) -> void:
 	if not (result is Dictionary):
+		_preview_task_id = ""
+		_status_label.text = Strings.STATUS_TASK_FAILED
 		return
 	var token := int(result.get("token", -1))
 	if token == _preview_token:
@@ -863,6 +884,18 @@ func _on_cleanup_preview_finished(result: Variant) -> void:
 		String(result.get("item_id", "")), result["image"], PREVIEW_OPACITY
 	)
 	_cleanup_inspector.show_report(result.get("report", {}))
+	_status_label.text = Strings.STATUS_PREVIEW_DONE
+
+
+func _on_cleanup_preview_progress(_task_id: String, ratio: float, _message: String) -> void:
+	_status_label.text = Strings.STATUS_PREVIEW_RUNNING_FORMAT % int(round(ratio * 100.0))
+
+
+func _on_cleanup_preview_canceled(token: int) -> void:
+	if token != _preview_token:
+		return
+	_preview_task_id = ""
+	_status_label.text = Strings.STATUS_PREVIEW_CANCELED
 
 
 func _on_manual_grid_changed(active: bool, scale: float, offset: Vector2) -> void:
@@ -906,64 +939,17 @@ func _export_selected_png() -> void:
 		_show_status_notice(Strings.STATUS_EXPORT_EMPTY)
 		return
 
-	_pending_export_snapshots = snapshots
 	var data: Dictionary = snapshots[0]["data"]
 	var default_name := (
 		"spritesheet" if snapshots.size() > 1 else String(data.get("asset_id", "sprite")).left(8)
 	)
-	_export_dialog.current_file = "%s.png" % default_name
-	_export_dialog.popup_centered_ratio(0.7)
-
-
-func _export_png_path(path: String) -> void:
-	if _pending_export_snapshots.is_empty():
-		return
-	var target_path := path
-	if not target_path.to_lower().ends_with(".png"):
-		target_path += ".png"
-
-	var error := OK
-	if _pending_export_snapshots.size() == 1:
-		error = Exporter.export_png(_pending_export_snapshots[0]["image"], target_path)
-		if error == OK:
-			_status_label.text = Strings.STATUS_EXPORTED
-	else:
-		var export_items := []
-		for index in range(_pending_export_snapshots.size()):
-			var snapshot: Dictionary = _pending_export_snapshots[index]
-			var data: Dictionary = snapshot["data"]
-			(
-				export_items
-				. append(
-					{
-						"name": String(data.get("asset_id", "sprite_%02d" % (index + 1))).left(16),
-						"image": snapshot["image"],
-					}
-				)
-			)
-		var result: Dictionary = Exporter.export_spritesheet(
-			export_items, target_path, {"columns": 0, "padding": 1, "image": target_path.get_file()}
-		)
-		error = int(result.get("error", OK))
-		if bool(result.get("ok", false)):
-			_status_label.text = Strings.STATUS_SPRITESHEET_EXPORTED
-
-	if error != OK:
-		Log.warn("PNG export failed", {"path": target_path, "error": error})
-		_show_status_notice(Strings.STATUS_EXPORT_FAILED)
-	_pending_export_snapshots.clear()
+	_export_flow.request_export(snapshots, "%s.png" % default_name)
 
 
 func _on_files_dropped(files: PackedStringArray) -> void:
 	if _m2_1_ui == null:
 		return
 	_m2_1_ui.import_files_at_mouse(files)
-
-
-func _on_export_snapshots_requested(snapshots: Array, default_file: String) -> void:
-	_pending_export_snapshots = snapshots
-	_export_dialog.current_file = default_file
-	_export_dialog.popup_centered_ratio(0.7)
 
 
 func _show_status_notice(message: String) -> void:

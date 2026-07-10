@@ -7,7 +7,6 @@ extends Node
 signal export_snapshots_requested(snapshots: Array, default_file: String)
 
 const Strings := preload("res://ui/shell/strings.gd")
-const FileIOScript := preload("res://infra/file_io.gd")
 const ToolManagerScript := preload("res://ui/tools/tool_manager.gd")
 const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
 const RectangleToolScript := preload("res://ui/tools/rectangle_tool.gd")
@@ -16,8 +15,7 @@ const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
 const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
 const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
 const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
-const OnboardingScript := preload("res://ui/dialogs/onboarding.gd")
-const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+const ImportFlowControllerScript := preload("res://ui/shell/import_flow_controller.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
@@ -41,6 +39,8 @@ const FILE_MENU_EDIT_SELECTED_GRAPH_NODE := 3
 const FILE_MENU_NEW := 4
 const FILE_MENU_OPEN := 5
 const FILE_MENU_SAVE := 6
+const FILE_MENU_FOCUS_LAST_IMPORT := 7
+const FILE_MENU_RETRY_IMPORT := 8
 const GRAPH_ADD_MENU_ID_START := 100
 const BATCH_MENU_CLEANUP := 0
 const BATCH_MENU_MATTE := 1
@@ -74,7 +74,6 @@ var _open_project_callback: Callable
 var _save_project_callback: Callable
 var _tool_manager: Variant = null
 var _tool_buttons := {}
-var _import_dialog: FileDialog = null
 var _matte_dialog: ConfirmationDialog = null
 var _slice_dialog: ConfirmationDialog = null
 var _outline_dialog: ConfirmationDialog = null
@@ -85,6 +84,7 @@ var _graph_add_types := {}
 var _graph_quick_add_world_position := Vector2.ZERO
 var _batch_menu: PopupMenu = null
 var _batch_menu_card_id := ""
+var _import_flow: Node = null
 
 
 func setup(
@@ -103,7 +103,10 @@ func setup(
 	_new_project_callback = new_project_callback
 	_open_project_callback = open_project_callback
 	_save_project_callback = save_project_callback
-	_create_import_dialog()
+	_import_flow = ImportFlowControllerScript.new()
+	_import_flow.name = "ImportFlowController"
+	add_child(_import_flow)
+	_import_flow.setup(_canvas, _status_label, self)
 	_create_m2_dialogs()
 	_create_graph_node_params_dialog()
 	_create_batch_menu()
@@ -120,6 +123,9 @@ func add_file_menu(parent: Control) -> void:
 	file_menu_button.add_theme_font_size_override("font_size", TOOLBAR_FONT_SIZE)
 	var popup := file_menu_button.get_popup()
 	popup.add_item(Strings.MENU_IMPORT_IMAGES, FILE_MENU_IMPORT_IMAGES)
+	popup.add_item(Strings.ACTION_FOCUS_LAST_IMPORT, FILE_MENU_FOCUS_LAST_IMPORT)
+	popup.add_item(Strings.ACTION_RETRY_IMPORT, FILE_MENU_RETRY_IMPORT)
+	popup.add_separator()
 	popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
 	popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
 	_add_graph_node_submenu(popup)
@@ -129,6 +135,7 @@ func add_file_menu(parent: Control) -> void:
 	popup.add_item(Strings.ACTION_OPEN, FILE_MENU_OPEN)
 	popup.add_item(Strings.ACTION_SAVE, FILE_MENU_SAVE)
 	popup.id_pressed.connect(_on_file_menu_pressed)
+	_import_flow.configure_file_menu(popup, FILE_MENU_FOCUS_LAST_IMPORT, FILE_MENU_RETRY_IMPORT)
 	parent.add_child(file_menu_button)
 
 
@@ -173,7 +180,7 @@ func handle_shortcut(event: InputEventKey) -> bool:
 
 
 func import_files_at_mouse(files: PackedStringArray) -> void:
-	_import_image_files(files, _canvas.get_mouse_world_position())
+	_import_flow.import_files_at_mouse(files)
 
 
 func open_matte_dialog() -> void:
@@ -408,22 +415,11 @@ func show_graph_quick_add_menu(screen_position: Vector2i) -> bool:
 
 
 func show_onboarding_if_needed() -> void:
-	if DisplayServer.get_name() == "headless":
-		return
-	if bool(SettingsService.get_setting("ui", "m2_1_onboarding_seen", false)):
-		return
-	call_deferred("_show_onboarding_dialog")
+	call_deferred("_refresh_import_hint")
 
 
-func _create_import_dialog() -> void:
-	_import_dialog = FileDialog.new()
-	DialogScalePolicy.configure_file_dialog(_import_dialog)
-	_import_dialog.title = Strings.DIALOG_IMPORT_IMAGES
-	_import_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	_import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
-	_import_dialog.filters = PackedStringArray(["*.png ; PNG Image", "*.jpg,*.jpeg ; JPEG Image"])
-	_import_dialog.files_selected.connect(_on_import_files_selected)
-	add_child(_import_dialog)
+func _refresh_import_hint() -> void:
+	_import_flow.refresh_empty_hint()
 
 
 func _create_m2_dialogs() -> void:
@@ -515,7 +511,11 @@ func _init_tools() -> void:
 func _on_file_menu_pressed(id: int) -> void:
 	match id:
 		FILE_MENU_IMPORT_IMAGES:
-			_import_dialog.popup_centered_ratio(0.7)
+			_import_flow.show_import_dialog()
+		FILE_MENU_FOCUS_LAST_IMPORT:
+			_import_flow.focus_last_import()
+		FILE_MENU_RETRY_IMPORT:
+			_import_flow.retry_import()
 		FILE_MENU_GENERATE_MOCK_BATCH:
 			generate_mock_batch()
 		FILE_MENU_RUN_SELECTED_GRAPH:
@@ -544,54 +544,6 @@ func _on_graph_quick_add_menu_pressed(id: int) -> void:
 		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
 		return
 	add_graph_node_to_selected_graph(type_name, _graph_quick_add_world_position)
-
-
-func _on_import_files_selected(files: PackedStringArray) -> void:
-	_import_image_files(files, _canvas.get_mouse_world_position())
-
-
-func _import_image_files(files: PackedStringArray, world_position: Vector2) -> void:
-	var supported_files := []
-	for file_path in files:
-		if _is_supported_image_path(file_path):
-			supported_files.append(String(file_path))
-
-	var drop_position := world_position
-	var imported_asset_ids: Array[String] = []
-	var make_batch := supported_files.size() > 1
-	for file_path in supported_files:
-		var image: Image = FileIOScript.load_png(file_path)
-		if image == null:
-			Log.warn("Imported image could not be loaded", {"path": file_path})
-			continue
-		if image.get_width() * image.get_height() > 1024 * 1024:
-			Log.warn(
-				"Large image imported without M1 cleanup",
-				{"path": file_path, "size": [image.get_width(), image.get_height()]}
-			)
-
-		var asset_name := String(file_path).get_file().get_basename()
-		var asset_id := AssetLibrary.register_image(image, asset_name, {"origin": "imported"})
-		imported_asset_ids.append(asset_id)
-		if not make_batch:
-			_canvas.add_sprite_item(image, asset_id, drop_position)
-		drop_position += Vector2(image.get_width() + 8, 0)
-
-	if imported_asset_ids.size() > 1:
-		var card: Node = _canvas._add_batch_card(
-			imported_asset_ids, world_position, Strings.BATCH_DEFAULT_LABEL
-		)
-		if card != null:
-			_focus_canvas_on_card(card)
-
-
-func _is_supported_image_path(file_path: String) -> bool:
-	var lower_path := file_path.to_lower()
-	return (
-		lower_path.ends_with(".png")
-		or lower_path.ends_with(".jpg")
-		or lower_path.ends_with(".jpeg")
-	)
 
 
 func _show_batch_menu(card_id: String, screen_position: Vector2i) -> void:
@@ -992,12 +944,3 @@ func _graph_batch_card_id(graph_id: String, batch_node_id: String) -> String:
 		):
 			return String(item_data.get("id", ""))
 	return ""
-
-
-func _show_onboarding_dialog() -> void:
-	var dialog: AcceptDialog = OnboardingScript.show_first_run_tips(self)
-	if dialog == null:
-		return
-	var mark_seen := func() -> void: SettingsService.set_setting("ui", "m2_1_onboarding_seen", true)
-	dialog.confirmed.connect(mark_seen, CONNECT_ONE_SHOT)
-	dialog.close_requested.connect(mark_seen, CONNECT_ONE_SHOT)

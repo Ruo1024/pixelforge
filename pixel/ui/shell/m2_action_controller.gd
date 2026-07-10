@@ -46,6 +46,7 @@ func matte_selection_with_params(params: Dictionary) -> void:
 		func(result: Variant) -> void:
 			_on_generated_asset_task_finished(result, Strings.STATUS_MATTING_DONE)
 	)
+	_connect_task_feedback(task, Strings.TASK_MATTING)
 	_task_id = TaskQueue.submit(task)
 	_cleanup_inspector.set_cleanup_running(true)
 	_status_label.text = Strings.STATUS_MATTING_QUEUED
@@ -65,6 +66,7 @@ func slice_selection_with_params(params: Dictionary) -> void:
 		func(result: Variant) -> void:
 			_on_generated_asset_task_finished(result, Strings.STATUS_SLICE_DONE)
 	)
+	_connect_task_feedback(task, Strings.TASK_SLICING)
 	_task_id = TaskQueue.submit(task)
 	_cleanup_inspector.set_cleanup_running(true)
 	_status_label.text = Strings.STATUS_SLICE_QUEUED
@@ -86,6 +88,7 @@ func outline_selection_with_params(params: Dictionary) -> void:
 		func(result: Variant) -> void:
 			_on_generated_asset_task_finished(result, Strings.STATUS_OUTLINE_DONE)
 	)
+	_connect_task_feedback(task, Strings.TASK_OUTLINE)
 	_task_id = TaskQueue.submit(task)
 	_cleanup_inspector.set_cleanup_running(true)
 	_status_label.text = Strings.STATUS_OUTLINE_QUEUED
@@ -264,7 +267,11 @@ func _on_generated_asset_task_finished(result: Variant, done_status: String) -> 
 	_task_id = ""
 	_cleanup_inspector.set_cleanup_running(false)
 	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
-	if not (result is Dictionary) or bool(result.get("canceled", false)):
+	if not (result is Dictionary):
+		_status_label.text = Strings.STATUS_TASK_FAILED
+		return
+	if bool(result.get("canceled", false)):
+		_status_label.text = Strings.STATUS_TASK_CANCELED
 		return
 
 	var first_warning := _first_warning(result.get("items", []))
@@ -314,6 +321,12 @@ func _start_batch_task(
 	task.finished.connect(
 		func(result: Variant) -> void: _on_batch_task_finished(result, done_status)
 	)
+	var action_label := Strings.TASK_CLEANUP
+	if task_kind.contains("matting"):
+		action_label = Strings.TASK_MATTING
+	elif task_kind.contains("outline"):
+		action_label = Strings.TASK_OUTLINE
+	_connect_task_feedback(task, action_label)
 	_task_id = TaskQueue.submit(task)
 	_cleanup_inspector.set_cleanup_running(true)
 	_status_label.text = queued_status
@@ -323,7 +336,11 @@ func _on_batch_task_finished(result: Variant, done_status: String) -> void:
 	_task_id = ""
 	_cleanup_inspector.set_cleanup_running(false)
 	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
-	if not (result is Dictionary) or bool(result.get("canceled", false)):
+	if not (result is Dictionary):
+		_status_label.text = Strings.STATUS_TASK_FAILED
+		return
+	if bool(result.get("canceled", false)):
+		_status_label.text = Strings.STATUS_TASK_CANCELED
 		return
 
 	var first_warning := _first_warning(result.get("items", []))
@@ -344,6 +361,31 @@ func _on_batch_task_finished(result: Variant, done_status: String) -> void:
 		String(result.get("card_id", "")), new_asset_ids, true, source_asset_ids
 	)
 	_status_label.text = done_status
+
+
+func _connect_task_feedback(task: Variant, action_label: String) -> void:
+	task.progress_reported.connect(
+		func(_task_id_value: String, ratio: float, _message: String) -> void:
+			_status_label.text = (
+				Strings.STATUS_TASK_RUNNING_FORMAT % [action_label, int(round(ratio * 100.0))]
+			)
+	)
+	task.canceled.connect(_on_task_canceled)
+	task.failed.connect(_on_task_failed)
+
+
+func _on_task_canceled() -> void:
+	_task_id = ""
+	_cleanup_inspector.set_cleanup_running(false)
+	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
+	_status_label.text = Strings.STATUS_TASK_CANCELED
+
+
+func _on_task_failed(_error: Dictionary) -> void:
+	_task_id = ""
+	_cleanup_inspector.set_cleanup_running(false)
+	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
+	_status_label.text = Strings.STATUS_TASK_FAILED
 
 
 func _matte_params(params: Dictionary) -> Dictionary:

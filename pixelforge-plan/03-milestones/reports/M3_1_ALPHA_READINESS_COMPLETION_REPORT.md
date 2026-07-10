@@ -79,3 +79,79 @@
 
 - 对应本地提交：`M3.1 guard unsaved project lifecycle`（哈希以 Goal 分支日志为准；提交对象不能在自身内容中可靠自引用）。
 - diff 模式：新增生命周期守卫、服务恢复状态与失败信号、主窗口接线、自动化、门禁脚本和集中字符串；不内联全量源码。
+
+## 2026-07-11 AR-2 首次任务与关键反馈
+
+### 服务的用户动作与原痛点
+
+- 陌生用户面对空画布时缺少低干扰入口；旧首次启动提示是模态对话框。
+- 文件对话框导入在关闭后读取鼠标位置，真实大图可能落到意外位置；逐文件解码和注册会在中途失败时留下半成品。
+- 1254×1254 输入的预览可能完成后仍显示 `Preview queued`；M2 任务未统一处理 progress / cancel / failure。
+- 导出没有明确完整路径、打开目录入口或部分产物说明，覆盖行为也没有可自动验证的应用级状态。
+
+### 本轮实现
+
+- 空画布改为居中的低干扰 Import Images 提示，不再弹 M2.1 模态 onboarding；拖放入口保留。
+- 文件对话框入口在选择文件前就使用当前视图中心作为稳定世界坐标；空画布自动 fit，新内容在已有工作区不强制缩放，并提供 `File > Focus Last Import`。
+- 导入先完成全部格式/解码预检，再统一注册；任一文件失败则本轮零素材、零画布元素，并显示失败文件与 Retry Import。
+- 清洗预览新增 5%/100% progress、完成/取消/失败状态；清洗、抠图、切分、描边与 batch 任务统一接 progress / canceled / failed。清洗完成会取消选择变化触发的陈旧预览，最终状态稳定为 `Cleanup complete`。
+- 导出流程独立为控制器：应用级覆盖确认可选择 Cancel/Overwrite；成功显示完整路径和 Open Folder；失败摘要区分已生成与未生成文件。
+
+### 修改文件
+
+- `pixel/ui/shell/import_flow_controller.gd`
+- `pixel/ui/shell/empty_canvas_import_hint.gd`
+- `pixel/ui/shell/export_flow_controller.gd`
+- `pixel/ui/shell/m2_1_ui_controller.gd`
+- `pixel/ui/shell/m2_action_controller.gd`
+- `pixel/ui/shell/main.gd`
+- `pixel/ui/inspector/cleanup_inspector.gd`
+- `pixel/ui/shell/strings.gd`
+- `pixel/tests/smoke/test_alpha_first_task_ui.gd`
+- `pixel/CHANGELOG.md`
+- `pixelforge-plan/03-milestones/CURRENT-STATE.md`
+- 本报告
+
+### 自动验证命令与结果
+
+- 定向 `test_alpha_first_task_ui.gd`：5/5 tests、34 assertions 通过。
+- `./pixel/scripts/lint.sh`：120 个 GDScript 文件零问题。
+- `./pixel/scripts/run_tests.sh`：189/189 tests、1457 assertions 通过。
+- 覆盖：空画布入口；对话框稳定落点；导入预检原子性与失败文件；空/非空画布聚焦策略；1254×1254 preview queued → running → done；任务取消；清洗完成状态不被预览覆盖；导出成功路径、Open Folder、覆盖 Cancel/Overwrite、部分产物失败摘要。
+- `./pixel/scripts/check_ui_scaling.sh`：通过。
+- `./pixel/scripts/verify_m3_1.sh`：通过；含 staged 图片与受保护目录红线。
+- `git diff --check`：提交前通过。
+
+### Agent 实机冒烟
+
+- 环境：macOS Retina，Godot 4.6.3，界面倍率 2.0；使用本地未授权测试目录中的一张真实 1254×1254 图片，仅本机读取，未复制、未 stage、未 commit。
+- 空画布显示低干扰提示；从提示进入文件对话框后，真实图立即出现在视图中并合理 fit。
+- preview 状态从 5% 进入 `Cleanup preview ready`，不再卡在 queued。
+- Apply Cleanup 显示 queued/进度，产出在原图旁可见，最终状态稳定为 `Cleanup complete`。
+- 导出到 `/tmp/pixelforge-ar2-smoke.png` 后显示完整路径和 Open Folder；再次导出同名文件时显示 Cancel / Overwrite，Cancel 保留现有文件。
+- 本节只记 agent 实机冒烟，不算用户人工签收。
+
+### 统一人工测试需要覆盖
+
+1. 空画布通过提示导入 1 张真实图；预期立即可见、合理 fit，落点不受文件对话框关闭时鼠标位置影响。
+2. 已有工作区再导入 1–5 张；预期不强制改变缩放，`File > Focus Last Import` 可返回新内容。
+3. 同时选择一个有效文件和一个损坏/不支持文件；预期列出失败文件、提供 Retry Import，且不新增任何半成品。
+4. 用真实 1254×1254 图执行 preview 与 Apply Cleanup；预期 queued、进行中、完成状态准确，最终不回退为 `Preview queued/ready`。
+5. 在可取消清洗任务进行中点击 Cancel Cleanup；预期显示 canceled、按钮恢复，不物化未完成结果。
+6. 分别执行单图 PNG 与多图 spritesheet 导出；预期成功摘要包含完整路径并可打开目录。
+7. 对已有导出选择 Cancel 与 Overwrite；预期 Cancel 不改文件，Overwrite 更新产物。
+8. 模拟 spritesheet JSON 写失败；预期明确 PNG 是否已存在、JSON 未生成及重试建议。
+
+人工状态：**待统一人工验收**。
+
+### 已知失败与明确延期
+
+- 真实图片仅用于 agent 本机冒烟；用户完整最小旅程、取消时机手感、文件管理器打开结果仍待统一人工验收。
+- 现有 WorkerThreadPool 采用协作式取消，不强杀正在运行的算法；界面已准确显示当前能力，本轮不扩张底层抢占机制。
+- Godot export templates 仍待 AR-3 准备。
+- 既有 GUT 1 个 orphan 与退出资源警告保持已知；本轮无新增用户影响证据。
+
+### 本地提交与 diff
+
+- 对应本地提交：`M3.1 close first task feedback loop`（哈希以 Goal 分支日志为准；提交对象不能在自身内容中可靠自引用）。
+- diff 模式：抽离 import/export 流程控制器，补任务状态接线、集中字符串、smoke 自动化与状态/报告增量；不内联全量源码。
