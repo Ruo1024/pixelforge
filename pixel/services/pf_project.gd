@@ -12,6 +12,7 @@ var manifest := {}
 var canvas := {}
 var graphs := {}
 var dirty := false
+var recovered_from_path := ""
 
 
 func reset(name: String = "Untitled") -> void:
@@ -43,6 +44,7 @@ func reset(name: String = "Untitled") -> void:
 	graphs = {}
 	project_path = ""
 	dirty = false
+	recovered_from_path = ""
 
 
 func get_id() -> String:

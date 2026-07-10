@@ -8,6 +8,7 @@ signal project_loaded(project: Variant)
 signal project_saved(path: String)
 signal dirty_changed(is_dirty: bool)
 signal recovery_available(autosaves: Array)
+signal autosave_failed(error: Error, path: String)
 
 const AUTOSAVE_INTERVAL_SECONDS := 180.0
 const AUTOSAVE_KEEP_COUNT := 5
@@ -24,6 +25,7 @@ const MIGRATIONS: Array = []
 var current_project: Variant = ProjectModel.new()
 
 var _autosave_timer: Timer = null
+var _pending_recovery_autosaves: Array = []
 
 
 func _ready() -> void:
@@ -90,6 +92,7 @@ func save_project(path: String = "") -> Error:
 	var error := _save_to_path(target_path)
 	if error == OK:
 		current_project.project_path = target_path
+		current_project.recovered_from_path = ""
 		SettingsService.add_recent_project(target_path)
 		_emit_dirty(false)
 		project_saved.emit(target_path)
@@ -98,6 +101,14 @@ func save_project(path: String = "") -> Error:
 
 
 func open_project(path: String) -> Error:
+	return _open_project(path, false)
+
+
+func recover_project(path: String) -> Error:
+	return _open_project(path, true)
+
+
+func _open_project(path: String, as_recovered_copy: bool) -> Error:
 	var unpacked: Dictionary = FileIOScript.zip_unpack(path)
 	if not bool(unpacked.get("ok", false)):
 		return int(unpacked.get("error", ERR_FILE_CANT_OPEN))
@@ -129,14 +140,18 @@ func open_project(path: String) -> Error:
 	current_project.manifest = manifest
 	current_project.canvas = canvas
 	current_project.graphs = loaded_graphs["graphs"]
-	current_project.project_path = path
+	current_project.project_path = "" if as_recovered_copy else path
+	current_project.recovered_from_path = path if as_recovered_copy else ""
 	current_project.dirty = false
 
-	SettingsService.add_recent_project(path)
+	if not as_recovered_copy:
+		SettingsService.add_recent_project(path)
+	else:
+		_pending_recovery_autosaves.erase(path)
 	UndoService.clear()
 	project_loaded.emit(current_project)
 	EventBus.project_opened.emit(path)
-	_emit_dirty(false)
+	_emit_dirty(as_recovered_copy)
 	return OK
 
 
@@ -177,6 +192,10 @@ func list_autosaves(project_id: String = "") -> Array:
 
 	autosaves.sort()
 	return autosaves
+
+
+func get_pending_recovery_autosaves() -> Array:
+	return _pending_recovery_autosaves.duplicate()
 
 
 func mark_clean_shutdown() -> void:
@@ -333,16 +352,18 @@ func _on_autosave_timeout() -> void:
 		var error := autosave_now()
 		if error != OK:
 			Log.warn("Autosave failed", {"error": error})
+			autosave_failed.emit(error, "user://autosave")
 
 
 func _check_recovery_state() -> void:
+	_pending_recovery_autosaves.clear()
 	if not FileAccess.file_exists(LOCK_PATH):
 		return
 
-	var autosaves := list_autosaves()
-	if not autosaves.is_empty():
-		recovery_available.emit(autosaves)
-		EventBus.recovery_available.emit(autosaves)
+	_pending_recovery_autosaves = list_autosaves()
+	if not _pending_recovery_autosaves.is_empty():
+		recovery_available.emit(_pending_recovery_autosaves.duplicate())
+		EventBus.recovery_available.emit(_pending_recovery_autosaves.duplicate())
 
 
 func _write_session_lock() -> void:

@@ -175,6 +175,33 @@ func test_project_open_rejects_future_format_version() -> void:
 	assert_eq(project_service.open_project(path), ERR_FILE_UNRECOGNIZED)
 
 
+func test_recovery_opens_unsaved_copy_and_never_targets_original_project() -> void:
+	var project_service := get_tree().root.get_node("ProjectService")
+	project_service.new_project("Recovery Safety")
+	project_service.set_canvas_data({"camera": {"center": [1, 2], "zoom": 1.0}, "items": []})
+	var original_path := "user://tests/recovery_original.pxproj"
+	assert_eq(project_service.save_project(original_path), OK)
+	var original_bytes := FileAccess.get_file_as_bytes(original_path)
+
+	project_service.set_canvas_data({"camera": {"center": [99, 42], "zoom": 2.0}, "items": []})
+	assert_eq(project_service.autosave_now(), OK)
+	var autosaves: Array = project_service.list_autosaves(project_service.current_project.get_id())
+	assert_false(autosaves.is_empty())
+	var recovery_path := String(autosaves.back())
+
+	assert_eq(project_service.recover_project(recovery_path), OK)
+	assert_eq(project_service.current_project.project_path, "")
+	assert_eq(project_service.current_project.recovered_from_path, recovery_path)
+	assert_true(project_service.current_project.dirty)
+	assert_eq(project_service.save_project(), ERR_FILE_BAD_PATH)
+
+	var recovered_path := "user://tests/recovery_copy.pxproj"
+	assert_eq(project_service.save_project(recovered_path), OK)
+	assert_eq(project_service.current_project.project_path, recovered_path)
+	assert_eq(project_service.current_project.recovered_from_path, "")
+	assert_eq(FileAccess.get_file_as_bytes(original_path), original_bytes)
+
+
 func test_cleanup_provenance_survives_project_roundtrip() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var asset_library := get_tree().root.get_node("AssetLibrary")

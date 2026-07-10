@@ -16,6 +16,7 @@ const Exporter := preload("res://services/exporter.gd")
 const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
 const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
 const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
+const ProjectLifecycleGuardScript := preload("res://ui/shell/project_lifecycle_guard.gd")
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
 const ScaleAudit := preload("res://ui/shell/scale_audit.gd")
@@ -60,6 +61,7 @@ var _preview_token := 0
 var _m2_actions: Variant = null
 var _m2_1_ui: Variant = null
 var _zoom_overlay: RefCounted = null
+var _lifecycle_guard: Node = null
 var _live_rescale_enabled := true
 var _scale_monitor_elapsed := 0.0
 var _rescale_debounce_elapsed := 0.0
@@ -70,6 +72,7 @@ var _pending_screen_snapshot := {}
 
 
 func _ready() -> void:
+	get_tree().auto_accept_quit = false
 	var startup_snapshot := InterfaceScalePolicy.read_current_screen_snapshot()
 	_interface_scale = _resolve_interface_scale_from_snapshot(startup_snapshot, "startup")
 	_live_rescale_enabled = bool(SettingsService.get_setting("ui", "live_rescale", true))
@@ -89,8 +92,9 @@ func _ready() -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
-		ProjectService.mark_clean_shutdown()
-		get_tree().quit()
+		if _lifecycle_guard == null:
+			return
+		_lifecycle_guard.request_action(ProjectLifecycleGuardScript.ACTION_QUIT)
 
 
 func _process(delta: float) -> void:
@@ -106,7 +110,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_save_current_project()
 		get_viewport().set_input_as_handled()
 	elif event.is_command_or_control_pressed() and event.keycode == KEY_O:
-		_open_dialog.popup_centered_ratio(0.7)
+		_show_open_dialog()
 		get_viewport().set_input_as_handled()
 	elif event.is_command_or_control_pressed() and event.keycode == KEY_N:
 		_create_new_project()
@@ -341,13 +345,9 @@ func _build_ui() -> void:
 	top_bar.add_child(_title_label)
 
 	_add_toolbar_button(top_bar, Strings.ACTION_NEW, _create_new_project)
-	_add_toolbar_button(
-		top_bar, Strings.ACTION_OPEN, func() -> void: _open_dialog.popup_centered_ratio(0.7)
-	)
+	_add_toolbar_button(top_bar, Strings.ACTION_OPEN, _show_open_dialog)
 	_add_toolbar_button(top_bar, Strings.ACTION_SAVE, _save_current_project)
-	_add_toolbar_button(
-		top_bar, Strings.ACTION_SAVE_AS, func() -> void: _save_dialog.popup_centered_ratio(0.7)
-	)
+	_add_toolbar_button(top_bar, Strings.ACTION_SAVE_AS, _show_save_dialog)
 	_add_toolbar_button(top_bar, Strings.ACTION_EXPORT_PNG, _export_selected_png)
 
 	var content := HSplitContainer.new()
@@ -391,7 +391,7 @@ func _build_ui() -> void:
 		_status_label,
 		_m2_actions,
 		_create_new_project,
-		func() -> void: _open_dialog.popup_centered_ratio(0.7),
+		_show_open_dialog,
 		_save_current_project
 	)
 	_m2_1_ui.export_snapshots_requested.connect(_on_export_snapshots_requested)
@@ -444,9 +444,18 @@ func _create_file_dialogs() -> void:
 	add_child(_export_dialog)
 
 	_recovery_dialog = ConfirmationDialog.new()
+	_recovery_dialog.name = "RecoveryDialog"
 	_recovery_dialog.title = Strings.DIALOG_RECOVERY
 	_recovery_dialog.confirmed.connect(_recover_pending_autosave)
 	add_child(_recovery_dialog)
+
+	_lifecycle_guard = ProjectLifecycleGuardScript.new()
+	_lifecycle_guard.name = "ProjectLifecycleGuard"
+	add_child(_lifecycle_guard)
+	_lifecycle_guard.setup(ProjectService)
+	_lifecycle_guard.action_ready.connect(_on_lifecycle_action_ready)
+	_lifecycle_guard.save_requested.connect(_save_for_pending_lifecycle_action)
+	_save_dialog.canceled.connect(_on_save_dialog_canceled)
 
 
 func _connect_services() -> void:
@@ -464,14 +473,23 @@ func _connect_services() -> void:
 	ProjectService.project_saved.connect(_on_project_saved)
 	ProjectService.dirty_changed.connect(_on_dirty_changed)
 	ProjectService.recovery_available.connect(_on_recovery_available)
+	ProjectService.autosave_failed.connect(_on_autosave_failed)
 	SettingsService.setting_changed.connect(_on_setting_changed)
 
 	var window := get_window()
 	if window != null:
 		window.files_dropped.connect(_on_files_dropped)
 
+	var pending_recovery: Array = ProjectService.get_pending_recovery_autosaves()
+	if not pending_recovery.is_empty():
+		call_deferred("_on_recovery_available", pending_recovery)
+
 
 func _create_new_project() -> void:
+	_lifecycle_guard.request_action(ProjectLifecycleGuardScript.ACTION_NEW)
+
+
+func _perform_new_project() -> void:
 	ProjectService.new_project("Untitled")
 	_canvas.clear_canvas()
 	_status_label.text = Strings.STATUS_READY
@@ -481,13 +499,13 @@ func _create_new_project() -> void:
 func _save_current_project() -> void:
 	ProjectService.set_canvas_data(_canvas.export_canvas_data(), false)
 	if ProjectService.current_project.project_path.is_empty():
-		_save_dialog.current_file = "%s.pxproj" % ProjectService.current_project.get_name()
-		_save_dialog.popup_centered_ratio(0.7)
+		_show_save_dialog()
 		return
 
 	var error := ProjectService.save_project()
 	if error != OK:
 		Log.warn("Project save failed", {"error": error})
+		_show_project_save_failed(ProjectService.current_project.project_path, error)
 
 
 func _save_project_path(path: String) -> void:
@@ -499,12 +517,66 @@ func _save_project_path(path: String) -> void:
 	var error := ProjectService.save_project(target_path)
 	if error != OK:
 		Log.warn("Project save failed", {"path": target_path, "error": error})
+		_show_project_save_failed(target_path, error)
+	if _lifecycle_guard.has_pending_action():
+		_lifecycle_guard.notify_save_result(error)
 
 
 func _open_project_path(path: String) -> void:
+	_lifecycle_guard.request_action(ProjectLifecycleGuardScript.ACTION_OPEN, path)
+
+
+func _perform_open_project(path: String) -> void:
 	var error := ProjectService.open_project(path)
 	if error != OK:
 		Log.warn("Project open failed", {"path": path, "error": error})
+		_show_project_open_failed(path, error)
+
+
+func _show_open_dialog() -> void:
+	_open_dialog.popup_centered_ratio(0.7)
+
+
+func _show_save_dialog() -> void:
+	var project_name: String = ProjectService.current_project.get_name()
+	if not ProjectService.current_project.recovered_from_path.is_empty():
+		project_name += "_recovered"
+	_save_dialog.current_file = "%s.pxproj" % project_name
+	_save_dialog.popup_centered_ratio(0.7)
+
+
+func _save_for_pending_lifecycle_action() -> void:
+	ProjectService.set_canvas_data(_canvas.export_canvas_data(), false)
+	if ProjectService.current_project.project_path.is_empty():
+		_show_save_dialog()
+		return
+
+	var target_path: String = ProjectService.current_project.project_path
+	var error := ProjectService.save_project()
+	if error != OK:
+		Log.warn(
+			"Project save failed before destructive action", {"path": target_path, "error": error}
+		)
+		_show_project_save_failed(target_path, error)
+	_lifecycle_guard.notify_save_result(error)
+
+
+func _on_save_dialog_canceled() -> void:
+	if _lifecycle_guard.has_pending_action():
+		_lifecycle_guard.cancel_pending()
+
+
+func _on_lifecycle_action_ready(action_id: String, payload: Variant) -> void:
+	match action_id:
+		ProjectLifecycleGuardScript.ACTION_NEW:
+			_perform_new_project()
+		ProjectLifecycleGuardScript.ACTION_OPEN:
+			_perform_open_project(String(payload))
+		ProjectLifecycleGuardScript.ACTION_QUIT:
+			ProjectService.mark_clean_shutdown()
+			get_tree().quit()
+		ProjectLifecycleGuardScript.ACTION_RECOVER:
+			_perform_recovery(String(payload))
 
 
 func _on_project_loaded(project: Variant) -> void:
@@ -900,20 +972,43 @@ func _show_status_notice(message: String) -> void:
 		OS.alert(message, Strings.DIALOG_NOTICE)
 
 
+func _show_project_save_failed(path: String, error: Error) -> void:
+	_show_status_notice(Strings.STATUS_PROJECT_SAVE_FAILED_FORMAT % [path, error_string(error)])
+
+
+func _show_project_open_failed(path: String, error: Error) -> void:
+	_show_status_notice(Strings.STATUS_PROJECT_OPEN_FAILED_FORMAT % [path, error_string(error)])
+
+
+func _on_autosave_failed(error: Error, path: String) -> void:
+	_show_status_notice(Strings.STATUS_AUTOSAVE_FAILED_FORMAT % [path, error_string(error)])
+
+
 func _on_recovery_available(autosaves: Array) -> void:
 	if autosaves.is_empty():
 		return
 
 	_pending_recovery_path = String(autosaves.back())
-	_recovery_dialog.dialog_text = "Autosave found:\n%s" % _pending_recovery_path
+	_recovery_dialog.dialog_text = Strings.DIALOG_RECOVERY_BODY_FORMAT % _pending_recovery_path
 	_recovery_dialog.popup_centered()
 
 
 func _recover_pending_autosave() -> void:
 	if _pending_recovery_path.is_empty():
 		return
-	_open_project_path(_pending_recovery_path)
+	_lifecycle_guard.request_action(
+		ProjectLifecycleGuardScript.ACTION_RECOVER, _pending_recovery_path
+	)
+
+
+func _perform_recovery(path: String) -> void:
+	var error := ProjectService.recover_project(path)
+	if error != OK:
+		Log.warn("Project recovery failed", {"path": path, "error": error})
+		_show_project_open_failed(path, error)
+		return
 	_pending_recovery_path = ""
+	_show_status_notice(Strings.STATUS_RECOVERY_COMPLETE)
 
 
 func _update_window_title() -> void:

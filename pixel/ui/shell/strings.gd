@@ -8,6 +8,8 @@ const ACTION_NEW := "New"
 const ACTION_OPEN := "Open"
 const ACTION_SAVE := "Save"
 const ACTION_SAVE_AS := "Save As"
+const ACTION_QUIT := "Quit"
+const ACTION_RECOVER := "Recover Autosave"
 const ACTION_BATCH := "Batch"
 const ACTION_MATTE := "Matte"
 const ACTION_SLICE := "Slice"
@@ -22,6 +24,14 @@ const MENU_EDIT_SELECTED_GRAPH_NODE := "Edit Selected Graph Node..."
 const STATUS_READY := "Ready"
 const STATUS_SAVED := "Saved"
 const STATUS_DIRTY := "Unsaved changes"
+const STATUS_PROJECT_SAVE_FAILED_FORMAT := (
+	"Save failed for %s (%s). " + "Check the folder permissions or choose Save As and try again."
+)
+const STATUS_PROJECT_OPEN_FAILED_FORMAT := (
+	"Open failed for %s (%s). " + "Check that the file exists and is a valid PixelForge project."
+)
+const STATUS_AUTOSAVE_FAILED_FORMAT := "Autosave failed in %s (%s). Save the project manually to a writable folder."
+const STATUS_RECOVERY_COMPLETE := "Autosave recovered as an unsaved copy. Use Save to choose a new project file."
 const STATUS_CLEANUP_EMPTY := "Select one or more sprites to clean"
 const STATUS_CLEANUP_QUEUED := "Cleanup queued"
 const STATUS_CLEANUP_DONE := "Cleanup complete"
@@ -129,6 +139,17 @@ const DIALOG_IMPORT_IMAGES := "Import Images"
 const DIALOG_EXPORT_PNG := "Export PNG"
 const DIALOG_NOTICE := "Notice"
 const DIALOG_RECOVERY := "Recover Autosave"
+const DIALOG_RECOVERY_BODY_FORMAT := (
+	"Autosave found:\n%s\n\nRecover it as an unsaved copy? "
+	+ "The original project will not be overwritten."
+)
+const DIALOG_UNSAVED_TITLE := "Unsaved Changes"
+const DIALOG_UNSAVED_BODY_FORMAT := (
+	"Save changes before %s?\n\nSave keeps your work. "
+	+ "Discard continues without saving. Cancel stays here."
+)
+const DIALOG_SAVE := "Save"
+const DIALOG_DISCARD := "Discard"
 const DIALOG_APPLY := "Apply"
 const DIALOG_CANCEL := "Cancel"
 const DIALOG_MATTE_TITLE := "Matte Background"
