@@ -155,3 +155,45 @@
 
 - 对应本地提交：`M3.1 close first task feedback loop`（哈希以 Goal 分支日志为准；提交对象不能在自身内容中可靠自引用）。
 - diff 模式：抽离 import/export 流程控制器，补任务状态接线、集中字符串、smoke 自动化与状态/报告增量；不内联全量源码。
+
+## 2026-07-11 AR-3 macOS 候选构建与统一验收准备
+
+### 版本与候选
+
+- 应用版本、项目设置与 README 同步为 `0.1.0-alpha.1`；范围只声明 macOS 受邀 alpha 候选，不声明公开发布或跨平台完成。
+- 安装与 Godot 4.6.3 精确匹配的官方 macOS export template；先后修正 universal 导出所需 ETC2/ASTC 与 bundle identifier 配置。
+- 候选：本地忽略文件 `pixel/build/PixelForge-0.1.0-alpha.1-macOS.zip`，64,761,252 bytes。
+- SHA-256：`c3704e0d2d6d0dcb71e9c9a02b40a4a6657028e4c6b912d08d6ecde2f00baa8d`。
+- 构建未签名、未公证、未上传；符合本卡明确延期范围，测试者若被 Gatekeeper 阻断须如实登记失败点。
+
+### 包红线与可复现门禁
+
+- 新增 `tests/fixtures/real/.gdignore`，从 Godot import/export 资源索引源头隔离本地未授权图片；Git 的图片红线保持不变。
+- staged 红线只为该固定 `.gdignore` 安全标记开例外；同目录任何其他新增文件仍会失败，所有 PNG/JPG 仍由扩展名门禁无条件拒绝。
+- `build_macos_alpha.sh` 校验版本、模板、可执行文件，解析 Godot PCK 的权威目录而不是仅 grep 压缩字节，并检查 ZIP/PCK 均无 `test picture/` 或 `tests/fixtures/real/` 条目。
+- 首次 all-resources 构建被审计正确拦截，确认包曾包含 3 个 real fixture；该失败包已被后续成功构建覆盖，不作为候选。
+- “仅主场景依赖”尝试虽通过图片审计，但干净启动发现 preload 脚本缺失，亦判失败并覆盖。最终方案保留完整运行时资源，并由 `.gdignore` 结构性隔离受保护目录。
+- 构建脚本会解包候选，以全新 HOME/APPDATA/LOCALAPPDATA headless 启动并对 `SCRIPT ERROR` / `ERROR:` 失败关闭。
+- 最终 `./pixel/scripts/verify_m3_1.sh`：189/189 tests、1457 assertions 通过；真实 fixture 回归在 `.gdignore` 存在时仍由 `FileAccess` 正常读取，UI 缩放和已安装 export template 检查通过。
+
+### Agent 候选实机冒烟
+
+- 环境：macOS Retina、Godot 4.6.3 universal 导出、临时干净用户目录、导出后的独立 `PixelForge.app`（bundle id `org.pixelforge.alpha`）。
+- 独立窗口正常显示空画布低干扰导入提示；导入本地 `/tmp` 冒烟 PNG 后立即可见并自动 fit。
+- Apply Cleanup 生成结果，最终状态为 `Cleanup complete`；PNG 导出到 `/tmp/pixelforge-alpha1-smoke.png`，界面显示完整路径与 Open Folder。
+- 项目保存到 `/tmp/pixelforge-alpha1-smoke.pxproj`，New 清空后通过 Open 重开，原图与清洗结果均恢复可见。
+- 本节只算 agent 冒烟，不算陌生测试者人工签收，也不记录“首次导出时间”产品指标。
+
+### 统一人工验收材料与当前出口结论
+
+- 一页说明：`pixel/docs/manual-test-m3_1-alpha.md`；只给候选与该页，不口头教学。
+- 每人原样记录：是否 15 分钟内独立完成、首次成功导出用时、是否愿意处理下一批、数据丢失/找不到导入内容/任务无反馈、失败点与自恢复情况。
+- 需要至少 3 名未参与开发的目标用户参加，且至少 2/3 在 15 分钟内无需口头指导完成；当前尚未执行，因此 `QUALITY.md` 对应项保持未通过。
+- 用户还需统一覆盖既有 `a9003ab` 快速添加落点、AR-1 New/Open/Quit 与强杀恢复、AR-2 真实输入/取消/导出失败，以及本 AR-3 候选旅程。
+
+人工状态：**待统一人工验收；M3.1 受邀 alpha 尚未通过**。
+
+### 本地提交与 diff
+
+- 对应本地提交：`M3.1 prepare macOS alpha candidate`（哈希以 Goal 分支日志为准）。
+- diff 模式：版本/README、导出预设、构建与 PCK 审计脚本、受保护目录导入隔离、一页测试说明、当前状态与本报告增量；不内联全量源码，不提交候选 ZIP。

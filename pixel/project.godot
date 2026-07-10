@@ -11,6 +11,7 @@ config_version=5
 [application]
 
 config/name="PixelForge"
+config/version="0.1.0-alpha.1"
 run/main_scene="res://ui/shell/main.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 run/low_processor_mode=true
@@ -44,4 +45,5 @@ window/size/min_height=800
 [rendering]
 
 textures/canvas_textures/default_texture_filter=0
+textures/vram_compression/import_etc2_astc=true
 rendering_device/driver.windows="d3d12"

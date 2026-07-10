@@ -17,6 +17,7 @@ fi
 
 if printf '%s\n' "${staged_files}" \
   | grep -E '^(test picture/|pixel/tests/fixtures/real/|垃圾桶/|godot-interactive-guide/)' \
+  | grep -v '^pixel/tests/fixtures/real/\.gdignore$' \
   >/dev/null; then
   echo "Protected local reference files are not allowed for M3.1 commits." >&2
   exit 1
