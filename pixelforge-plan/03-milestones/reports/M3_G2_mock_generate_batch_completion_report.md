@@ -14692,7 +14692,7 @@ index 77206b2..f7253c6 100644
 |---|---|---|---|
 | 代码规范 | gdlint/gdformat 零告警 | 通过 | `pixel/scripts/lint.sh` |
 | 自动测试 | 卡内验收标准已转自动化并通过 | 通过 | 定向 20/20、177 asserts；全量 177/177、1373 asserts |
-| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户验证真实窗口下 Tab/右键落点和 File 相邻落点手感 |
+| 手动测试 | 标注手动项已执行或登记延期 | 待统一人工验收 | Goal 结束时统一验证真实窗口下 Tab/右键落点和 File 相邻落点手感 |
 | 契约同步 | 影响契约的改动已更新 `02-contracts/` | 不适用 | 仅实现既有快速添加入口的落点语义，不改变 graph/project schema |
 | TODO | 一方代码无无主 `TODO/FIXME/HACK` | 通过 | 变更文件未新增 TODO/FIXME/HACK |
 | 性能预算 | 相关卡写入实测数字或明确延期 | 不适用 | 每次菜单打开只执行一次坐标转换 |
@@ -14823,3 +14823,51 @@ index 1730bed..e26a904 100644
 -| 手动测试 | 标注手动项已执行或登记延期 | 延期登记 | 需用户按原问题场景复测真实窗口下的视觉间距 |
 +| 手动测试 | 标注手动项已执行或登记延期 | 通过 | 用户继续开发前确认缩放栏与状态提示栏的真实窗口布局通过 |
 ```
+
+## 2026-07-11 M3 G-4 Goal 收口
+
+### 服务动作与收口结论
+
+- 服务动作：用户在平移、非 100% 缩放后的画布工作位置，用 Tab 或右键快速添加 graph 节点，并在 Undo/Redo 后保持落点；File 菜单仍保留相邻添加语义。
+- 实现审计：`a9003ab` 的代码、定向测试、全量自动化和 diff 模式报告完整，无需追加节点便利性补丁。
+- 状态校准：G-4j 人工状态保持为“待统一人工验收”，并入 M3.1 Goal 结束时的统一测试，不写成人工通过。
+- UX-4：`M3-DD-001` 继续保持“待设计”；隐藏缩略图的 overview 已被明确否决并撤销，本 Goal 不重做 LOD，也不把该能力计入 M3 出口。
+- 后续边界：M3 当前 G-4 工程收口完成，下一张固定为 AR-1 数据安全底线；不追加新的节点便利性小卡。
+
+### 修改文件
+
+- `pixelforge-plan/03-milestones/CURRENT-STATE.md`
+- `pixelforge-plan/03-milestones/reports/M3_G2_mock_generate_batch_completion_report.md`
+
+### 自动验证
+
+- `./pixel/scripts/verify_m3_ux7.sh`：通过。
+- lint：113 个 GDScript 文件零问题。
+- GUT：177/177 tests、1373 assertions 通过；保留既有 1 个 orphan 与退出资源警告，本轮没有新增证据表明影响用户路径。
+- `check_ui_scaling.sh`：通过。
+- headless startup gate：通过；Godot 4.6.3 export templates 当前未安装，此项在 AR-3 候选构建前补齐。
+- `git diff --check`：提交前通过。
+
+### 统一人工测试覆盖
+
+1. `File > Generate Mock Batch`。
+2. 平移并缩放到非 100%。
+3. 在远处空白位置按 Tab 添加节点。
+4. 在另一位置右键添加节点。
+5. Undo/Redo 后节点落点保持。
+6. `File > Add Graph Node` 仍在选中节点右侧添加。
+
+人工状态：**待统一人工验收**。
+
+### 已知失败与延期
+
+- UX-4 overview 方案明确未通过，保留 review/inspect 路径；登记于 `M3-DD-001`，推迟至 v0.1 后重新设计。
+- 原生 PopupMenu 的实际落点手感尚待用户统一人工验收。
+- 本卡没有改动产品契约、代码或项目格式。
+
+### 本地提交与 diff
+
+- Goal 基线：`bdfeafc`。
+- Goal 分支：`codex/m3-1-alpha-goal`。
+- 对应本地提交：`docs: close M3 engineering for alpha goal`（哈希以 Goal 分支日志为准；提交对象不能在自身内容中可靠自引用）。
+- diffstat：2 files changed；仅状态与完成报告增量，不内联全量源码。
