@@ -140,12 +140,36 @@ func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> vo
 		),
 		Strings.text("BATCH_ACTION_MARK_KEEP")
 	)
+	var settings_dialog: ConfirmationDialog = main.get_node(
+		"WorkspaceSettingsController/WorkspaceSettingsDialog"
+	)
+	assert_eq(settings_dialog.get_ok_button().text, Strings.text("ACTION_OK"))
+	assert_eq(settings_dialog.get_cancel_button().text, Strings.text("ACTION_CANCEL"))
+	var onboarding: ConfirmationDialog = main.get_node("M21UiController/V1OnboardingDialog")
+	assert_eq(onboarding.title, Strings.text("ONBOARDING_TITLE"))
+	assert_eq(onboarding.get_ok_button().text, Strings.text("ONBOARDING_START"))
+	var unsaved: ConfirmationDialog = main.get_node("ProjectLifecycleGuard/UnsavedChangesDialog")
+	assert_eq(unsaved.title, Strings.text("DIALOG_UNSAVED_TITLE"))
+	assert_eq(unsaved.get_cancel_button().text, Strings.text("ACTION_CANCEL"))
 	(hint.get_node("EmptyContent/EmptyActions/AddInput") as Button).pressed.emit()
 	await wait_process_frames(2)
 	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
 	var card: Node = canvas._items_by_id.values()[0]
 	assert_eq(card._display_name, Strings.text("NODE_OBJECT_LIST"))
 	assert_eq(SettingsService.get_setting("ui", "language", "auto"), "zh_CN")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+	var cleanup: Control = main.get_node(
+		"Root/Content/ContextInspector/ContextRoot/CleanupInspector"
+	)
+	assert_eq(cleanup.find_child("CleanupTitle", true, false).text, Strings.text("CLEANUP_TITLE"))
+	assert_eq(
+		cleanup.find_child("AutoDetectCheck", true, false).text, Strings.text("CLEANUP_AUTO_DETECT")
+	)
+	assert_eq(
+		cleanup.find_child("ResampleOptions", true, false).get_item_text(0),
+		Strings.text("CLEANUP_RESAMPLE_MODE")
+	)
 
 
 func _make_main() -> Control:

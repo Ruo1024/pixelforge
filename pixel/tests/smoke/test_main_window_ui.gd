@@ -9,6 +9,7 @@ const Strings := preload("res://ui/shell/strings.gd")
 
 
 func test_main_window_uses_readable_minimum_sizes() -> void:
+	LocalizationService.set_language("en")
 	var main: Control = MainScript.new()
 	add_child_autofree(main)
 	await wait_process_frames(2)

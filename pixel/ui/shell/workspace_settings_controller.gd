@@ -21,15 +21,21 @@ func setup(button_parent: Control) -> void:
 	_dialog = ConfirmationDialog.new()
 	_dialog.name = "WorkspaceSettingsDialog"
 	_dialog.title = Strings.text("SETTINGS_TITLE")
-	_dialog.add_child(LanguageSelectorScript.new())
+	var selector := LanguageSelectorScript.new()
+	selector.name = "LanguageSelector"
+	_dialog.add_child(selector)
 	add_child(_dialog)
 	LocalizationService.language_changed.connect(_refresh_text)
+	_refresh_text("", "")
 
 
 func _show_settings() -> void:
-	_dialog.popup_centered(Vector2i(520, 260))
+	_dialog.reset_size()
+	_dialog.popup_centered()
 
 
 func _refresh_text(_preference: String, _locale: String) -> void:
 	_button.text = Strings.text("SETTINGS_ACTION")
 	_dialog.title = Strings.text("SETTINGS_TITLE")
+	_dialog.ok_button_text = Strings.text("ACTION_OK")
+	_dialog.cancel_button_text = Strings.text("ACTION_CANCEL")

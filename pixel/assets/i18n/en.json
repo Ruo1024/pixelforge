@@ -6,6 +6,11 @@
 	"LANGUAGE_APPLY_NOTE": "Language changes apply immediately. Open views refresh when they handle the language change signal.",
 	"SETTINGS_ACTION": "Settings",
 	"SETTINGS_TITLE": "PixelForge Settings",
+	"ACTION_OK": "OK",
+	"ACTION_CANCEL": "Cancel",
+	"ACTION_DISCARD": "Discard",
+	"ACTION_QUIT": "Quit",
+	"ACTION_RECOVER": "Recover Autosave",
 	"ACTION_NEW": "New",
 	"ACTION_OPEN": "Open",
 	"ACTION_SAVE": "Save",
@@ -37,6 +42,16 @@
 	"CONTENT_STATUS_FAILED": "Failed",
 	"CONTENT_STATUS_CANCELED": "Canceled",
 	"ACTION_APPLY": "Apply",
+	"ONBOARDING_TITLE": "Set Up PixelForge",
+	"ONBOARDING_INTRO": "Choose a project style. Cloud keys are optional; mock and ComfyUI routes work without a cloud account.",
+	"ONBOARDING_STYLE": "Project style preset",
+	"ONBOARDING_PROVIDER": "Open optional cloud Provider settings after setup",
+	"ONBOARDING_SAMPLE": "Create an editable sample mock batch",
+	"ONBOARDING_START": "Create Workspace",
+	"DIALOG_RECOVERY_TITLE": "Recover Autosave",
+	"DIALOG_RECOVERY_BODY_FORMAT": "Autosave found:\n%s\n\nRecover it as an unsaved copy? The original project will not be overwritten.",
+	"DIALOG_UNSAVED_TITLE": "Unsaved Changes",
+	"DIALOG_UNSAVED_BODY_FORMAT": "Save changes before %s?\n\nSave keeps your work. Discard continues without saving. Cancel stays here.",
 	"NODE_OBJECT_LIST": "Object List",
 	"NODE_SIZE_SPEC": "Size Spec",
 	"NODE_AI_GENERATE": "AI Generate",
@@ -85,4 +100,57 @@
 	"BATCH_ACTION_EXPORT": "Export Batch",
 	"BATCH_ACTION_SPLIT": "Split Selected",
 	"BATCH_ACTION_SEND_TO_EDITOR": "Send to Editor"
+	,"CLEANUP_TITLE": "Pixel Cleanup"
+	,"CLEANUP_SELECTED_FORMAT": "%d selected"
+	,"CLEANUP_PRESET_PRIOR_FORMAT": "Preset prior: %dpx"
+	,"CLEANUP_AUTO_DETECT": "Auto detect grid"
+	,"CLEANUP_RUN_RESAMPLE": "Run resample"
+	,"CLEANUP_RUN_QUANTIZE": "Run quantize"
+	,"CLEANUP_LABEL_SCALE": "Scale"
+	,"CLEANUP_LABEL_OFFSET_X": "Offset X"
+	,"CLEANUP_LABEL_OFFSET_Y": "Offset Y"
+	,"CLEANUP_LABEL_RESAMPLE": "Resample"
+	,"CLEANUP_LABEL_QUANTIZE": "Quantize"
+	,"CLEANUP_LABEL_AUTO_K_STRATEGY": "Auto K Strategy"
+	,"CLEANUP_LABEL_PALETTE": "Palette"
+	,"CLEANUP_LABEL_MAX_COLORS": "Max Colors"
+	,"CLEANUP_LABEL_DITHER": "Dither"
+	,"CLEANUP_LABEL_STRENGTH": "Strength"
+	,"CLEANUP_LABEL_CHROMA": "Chroma"
+	,"CLEANUP_LABEL_DENSITY": "Density"
+	,"CLEANUP_AUTO_K_TOOLTIP": "K-means is smoother for larger K, but slower."
+	,"CLEANUP_CUSTOM_PALETTE_PREFIX": "Custom: %s"
+	,"CLEANUP_IMPORT_PALETTE_ITEM": "Import custom palette..."
+	,"CLEANUP_DELETE_PALETTE": "Delete Custom Palette"
+	,"CLEANUP_APPLY": "Apply Cleanup"
+	,"CLEANUP_CANCEL": "Cancel Cleanup"
+	,"CLEANUP_NO_REPORT": "No cleanup report"
+	,"CLEANUP_NON_SQUARE_WARNING": "\nNon-square grid warning"
+	,"CLEANUP_REPORT_FORMAT": "Scale %.2f | Confidence %.2f\nColors %d | Output %s%s"
+	,"CLEANUP_RESAMPLE_MODE": "Mode"
+	,"CLEANUP_RESAMPLE_CENTER": "Center"
+	,"CLEANUP_RESAMPLE_MEDIAN": "Median"
+	,"CLEANUP_RESAMPLE_EDGE_AWARE": "Edge Aware"
+	,"CLEANUP_QUANTIZE_AUTO_K": "Auto K"
+	,"CLEANUP_QUANTIZE_FIXED": "Fixed Palette"
+	,"CLEANUP_VALUE_NONE": "None"
+	,"CLEANUP_STRATEGY_MEDIAN_CUT": "Median Cut"
+	,"CLEANUP_STRATEGY_KMEANS": "K-means"
+	,"CLEANUP_DITHER_BAYER_2": "Bayer 2"
+	,"CLEANUP_DITHER_BAYER_4": "Bayer 4"
+	,"CLEANUP_DITHER_BAYER_8": "Bayer 8"
+	,"CLEANUP_DITHER_CHROMATIC": "Chromatic"
+	,"CLEANUP_DITHER_ERROR_DIFFUSION": "Error Diffusion"
+	,"STATUS_MOCK_GENERATE_DONE_FORMAT": "Mock batch generated: %d sprites"
+	,"STATUS_MOCK_GENERATE_FAILED": "Mock batch generation failed"
+	,"STATUS_GRAPH_RUN_DONE_FORMAT": "Graph run complete: %d sprites"
+	,"STATUS_GRAPH_RUN_FAILED": "Graph run failed"
+	,"STATUS_GRAPH_RUN_FAILED_DETAIL_FORMAT": "Graph run failed: %s"
+	,"STATUS_GRAPH_RUN_NEEDS_SELECTION": "Select a graph node or batch before running"
+	,"STATUS_GRAPH_RUN_MISSING_GRAPH": "Selected graph is missing"
+	,"STATUS_GRAPH_RUN_NO_BATCH": "Graph has no batch node"
+	,"STATUS_GRAPH_RUN_MISSING_BATCH_CARD": "Batch card is missing"
+	,"STATUS_GRAPH_RUN_MISSING_NODE_TYPE_FORMAT": "Cannot run graph with missing node type: %s"
+	,"COST_MONTH_FORMAT": "This month: $%.2f"
+	,"COST_MONTH_ESTIMATE_FORMAT": "This month: $%.2f · Next ≈$%.2f"
 }

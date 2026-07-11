@@ -14,7 +14,6 @@ func _ready() -> void:
 	add_child(_label)
 	add_child(_options)
 	add_child(_note)
-	_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_options.item_selected.connect(_on_item_selected)
 	LocalizationService.language_changed.connect(_on_language_changed)
 	_rebuild(LocalizationService.current_preference)

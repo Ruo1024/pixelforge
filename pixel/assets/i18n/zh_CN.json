@@ -6,6 +6,11 @@
 	"LANGUAGE_APPLY_NOTE": "语言会立即切换；已打开的视图需响应语言变化信号后刷新。",
 	"SETTINGS_ACTION": "设置",
 	"SETTINGS_TITLE": "PixelForge 设置",
+	"ACTION_OK": "确定",
+	"ACTION_CANCEL": "取消",
+	"ACTION_DISCARD": "放弃更改",
+	"ACTION_QUIT": "退出",
+	"ACTION_RECOVER": "恢复自动保存",
 	"ACTION_NEW": "新建",
 	"ACTION_OPEN": "打开",
 	"ACTION_SAVE": "保存",
@@ -37,6 +42,16 @@
 	"CONTENT_STATUS_FAILED": "失败",
 	"CONTENT_STATUS_CANCELED": "已取消",
 	"ACTION_APPLY": "应用",
+	"ONBOARDING_TITLE": "设置 PixelForge",
+	"ONBOARDING_INTRO": "选择项目风格。云端密钥不是必需项；离线 mock 和 ComfyUI 路径无需云端账号即可使用。",
+	"ONBOARDING_STYLE": "项目风格预设",
+	"ONBOARDING_PROVIDER": "设置完成后打开可选的云端提供方设置",
+	"ONBOARDING_SAMPLE": "创建可编辑的离线示例批次",
+	"ONBOARDING_START": "创建工作区",
+	"DIALOG_RECOVERY_TITLE": "恢复自动保存",
+	"DIALOG_RECOVERY_BODY_FORMAT": "发现自动保存：\n%s\n\n是否恢复为未保存副本？原项目不会被覆盖。",
+	"DIALOG_UNSAVED_TITLE": "存在未保存更改",
+	"DIALOG_UNSAVED_BODY_FORMAT": "在%s前保存更改吗？\n\n保存会保留工作；放弃更改会继续操作；取消会留在当前项目。",
 	"NODE_OBJECT_LIST": "对象输入",
 	"NODE_SIZE_SPEC": "尺寸设置",
 	"NODE_AI_GENERATE": "生成",
@@ -85,4 +100,57 @@
 	"BATCH_ACTION_EXPORT": "导出批次",
 	"BATCH_ACTION_SPLIT": "拆分选中项",
 	"BATCH_ACTION_SEND_TO_EDITOR": "发送到编辑器"
+	,"CLEANUP_TITLE": "像素清洗"
+	,"CLEANUP_SELECTED_FORMAT": "已选择 %d 项"
+	,"CLEANUP_PRESET_PRIOR_FORMAT": "预设参考尺寸：%dpx"
+	,"CLEANUP_AUTO_DETECT": "自动检测网格"
+	,"CLEANUP_RUN_RESAMPLE": "执行重采样"
+	,"CLEANUP_RUN_QUANTIZE": "执行颜色量化"
+	,"CLEANUP_LABEL_SCALE": "缩放倍数"
+	,"CLEANUP_LABEL_OFFSET_X": "水平偏移"
+	,"CLEANUP_LABEL_OFFSET_Y": "垂直偏移"
+	,"CLEANUP_LABEL_RESAMPLE": "重采样"
+	,"CLEANUP_LABEL_QUANTIZE": "颜色量化"
+	,"CLEANUP_LABEL_AUTO_K_STRATEGY": "自动取色策略"
+	,"CLEANUP_LABEL_PALETTE": "调色板"
+	,"CLEANUP_LABEL_MAX_COLORS": "最大颜色数"
+	,"CLEANUP_LABEL_DITHER": "抖动"
+	,"CLEANUP_LABEL_STRENGTH": "强度"
+	,"CLEANUP_LABEL_CHROMA": "色度"
+	,"CLEANUP_LABEL_DENSITY": "密度"
+	,"CLEANUP_AUTO_K_TOOLTIP": "K-means 在颜色数较多时更平滑，但速度更慢。"
+	,"CLEANUP_CUSTOM_PALETTE_PREFIX": "自定义：%s"
+	,"CLEANUP_IMPORT_PALETTE_ITEM": "导入自定义调色板..."
+	,"CLEANUP_DELETE_PALETTE": "删除自定义调色板"
+	,"CLEANUP_APPLY": "应用清洗"
+	,"CLEANUP_CANCEL": "取消清洗"
+	,"CLEANUP_NO_REPORT": "暂无清洗报告"
+	,"CLEANUP_NON_SQUARE_WARNING": "\n警告：网格并非正方形"
+	,"CLEANUP_REPORT_FORMAT": "缩放 %.2f | 置信度 %.2f\n颜色 %d | 输出 %s%s"
+	,"CLEANUP_RESAMPLE_MODE": "众数"
+	,"CLEANUP_RESAMPLE_CENTER": "中心采样"
+	,"CLEANUP_RESAMPLE_MEDIAN": "中位数"
+	,"CLEANUP_RESAMPLE_EDGE_AWARE": "边缘感知"
+	,"CLEANUP_QUANTIZE_AUTO_K": "自动取色"
+	,"CLEANUP_QUANTIZE_FIXED": "固定调色板"
+	,"CLEANUP_VALUE_NONE": "无"
+	,"CLEANUP_STRATEGY_MEDIAN_CUT": "中位切分"
+	,"CLEANUP_STRATEGY_KMEANS": "K-means"
+	,"CLEANUP_DITHER_BAYER_2": "Bayer 2"
+	,"CLEANUP_DITHER_BAYER_4": "Bayer 4"
+	,"CLEANUP_DITHER_BAYER_8": "Bayer 8"
+	,"CLEANUP_DITHER_CHROMATIC": "色度抖动"
+	,"CLEANUP_DITHER_ERROR_DIFFUSION": "误差扩散"
+	,"STATUS_MOCK_GENERATE_DONE_FORMAT": "已生成离线示例批次：%d 张图片"
+	,"STATUS_MOCK_GENERATE_FAILED": "离线示例批次生成失败"
+	,"STATUS_GRAPH_RUN_DONE_FORMAT": "流程运行完成：%d 张图片"
+	,"STATUS_GRAPH_RUN_FAILED": "流程运行失败"
+	,"STATUS_GRAPH_RUN_FAILED_DETAIL_FORMAT": "流程运行失败：%s"
+	,"STATUS_GRAPH_RUN_NEEDS_SELECTION": "请先选择流程模块或结果批次"
+	,"STATUS_GRAPH_RUN_MISSING_GRAPH": "选中的流程不存在"
+	,"STATUS_GRAPH_RUN_NO_BATCH": "流程中没有结果批次模块"
+	,"STATUS_GRAPH_RUN_MISSING_BATCH_CARD": "结果批次卡片不存在"
+	,"STATUS_GRAPH_RUN_MISSING_NODE_TYPE_FORMAT": "流程包含缺失的模块类型，无法运行：%s"
+	,"COST_MONTH_FORMAT": "本月费用：$%.2f"
+	,"COST_MONTH_ESTIMATE_FORMAT": "本月费用：$%.2f · 下次约 $%.2f"
 }

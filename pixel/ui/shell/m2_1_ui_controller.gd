@@ -288,17 +288,17 @@ func generate_mock_batch() -> void:
 	if not bool(result.get("ok", false)):
 		var error: Dictionary = result.get("error", {})
 		Log.warn("Mock graph generation failed", error)
-		_status_label.text = Strings.STATUS_MOCK_GENERATE_FAILED
+		_status_label.text = Strings.text("STATUS_MOCK_GENERATE_FAILED")
 		return
 
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	var asset_ids: Array = result["asset_ids"]
 	var items := _add_generate_graph_canvas_items(
-		graph, asset_ids, _canvas.get_mouse_world_position(), Strings.MOCK_BATCH_LABEL
+		graph, asset_ids, _canvas.get_mouse_world_position(), Strings.text("BATCH_DEFAULT_LABEL")
 	)
 	if not items.is_empty():
 		_focus_canvas_on_bounds(_bounds_for_items(items))
-	_status_label.text = Strings.STATUS_MOCK_GENERATE_DONE % asset_ids.size()
+	_status_label.text = Strings.text("STATUS_MOCK_GENERATE_DONE_FORMAT") % asset_ids.size()
 
 
 func configure_openai_session() -> void:
@@ -316,14 +316,14 @@ func cancel_graph_run(graph_id: String) -> bool:
 func run_selected_mock_graph() -> void:
 	var binding := _selected_graph_binding()
 	if binding.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_RUN_NEEDS_SELECTION
+		_status_label.text = Strings.text("STATUS_GRAPH_RUN_NEEDS_SELECTION")
 		return
 
 	var graph_id := String(binding["graph_id"])
 	var graph_data := ProjectService.get_graph_data(graph_id)
 	if graph_data.is_empty():
 		_status_label.text = _graph_run_failure_status(
-			{"message": Strings.STATUS_GRAPH_RUN_MISSING_GRAPH}
+			{"message": Strings.text("STATUS_GRAPH_RUN_MISSING_GRAPH")}
 		)
 		return
 
@@ -335,7 +335,7 @@ func run_selected_mock_graph() -> void:
 	var batch_node_id := _first_batch_node_id(graph)
 	if batch_node_id.is_empty():
 		_status_label.text = _graph_run_failure_status(
-			{"message": Strings.STATUS_GRAPH_RUN_NO_BATCH}
+			{"message": Strings.text("STATUS_GRAPH_RUN_NO_BATCH")}
 		)
 		return
 	var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
@@ -359,12 +359,12 @@ func _run_mock_graph(graph: PFGraph, batch_node_id: String, batch_card_id: Strin
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if batch_card_id.is_empty():
 		_status_label.text = _graph_run_failure_status(
-			{"message": Strings.STATUS_GRAPH_RUN_MISSING_BATCH_CARD}
+			{"message": Strings.text("STATUS_GRAPH_RUN_MISSING_BATCH_CARD")}
 		)
 		return
 	_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
 	_canvas._set_graph_node_type_status(graph.id, "ai_generate", "CONTENT_STATUS_COMPLETE")
-	_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
+	_status_label.text = Strings.text("STATUS_GRAPH_RUN_DONE_FORMAT") % asset_ids.size()
 
 
 func edit_selected_graph_node() -> void:
@@ -479,13 +479,21 @@ func show_graph_quick_add_menu(screen_position: Vector2i) -> bool:
 	return true
 
 
-func show_onboarding_if_needed() -> void:
+func show_onboarding_if_needed(blocking_dialog: Window = null) -> void:
 	call_deferred("_refresh_import_hint")
 	if (
 		DisplayServer.get_name() != "headless"
 		and not bool(SettingsService.get_setting("onboarding", "v1_complete", false))
 	):
-		_v1_onboarding.call_deferred("show_setup")
+		call_deferred("_show_onboarding_after_blocker", blocking_dialog)
+
+
+func _show_onboarding_after_blocker(blocking_dialog: Window) -> void:
+	if blocking_dialog != null and blocking_dialog.visible:
+		await blocking_dialog.visibility_changed
+		# Window exclusivity is released on the following frame after visibility changes.
+		await get_tree().process_frame
+	_v1_onboarding.show_setup()
 
 
 func _refresh_import_hint() -> void:
@@ -896,8 +904,8 @@ func _on_tool_selection_changed(selection: PFSelection) -> void:
 func _graph_run_failure_status(error: Dictionary) -> String:
 	var message := String(error.get("message", "")).strip_edges()
 	if message.is_empty():
-		return Strings.STATUS_GRAPH_RUN_FAILED
-	return Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % message
+		return Strings.text("STATUS_GRAPH_RUN_FAILED")
+	return Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL_FORMAT") % message
 
 
 func _graph_node_add_position(binding: Dictionary) -> Vector2:
@@ -929,7 +937,7 @@ func _route_provider_graph_run(
 		return false
 	if batch_card_id.is_empty():
 		_status_label.text = _graph_run_failure_status(
-			{"message": Strings.STATUS_GRAPH_RUN_MISSING_BATCH_CARD}
+			{"message": Strings.text("STATUS_GRAPH_RUN_MISSING_BATCH_CARD")}
 		)
 		return true
 	var provider: PFProvider = ProviderService.get_provider(provider_id)
@@ -977,7 +985,10 @@ func _make_mock_generate_graph() -> PFGraph:
 		Vector2(280, 75)
 	)
 	graph.add_node(
-		BatchNodeScript.new(), "batch_1", {"label": Strings.MOCK_BATCH_LABEL}, Vector2(560, 29)
+		BatchNodeScript.new(),
+		"batch_1",
+		{"label": Strings.text("BATCH_DEFAULT_LABEL")},
+		Vector2(560, 29)
 	)
 	graph.add_edge("objects", "items", "generate", "items")
 	graph.add_edge("size", "spec", "generate", "spec")
@@ -1029,7 +1040,8 @@ func _first_ghost_node_error(graph: PFGraph) -> Dictionary:
 		if node != null and node.is_ghost():
 			return {
 				"code": "ghost_node",
-				"message": Strings.STATUS_GRAPH_RUN_MISSING_NODE_TYPE % node.get_type(),
+				"message":
+				Strings.text("STATUS_GRAPH_RUN_MISSING_NODE_TYPE_FORMAT") % node.get_type(),
 			}
 	return {}
 

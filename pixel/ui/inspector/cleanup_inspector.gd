@@ -21,21 +21,35 @@ const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const PANEL_WIDTH := 420
 const CONTROL_HEIGHT := 30
 const PREVIEW_DEBOUNCE_SECONDS := 0.3
-const RESAMPLE_LABELS := ["Mode", "Center", "Median", "Edge Aware"]
+const RESAMPLE_LABEL_KEYS := [
+	"CLEANUP_RESAMPLE_MODE",
+	"CLEANUP_RESAMPLE_CENTER",
+	"CLEANUP_RESAMPLE_MEDIAN",
+	"CLEANUP_RESAMPLE_EDGE_AWARE",
+]
 const RESAMPLE_VALUES := [
 	Resampler.MODE_MODE,
 	Resampler.MODE_CENTER,
 	Resampler.MODE_MEDIAN,
 	Resampler.MODE_EDGE_AWARE,
 ]
-const QUANTIZE_LABELS := ["Auto K", "Fixed Palette", "None"]
+const QUANTIZE_LABEL_KEYS := [
+	"CLEANUP_QUANTIZE_AUTO_K", "CLEANUP_QUANTIZE_FIXED", "CLEANUP_VALUE_NONE"
+]
 const QUANTIZE_VALUES := [Quantizer.MODE_AUTO_K, Quantizer.MODE_FIXED_PALETTE, Quantizer.MODE_NONE]
-const AUTO_K_STRATEGY_LABELS := ["Median Cut", "K-means"]
+const AUTO_K_STRATEGY_LABEL_KEYS := ["CLEANUP_STRATEGY_MEDIAN_CUT", "CLEANUP_STRATEGY_KMEANS"]
 const AUTO_K_STRATEGY_VALUES := [
 	Quantizer.AUTO_K_STRATEGY_MEDIAN_CUT,
 	Quantizer.AUTO_K_STRATEGY_KMEANS,
 ]
-const DITHER_LABELS := ["None", "Bayer 2", "Bayer 4", "Bayer 8", "Chromatic", "Error Diffusion"]
+const DITHER_LABEL_KEYS := [
+	"CLEANUP_VALUE_NONE",
+	"CLEANUP_DITHER_BAYER_2",
+	"CLEANUP_DITHER_BAYER_4",
+	"CLEANUP_DITHER_BAYER_8",
+	"CLEANUP_DITHER_CHROMATIC",
+	"CLEANUP_DITHER_ERROR_DIFFUSION",
+]
 const DITHER_VALUES := [
 	Ditherer.MODE_NONE,
 	Ditherer.MODE_BAYER2,
@@ -83,12 +97,17 @@ var _style_prior_label: Label = null
 var _palette_ids := []
 var _last_palette_id := "db32"
 var _suppress_param_signal := false
+var _selection_count := 0
+var _style_prior_base_size := 0
+var _last_report := {}
+var _localized_options: Array[OptionButton] = []
 
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(PANEL_WIDTH, 0)
 	_build_ui()
 	set_selection_count(0)
+	LocalizationService.language_changed.connect(_on_language_changed)
 
 
 func get_params() -> Dictionary:
@@ -126,9 +145,10 @@ func get_params() -> Dictionary:
 
 
 func set_selection_count(count: int) -> void:
+	_selection_count = count
 	if _selection_label == null:
 		return
-	_selection_label.text = Strings.CLEANUP_SELECTED_FORMAT % count
+	_selection_label.text = Strings.text("CLEANUP_SELECTED_FORMAT") % count
 	_apply_button.disabled = count <= 0
 	_schedule_preview()
 	_emit_manual_grid_changed()
@@ -160,8 +180,9 @@ func set_style_preset(style_preset: Dictionary) -> void:
 		return
 
 	var base_size := int(style_preset.get("base_size", 0))
+	_style_prior_base_size = base_size
 	_style_prior_label.visible = base_size > 0
-	_style_prior_label.text = Strings.CLEANUP_PRESET_PRIOR_FORMAT % base_size
+	_style_prior_label.text = Strings.text("CLEANUP_PRESET_PRIOR_FORMAT") % base_size
 
 	var quantize: Dictionary = get_params().get(Pipeline.STEP_QUANTIZE, {})
 	var palette_data: Variant = style_preset.get("palette", {})
@@ -199,13 +220,13 @@ func refresh_palette_options(preferred_id: String = "") -> void:
 	for palette_id in PaletteRegistry.get_custom_ids():
 		_palette_options.add_item(
 			(
-				Strings.CLEANUP_CUSTOM_PALETTE_PREFIX
+				Strings.text("CLEANUP_CUSTOM_PALETTE_PREFIX")
 				% PaletteRegistry.get_palette_name(String(palette_id))
 			)
 		)
 		_palette_ids.append(String(palette_id))
 
-	_palette_options.add_item(Strings.CLEANUP_IMPORT_PALETTE_ITEM)
+	_palette_options.add_item(Strings.text("CLEANUP_IMPORT_PALETTE_ITEM"))
 	_palette_ids.append(IMPORT_PALETTE_ID)
 
 	var selected_index := _palette_ids.find(selected_id)
@@ -219,13 +240,16 @@ func refresh_palette_options(preferred_id: String = "") -> void:
 func show_report(report: Dictionary) -> void:
 	if _report_label == null or report.is_empty():
 		return
+	_last_report = report.duplicate(true)
 	var detect: Dictionary = report.get("detect", {})
 	var quantize: Dictionary = report.get("quantize", {})
 	var warning := (
-		Strings.CLEANUP_NON_SQUARE_WARNING if bool(detect.get("non_square_warning", false)) else ""
+		Strings.text("CLEANUP_NON_SQUARE_WARNING")
+		if bool(detect.get("non_square_warning", false))
+		else ""
 	)
 	_report_label.text = (
-		Strings.CLEANUP_REPORT_FORMAT
+		Strings.text("CLEANUP_REPORT_FORMAT")
 		% [
 			float(detect.get("scale", 0.0)),
 			float(detect.get("confidence", 0.0)),
@@ -243,7 +267,8 @@ func _build_ui() -> void:
 	add_child(root)
 
 	var title := Label.new()
-	title.text = Strings.CLEANUP_TITLE
+	title.name = "CleanupTitle"
+	LocalizationService.bind_control_text(title, "CLEANUP_TITLE")
 	title.add_theme_font_size_override("font_size", TITLE_FONT_SIZE)
 	root.add_child(title)
 
@@ -262,7 +287,8 @@ func _build_ui() -> void:
 	controls.add_theme_constant_override("separation", ROOT_SEPARATION)
 	scroll.add_child(controls)
 
-	_auto_detect_check = _make_check(Strings.CLEANUP_AUTO_DETECT, true)
+	_auto_detect_check = _make_check("CLEANUP_AUTO_DETECT", true)
+	_auto_detect_check.name = "AutoDetectCheck"
 	controls.add_child(_auto_detect_check)
 
 	_style_prior_label = Label.new()
@@ -270,35 +296,37 @@ func _build_ui() -> void:
 	_style_prior_label.visible = false
 	controls.add_child(_style_prior_label)
 
-	_resample_check = _make_check(Strings.CLEANUP_RUN_RESAMPLE, true)
+	_resample_check = _make_check("CLEANUP_RUN_RESAMPLE", true)
 	controls.add_child(_resample_check)
 
-	_quantize_check = _make_check(Strings.CLEANUP_RUN_QUANTIZE, true)
+	_quantize_check = _make_check("CLEANUP_RUN_QUANTIZE", true)
 	controls.add_child(_quantize_check)
 
 	_scale_spin = _make_spin(1.0, 64.0, 0.1, 4.0)
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_SCALE, _scale_spin)
+	_add_labeled_control(controls, "CLEANUP_LABEL_SCALE", _scale_spin)
 
 	_offset_x_spin = _make_spin(0.0, 64.0, 0.25, 0.0)
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_OFFSET_X, _offset_x_spin)
+	_add_labeled_control(controls, "CLEANUP_LABEL_OFFSET_X", _offset_x_spin)
 
 	_offset_y_spin = _make_spin(0.0, 64.0, 0.25, 0.0)
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_OFFSET_Y, _offset_y_spin)
+	_add_labeled_control(controls, "CLEANUP_LABEL_OFFSET_Y", _offset_y_spin)
 
-	_resample_options = _make_options(RESAMPLE_LABELS)
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_RESAMPLE, _resample_options)
+	_resample_options = _make_options(RESAMPLE_LABEL_KEYS)
+	_resample_options.name = "ResampleOptions"
+	_add_labeled_control(controls, "CLEANUP_LABEL_RESAMPLE", _resample_options)
 
-	_quantize_options = _make_options(QUANTIZE_LABELS)
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_QUANTIZE, _quantize_options)
+	_quantize_options = _make_options(QUANTIZE_LABEL_KEYS)
+	_quantize_options.name = "QuantizeOptions"
+	_add_labeled_control(controls, "CLEANUP_LABEL_QUANTIZE", _quantize_options)
 
-	_auto_k_strategy_options = _make_options(AUTO_K_STRATEGY_LABELS)
-	_auto_k_strategy_options.tooltip_text = Strings.CLEANUP_AUTO_K_TOOLTIP
+	_auto_k_strategy_options = _make_options(AUTO_K_STRATEGY_LABEL_KEYS)
+	_auto_k_strategy_options.tooltip_text = Strings.text("CLEANUP_AUTO_K_TOOLTIP")
 	_auto_k_strategy_row = _add_labeled_control(
-		controls, Strings.CLEANUP_LABEL_AUTO_K_STRATEGY, _auto_k_strategy_options
+		controls, "CLEANUP_LABEL_AUTO_K_STRATEGY", _auto_k_strategy_options
 	)
 
 	_palette_options = _make_options([])
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_PALETTE, _palette_options)
+	_add_labeled_control(controls, "CLEANUP_LABEL_PALETTE", _palette_options)
 	refresh_palette_options("db32")
 
 	_palette_preview = TextureRect.new()
@@ -307,7 +335,7 @@ func _build_ui() -> void:
 	controls.add_child(_palette_preview)
 
 	_delete_palette_button = Button.new()
-	_delete_palette_button.text = Strings.CLEANUP_DELETE_PALETTE
+	LocalizationService.bind_control_text(_delete_palette_button, "CLEANUP_DELETE_PALETTE")
 	_delete_palette_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	_delete_palette_button.disabled = true
 	_delete_palette_button.pressed.connect(_delete_selected_custom_palette)
@@ -315,23 +343,23 @@ func _build_ui() -> void:
 	_update_palette_controls()
 
 	_k_spin = _make_spin(2.0, 256.0, 1.0, 16.0)
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_MAX_COLORS, _k_spin)
+	_add_labeled_control(controls, "CLEANUP_LABEL_MAX_COLORS", _k_spin)
 
-	_dither_options = _make_options(DITHER_LABELS)
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_DITHER, _dither_options)
+	_dither_options = _make_options(DITHER_LABEL_KEYS)
+	_add_labeled_control(controls, "CLEANUP_LABEL_DITHER", _dither_options)
 
 	_strength_slider = _make_slider(0.0, 1.0, 0.05, 0.0)
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_STRENGTH, _strength_slider)
+	_add_labeled_control(controls, "CLEANUP_LABEL_STRENGTH", _strength_slider)
 
 	_chroma_slider = _make_slider(0.0, 0.25, 0.01, 0.0)
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_CHROMA, _chroma_slider)
+	_add_labeled_control(controls, "CLEANUP_LABEL_CHROMA", _chroma_slider)
 
 	_density_slider = _make_slider(0.0, 1.0, 0.05, 1.0)
-	_add_labeled_control(controls, Strings.CLEANUP_LABEL_DENSITY, _density_slider)
+	_add_labeled_control(controls, "CLEANUP_LABEL_DENSITY", _density_slider)
 
 	_report_label = Label.new()
 	_report_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_report_label.text = Strings.CLEANUP_NO_REPORT
+	_report_label.text = Strings.text("CLEANUP_NO_REPORT")
 	controls.add_child(_report_label)
 
 	var action_row := HBoxContainer.new()
@@ -341,7 +369,7 @@ func _build_ui() -> void:
 
 	_apply_button = Button.new()
 	_apply_button.name = "ApplyCleanupButton"
-	_apply_button.text = Strings.CLEANUP_APPLY
+	LocalizationService.bind_control_text(_apply_button, "CLEANUP_APPLY")
 	_apply_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	_apply_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_apply_button.pressed.connect(func() -> void: apply_requested.emit(get_params()))
@@ -349,7 +377,7 @@ func _build_ui() -> void:
 
 	_cancel_button = Button.new()
 	_cancel_button.name = "CancelCleanupButton"
-	_cancel_button.text = Strings.CLEANUP_CANCEL
+	LocalizationService.bind_control_text(_cancel_button, "CLEANUP_CANCEL")
 	_cancel_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	_cancel_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_cancel_button.disabled = true
@@ -366,11 +394,11 @@ func _build_ui() -> void:
 	_update_quantize_visibility()
 
 
-func _add_labeled_control(parent: Control, label_text: String, control: Control) -> Control:
+func _add_labeled_control(parent: Control, text_key: String, control: Control) -> Control:
 	var row := VBoxContainer.new()
 	row.add_theme_constant_override("separation", ROW_SEPARATION)
 	var label := Label.new()
-	label.text = label_text
+	LocalizationService.bind_control_text(label, text_key)
 	label.add_theme_font_size_override("font_size", LABEL_FONT_SIZE)
 	row.add_child(label)
 	row.add_child(control)
@@ -378,9 +406,9 @@ func _add_labeled_control(parent: Control, label_text: String, control: Control)
 	return row
 
 
-func _make_check(text: String, pressed: bool) -> CheckBox:
+func _make_check(text_key: String, pressed: bool) -> CheckBox:
 	var check := CheckBox.new()
-	check.text = text
+	LocalizationService.bind_control_text(check, text_key)
 	check.button_pressed = pressed
 	return check
 
@@ -405,11 +433,13 @@ func _make_slider(minimum: float, maximum: float, step: float, value: float) -> 
 	return slider
 
 
-func _make_options(labels: Array) -> OptionButton:
+func _make_options(label_keys: Array) -> OptionButton:
 	var options := OptionButton.new()
 	options.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
-	for label in labels:
-		options.add_item(String(label))
+	options.set_meta("i18n_keys", label_keys)
+	for key in label_keys:
+		options.add_item(Strings.text(String(key)))
+	_localized_options.append(options)
 	return options
 
 
@@ -567,3 +597,21 @@ func _emit_manual_grid_changed() -> void:
 		float(_scale_spin.value),
 		Vector2(_offset_x_spin.value, _offset_y_spin.value)
 	)
+
+
+func _on_language_changed(_preference: String, _locale: String) -> void:
+	for options in _localized_options:
+		var label_keys: Array = options.get_meta("i18n_keys", [])
+		for index in range(mini(options.item_count, label_keys.size())):
+			options.set_item_text(index, Strings.text(String(label_keys[index])))
+	_auto_k_strategy_options.tooltip_text = Strings.text("CLEANUP_AUTO_K_TOOLTIP")
+	_selection_label.text = Strings.text("CLEANUP_SELECTED_FORMAT") % _selection_count
+	if _style_prior_base_size > 0:
+		_style_prior_label.text = (
+			Strings.text("CLEANUP_PRESET_PRIOR_FORMAT") % _style_prior_base_size
+		)
+	refresh_palette_options(_selected_palette_id())
+	if _last_report.is_empty():
+		_report_label.text = Strings.text("CLEANUP_NO_REPORT")
+	else:
+		show_report(_last_report)

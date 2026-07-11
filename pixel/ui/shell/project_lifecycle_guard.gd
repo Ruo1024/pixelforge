@@ -17,6 +17,7 @@ const DISCARD_ACTION := &"discard"
 
 var _project_service: Variant = null
 var _dialog: ConfirmationDialog = null
+var _discard_button: Button = null
 var _pending_action := {}
 
 
@@ -24,14 +25,13 @@ func setup(project_service: Variant) -> void:
 	_project_service = project_service
 	_dialog = ConfirmationDialog.new()
 	_dialog.name = "UnsavedChangesDialog"
-	_dialog.title = Strings.DIALOG_UNSAVED_TITLE
-	_dialog.get_ok_button().text = Strings.DIALOG_SAVE
-	_dialog.get_cancel_button().text = Strings.DIALOG_CANCEL
-	_dialog.add_button(Strings.DIALOG_DISCARD, true, DISCARD_ACTION)
+	_discard_button = _dialog.add_button("", true, DISCARD_ACTION)
+	_refresh_text("", "")
 	_dialog.confirmed.connect(choose_save)
 	_dialog.canceled.connect(cancel_pending)
 	_dialog.custom_action.connect(_on_custom_action)
 	add_child(_dialog)
+	LocalizationService.language_changed.connect(_refresh_text)
 
 
 func request_action(action_id: String, payload: Variant = null) -> bool:
@@ -40,7 +40,9 @@ func request_action(action_id: String, payload: Variant = null) -> bool:
 		return false
 
 	_pending_action = {"id": action_id, "payload": payload}
-	_dialog.dialog_text = Strings.DIALOG_UNSAVED_BODY_FORMAT % _action_display_name(action_id)
+	_dialog.dialog_text = (
+		Strings.text("DIALOG_UNSAVED_BODY_FORMAT") % _action_display_name(action_id)
+	)
 	_dialog.popup_centered()
 	return true
 
@@ -107,12 +109,19 @@ func _on_custom_action(action: StringName) -> void:
 func _action_display_name(action_id: String) -> String:
 	match action_id:
 		ACTION_NEW:
-			return Strings.ACTION_NEW
+			return Strings.text("ACTION_NEW")
 		ACTION_OPEN:
-			return Strings.ACTION_OPEN
+			return Strings.text("ACTION_OPEN")
 		ACTION_QUIT:
-			return Strings.ACTION_QUIT
+			return Strings.text("ACTION_QUIT")
 		ACTION_RECOVER:
-			return Strings.ACTION_RECOVER
+			return Strings.text("ACTION_RECOVER")
 		_:
 			return action_id
+
+
+func _refresh_text(_preference: String, _locale: String) -> void:
+	_dialog.title = Strings.text("DIALOG_UNSAVED_TITLE")
+	_dialog.ok_button_text = Strings.text("ACTION_SAVE")
+	_dialog.cancel_button_text = Strings.text("ACTION_CANCEL")
+	_discard_button.text = Strings.text("ACTION_DISCARD")

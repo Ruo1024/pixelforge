@@ -22,25 +22,26 @@ var _sample: CheckButton = null
 
 
 func _ready() -> void:
-	title = Strings.DIALOG_V1_ONBOARDING
-	ok_button_text = Strings.V1_ONBOARDING_START
 	_build_ui()
+	_refresh_text("", "")
 	confirmed.connect(_apply)
+	LocalizationService.language_changed.connect(_refresh_text)
 
 
 func show_setup() -> void:
+	reset_size()
 	popup_centered()
 
 
 func _build_ui() -> void:
 	var root := VBoxContainer.new()
 	root.name = "Content"
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(root)
+	root.custom_minimum_size.x = 440
+	root.size.x = 440
+	get_label().get_parent().add_child(root)
 	var intro := Label.new()
 	intro.name = "Intro"
 	intro.text = Strings.V1_ONBOARDING_INTRO
-	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(intro)
 	var preset_label := Label.new()
 	preset_label.name = "PresetLabel"
@@ -71,3 +72,13 @@ func _apply() -> void:
 		ProjectService.mark_dirty()
 	SettingsService.set_setting("onboarding", "v1_complete", true)
 	setup_completed.emit(_provider_setup.button_pressed, _sample.button_pressed)
+
+
+func _refresh_text(_preference: String, _locale: String) -> void:
+	title = Strings.text("ONBOARDING_TITLE")
+	ok_button_text = Strings.text("ONBOARDING_START")
+	cancel_button_text = Strings.text("ACTION_CANCEL")
+	get_node("Content/Intro").text = Strings.text("ONBOARDING_INTRO")
+	get_node("Content/PresetLabel").text = Strings.text("ONBOARDING_STYLE")
+	_provider_setup.text = Strings.text("ONBOARDING_PROVIDER")
+	_sample.text = Strings.text("ONBOARDING_SAMPLE")

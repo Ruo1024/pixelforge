@@ -238,9 +238,9 @@ func _refresh_cost_label(estimate: float = -1.0) -> void:
 		return
 	var total := CostService.get_month_total()
 	_cost_label.text = (
-		Strings.COST_MONTH_ESTIMATE_FORMAT % [total, estimate]
+		Strings.text("COST_MONTH_ESTIMATE_FORMAT") % [total, estimate]
 		if estimate >= 0.0
-		else Strings.COST_MONTH_FORMAT % total
+		else Strings.text("COST_MONTH_FORMAT") % total
 	)
 
 

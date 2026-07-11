@@ -92,7 +92,7 @@ func _ready() -> void:
 	_last_screen_snapshot = startup_snapshot
 	set_process(DisplayServer.get_name() != "headless")
 	_update_window_title()
-	_m2_1_ui.show_onboarding_if_needed()
+	_m2_1_ui.show_onboarding_if_needed(_recovery_dialog)
 	if ScaleAudit.is_requested():
 		call_deferred("_log_scale_audit")
 
@@ -374,7 +374,7 @@ func _build_ui() -> void:
 	bottom_bar.add_child(_status_label)
 	_cost_label = Label.new()
 	_cost_label.name = "CostLabel"
-	_cost_label.text = Strings.COST_MONTH_FORMAT % CostService.get_month_total()
+	_cost_label.text = Strings.text("COST_MONTH_FORMAT") % CostService.get_month_total()
 	_cost_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_cost_label.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
 	bottom_bar.add_child(_cost_label)
@@ -462,6 +462,10 @@ func _refresh_toolbar_text(_preference: String, _locale: String) -> void:
 	for button in _localized_toolbar_buttons:
 		if is_instance_valid(button):
 			button.text = Strings.text(String(button.get_meta("text_key", "")))
+	_recovery_dialog.title = Strings.text("DIALOG_RECOVERY_TITLE")
+	_recovery_dialog.ok_button_text = Strings.text("ACTION_RECOVER")
+	_recovery_dialog.cancel_button_text = Strings.text("ACTION_CANCEL")
+	_cost_label.text = Strings.text("COST_MONTH_FORMAT") % CostService.get_month_total()
 
 
 func _create_file_dialogs() -> void:
@@ -485,7 +489,9 @@ func _create_file_dialogs() -> void:
 
 	_recovery_dialog = ConfirmationDialog.new()
 	_recovery_dialog.name = "RecoveryDialog"
-	_recovery_dialog.title = Strings.DIALOG_RECOVERY
+	_recovery_dialog.title = Strings.text("DIALOG_RECOVERY_TITLE")
+	_recovery_dialog.ok_button_text = Strings.text("ACTION_RECOVER")
+	_recovery_dialog.cancel_button_text = Strings.text("ACTION_CANCEL")
 	_recovery_dialog.confirmed.connect(_recover_pending_autosave)
 	add_child(_recovery_dialog)
 
@@ -1037,7 +1043,9 @@ func _on_recovery_available(autosaves: Array) -> void:
 		return
 
 	_pending_recovery_path = String(autosaves.back())
-	_recovery_dialog.dialog_text = Strings.DIALOG_RECOVERY_BODY_FORMAT % _pending_recovery_path
+	_recovery_dialog.dialog_text = (
+		Strings.text("DIALOG_RECOVERY_BODY_FORMAT") % _pending_recovery_path
+	)
 	_recovery_dialog.popup_centered()
 
 
