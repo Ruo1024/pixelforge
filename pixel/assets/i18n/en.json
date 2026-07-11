@@ -1,0 +1,22 @@
+{
+	"LANGUAGE_LABEL": "Language",
+	"LANGUAGE_AUTO": "Follow system",
+	"LANGUAGE_ENGLISH": "English",
+	"LANGUAGE_SIMPLIFIED_CHINESE": "Simplified Chinese",
+	"LANGUAGE_APPLY_NOTE": "Language changes apply immediately. Open views refresh when they handle the language change signal.",
+	"GRAPH_PARAM_OBJECT_LIST": "Objects",
+	"GRAPH_PARAM_WIDTH": "Width",
+	"GRAPH_PARAM_HEIGHT": "Height",
+	"GRAPH_PARAM_PER_SUBJECT": "Per Subject",
+	"GRAPH_PARAM_PROVIDER": "Provider",
+	"GRAPH_PARAM_BATCH_SIZE": "Batch Size",
+	"GRAPH_PARAM_SEED": "Seed",
+	"BATCH_DEFAULT_LABEL": "Batch",
+	"BATCH_ACTION_CLEANUP": "Clean Batch",
+	"BATCH_ACTION_MATTE": "Matte Batch",
+	"BATCH_ACTION_OUTLINE": "Outline Batch",
+	"BATCH_ACTION_QUANTIZE": "Quantize Batch",
+	"BATCH_ACTION_EXPORT": "Export Batch",
+	"BATCH_ACTION_SPLIT": "Split Selected",
+	"BATCH_ACTION_SEND_TO_EDITOR": "Send to Editor"
+}

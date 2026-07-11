@@ -21,6 +21,7 @@ config/icon="res://icon.svg"
 
 Logger="*res://infra/logger.gd"
 SettingsService="*res://services/settings_service.gd"
+LocalizationService="*res://services/localization_service.gd"
 EventBus="*res://services/event_bus.gd"
 AssetLibrary="*res://services/asset_library.gd"
 UndoService="*res://services/undo_service.gd"

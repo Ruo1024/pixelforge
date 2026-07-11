@@ -1,8 +1,7 @@
 class_name PFStrings
 extends RefCounted
 
-## UI 文案集中入口。
-## v1.0 前界面先使用英文，后续 i18n 只需要替换这里和对应翻译资源。
+## UI 文案集中入口。旧常量保留兼容，新代码使用稳定 catalog key。
 
 const ACTION_NEW := "New"
 const ACTION_OPEN := "Open"
@@ -442,3 +441,7 @@ const GRAPH_PARAM_UNKNOWN_FORMAT := "%s"
 const CONTENT_OBJECT_COUNT_FORMAT := "%d objects"
 const CONTENT_OBJECT_PLACEHOLDER := "One object per line"
 const CONTENT_RUN_GENERATION := "Run generation"
+
+
+static func text(key: StringName, fallback: String = "") -> String:
+	return LocalizationService.text(key, fallback)
