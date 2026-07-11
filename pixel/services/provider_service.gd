@@ -13,6 +13,7 @@ const CredentialStoreScript := preload("res://services/credential_store.gd")
 const BUILTIN_PROVIDER_PLUGINS := [
 	"res://plugins/provider_openai/main.gd",
 	"res://plugins/provider_retrodiffusion/main.gd",
+	"res://plugins/bridge_comfyui/main.gd",
 ]
 const API_VERSION := 1
 const DEFAULT_PROVIDER := "mock"
@@ -53,7 +54,7 @@ func load_builtin_plugin(script_path: String) -> bool:
 	var plugin: Variant = script.new()
 	if plugin == null or not plugin.has_method("_enter_app"):
 		return false
-	plugin._enter_app(PluginAPIScript.new(self))
+	plugin._enter_app(PluginAPIScript.new(null, self, script_path.get_base_dir().get_file()))
 	_plugins.append(plugin)
 	return true
 
@@ -70,6 +71,17 @@ func register_provider(provider: PFProvider) -> bool:
 	_validation_states[provider_id] = {"state": "unconfigured", "message": ""}
 	_configure_from_storage(provider_id)
 	provider_registered.emit(provider_id)
+	return true
+
+
+func unregister_provider(provider_id: String) -> bool:
+	if not _providers.has(provider_id):
+		return false
+	var provider: Variant = _providers[provider_id]
+	if provider.has_method("clear_session_config"):
+		provider.clear_session_config()
+	_providers.erase(provider_id)
+	_validation_states.erase(provider_id)
 	return true
 
 

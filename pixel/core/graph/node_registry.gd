@@ -10,6 +10,7 @@ const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 
+static var _plugin_scripts := {}
 var _scripts := {}
 
 
@@ -19,6 +20,26 @@ func _init(register_builtins: bool = true) -> void:
 		register("size_spec", SizeSpecNodeScript)
 		register("ai_generate", AiGenerateNodeScript)
 		register("batch", BatchNodeScript)
+	for type_name in _plugin_scripts:
+		register(String(type_name), _plugin_scripts[type_name])
+
+
+static func register_plugin_type(type_name: String, node_script: Script) -> bool:
+	if type_name.is_empty() or node_script == null or _plugin_scripts.has(type_name):
+		return false
+	var node: Variant = node_script.new()
+	if not (node is PFNode) or node.get_type() != type_name:
+		return false
+	_plugin_scripts[type_name] = node_script
+	return true
+
+
+static func unregister_plugin_type(type_name: String) -> bool:
+	return _plugin_scripts.erase(type_name)
+
+
+static func clear_plugin_types() -> void:
+	_plugin_scripts.clear()
 
 
 func register(type_name: String, node_script: Script) -> bool:

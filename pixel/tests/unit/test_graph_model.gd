@@ -38,7 +38,10 @@ func test_node_registry_registers_batch_and_rejects_duplicate_type() -> void:
 
 	assert_true(registry.has_type("batch"))
 	assert_false(registry.register("batch", BatchNodeScript))
-	assert_eq(registry.get_registered_types(), ["ai_generate", "batch", "object_list", "size_spec"])
+	assert_eq(
+		registry.get_registered_types(),
+		["ai_generate", "batch", "comfyui.run_workflow", "object_list", "size_spec"]
+	)
 
 
 func test_connection_matrix_follows_graph_schema_port_rules() -> void:

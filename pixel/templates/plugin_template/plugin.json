@@ -1,0 +1,11 @@
+{
+  "id": "image_invert_example",
+  "name": "Image Invert Example",
+  "version": "1.0.0",
+  "api_version": 1,
+  "min_app_version": "1.0.0-rc.1",
+  "entry": "main.gd",
+  "permissions": [],
+  "description": "Minimal PixelForge node plugin template.",
+  "author": "Your Name"
+}

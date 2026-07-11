@@ -1,5 +1,6 @@
 # Changelog
 
+- M7 / v1.0 RC engineering: add reversible runtime plugins, Plugin Manager, ComfyUI templates/provider/workflow node, first-run onboarding, release documentation, security checks, and unified candidate gates.
 - M4-1: add cancellable per-request HTTP tasks with normalized failures, redacted logs, and deterministic retry coverage.
 - M4-2: add encrypted persistent Provider credentials, schema-driven settings, validation state, and verified node filtering.
 - M4-3: add the RetroDiffusion provider, worker-thread PNG decode, normalized quota errors, and verified graph-to-batch execution.

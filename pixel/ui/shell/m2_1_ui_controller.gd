@@ -2,7 +2,6 @@ class_name PFM21UiController
 extends Node
 
 ## M2.1 UI 接线控制器。
-## 主窗口保留布局和项目命令；本控制器承接导入、工具、M2 参数对话框与批次菜单。
 
 signal export_snapshots_requested(snapshots: Array, default_file: String)
 
@@ -20,6 +19,10 @@ const OpenAIGenerationControllerScript := preload("res://ui/shell/openai_generat
 const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_settings_dialog.gd")
 const BoardEditorScript := preload("res://ui/board/board_editor.gd")
 const PixelEditorScript := preload("res://ui/editor/pixel_editor.gd")
+const PluginManagerDialogScript := preload("res://ui/dialogs/plugin_manager_dialog.gd")
+const ComfyUITemplateDialogScript := preload("res://ui/dialogs/comfyui_template_dialog.gd")
+const V1OnboardingDialogScript := preload("res://ui/dialogs/v1_onboarding_dialog.gd")
+const PixelEditorFlowControllerScript := preload("res://ui/shell/pixel_editor_flow_controller.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
@@ -50,6 +53,8 @@ const FILE_MENU_GENERATE_OPENAI_BATCH := 10
 const FILE_MENU_PROVIDER_SETTINGS := 11
 const FILE_MENU_OPEN_BOARD := 12
 const FILE_MENU_OPEN_PIXEL_EDITOR := 13
+const FILE_MENU_PLUGIN_MANAGER := 14
+const FILE_MENU_COMFY_TEMPLATES := 15
 const GRAPH_ADD_MENU_ID_START := 100
 const BATCH_MENU_CLEANUP := 0
 const BATCH_MENU_MATTE := 1
@@ -73,7 +78,9 @@ const BATCH_MENU_LAYOUT_CONTACT := 18
 const BATCH_MENU_LAYOUT_FOCUS := 19
 const BATCH_MENU_EDIT := 20
 const SELECTION_TOOLS_VISIBLE := false
-const EDITABLE_GRAPH_NODE_TYPES := ["object_list", "size_spec", "ai_generate"]
+const EDITABLE_GRAPH_NODE_TYPES := [
+	"object_list", "size_spec", "ai_generate", "comfyui.run_workflow"
+]
 
 var _canvas: Control = null
 var _cleanup_inspector: Control = null
@@ -100,6 +107,10 @@ var _openai_flow: Node = null
 var _provider_settings_dialog: ConfirmationDialog = null
 var _board_editor: ConfirmationDialog = null
 var _pixel_editor: ConfirmationDialog = null
+var _plugin_manager: ConfirmationDialog = null
+var _comfy_templates: ConfirmationDialog = null
+var _v1_onboarding: ConfirmationDialog = null
+var _pixel_editor_flow: RefCounted = null
 
 
 func setup(
@@ -137,7 +148,18 @@ func setup(
 	_pixel_editor = PixelEditorScript.new()
 	_pixel_editor.name = "PixelEditor"
 	add_child(_pixel_editor)
-	_pixel_editor.asset_saved.connect(_on_editor_asset_saved)
+	_pixel_editor_flow = PixelEditorFlowControllerScript.new()
+	_pixel_editor_flow.setup(_canvas, _status_label, _pixel_editor)
+	_plugin_manager = PluginManagerDialogScript.new()
+	_plugin_manager.name = "PluginManagerDialog"
+	add_child(_plugin_manager)
+	_comfy_templates = ComfyUITemplateDialogScript.new()
+	_comfy_templates.name = "ComfyUITemplateDialog"
+	add_child(_comfy_templates)
+	_v1_onboarding = V1OnboardingDialogScript.new()
+	_v1_onboarding.name = "V1OnboardingDialog"
+	_v1_onboarding.setup_completed.connect(_on_v1_setup_completed)
+	add_child(_v1_onboarding)
 	_create_m2_dialogs()
 	_create_graph_node_params_dialog()
 	_create_batch_menu()
@@ -167,6 +189,8 @@ func add_file_menu(parent: Control) -> void:
 	popup.add_item(Strings.MENU_EDIT_SELECTED_GRAPH_NODE, FILE_MENU_EDIT_SELECTED_GRAPH_NODE)
 	popup.add_item(Strings.MENU_OPEN_BOARD, FILE_MENU_OPEN_BOARD)
 	popup.add_item(Strings.MENU_OPEN_PIXEL_EDITOR, FILE_MENU_OPEN_PIXEL_EDITOR)
+	popup.add_item(Strings.MENU_PLUGIN_MANAGER, FILE_MENU_PLUGIN_MANAGER)
+	popup.add_item(Strings.MENU_COMFY_TEMPLATES, FILE_MENU_COMFY_TEMPLATES)
 	popup.add_separator()
 	popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
 	popup.add_item(Strings.ACTION_OPEN, FILE_MENU_OPEN)
@@ -468,10 +492,22 @@ func show_graph_quick_add_menu(screen_position: Vector2i) -> bool:
 
 func show_onboarding_if_needed() -> void:
 	call_deferred("_refresh_import_hint")
+	if (
+		DisplayServer.get_name() != "headless"
+		and not bool(SettingsService.get_setting("onboarding", "v1_complete", false))
+	):
+		_v1_onboarding.call_deferred("show_setup")
 
 
 func _refresh_import_hint() -> void:
 	_import_flow.refresh_empty_hint()
+
+
+func _on_v1_setup_completed(open_provider_settings: bool, create_sample: bool) -> void:
+	if create_sample:
+		generate_mock_batch()
+	if open_provider_settings:
+		_provider_settings_dialog.show_settings()
 
 
 func _create_m2_dialogs() -> void:
@@ -585,6 +621,10 @@ func _on_file_menu_pressed(id: int) -> void:
 			_board_editor.show_editor()
 		FILE_MENU_OPEN_PIXEL_EDITOR:
 			_open_selected_in_pixel_editor()
+		FILE_MENU_PLUGIN_MANAGER:
+			_plugin_manager.show_manager()
+		FILE_MENU_COMFY_TEMPLATES:
+			_comfy_templates.show_manager()
 		FILE_MENU_NEW:
 			_new_project_callback.call()
 		FILE_MENU_OPEN:
@@ -712,34 +752,11 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 
 
 func _open_selected_in_pixel_editor() -> void:
-	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
-	if snapshots.size() == 1:
-		_open_pixel_editor(String(snapshots[0]["data"].get("asset_id", "")), "")
-		return
-	var card_id := _selected_batch_card_id()
-	if not card_id.is_empty():
-		var ids: Array = _canvas._get_batch_asset_ids(card_id, true)
-		if not ids.is_empty():
-			_open_pixel_editor(String(ids[0]), card_id)
-			return
-	_status_label.text = Strings.EDITOR_SELECT_ASSET
+	_pixel_editor_flow.open_selected()
 
 
 func _open_pixel_editor(asset_id: String, batch_id: String) -> void:
-	if not _pixel_editor.open_asset(asset_id, batch_id):
-		_status_label.text = Strings.EDITOR_OPEN_FAILED
-
-
-func _on_editor_asset_saved(old_asset_id: String, new_asset_id: String, batch_id: String) -> void:
-	if not batch_id.is_empty():
-		var ids: Array = _canvas._get_batch_asset_ids(batch_id)
-		for index in range(ids.size()):
-			if String(ids[index]) == old_asset_id:
-				ids[index] = new_asset_id
-		_canvas._replace_batch_asset_ids(batch_id, ids, true)
-	else:
-		_canvas._replace_asset_reference(old_asset_id, new_asset_id)
-	_status_label.text = Strings.EDITOR_SAVED
+	_pixel_editor_flow.open_asset(asset_id, batch_id)
 
 
 func _mark_batch_review_state(review_state: String, status_format: String) -> void:
@@ -936,6 +953,8 @@ func _graph_provider_id(graph: PFGraph) -> String:
 		var node: PFNode = graph.get_node(String(node_id))
 		if node != null and node.get_type() == "ai_generate":
 			return String(graph.get_node_params(String(node_id)).get("provider_id", "mock"))
+		if node != null and node.get_type() == "comfyui.run_workflow":
+			return "comfyui"
 	return "mock"
 
 

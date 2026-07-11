@@ -130,7 +130,7 @@ func _refresh_provider_list() -> void:
 	if _provider_options.item_count == 0:
 		_provider_id = ""
 		return
-	_select_provider(previous)
+	_select_provider("openai_image" if previous.is_empty() else previous)
 
 
 func _select_provider(provider_id: String) -> void:

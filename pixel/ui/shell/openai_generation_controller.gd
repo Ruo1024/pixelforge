@@ -303,6 +303,12 @@ func _request_for_graph(graph: PFGraph) -> Dictionary:
 			"ai_generate":
 				request["batch"] = int(params.get("batch_size", request["batch"]))
 				request["seed"] = int(params.get("seed", request["seed"]))
+			"comfyui.run_workflow":
+				request["batch"] = 1
+				request["seed"] = int(params.get("seed", request["seed"]))
+				request["extra"]["template_id"] = String(
+					params.get("template_id", "sdxl_pixel_txt2img")
+				)
 	return request
 
 
@@ -311,6 +317,8 @@ func _provider_id_for_graph(graph: PFGraph) -> String:
 		var node: PFNode = graph.get_node(String(node_id))
 		if node != null and node.get_type() == "ai_generate":
 			return String(graph.get_node_params(String(node_id)).get("provider_id", "mock"))
+		if node != null and node.get_type() == "comfyui.run_workflow":
+			return "comfyui"
 	return "mock"
 
 

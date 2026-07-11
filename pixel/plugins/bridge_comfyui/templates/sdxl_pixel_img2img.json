@@ -1,0 +1,25 @@
+{
+  "id": "sdxl_pixel_img2img",
+  "name": "SDXL Pixel Redraw (img2img)",
+  "mode": "img2img",
+  "requirements": {
+    "checkpoint": "sd_xl_base_1.0.safetensors",
+    "checkpoint_source": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0"
+  },
+  "bindings": {
+    "prompt": "6.inputs.text",
+    "negative_prompt": "7.inputs.text",
+    "seed": "3.inputs.seed",
+    "ref_image": "11.inputs.image"
+  },
+  "workflow": {
+    "3": {"class_type": "KSampler", "inputs": {"seed": 1, "steps": 24, "cfg": 7.0, "sampler_name": "euler", "scheduler": "normal", "denoise": 0.65, "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["12", 0]}},
+    "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"}},
+    "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "pixel art redraw", "clip": ["4", 1]}},
+    "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry, antialiasing", "clip": ["4", 1]}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+    "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "PixelForge", "images": ["8", 0]}},
+    "11": {"class_type": "LoadImage", "inputs": {"image": "pixelforge-input.png"}},
+    "12": {"class_type": "VAEEncode", "inputs": {"pixels": ["11", 0], "vae": ["4", 2]}}
+  }
+}

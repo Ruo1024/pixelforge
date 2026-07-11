@@ -405,14 +405,15 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 
-	assert_eq(controller._graph_add_menu.item_count, 3)
+	assert_eq(controller._graph_add_menu.item_count, 4)
 	assert_eq(
 		[
 			controller._graph_add_menu.get_item_text(0),
 			controller._graph_add_menu.get_item_text(1),
 			controller._graph_add_menu.get_item_text(2),
+			controller._graph_add_menu.get_item_text(3),
 		],
-		["AI Generate", "Object List", "Size Spec"]
+		["AI Generate", "ComfyUI Workflow", "Object List", "Size Spec"]
 	)
 
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
@@ -425,14 +426,15 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	await wait_process_frames(1)
 
 	assert_true(controller._graph_quick_add_menu.visible)
-	assert_eq(controller._graph_quick_add_menu.item_count, 3)
+	assert_eq(controller._graph_quick_add_menu.item_count, 4)
 	assert_eq(
 		[
 			controller._graph_quick_add_menu.get_item_text(0),
 			controller._graph_quick_add_menu.get_item_text(1),
 			controller._graph_quick_add_menu.get_item_text(2),
+			controller._graph_quick_add_menu.get_item_text(3),
 		],
-		["AI Generate", "Object List", "Size Spec"]
+		["AI Generate", "ComfyUI Workflow", "Object List", "Size Spec"]
 	)
 
 	var existing_node_ids := {}
