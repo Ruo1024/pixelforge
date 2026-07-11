@@ -207,12 +207,21 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	ProviderService._set_validation_state("retrodiffusion", "verified", "Fixture verified")
 	CostService.set_monthly_budget(0.1)
 
-	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
+	var canvas_items: Array = canvas.export_canvas_data()["items"]
+	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
+	var generate_item_id := _item_id_for_node(canvas_items, "generate")
 	canvas.select_ids([batch_item_id])
 	controller.run_selected_mock_graph()
 	var budget_dialog: ConfirmationDialog = controller._openai_flow.get_budget_dialog()
 	assert_true(budget_dialog.visible)
 	assert_string_contains(budget_dialog.dialog_text, "$1.00")
+	assert_eq(
+		canvas._items_by_id[generate_item_id]._status_badge, Strings.text("CONTENT_STATUS_WAITING")
+	)
+	assert_eq(
+		canvas._items_by_id[generate_item_id].get_content_control("ExecutionDetail").text,
+		budget_dialog.dialog_text
+	)
 	assert_true(TaskQueue.is_idle())
 	budget_dialog.confirmed.emit()
 	assert_true(
@@ -222,6 +231,10 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 		)
 	)
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id).size(), 4)
+	assert_eq(
+		canvas._items_by_id[generate_item_id].get_content_control("ExecutionDetail").text,
+		Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % 4
+	)
 	var first_asset_id := String(canvas._get_batch_asset_ids(batch_item_id)[0])
 	var provenance: Dictionary = AssetLibrary.get_asset_meta(first_asset_id)["provenance"]
 	assert_eq(provenance["provider"], "retrodiffusion")
@@ -242,6 +255,9 @@ func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_res
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
 	_node_data_for_id(graph_data["nodes"], "generate")["params"]["provider_id"] = ("retrodiffusion")
+	var size_node := _node_data_for_id(graph_data["nodes"], "size")
+	size_node["params"]["width"] = 256
+	size_node["params"]["height"] = 256
 	ProjectService.set_graph_data(graph_id, graph_data, true)
 	assert_null(
 		(
@@ -267,6 +283,10 @@ func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_res
 	assert_eq(
 		canvas._items_by_id[generate_item_id]._status_badge, Strings.text("CONTENT_STATUS_RUNNING")
 	)
+	assert_eq(
+		canvas._items_by_id[generate_item_id].get_content_control("ExecutionDetail").text,
+		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % 0.5
+	)
 	assert_true(controller.cancel_graph_run(graph_id))
 	var canceled_status := Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT % "RetroDiffusion"
 	assert_true(
@@ -274,6 +294,10 @@ func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_res
 	)
 	assert_eq(
 		canvas._items_by_id[generate_item_id]._status_badge, Strings.text("CONTENT_STATUS_CANCELED")
+	)
+	assert_eq(
+		canvas._items_by_id[generate_item_id].get_content_control("ExecutionDetail").text,
+		Strings.text("CONTENT_DETAIL_CANCELED")
 	)
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), stable_asset_ids)
 	assert_false(canvas.export_canvas_data()["items"][2].has("execution_status"))

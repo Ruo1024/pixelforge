@@ -306,7 +306,9 @@ func _refresh_graph_node_card(graph_id: String, node_id: String) -> bool:
 	return refreshed
 
 
-func _set_graph_node_type_status(graph_id: String, node_type: String, status: String) -> void:
+func _set_graph_node_type_status(
+	graph_id: String, node_type: String, status: String, detail: String = ""
+) -> void:
 	var matching_ids := []
 	for raw_node in ProjectService.get_graph_data(graph_id).get("nodes", []):
 		if raw_node is Dictionary and String(raw_node.get("type", "")) == node_type:
@@ -317,7 +319,7 @@ func _set_graph_node_type_status(graph_id: String, node_type: String, status: St
 			and item.graph_id == graph_id
 			and matching_ids.has(item.node_id)
 		):
-			item.set_execution_status(status)
+			item.set_execution_status(status, detail)
 
 
 func delete_selected(record_undo: bool = true) -> void:

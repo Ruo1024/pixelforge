@@ -269,6 +269,10 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	assert_ne(rerun_asset_ids, first_asset_ids)
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
 	assert_eq(generate_card._status_badge, Strings.text("CONTENT_STATUS_COMPLETE"))
+	assert_eq(
+		generate_card.get_content_control("ExecutionDetail").text,
+		Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % rerun_asset_ids.size()
+	)
 
 	canvas.select_ids([])
 	canvas._selected_graph_edge = {
@@ -334,6 +338,10 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	assert_eq(batch_node["params"]["asset_ids"], stable_asset_ids)
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), stable_asset_ids)
 	assert_eq(generate_card._status_badge, Strings.text("CONTENT_STATUS_FAILED"))
+	assert_string_contains(
+		generate_card.get_content_control("ExecutionDetail").text,
+		"Node generate requires input port spec"
+	)
 	assert_false(canvas.export_canvas_data()["items"][2].has("execution_status"))
 
 

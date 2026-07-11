@@ -70,7 +70,9 @@ func _queue_graph(
 ) -> void:
 	var provider: PFProvider = ProviderService.get_provider(provider_id)
 	if provider == null:
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "provider unavailable"
+		var unavailable := Strings.text("CONTENT_DETAIL_PROVIDER_UNAVAILABLE")
+		_set_graph_status({"graph": graph}, "CONTENT_STATUS_FAILED", unavailable)
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % unavailable
 		return
 	var display_name := provider.get_display_name()
 	if not ProviderService.has_session_credentials(provider_id):
@@ -81,6 +83,7 @@ func _queue_graph(
 			_status_label.text = (
 				Strings.STATUS_PROVIDER_CREDENTIALS_REQUIRED_FORMAT % display_name
 			)
+		_set_graph_status({"graph": graph}, "CONTENT_STATUS_FAILED", _status_label.text)
 		return
 	var request := _request_for_graph(graph)
 	var estimate := CostService.estimate_request(provider_id, request)
@@ -102,6 +105,7 @@ func _queue_graph(
 			% [estimate, CostService.get_monthly_budget()]
 		)
 		_status_label.text = _budget_dialog.dialog_text
+		_set_graph_status(run_state, "CONTENT_STATUS_WAITING", _budget_dialog.dialog_text)
 		_budget_dialog.popup_centered()
 		return
 	_submit_provider_run(run_state)
@@ -113,12 +117,18 @@ func _submit_provider_run(run_state: Dictionary) -> void:
 	var request: Dictionary = run_state["request"]
 	var task: Variant = ProviderService.generate(provider_id, request)
 	if task == null:
+		var unavailable := Strings.text("CONTENT_DETAIL_PROVIDER_UNAVAILABLE")
 		_status_label.text = (
-			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, "provider unavailable"]
+			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, unavailable]
 		)
+		_set_graph_status(run_state, "CONTENT_STATUS_FAILED", unavailable)
 		return
 	_pending_runs[task.id] = run_state
-	_set_graph_status(run_state, "CONTENT_STATUS_RUNNING")
+	var estimate := float(run_state.get("estimate", -1.0))
+	var detail := (
+		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % estimate if estimate >= 0.0 else ""
+	)
+	_set_graph_status(run_state, "CONTENT_STATUS_RUNNING", detail)
 	task.progress_reported.connect(_on_progress)
 	task.finished.connect(_on_finished.bind(task.id))
 	task.failed.connect(_on_failed.bind(task.id))
@@ -155,9 +165,14 @@ func _on_session_configured(api_key: String) -> void:
 func _on_progress(_task_id: String, ratio: float, message: String) -> void:
 	var state: Dictionary = _pending_runs.get(_task_id, {})
 	var display_name := String(state.get("provider_name", "Provider"))
+	var percent := roundi(ratio * 100.0)
+	_set_graph_status(
+		state,
+		"CONTENT_STATUS_RUNNING",
+		Strings.text("CONTENT_DETAIL_PROGRESS_FORMAT") % [percent, message]
+	)
 	_status_label.text = (
-		Strings.STATUS_PROVIDER_GENERATE_RUNNING_FORMAT
-		% [display_name, roundi(ratio * 100.0), message]
+		Strings.STATUS_PROVIDER_GENERATE_RUNNING_FORMAT % [display_name, percent, message]
 	)
 
 
@@ -184,14 +199,18 @@ func _on_finished(result: Variant, task_id: String) -> void:
 		not batch_card_id.is_empty()
 	)
 	if not bool(materialized.get("ok", false)):
-		_set_graph_status(state, "CONTENT_STATUS_FAILED")
+		var invalid_response := Strings.text("CONTENT_DETAIL_INVALID_RESPONSE")
+		_set_graph_status(state, "CONTENT_STATUS_FAILED", invalid_response)
 		_status_label.text = (
-			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
-			% [display_name, "invalid image response"]
+			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, invalid_response]
 		)
 		return
 	var asset_ids: Array = materialized["asset_ids"]
-	_set_graph_status(state, "CONTENT_STATUS_COMPLETE")
+	_set_graph_status(
+		state,
+		"CONTENT_STATUS_COMPLETE",
+		Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % asset_ids.size()
+	)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if not batch_card_id.is_empty():
 		_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
@@ -208,8 +227,10 @@ func _on_finished(result: Variant, task_id: String) -> void:
 func _on_failed(error: Dictionary, task_id: String) -> void:
 	var state: Dictionary = _pending_runs.get(task_id, {})
 	_pending_runs.erase(task_id)
-	_set_graph_status(state, "CONTENT_STATUS_FAILED")
-	var message := String(error.get("message", "unknown error"))
+	var message := String(error.get("message", "")).strip_edges()
+	if message.is_empty():
+		message = Strings.text("CONTENT_DETAIL_UNKNOWN_ERROR")
+	_set_graph_status(state, "CONTENT_STATUS_FAILED", message)
 	_status_label.text = (
 		Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
 		% [String(state.get("provider_name", "Provider")), message]
@@ -219,7 +240,7 @@ func _on_failed(error: Dictionary, task_id: String) -> void:
 func _on_canceled(task_id: String) -> void:
 	var state: Dictionary = _pending_runs.get(task_id, {})
 	_pending_runs.erase(task_id)
-	_set_graph_status(state, "CONTENT_STATUS_CANCELED")
+	_set_graph_status(state, "CONTENT_STATUS_CANCELED", Strings.text("CONTENT_DETAIL_CANCELED"))
 	_status_label.text = (
 		Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT
 		% String(state.get("provider_name", "Provider"))
@@ -227,10 +248,10 @@ func _on_canceled(task_id: String) -> void:
 	_refresh_cost_label()
 
 
-func _set_graph_status(state: Dictionary, status_key: String) -> void:
+func _set_graph_status(state: Dictionary, status_key: String, detail: String = "") -> void:
 	var graph: PFGraph = state.get("graph")
 	if graph != null:
-		_canvas._set_graph_node_type_status(graph.id, "ai_generate", status_key)
+		_canvas._set_graph_node_type_status(graph.id, "ai_generate", status_key, detail)
 
 
 func _refresh_cost_label(estimate: float = -1.0) -> void:

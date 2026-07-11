@@ -15,6 +15,7 @@ const UIFont := preload("res://ui/widgets/ui_font.gd")
 
 const SUMMARY_CARD_SIZE := Vector2(220, 116)
 const CONTENT_CARD_SIZE := Vector2(240, 238)
+const GENERATE_CARD_SIZE := Vector2(240, 282)
 const HEADER_HEIGHT := 32
 const PADDING := 12
 const BACKGROUND := Color(0.13, 0.145, 0.155, 0.98)
@@ -48,6 +49,7 @@ var _is_ghost := false
 var _has_edge_error := false
 var _status_badge := ""
 var _execution_status_key := ""
+var _execution_detail := ""
 var _font: Font = null
 var _content_root: Control = null
 var _object_edit: TextEdit = null
@@ -56,6 +58,7 @@ var _batch_size_spin: SpinBox = null
 var _seed_spin: SpinBox = null
 var _run_button: Button = null
 var _cancel_button: Button = null
+var _execution_detail_label: Label = null
 var _params_snapshot := {}
 
 
@@ -113,9 +116,11 @@ func get_content_control(control_name: String) -> Control:
 	return _content_root.find_child(control_name, true, false) as Control
 
 
-func set_execution_status(status_key: String) -> void:
+func set_execution_status(status_key: String, detail: String = "") -> void:
 	_execution_status_key = status_key
+	_execution_detail = detail
 	_status_badge = Strings.text(status_key) if not status_key.is_empty() else ""
+	_sync_execution_detail()
 	_sync_run_controls()
 	queue_redraw()
 
@@ -319,7 +324,9 @@ func _summarize_params(params: Variant) -> String:
 
 
 func _card_size() -> Vector2:
-	return CONTENT_CARD_SIZE if _is_content_node() and not collapsed else SUMMARY_CARD_SIZE
+	if collapsed or not _is_content_node():
+		return SUMMARY_CARD_SIZE
+	return GENERATE_CARD_SIZE if _node_type == "ai_generate" else CONTENT_CARD_SIZE
 
 
 func _is_content_node() -> bool:
@@ -337,13 +344,14 @@ func _rebuild_content_controls() -> void:
 	_seed_spin = null
 	_run_button = null
 	_cancel_button = null
+	_execution_detail_label = null
 	if collapsed or not _is_content_node() or _is_ghost:
 		return
 
 	_content_root = VBoxContainer.new()
 	_content_root.name = "Content"
 	_content_root.position = Vector2(PADDING, HEADER_HEIGHT + PADDING)
-	_content_root.size = CONTENT_CARD_SIZE - Vector2(PADDING * 2, HEADER_HEIGHT + PADDING * 2)
+	_content_root.size = _card_size() - Vector2(PADDING * 2, HEADER_HEIGHT + PADDING * 2)
 	_content_root.mouse_filter = Control.MOUSE_FILTER_PASS
 	_content_root.add_theme_constant_override("separation", 8)
 	add_child(_content_root)
@@ -422,6 +430,12 @@ func _build_generate_controls() -> void:
 	)
 	action_row.add_child(_cancel_button)
 	_content_root.add_child(action_row)
+	_execution_detail_label = Label.new()
+	_execution_detail_label.name = "ExecutionDetail"
+	_execution_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_execution_detail_label.custom_minimum_size.y = 36
+	_content_root.add_child(_execution_detail_label)
+	_sync_execution_detail()
 	_sync_run_controls()
 
 
@@ -532,3 +546,10 @@ func _sync_run_controls() -> void:
 	var is_running := _execution_status_key == "CONTENT_STATUS_RUNNING"
 	_run_button.disabled = is_running
 	_cancel_button.visible = is_running
+
+
+func _sync_execution_detail() -> void:
+	if _execution_detail_label == null:
+		return
+	_execution_detail_label.text = _execution_detail
+	_execution_detail_label.visible = not _execution_detail.is_empty()

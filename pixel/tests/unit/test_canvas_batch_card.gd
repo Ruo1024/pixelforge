@@ -600,16 +600,19 @@ func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> v
 	run_button.pressed.emit()
 	assert_eq(actions, [[graph.id, "generate", "run"]])
 
-	card.set_execution_status("CONTENT_STATUS_RUNNING")
+	card.set_execution_status("CONTENT_STATUS_RUNNING", "42% · rendering")
 	assert_true(run_button.disabled)
 	assert_true(cancel_button.visible)
 	assert_eq(card._status_badge, Strings.text("CONTENT_STATUS_RUNNING"))
+	assert_eq(card.get_content_control("ExecutionDetail").text, "42% · rendering")
+	assert_eq(card.get_canvas_bounds().size, Vector2(240, 282))
 	cancel_button.pressed.emit()
 	assert_eq(actions, [[graph.id, "generate", "run"], [graph.id, "generate", "cancel"]])
-	card.set_execution_status("CONTENT_STATUS_CANCELED")
+	card.set_execution_status("CONTENT_STATUS_CANCELED", "Previous results preserved")
 	assert_false(run_button.disabled)
 	assert_false(cancel_button.visible)
 	assert_eq(card._status_badge, Strings.text("CONTENT_STATUS_CANCELED"))
+	assert_eq(card.get_content_control("ExecutionDetail").text, "Previous results preserved")
 	assert_false(card.to_canvas_data().has("execution_status"))
 
 	var collapsed_card: Node = (

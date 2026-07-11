@@ -345,25 +345,39 @@ func run_selected_mock_graph() -> void:
 
 
 func _run_mock_graph(graph: PFGraph, batch_node_id: String, batch_card_id: String) -> void:
-	_canvas._set_graph_node_type_status(graph.id, "ai_generate", "CONTENT_STATUS_RUNNING")
+	_canvas._set_graph_node_type_status(
+		graph.id,
+		"ai_generate",
+		"CONTENT_STATUS_RUNNING",
+		Strings.text("CONTENT_DETAIL_MOCK_RUNNING")
+	)
 	var runner := GraphMockRunnerScript.new()
 	var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, batch_node_id, true)
 	if not bool(result.get("ok", false)):
 		var error: Dictionary = result.get("error", {})
 		Log.warn("Selected mock graph run failed", error)
-		_canvas._set_graph_node_type_status(graph.id, "ai_generate", "CONTENT_STATUS_FAILED")
+		_canvas._set_graph_node_type_status(
+			graph.id, "ai_generate", "CONTENT_STATUS_FAILED", String(error.get("message", ""))
+		)
 		_status_label.text = _graph_run_failure_status(error)
 		return
 
 	var asset_ids: Array = result["asset_ids"]
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if batch_card_id.is_empty():
-		_status_label.text = _graph_run_failure_status(
-			{"message": Strings.text("STATUS_GRAPH_RUN_MISSING_BATCH_CARD")}
+		var message := Strings.text("STATUS_GRAPH_RUN_MISSING_BATCH_CARD")
+		_canvas._set_graph_node_type_status(
+			graph.id, "ai_generate", "CONTENT_STATUS_FAILED", message
 		)
+		_status_label.text = _graph_run_failure_status({"message": message})
 		return
 	_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
-	_canvas._set_graph_node_type_status(graph.id, "ai_generate", "CONTENT_STATUS_COMPLETE")
+	_canvas._set_graph_node_type_status(
+		graph.id,
+		"ai_generate",
+		"CONTENT_STATUS_COMPLETE",
+		Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % asset_ids.size()
+	)
 	_status_label.text = Strings.text("STATUS_GRAPH_RUN_DONE_FORMAT") % asset_ids.size()
 
 
