@@ -48,6 +48,15 @@ func test_upscaled_png_export_keeps_original_color_set() -> void:
 	assert_eq(ImageMath.color_set(loaded), ImageMath.color_set(image))
 
 
+func test_spritesheet_metadata_preserves_animation_tags() -> void:
+	var image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	var tags := [{"name": "walk", "from": 0, "to": 1}]
+	var packed := Exporter.pack_spritesheet(
+		[{"name": "a", "image": image}, {"name": "b", "image": image}], {"tags": tags}
+	)
+	assert_eq(packed["json"]["meta"]["frameTags"], tags)
+
+
 func test_spritesheet_export_writes_png_and_json_manifest() -> void:
 	var path := "user://tests/m2_export/sheet.png"
 	var result: Dictionary = (

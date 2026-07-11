@@ -10,6 +10,7 @@ var name := "Animation"
 var frames: Array = []
 var durations_ms: Array = []
 var loop := true
+var tags: Array = []
 var extra := {}
 
 
@@ -75,6 +76,7 @@ func to_json() -> Dictionary:
 				"frames": frames.duplicate(),
 				"durations_ms": durations_ms.duplicate(),
 				"loop": loop,
+				"tags": tags.duplicate(true),
 			},
 			true
 		)
@@ -86,8 +88,9 @@ static func from_json(data: Dictionary) -> PFAnimation:
 	var animation := PFAnimation.new(String(data.get("name", "Animation")))
 	animation.id = String(data.get("id", animation.id))
 	animation.extra = data.duplicate(true)
-	for known_key in ["id", "name", "frames", "durations_ms", "loop"]:
+	for known_key in ["id", "name", "frames", "durations_ms", "loop", "tags"]:
 		animation.extra.erase(known_key)
+	animation.tags = data.get("tags", []).duplicate(true)
 	animation.configure(
 		Array(data.get("frames", [])),
 		Array(data.get("durations_ms", [])),

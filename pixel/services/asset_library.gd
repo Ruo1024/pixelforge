@@ -54,6 +54,7 @@ func register_image(image: Image, name: String, extra_meta: Dictionary = {}) -> 
 		"origin": extra_meta.get("origin", "imported"),
 		"provenance": extra_meta.get("provenance", default_provenance),
 		"palette_ref": extra_meta.get("palette_ref", null),
+		"editor_palette": extra_meta.get("editor_palette", null),
 		"anim": extra_meta.get("anim", null),
 	}
 

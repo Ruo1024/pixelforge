@@ -12,6 +12,7 @@ signal graph_quick_add_requested(screen_position: Vector2i)
 signal zoom_changed(zoom_index: int, camera_zoom: float)
 signal graph_connect_failed(reason: String)
 signal graph_status(event: Dictionary)
+signal asset_edit_requested(asset_id: String, batch_id: String)
 
 const ZOOM_LEVELS := [0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
 const DEFAULT_ZOOM_INDEX := 4
@@ -670,11 +671,46 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		grab_focus()
 		if Input.is_key_pressed(KEY_SPACE):
 			_is_panning = event.pressed
+		elif event.pressed and event.double_click and _emit_asset_edit_request(event.position):
+			pass
 		elif event.pressed:
 			_begin_left_interaction(event.position, event.shift_pressed)
 		else:
 			_finish_left_interaction(event.position)
 		accept_event()
+
+
+func _emit_asset_edit_request(screen_position: Vector2) -> bool:
+	var hit := _hit_at_world(screen_to_world(screen_position))
+	var item: Node = hit.get("item", null)
+	if item == null:
+		return false
+	if item.get_script() == CanvasItemSpriteScript:
+		asset_edit_requested.emit(String(item.asset_id), "")
+		return true
+	if item.get_script() == CanvasBatchCardScript:
+		var visible_ids: Array[String] = item.get_visible_asset_ids()
+		var index := int(hit.get("asset_index", -1))
+		if index >= 0 and index < visible_ids.size():
+			asset_edit_requested.emit(visible_ids[index], String(item.item_id))
+			return true
+	return false
+
+
+func _replace_asset_reference(old_asset_id: String, new_asset_id: String) -> int:
+	var replacement: Image = AssetLibrary.get_image(new_asset_id)
+	if replacement == null:
+		return 0
+	var count := 0
+	for item in _items_by_id.values():
+		if item.get_script() == CanvasItemSpriteScript and item.asset_id == old_asset_id:
+			var data: Dictionary = item.to_canvas_data()
+			data["asset_id"] = new_asset_id
+			item.setup_from_image(data, replacement)
+			count += 1
+	if count > 0:
+		_emit_canvas_changed()
+	return count
 
 
 func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:

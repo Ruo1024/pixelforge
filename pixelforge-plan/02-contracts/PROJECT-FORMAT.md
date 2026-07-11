@@ -168,11 +168,12 @@ my_project.pxproj (ZIP)
 {
   "id": "anim_uuid", "name": "torch",
   "frames": ["asset_uuid_1", "asset_uuid_2"],
-  "durations_ms": [100, 100], "loop": true
+  "durations_ms": [100, 100], "loop": true,
+  "tags": [{"name": "idle", "from": 0, "to": 1}]
 }
 ```
 
-规则：frames 与 durations_ms 等长且非空，duration 最小 1ms；帧是独立素材引用。删除被
+规则：frames 与 durations_ms 等长且非空，duration 最小 1ms；tags 可选且使用含首尾帧索引；帧是独立素材引用。删除被
 board/animation 引用的素材必须拒绝或先由用户解除引用。
 
 ## 5. 读写规则

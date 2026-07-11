@@ -4,6 +4,7 @@ extends RefCounted
 ## Board compositor/exporter with bounded output size and deterministic animation sampling.
 
 const AnimationScript := preload("res://core/animation/pf_animation.gd")
+const CompositorScript := preload("res://services/compositor.gd")
 
 const MAX_OUTPUT_SIDE := 8000
 
@@ -134,7 +135,7 @@ func _render_layer(
 			var cell_data: Dictionary = layer["cells"][key]
 			var image: Image = asset_library.get_image(String(cell_data.get("asset_id", "")))
 			if image != null:
-				_blend_image(output, image, cell * tile_size, opacity, blend, false)
+				CompositorScript.blend_image(output, image, cell * tile_size, opacity, blend, false)
 	else:
 		var items: Array = layer.get("items", [])
 		items.sort_custom(
@@ -148,7 +149,7 @@ func _render_layer(
 			if image == null:
 				continue
 			var raw_pos: Array = item.get("pos", [0, 0])
-			_blend_image(
+			CompositorScript.blend_image(
 				output,
 				image,
 				Vector2i(int(raw_pos[0]), int(raw_pos[1])),
@@ -165,57 +166,6 @@ func _item_asset_id(item: Dictionary, animations: Dictionary, time_ms: int) -> S
 		var animation := AnimationScript.from_json(Dictionary(animations[anim_id]))
 		return animation.get_frame_asset_id(time_ms, int(item.get("anim_offset_ms", 0)))
 	return String(item.get("asset_id", ""))
-
-
-func _blend_image(
-	destination: Image,
-	source: Image,
-	position: Vector2i,
-	opacity: float,
-	blend: String,
-	flip_h: bool
-) -> void:
-	for source_y in range(source.get_height()):
-		var target_y := position.y + source_y
-		if target_y < 0 or target_y >= destination.get_height():
-			continue
-		for source_x in range(source.get_width()):
-			var target_x := position.x + source_x
-			if target_x < 0 or target_x >= destination.get_width():
-				continue
-			var read_x := source.get_width() - source_x - 1 if flip_h else source_x
-			var src := source.get_pixel(read_x, source_y)
-			src.a *= opacity
-			if src.a <= 0.0:
-				continue
-			var dst := destination.get_pixel(target_x, target_y)
-			destination.set_pixel(target_x, target_y, _blend_color(dst, src, blend))
-
-
-func _blend_color(dst: Color, src: Color, blend: String) -> Color:
-	var alpha := src.a + dst.a * (1.0 - src.a)
-	if blend == "add":
-		return Color(
-			minf(1.0, dst.r + src.r * src.a),
-			minf(1.0, dst.g + src.g * src.a),
-			minf(1.0, dst.b + src.b * src.a),
-			alpha
-		)
-	if blend == "multiply":
-		return Color(
-			dst.r * lerpf(1.0, src.r, src.a),
-			dst.g * lerpf(1.0, src.g, src.a),
-			dst.b * lerpf(1.0, src.b, src.a),
-			alpha
-		)
-	if alpha <= 0.0:
-		return Color.TRANSPARENT
-	return Color(
-		(src.r * src.a + dst.r * dst.a * (1.0 - src.a)) / alpha,
-		(src.g * src.a + dst.g * dst.a * (1.0 - src.a)) / alpha,
-		(src.b * src.a + dst.b * dst.a * (1.0 - src.a)) / alpha,
-		alpha
-	)
 
 
 func _safe_name(value: String) -> String:

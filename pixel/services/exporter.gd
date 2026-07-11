@@ -115,19 +115,21 @@ static func pack_spritesheet(items: Array, params: Dictionary = {}) -> Dictionar
 			"sourceSize": {"w": source_size.x * scale, "h": source_size.y * scale},
 		}
 
+	var metadata := {
+		"app": "PixelForge",
+		"image": String(params.get("image", "spritesheet.png")),
+		"format": "RGBA8888",
+		"scale": str(scale),
+		"size": {"w": sheet.get_width(), "h": sheet.get_height()},
+	}
+	if params.has("tags"):
+		metadata["frameTags"] = params["tags"].duplicate(true)
 	return {
 		"image": sheet,
 		"json":
 		{
 			"frames": frames,
-			"meta":
-			{
-				"app": "PixelForge",
-				"image": String(params.get("image", "spritesheet.png")),
-				"format": "RGBA8888",
-				"scale": str(scale),
-				"size": {"w": sheet.get_width(), "h": sheet.get_height()},
-			},
+			"meta": metadata,
 		},
 	}
 

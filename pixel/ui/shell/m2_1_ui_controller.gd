@@ -19,6 +19,7 @@ const ImportFlowControllerScript := preload("res://ui/shell/import_flow_controll
 const OpenAIGenerationControllerScript := preload("res://ui/shell/openai_generation_controller.gd")
 const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_settings_dialog.gd")
 const BoardEditorScript := preload("res://ui/board/board_editor.gd")
+const PixelEditorScript := preload("res://ui/editor/pixel_editor.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
@@ -48,6 +49,7 @@ const FILE_MENU_CONFIGURE_OPENAI_SESSION := 9
 const FILE_MENU_GENERATE_OPENAI_BATCH := 10
 const FILE_MENU_PROVIDER_SETTINGS := 11
 const FILE_MENU_OPEN_BOARD := 12
+const FILE_MENU_OPEN_PIXEL_EDITOR := 13
 const GRAPH_ADD_MENU_ID_START := 100
 const BATCH_MENU_CLEANUP := 0
 const BATCH_MENU_MATTE := 1
@@ -69,6 +71,7 @@ const BATCH_MENU_COMPARE_PREVIOUS := 16
 const BATCH_MENU_COMPARE_SPLIT := 17
 const BATCH_MENU_LAYOUT_CONTACT := 18
 const BATCH_MENU_LAYOUT_FOCUS := 19
+const BATCH_MENU_EDIT := 20
 const SELECTION_TOOLS_VISIBLE := false
 const EDITABLE_GRAPH_NODE_TYPES := ["object_list", "size_spec", "ai_generate"]
 
@@ -96,6 +99,7 @@ var _import_flow: Node = null
 var _openai_flow: Node = null
 var _provider_settings_dialog: ConfirmationDialog = null
 var _board_editor: ConfirmationDialog = null
+var _pixel_editor: ConfirmationDialog = null
 
 
 func setup(
@@ -130,12 +134,17 @@ func setup(
 	_board_editor = BoardEditorScript.new()
 	_board_editor.name = "BoardEditor"
 	add_child(_board_editor)
+	_pixel_editor = PixelEditorScript.new()
+	_pixel_editor.name = "PixelEditor"
+	add_child(_pixel_editor)
+	_pixel_editor.asset_saved.connect(_on_editor_asset_saved)
 	_create_m2_dialogs()
 	_create_graph_node_params_dialog()
 	_create_batch_menu()
 	_init_tools()
 	_canvas.batch_context_requested.connect(_show_batch_menu)
 	_canvas.graph_quick_add_requested.connect(show_graph_quick_add_menu)
+	_canvas.asset_edit_requested.connect(_open_pixel_editor)
 
 
 func add_file_menu(parent: Control) -> void:
@@ -157,6 +166,7 @@ func add_file_menu(parent: Control) -> void:
 	_add_graph_node_submenu(popup)
 	popup.add_item(Strings.MENU_EDIT_SELECTED_GRAPH_NODE, FILE_MENU_EDIT_SELECTED_GRAPH_NODE)
 	popup.add_item(Strings.MENU_OPEN_BOARD, FILE_MENU_OPEN_BOARD)
+	popup.add_item(Strings.MENU_OPEN_PIXEL_EDITOR, FILE_MENU_OPEN_PIXEL_EDITOR)
 	popup.add_separator()
 	popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
 	popup.add_item(Strings.ACTION_OPEN, FILE_MENU_OPEN)
@@ -536,6 +546,7 @@ func _create_batch_menu() -> void:
 	_batch_menu.add_item(Strings.BATCH_ACTION_SPLIT, BATCH_MENU_SPLIT)
 	_batch_menu.add_separator()
 	_batch_menu.add_item(Strings.BATCH_ACTION_EXPORT, BATCH_MENU_EXPORT)
+	_batch_menu.add_item(Strings.BATCH_ACTION_EDIT, BATCH_MENU_EDIT)
 	_batch_menu.id_pressed.connect(_on_batch_menu_id_pressed)
 	add_child(_batch_menu)
 
@@ -572,6 +583,8 @@ func _on_file_menu_pressed(id: int) -> void:
 			edit_selected_graph_node()
 		FILE_MENU_OPEN_BOARD:
 			_board_editor.show_editor()
+		FILE_MENU_OPEN_PIXEL_EDITOR:
+			_open_selected_in_pixel_editor()
 		FILE_MENU_NEW:
 			_new_project_callback.call()
 		FILE_MENU_OPEN:
@@ -605,6 +618,9 @@ func _show_batch_menu(card_id: String, screen_position: Vector2i) -> void:
 func _on_batch_menu_id_pressed(id: int) -> void:
 	var asset_ids: Array = _canvas._get_batch_asset_ids(_batch_menu_card_id, true)
 	match id:
+		BATCH_MENU_EDIT:
+			if not asset_ids.is_empty():
+				_open_pixel_editor(String(asset_ids[0]), _batch_menu_card_id)
 		BATCH_MENU_CLEANUP:
 			_m2_actions.batch_cleanup(
 				_batch_menu_card_id,
@@ -693,6 +709,37 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 			)
 		BATCH_MENU_EXPORT:
 			_emit_batch_export(asset_ids)
+
+
+func _open_selected_in_pixel_editor() -> void:
+	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
+	if snapshots.size() == 1:
+		_open_pixel_editor(String(snapshots[0]["data"].get("asset_id", "")), "")
+		return
+	var card_id := _selected_batch_card_id()
+	if not card_id.is_empty():
+		var ids: Array = _canvas._get_batch_asset_ids(card_id, true)
+		if not ids.is_empty():
+			_open_pixel_editor(String(ids[0]), card_id)
+			return
+	_status_label.text = Strings.EDITOR_SELECT_ASSET
+
+
+func _open_pixel_editor(asset_id: String, batch_id: String) -> void:
+	if not _pixel_editor.open_asset(asset_id, batch_id):
+		_status_label.text = Strings.EDITOR_OPEN_FAILED
+
+
+func _on_editor_asset_saved(old_asset_id: String, new_asset_id: String, batch_id: String) -> void:
+	if not batch_id.is_empty():
+		var ids: Array = _canvas._get_batch_asset_ids(batch_id)
+		for index in range(ids.size()):
+			if String(ids[index]) == old_asset_id:
+				ids[index] = new_asset_id
+		_canvas._replace_batch_asset_ids(batch_id, ids, true)
+	else:
+		_canvas._replace_asset_reference(old_asset_id, new_asset_id)
+	_status_label.text = Strings.EDITOR_SAVED
 
 
 func _mark_batch_review_state(review_state: String, status_format: String) -> void:
