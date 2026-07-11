@@ -15,6 +15,8 @@ var id := ""
 var kind := ""
 var payload := {}
 var work_callable := Callable()
+var external_start_callable := Callable()
+var external_cancel_callable := Callable()
 var cancel_requested := false
 var queue_sequence := -1
 
@@ -32,6 +34,8 @@ func _init(
 
 func cancel() -> void:
 	cancel_requested = true
+	if external_cancel_callable.is_valid():
+		external_cancel_callable.call(self)
 
 
 func report_progress(ratio: float, message: String = "") -> void:
@@ -48,6 +52,33 @@ func execute() -> Variant:
 	if work_callable.is_valid():
 		return work_callable.call(self)
 	return payload
+
+
+func configure_external(start_callable: Callable, cancel_callable: Callable = Callable()) -> void:
+	external_start_callable = start_callable
+	external_cancel_callable = cancel_callable
+
+
+func is_external_async() -> bool:
+	return external_start_callable.is_valid()
+
+
+func start_external() -> void:
+	if cancel_requested:
+		resolve(null)
+		return
+	if external_start_callable.is_valid():
+		external_start_callable.call(self)
+
+
+func resolve(result: Variant) -> void:
+	if _queue != null:
+		_queue.call_deferred("_complete_external_task", id, result, {})
+
+
+func reject(error: Dictionary) -> void:
+	if _queue != null:
+		_queue.call_deferred("_complete_external_task", id, null, error)
 
 
 func _assign_queue(queue: Node) -> void:

@@ -83,10 +83,10 @@
 
 ## M4-4 OpenAI Image Provider（plugins/provider_openai/）
 
-**目标**：通用兜底 provider（gpt-image-1：透明背景支持；伪像素输出 → 清洗管线主战场）。
+**目标**：通用兜底 provider（当前推荐 `gpt-image-2`；伪像素输出 → 清洗管线主战场）。
 
 **技术实现指导**：
-- 端点 images/generations；background=transparent + output_format=png；尺寸映射：API 仅支持固定档（1024² 等）→ 请求 1024，**结果必然伪像素**：raw_pixel=false，依赖下游清洗（这正是产品价值闭环的展示场景）。
+- 端点 images/generations；按 2026-07-11 官方能力，`gpt-image-2` 不支持透明背景，尺寸映射使用 1024/1536 固定档并通过纯色对比背景辅助后续抠图。**结果必然伪像素**：raw_pixel=false，依赖下游清洗（这正是产品价值闭环的展示场景）。
 - prompt 组装强化：追加"pixel art, {base_size}x{base_size} sprite, flat colors, no anti-aliasing"等模板尾缀（在 provider 内追加而非污染通用模板——平台适配职责，PROVIDER-API §4）。
 - moderation/content_policy 错误映射；组织级 key 校验。
 - 费用估算：按 quality 档价目表。

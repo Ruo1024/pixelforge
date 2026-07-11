@@ -120,6 +120,44 @@ func test_progress_signal_is_emitted_on_main_thread() -> void:
 	queue.task_progressed.disconnect(on_progress)
 
 
+func test_external_async_task_resolves_through_queue() -> void:
+	var queue := get_tree().root.get_node("TaskQueue")
+	var finished := []
+	var task := TaskScript.new("external", {"safe": true})
+	task.configure_external(func(task_ref: Variant) -> void: task_ref.resolve("external-ok"))
+	task.finished.connect(func(result: Variant) -> void: finished.append(result))
+
+	queue.submit(task)
+
+	assert_true(await _wait_until(func() -> bool: return queue.is_idle()))
+	assert_eq(finished, ["external-ok"])
+
+
+func test_external_async_cancel_emits_only_canceled() -> void:
+	var queue := get_tree().root.get_node("TaskQueue")
+	var finished := []
+	var canceled := []
+	var task := TaskScript.new("external-cancel", {})
+	task.configure_external(_hold_external, _resolve_external_cancel)
+	task.finished.connect(func(result: Variant) -> void: finished.append(result))
+	task.canceled.connect(func() -> void: canceled.append(task.id))
+
+	queue.submit(task)
+	queue.cancel(task.id)
+
+	assert_true(await _wait_until(func() -> bool: return queue.is_idle()))
+	assert_eq(finished, [])
+	assert_eq(canceled, [task.id])
+
+
+func _hold_external(_task_ref: Variant) -> void:
+	pass
+
+
+func _resolve_external_cancel(task_ref: Variant) -> void:
+	task_ref.resolve(null)
+
+
 func _wait_until(check: Callable, timeout_seconds: float = 2.0) -> bool:
 	var elapsed := 0.0
 	while elapsed < timeout_seconds:

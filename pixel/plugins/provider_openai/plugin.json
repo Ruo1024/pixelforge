@@ -1,0 +1,11 @@
+{
+  "id": "provider_openai",
+  "name": "OpenAI Image Provider",
+  "version": "0.1.0",
+  "api_version": 1,
+  "min_app_version": "0.1.0-alpha.1",
+  "entry": "main.gd",
+  "permissions": ["network"],
+  "description": "Session-only GPT Image generation for the M4-V1 value experiment.",
+  "author": "PixelForge"
+}

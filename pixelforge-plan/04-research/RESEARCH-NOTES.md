@@ -1,6 +1,6 @@
 # RESEARCH-NOTES.md — 2026-06 调研结论存档
 
-> 本文件是技术选型的事实依据。所有结论核实于 2026年6月，落地实现前涉及外部 API 的部分应重新验证（标注 ⚠ 的尤其如此）。
+> 本文件是技术选型的事实依据。主体结论核实于 2026年6月；落地实现前涉及外部 API 的部分应重新验证（标注 ⚠ 的尤其如此）。M4-V1 的 OpenAI 小节已于 2026-07-11 复核。
 
 ## 1. Godot 技术栈核实
 
@@ -20,7 +20,7 @@
 - **PixelLab.ai** ⚠：活跃；API+MCP；8 方向角色、骨架动画、Wang tileset；订阅 ~$9–22/月。动画能力超出 v1 范围 → M7 后候选。
 
 ### 通用大厂 API
-- **OpenAI**：gpt-image-1（支持 background=transparent + PNG）；gpt-image-2 旗舰但**不支持**透明背景 ⚠；DALL-E 系已退役（2026-05）。价格 1024² 约 $0.02–0.19 按质量档。
+- **OpenAI（2026-07-11 复核）**：官方当前推荐图像模型为 `gpt-image-2`，生成端点为 `POST /v1/images/generations`，响应图像位于 `data[].b64_json`。该模型不支持透明背景，输出尺寸为 1024/1536 固定档，因此很适合 M4-V1 暴露“高分辨率伪像素 → PixelForge 清洗”的价值。V1 使用 low quality 草稿档，不把未知实时费用伪装成精确估算。来源：[Image generation guide](https://developers.openai.com/api/docs/guides/image-generation)、[GPT Image 2 model](https://developers.openai.com/api/docs/models/gpt-image-2)。
 - **Google**：Imagen 4 / Gemini 系图像 $0.02–0.13；透明背景未明确支持 + 强制 SynthID 水印 → 不入 v1 首选。
 - **FLUX (BFL)**：FLUX.2（2025-11）；Kontext 编辑系；Fill 支持 alpha 掩码 inpaint；schnell 开源 Apache 2.0（本地/ComfyUI 路线素材）。
 - **Stability**：SD3.5 API 在役，$0.03–0.08/张。
@@ -63,7 +63,7 @@ RetroDiffusion 可商用｜OpenAI 可商用（输出不训练）｜Stability 年
 
 ## 5. 后续需持续跟踪的不确定项
 - ⚠ RetroDiffusion/PixelLab API 字段与价格：落地 M4/M7 前重新核对官方文档。
-- ⚠ gpt-image 系列型号更替快（gpt-image-1 是否退役）。
+- ⚠ gpt-image 系列型号更替快；每次进入真实 Provider 施工前重新核对推荐型号、尺寸、透明背景和价格。
 - ⚠ Godot 4.7 的 GraphEdit/TileMapLayer API 变化（升级评估卡触发）。
 - ⚠ FLUX/SD 像素 LoRA 生态月度演进（出厂 ComfyUI 模板的模型选择在 M7 时点重选最优）。
 

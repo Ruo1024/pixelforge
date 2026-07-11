@@ -1,5 +1,6 @@
 # Changelog
 
+- M4-V1 engineering: add a session-only OpenAI GPT Image 2 provider, async queue integration, recorded response contract tests, graph/batch materialization with provenance, rerun support, and key-leak guards. Real API and three-person A/B acceptance remain pending.
 - M3.1 AR-1: New/Open/Quit 统一保护未保存项目，恢复副本和文件失败提供安全、可操作的反馈。
 - M3.1 AR-2: 首次导入使用稳定落点和原子失败重试，清洗状态与导出路径/覆盖/失败产物反馈完整可见。
 - M3.1 AR-3: 版本更新为 0.1.0-alpha.1，增加 macOS 候选构建、受保护图片包审计与统一受邀测试说明。

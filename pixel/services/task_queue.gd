@@ -106,6 +106,9 @@ func _start_task(task: Variant) -> void:
 	_running[task.id] = task
 	task_started.emit(task.id, task.kind)
 	EventBus.task_started.emit(task.id, task.kind)
+	if task.is_external_async():
+		task.start_external()
+		return
 
 	var worker_callable := func() -> void:
 		var result: Variant = task.execute()
@@ -113,6 +116,21 @@ func _start_task(task: Variant) -> void:
 
 	var worker_id := WorkerThreadPool.add_task(worker_callable, false, "PFTask:%s" % task.kind)
 	_worker_ids[task.id] = worker_id
+
+
+func _complete_external_task(task_id: String, result: Variant, error: Dictionary) -> void:
+	if not _running.has(task_id):
+		return
+	var task: Variant = _running[task_id]
+	_running.erase(task_id)
+	if task.cancel_requested:
+		_store_completion(task, "canceled", null, {})
+	elif not error.is_empty():
+		_store_completion(task, "failed", null, error)
+	else:
+		_store_completion(task, "finished", result, {})
+	_flush_completed_in_order()
+	_pump_queue()
 
 
 func _complete_task_from_worker(task_id: String, result: Variant) -> void:

@@ -1,0 +1,12 @@
+{
+  "created": 1783770000,
+  "data": [
+    {
+      "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "revised_prompt": "A tiny test sprite"
+    }
+  ],
+  "usage": {
+    "total_tokens": 42
+  }
+}

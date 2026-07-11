@@ -1,0 +1,132 @@
+extends "res://addons/gut/test.gd"
+
+const ProviderScript := preload("res://plugins/provider_openai/openai_image_provider.gd")
+const GraphScript := preload("res://core/graph/pf_graph.gd")
+const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+const GraphRunnerScript := preload("res://services/graph_mock_runner.gd")
+
+const FIXTURE_PATH := "res://tests/fixtures/providers/openai_image_success.json"
+const SECRET_SENTINEL := "sk-pf-m4-v1-contract-secret"
+
+var _provider: PFOpenAIImageProvider
+
+
+func before_each() -> void:
+	_provider = ProviderScript.new()
+	get_tree().root.get_node("ProjectService").new_project("M4 V1 Contract")
+
+
+func after_each() -> void:
+	_provider.clear_session_config()
+	get_tree().root.get_node("ProviderService").clear_session("openai_image")
+
+
+func test_capabilities_and_session_only_schema_match_contract() -> void:
+	assert_eq(_provider.get_id(), "openai_image")
+	assert_eq(_provider.get_api_version(), 1)
+	var capabilities := _provider.get_capabilities()
+	assert_true(capabilities["txt2img"])
+	assert_false(capabilities["transparent_bg"])
+	assert_false(capabilities["native_pixel"])
+	assert_eq(capabilities["max_batch"], 4)
+	assert_false(capabilities["cost_estimate"])
+	var schema := _provider.get_config_schema()
+	assert_eq(schema.size(), 1)
+	assert_eq(schema[0]["kind"], "password")
+	assert_true(schema[0]["session_only"])
+
+
+func test_request_body_is_sanitized_and_adapts_target_size() -> void:
+	assert_null(_provider.configure({"api_key": SECRET_SENTINEL}))
+	var request := {
+		"prompt": "wooden barrel",
+		"width": 32,
+		"height": 32,
+		"batch": 9,
+	}
+	var body := _provider.build_request_body(request)
+	assert_eq(body["model"], "gpt-image-2")
+	assert_eq(body["quality"], "low")
+	assert_eq(body["size"], "1024x1024")
+	assert_eq(body["n"], 4)
+	assert_string_contains(body["prompt"], "wooden barrel")
+	assert_string_contains(body["prompt"], "32x32 true-pixel target")
+	assert_false(JSON.stringify(body).contains(SECRET_SENTINEL))
+
+	var task: PFTask = _provider.generate(request)
+	assert_false(JSON.stringify(task.payload).contains(SECRET_SENTINEL))
+	assert_false(JSON.stringify(ProjectService.current_project.manifest).contains(SECRET_SENTINEL))
+	assert_false(JSON.stringify(ProjectService.current_project.graphs).contains(SECRET_SENTINEL))
+	assert_ne(SettingsService.get_setting("provider", "api_key", "missing"), SECRET_SENTINEL)
+
+
+func test_recorded_success_fixture_decodes_to_rgba_result() -> void:
+	var payload := _load_fixture()
+	var result := _provider.decode_success_payload(payload, {"width": 32, "height": 24})
+	assert_true(result["ok"])
+	assert_eq(result["images"].size(), 1)
+	var image: Image = result["images"][0]
+	assert_eq(image.get_size(), Vector2i(1, 1))
+	assert_eq(image.get_format(), Image.FORMAT_RGBA8)
+	assert_false(result["raw_pixel"])
+	assert_eq(result["cost"], -1.0)
+	assert_eq(result["provider_meta"]["model"], "gpt-image-2")
+	assert_eq(result["provider_meta"]["target_size"], [32, 24])
+
+
+func test_error_mapping_and_single_retry_policy_are_stable() -> void:
+	assert_eq(_provider.map_error(HTTPRequest.RESULT_SUCCESS, 401)["code"], "auth_failed")
+	assert_eq(_provider.map_error(HTTPRequest.RESULT_SUCCESS, 429)["code"], "rate_limited")
+	assert_eq(
+		(
+			_provider
+			. map_error(
+				HTTPRequest.RESULT_SUCCESS, 400, {"error": {"code": "content_policy_violation"}}
+			)["code"]
+		),
+		"content_policy"
+	)
+	assert_eq(_provider.map_error(HTTPRequest.RESULT_SUCCESS, 500)["code"], "provider_internal")
+	assert_eq(_provider.map_error(HTTPRequest.RESULT_TIMEOUT, 0)["code"], "timeout")
+	assert_true(_provider.should_retry(HTTPRequest.RESULT_CANT_CONNECT, 0, 0))
+	assert_true(_provider.should_retry(HTTPRequest.RESULT_SUCCESS, 503, 0))
+	assert_false(_provider.should_retry(HTTPRequest.RESULT_SUCCESS, 503, 1))
+	assert_false(_provider.should_retry(HTTPRequest.RESULT_SUCCESS, 429, 0))
+
+
+func test_provider_result_materializes_complete_provenance_without_secret() -> void:
+	var decoded := _provider.decode_success_payload(_load_fixture(), {"width": 32, "height": 32})
+	var graph := GraphScript.new()
+	graph.id = "graph_openai_contract"
+	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": "OpenAI"}, Vector2.ZERO)
+	var metadata := [
+		{
+			"provider": "openai_image",
+			"model": "gpt-image-2",
+			"prompt": "wooden barrel",
+			"seed": null,
+			"cost": decoded["cost"],
+			"provider_meta": decoded["provider_meta"],
+			"name": "openai_001",
+		}
+	]
+	var result := GraphRunnerScript.new().materialize_provider_batch(
+		graph, "batch_1", decoded["images"], metadata, AssetLibrary
+	)
+	assert_true(result["ok"])
+	var meta: Dictionary = AssetLibrary.get_asset_meta(result["asset_ids"][0])
+	var provenance: Dictionary = meta["provenance"]
+	assert_eq(provenance["provider"], "openai_image")
+	assert_eq(provenance["model"], "gpt-image-2")
+	assert_eq(provenance["prompt"], "wooden barrel")
+	assert_eq(provenance["cost"], -1.0)
+	assert_eq(int(provenance["provider_meta"]["usage"]["total_tokens"]), 42)
+	assert_false(JSON.stringify(meta).contains(SECRET_SENTINEL))
+
+
+func _load_fixture() -> Dictionary:
+	var file := FileAccess.open(FIXTURE_PATH, FileAccess.READ)
+	assert_not_null(file)
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	assert_true(parsed is Dictionary)
+	return parsed

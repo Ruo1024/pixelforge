@@ -26,6 +26,7 @@ AssetLibrary="*res://services/asset_library.gd"
 UndoService="*res://services/undo_service.gd"
 TaskQueue="*res://services/task_queue.gd"
 ProjectService="*res://services/project_service.gd"
+ProviderService="*res://services/provider_service.gd"
 
 [display]
 

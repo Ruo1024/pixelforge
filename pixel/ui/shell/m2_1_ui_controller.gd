@@ -16,6 +16,7 @@ const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
 const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
 const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
 const ImportFlowControllerScript := preload("res://ui/shell/import_flow_controller.gd")
+const OpenAIGenerationControllerScript := preload("res://ui/shell/openai_generation_controller.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
@@ -41,6 +42,8 @@ const FILE_MENU_OPEN := 5
 const FILE_MENU_SAVE := 6
 const FILE_MENU_FOCUS_LAST_IMPORT := 7
 const FILE_MENU_RETRY_IMPORT := 8
+const FILE_MENU_CONFIGURE_OPENAI_SESSION := 9
+const FILE_MENU_GENERATE_OPENAI_BATCH := 10
 const GRAPH_ADD_MENU_ID_START := 100
 const BATCH_MENU_CLEANUP := 0
 const BATCH_MENU_MATTE := 1
@@ -85,6 +88,7 @@ var _graph_quick_add_world_position := Vector2.ZERO
 var _batch_menu: PopupMenu = null
 var _batch_menu_card_id := ""
 var _import_flow: Node = null
+var _openai_flow: Node = null
 
 
 func setup(
@@ -107,6 +111,10 @@ func setup(
 	_import_flow.name = "ImportFlowController"
 	add_child(_import_flow)
 	_import_flow.setup(_canvas, _status_label, self)
+	_openai_flow = OpenAIGenerationControllerScript.new()
+	_openai_flow.name = "OpenAIGenerationController"
+	add_child(_openai_flow)
+	_openai_flow.setup(_canvas, _status_label)
 	_create_m2_dialogs()
 	_create_graph_node_params_dialog()
 	_create_batch_menu()
@@ -127,6 +135,8 @@ func add_file_menu(parent: Control) -> void:
 	popup.add_item(Strings.ACTION_RETRY_IMPORT, FILE_MENU_RETRY_IMPORT)
 	popup.add_separator()
 	popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
+	popup.add_item(Strings.MENU_CONFIGURE_OPENAI_SESSION, FILE_MENU_CONFIGURE_OPENAI_SESSION)
+	popup.add_item(Strings.MENU_GENERATE_OPENAI_BATCH, FILE_MENU_GENERATE_OPENAI_BATCH)
 	popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
 	_add_graph_node_submenu(popup)
 	popup.add_item(Strings.MENU_EDIT_SELECTED_GRAPH_NODE, FILE_MENU_EDIT_SELECTED_GRAPH_NODE)
@@ -250,10 +260,20 @@ func generate_mock_batch() -> void:
 
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	var asset_ids: Array = result["asset_ids"]
-	var items := _add_mock_graph_canvas_items(graph, asset_ids, _canvas.get_mouse_world_position())
+	var items := _add_generate_graph_canvas_items(
+		graph, asset_ids, _canvas.get_mouse_world_position(), Strings.MOCK_BATCH_LABEL
+	)
 	if not items.is_empty():
 		_focus_canvas_on_bounds(_bounds_for_items(items))
 	_status_label.text = Strings.STATUS_MOCK_GENERATE_DONE % asset_ids.size()
+
+
+func configure_openai_session() -> void:
+	_openai_flow.configure_session()
+
+
+func generate_openai_batch() -> void:
+	_openai_flow.generate_batch()
 
 
 func run_selected_mock_graph() -> void:
@@ -281,7 +301,13 @@ func run_selected_mock_graph() -> void:
 			{"message": Strings.STATUS_GRAPH_RUN_NO_BATCH}
 		)
 		return
+	var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
+	if _route_openai_graph_run(graph, batch_node_id, batch_card_id):
+		return
+	_run_mock_graph(graph, batch_node_id, batch_card_id)
 
+
+func _run_mock_graph(graph: PFGraph, batch_node_id: String, batch_card_id: String) -> void:
 	var runner := GraphMockRunnerScript.new()
 	var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, batch_node_id, true)
 	if not bool(result.get("ok", false)):
@@ -291,7 +317,6 @@ func run_selected_mock_graph() -> void:
 		return
 
 	var asset_ids: Array = result["asset_ids"]
-	var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if batch_card_id.is_empty():
 		_status_label.text = _graph_run_failure_status(
@@ -518,6 +543,10 @@ func _on_file_menu_pressed(id: int) -> void:
 			_import_flow.retry_import()
 		FILE_MENU_GENERATE_MOCK_BATCH:
 			generate_mock_batch()
+		FILE_MENU_CONFIGURE_OPENAI_SESSION:
+			configure_openai_session()
+		FILE_MENU_GENERATE_OPENAI_BATCH:
+			generate_openai_batch()
 		FILE_MENU_RUN_SELECTED_GRAPH:
 			run_selected_mock_graph()
 		FILE_MENU_EDIT_SELECTED_GRAPH_NODE:
@@ -834,6 +863,26 @@ func _graph_node_add_position(binding: Dictionary) -> Vector2:
 	return _canvas.screen_to_world(_canvas.size * 0.5)
 
 
+func _graph_provider_id(graph: PFGraph) -> String:
+	for node_id in graph.nodes.keys():
+		var node: PFNode = graph.get_node(String(node_id))
+		if node != null and node.get_type() == "ai_generate":
+			return String(graph.get_node_params(String(node_id)).get("provider_id", "mock"))
+	return "mock"
+
+
+func _route_openai_graph_run(graph: PFGraph, batch_node_id: String, batch_card_id: String) -> bool:
+	if _graph_provider_id(graph) != "openai_image":
+		return false
+	if batch_card_id.is_empty():
+		_status_label.text = _graph_run_failure_status(
+			{"message": Strings.STATUS_GRAPH_RUN_MISSING_BATCH_CARD}
+		)
+		return true
+	_openai_flow.run_graph(graph, batch_node_id, batch_card_id)
+	return true
+
+
 func _project_style_preset() -> Dictionary:
 	var style_data: Variant = ProjectService.current_project.manifest.get("style_preset", {})
 	return style_data if style_data is Dictionary else {}
@@ -870,7 +919,9 @@ func _make_mock_generate_graph() -> PFGraph:
 	return graph
 
 
-func _add_mock_graph_canvas_items(graph: PFGraph, asset_ids: Array, anchor: Vector2) -> Array:
+func _add_generate_graph_canvas_items(
+	graph: PFGraph, asset_ids: Array, anchor: Vector2, batch_label: String
+) -> Array:
 	var items := []
 	for node_id in ["objects", "size", "generate"]:
 		var node_item: Node = _canvas._add_graph_node_card(
@@ -881,7 +932,7 @@ func _add_mock_graph_canvas_items(graph: PFGraph, asset_ids: Array, anchor: Vect
 	var batch_card: Node = _canvas._add_batch_card(
 		asset_ids,
 		anchor + _graph_node_position(graph, "batch_1"),
-		Strings.MOCK_BATCH_LABEL,
+		batch_label,
 		"",
 		false,
 		graph.id,

@@ -44,6 +44,21 @@ func run_to_batch(
 	return {"ok": true, "asset_ids": materialized_asset_ids, "graph": graph.to_json()}
 
 
+func materialize_provider_batch(
+	graph: PFGraph,
+	batch_node_id: String,
+	images: Array,
+	metadata: Array,
+	asset_library: Node,
+	replace_batch_assets: bool = false
+) -> Dictionary:
+	## M4-V1 adapter: async providers supply the generated images, while graph materialization
+	## continues to use the same batch/provenance path as the mock runner.
+	return _materialize_batch(
+		graph, batch_node_id, images, metadata, asset_library, replace_batch_assets
+	)
+
+
 func _validate_run_setup(graph: PFGraph, asset_library: Node) -> Dictionary:
 	if graph == null:
 		return _error("missing_graph", "Graph is required")
@@ -235,15 +250,18 @@ func _topological_order(graph: PFGraph) -> Dictionary:
 
 
 func _asset_meta(graph_id: String, meta: Dictionary) -> Dictionary:
+	var provider := String(meta.get("provider", "mock"))
 	return {
 		"origin": "generated",
-		"tags": ["mock", "graph"],
+		"tags": [provider, "graph"],
 		"provenance":
 		{
-			"provider": meta.get("provider", "mock"),
+			"provider": provider,
 			"model": meta.get("model", "pixel_mock_v1"),
 			"prompt": meta.get("prompt", ""),
 			"seed": meta.get("seed", null),
+			"cost": meta.get("cost", -1.0),
+			"provider_meta": meta.get("provider_meta", {}),
 			"parent_asset": null,
 			"graph_id": graph_id,
 			"created_at": IdUtil.utc_now_iso(),
