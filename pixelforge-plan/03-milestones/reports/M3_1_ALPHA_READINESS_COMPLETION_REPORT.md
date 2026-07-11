@@ -197,3 +197,11 @@
 
 - 对应本地提交：`M3.1 prepare macOS alpha candidate`（哈希以 Goal 分支日志为准）。
 - diff 模式：版本/README、导出预设、构建与 PCK 审计脚本、受保护目录导入隔离、一页测试说明、当前状态与本报告增量；不内联全量源码，不提交候选 ZIP。
+
+## 2026-07-11 长期 Goal 继承审计
+
+- M3 工程收口提交 `d6efb6e`、M3.1 AR-1～AR-3 提交 `8c2afab..531aa86` 均为长期 Goal 起点 `44a5081` 的祖先；报告与 Git diffstat 可对账。
+- `./pixel/scripts/verify_m4_v1.sh` 复用并通过 `verify_m3_1.sh`：197/197 tests、1515 assertions；M3.1 包红线、UI 缩放、模板和 headless 启动门均通过。
+- 候选 ZIP 仍是本地忽略产物，未 stage、未 commit、未上传；本次审计没有触碰保留目录或未授权图片。
+- 人工状态保持：**待最终统一验收；M3.1 受邀 alpha 尚未通过**。
+- 长期分支 `codex/pixelforge-full-plan-goal` 只继承这些本地提交；main 保持 `bdfeafc`，origin/main 保持 `a9003ab`，没有 merge 或 push。

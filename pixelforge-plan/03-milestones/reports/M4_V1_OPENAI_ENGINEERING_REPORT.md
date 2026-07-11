@@ -1,6 +1,6 @@
 # M4-V1 OpenAI 工程准备报告（diff 模式）
 
-> 日期：2026-07-11；分支：`codex/m4-v1-openai`。
+> 日期：2026-07-11；原工程分支：`codex/m4-v1-openai`；已由长期本地分支 `codex/pixelforge-full-plan-goal` 继承。
 > 结论：**工程准备完成；M4-V1 产品实验未完成，不作 go/no-go。**
 
 ## 1. 路线与边界
@@ -31,7 +31,7 @@
 1. 使用真实 key 完成一次固定提示词生成，确认网络、账户权限、当前响应字段和实际延迟。
 2. 在真实图上走通生成 → 清洗/抠图 → 对比/筛选 → 导出，并记录失败样本。
 3. 三名目标用户分别执行集成生成与外部生成后导入 A/B，记录首次可用素材时间与继续使用意愿。
-4. 按 `M4-ai-providers.md` 给出明确 go/no-go；此前 M4-1～M4-5 继续冻结。
+4. 按 `M4-ai-providers.md` 给出明确 go/no-go。项目所有者已授权 Goal 期间暂定工程继续 M4-1～M4-5，但不得把该授权倒填为产品 `go`；最终 no-go 时可整体不合并本地 Goal 分支。
 
 ## 5. 后续人工入口（用户准备测试时）
 
@@ -39,3 +39,11 @@
 2. File → Generate OpenAI Value Batch，等待状态栏完成或可操作错误。
 3. 对生成批次执行现有 Clean/Matte/Compare/Export；选中该 graph 任一节点后可用 Run Selected Graph 重跑。
 4. 关闭并重新启动应用，确认必须重新输入 key；保存的 `.pxproj` 与日志中不得出现 key。
+
+## 6. 长期 Goal 继承审计
+
+- origin/main 基线：`a9003ab`；本地 main 基线：`bdfeafc`；Goal 起点：`44a5081`。
+- 继承提交：M3/M3.1 `bdfeafc..531aa86`，M4-V1 `44a5081`；没有合并 main，没有 push。
+- `./pixel/scripts/verify_m4_v1.sh`：197/197 tests、1515 assertions 通过；复用 `verify_m3_1.sh` 通过。
+- 既有 1 个 GUT orphan 与退出时资源警告仍存在；本轮没有新增用户影响证据，后续若数量或归属变化必须重新定位。
+- 人工状态：**待最终统一验收**。当前结论固定为：**暂定工程继续，产品 go/no-go 待最终统一验收**。
