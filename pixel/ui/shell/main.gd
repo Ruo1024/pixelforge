@@ -1,9 +1,6 @@
 class_name PFMain
 extends Control
 
-## 应用主窗口。
-## UI 只负责命令分发和状态展示；项目状态由 ProjectService 管，画布状态由 PFInfiniteCanvas 管。
-
 const Strings := preload("res://ui/shell/strings.gd")
 const InfiniteCanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const ContextInspectorScript := preload("res://ui/inspector/workspace_context_inspector.gd")
@@ -17,9 +14,13 @@ const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
 const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
 const WorkspaceNavigationScript := preload("res://ui/shell/workspace_navigation.gd")
 const WorkspaceStartControllerScript := preload("res://ui/shell/workspace_start_controller.gd")
+const WorkspaceSettingsControllerScript := preload(
+	"res://ui/shell/workspace_settings_controller.gd"
+)
 const ProjectLifecycleGuardScript := preload("res://ui/shell/project_lifecycle_guard.gd")
 const ExportFlowControllerScript := preload("res://ui/shell/export_flow_controller.gd")
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
+const AppTheme := preload("res://ui/shell/app_theme.gd")
 const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
 const ScaleAudit := preload("res://ui/shell/scale_audit.gd")
 const ViewportFillPolicy := preload("res://ui/shell/viewport_fill_policy.gd")
@@ -274,31 +275,7 @@ func _apply_runtime_theme() -> void:
 
 
 func _build_app_theme() -> Theme:
-	var app_theme := Theme.new()
-	app_theme.default_font_size = UI_FONT_SIZE
-
-	for type_name in [
-		"Button",
-		"CheckBox",
-		"ConfirmationDialog",
-		"FileDialog",
-		"ItemList",
-		"Label",
-		"LineEdit",
-		"MenuButton",
-		"OptionButton",
-		"PopupMenu",
-		"TabBar",
-		"Tree",
-		"Window",
-	]:
-		app_theme.set_font_size("font_size", type_name, UI_FONT_SIZE)
-
-	app_theme.set_font_size("font_size", "Button", UI_SMALL_FONT_SIZE)
-	app_theme.set_font_size("font_size", "PopupMenu", UI_SMALL_FONT_SIZE)
-	app_theme.set_constant("h_separation", "HBoxContainer", 8)
-	app_theme.set_constant("v_separation", "VBoxContainer", 0)
-	return app_theme
+	return AppTheme.build(UI_FONT_SIZE, UI_SMALL_FONT_SIZE)
 
 
 func _apply_window_defaults() -> void:
@@ -363,6 +340,10 @@ func _build_ui() -> void:
 	_add_toolbar_button(
 		global_actions, Strings.ACTION_EXPORT_PNG, _export_selected_png, TOOLBAR_BUTTON_WIDTH
 	)
+	var settings_controller := WorkspaceSettingsControllerScript.new()
+	settings_controller.name = "WorkspaceSettingsController"
+	add_child(settings_controller)
+	settings_controller.setup(global_actions)
 
 	var canvas_actions := HBoxContainer.new()
 	canvas_actions.name = "CanvasActions"
@@ -527,11 +508,7 @@ func _connect_services() -> void:
 	_canvas.graph_connect_failed.connect(_on_canvas_graph_connect_failed)
 	_canvas.graph_status.connect(_on_canvas_graph_status)
 	_canvas.graph_node_params_commit_requested.connect(_m2_1_ui.apply_graph_node_params)
-	_canvas.graph_node_action_requested.connect(
-		func(_graph_id: String, _node_id: String, action_id: String) -> void:
-			if action_id == "run":
-				_m2_1_ui.run_selected_mock_graph()
-	)
+	_canvas.graph_node_action_requested.connect(_m2_1_ui.run_selected_mock_graph.unbind(3))
 	_cleanup_inspector.apply_requested.connect(_apply_cleanup_to_selection)
 	_cleanup_inspector.preview_requested.connect(_request_cleanup_preview)
 	_cleanup_inspector.cancel_requested.connect(_cancel_cleanup_task)

@@ -4,6 +4,8 @@
 	"LANGUAGE_ENGLISH": "English",
 	"LANGUAGE_SIMPLIFIED_CHINESE": "Simplified Chinese",
 	"LANGUAGE_APPLY_NOTE": "Language changes apply immediately. Open views refresh when they handle the language change signal.",
+	"SETTINGS_ACTION": "Settings",
+	"SETTINGS_TITLE": "PixelForge Settings",
 	"GRAPH_PARAM_OBJECT_LIST": "Objects",
 	"GRAPH_PARAM_WIDTH": "Width",
 	"GRAPH_PARAM_HEIGHT": "Height",

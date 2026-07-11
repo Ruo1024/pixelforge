@@ -26,6 +26,8 @@ func test_workspace_groups_global_and_canvas_actions_with_three_empty_starts() -
 	assert_not_null(hint.get_node("EmptyContent/EmptyActions/AddInput"))
 	assert_not_null(hint.get_node("EmptyContent/EmptyActions/ImportReference"))
 	assert_not_null(hint.get_node("EmptyContent/EmptyActions/OpenExample"))
+	assert_not_null(global_actions.get_node("SettingsButton"))
+	assert_not_null(main.get_node("WorkspaceSettingsController/WorkspaceSettingsDialog"))
 
 
 func test_empty_add_input_creates_real_graph_atomically_and_updates_context() -> void:
