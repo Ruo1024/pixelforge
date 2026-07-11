@@ -56,6 +56,15 @@ func run_graph(graph: PFGraph, batch_node_id: String, batch_card_id: String) -> 
 	_queue_graph(graph, batch_node_id, batch_card_id, _provider_id_for_graph(graph))
 
 
+func cancel_graph(graph_id: String) -> bool:
+	for task_id in _pending_runs.keys():
+		var graph: PFGraph = _pending_runs[task_id].get("graph")
+		if graph != null and graph.id == graph_id:
+			TaskQueue.cancel(String(task_id))
+			return true
+	return false
+
+
 func _queue_graph(
 	graph: PFGraph, batch_node_id: String, batch_card_id: String, provider_id: String
 ) -> void:
@@ -109,6 +118,7 @@ func _submit_provider_run(run_state: Dictionary) -> void:
 		)
 		return
 	_pending_runs[task.id] = run_state
+	_set_graph_status(run_state, "CONTENT_STATUS_RUNNING")
 	task.progress_reported.connect(_on_progress)
 	task.finished.connect(_on_finished.bind(task.id))
 	task.failed.connect(_on_failed.bind(task.id))
@@ -174,12 +184,14 @@ func _on_finished(result: Variant, task_id: String) -> void:
 		not batch_card_id.is_empty()
 	)
 	if not bool(materialized.get("ok", false)):
+		_set_graph_status(state, "CONTENT_STATUS_FAILED")
 		_status_label.text = (
 			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
 			% [display_name, "invalid image response"]
 		)
 		return
 	var asset_ids: Array = materialized["asset_ids"]
+	_set_graph_status(state, "CONTENT_STATUS_COMPLETE")
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if not batch_card_id.is_empty():
 		_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
@@ -196,6 +208,7 @@ func _on_finished(result: Variant, task_id: String) -> void:
 func _on_failed(error: Dictionary, task_id: String) -> void:
 	var state: Dictionary = _pending_runs.get(task_id, {})
 	_pending_runs.erase(task_id)
+	_set_graph_status(state, "CONTENT_STATUS_FAILED")
 	var message := String(error.get("message", "unknown error"))
 	_status_label.text = (
 		Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
@@ -206,11 +219,18 @@ func _on_failed(error: Dictionary, task_id: String) -> void:
 func _on_canceled(task_id: String) -> void:
 	var state: Dictionary = _pending_runs.get(task_id, {})
 	_pending_runs.erase(task_id)
+	_set_graph_status(state, "CONTENT_STATUS_CANCELED")
 	_status_label.text = (
 		Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT
 		% String(state.get("provider_name", "Provider"))
 	)
 	_refresh_cost_label()
+
+
+func _set_graph_status(state: Dictionary, status_key: String) -> void:
+	var graph: PFGraph = state.get("graph")
+	if graph != null:
+		_canvas._set_graph_node_type_status(graph.id, "ai_generate", status_key)
 
 
 func _refresh_cost_label(estimate: float = -1.0) -> void:

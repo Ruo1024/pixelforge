@@ -228,6 +228,57 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	assert_eq(provenance["model"], "rd_plus")
 
 
+func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_results() -> void:
+	ProjectService.new_project("RetroDiffusion cancel")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+	_node_data_for_id(graph_data["nodes"], "generate")["params"]["provider_id"] = ("retrodiffusion")
+	ProjectService.set_graph_data(graph_id, graph_data, true)
+	assert_null(
+		(
+			ProviderService
+			. configure_session(
+				"retrodiffusion",
+				{
+					"api_key": "rdpk-cancel-fixture",
+					"endpoint": OS.get_environment("PF_HTTP_MOCK_URL") + "/retrodiffusion-slow",
+				}
+			)
+		)
+	)
+	ProviderService._set_validation_state("retrodiffusion", "verified", "Fixture verified")
+	CostService.set_monthly_budget(10.0)
+	var items: Array = canvas.export_canvas_data()["items"]
+	var batch_item_id := _item_id_for_node(items, "batch_1")
+	var generate_item_id := _item_id_for_node(items, "generate")
+	var stable_asset_ids: Array = canvas._get_batch_asset_ids(batch_item_id).duplicate()
+	canvas.select_ids([batch_item_id])
+
+	controller.run_selected_mock_graph()
+	assert_eq(
+		canvas._items_by_id[generate_item_id]._status_badge, Strings.text("CONTENT_STATUS_RUNNING")
+	)
+	assert_true(controller.cancel_graph_run(graph_id))
+	var canceled_status := Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT % "RetroDiffusion"
+	assert_true(
+		await _wait_until(func() -> bool: return _status_label(main).text == canceled_status)
+	)
+	assert_eq(
+		canvas._items_by_id[generate_item_id]._status_badge, Strings.text("CONTENT_STATUS_CANCELED")
+	)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), stable_asset_ids)
+	assert_false(canvas.export_canvas_data()["items"][2].has("execution_status"))
+
+
 func _load_fixture() -> Dictionary:
 	var file := FileAccess.open(FIXTURE_PATH, FileAccess.READ)
 	assert_not_null(file)

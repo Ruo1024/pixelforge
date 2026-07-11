@@ -65,7 +65,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "interrupts": Handler.comfy_interrupts})
         elif self.path == "/upload/image":
             self._json(200, {"name": "uploaded.png", "subfolder": "", "type": "input"})
-        elif self.path == "/retrodiffusion-success":
+        elif self.path in {"/retrodiffusion-success", "/retrodiffusion-slow"}:
+            if self.path == "/retrodiffusion-slow":
+                time.sleep(0.3)
             pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
             image_count = max(1, min(4, int(request_body.get("num_images", 1))))
             self._json(200, {

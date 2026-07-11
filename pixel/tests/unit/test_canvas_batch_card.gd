@@ -12,6 +12,7 @@ const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.g
 
 
 func before_each() -> void:
+	LocalizationService.set_language("en")
 	get_tree().root.get_node("ProjectService").new_project("Batch Card")
 
 
@@ -590,11 +591,26 @@ func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> v
 		graph.id, "generate", Vector2(24, 32), "node_item_generate", false
 	)
 	var run_button: Button = card.get_content_control("RunButton")
+	var cancel_button: Button = card.get_content_control("CancelButton")
 
 	assert_not_null(card.get_content_control("ProviderOption"))
 	assert_not_null(run_button)
+	assert_not_null(cancel_button)
+	assert_false(cancel_button.visible)
 	run_button.pressed.emit()
 	assert_eq(actions, [[graph.id, "generate", "run"]])
+
+	card.set_execution_status("CONTENT_STATUS_RUNNING")
+	assert_true(run_button.disabled)
+	assert_true(cancel_button.visible)
+	assert_eq(card._status_badge, Strings.text("CONTENT_STATUS_RUNNING"))
+	cancel_button.pressed.emit()
+	assert_eq(actions, [[graph.id, "generate", "run"], [graph.id, "generate", "cancel"]])
+	card.set_execution_status("CONTENT_STATUS_CANCELED")
+	assert_false(run_button.disabled)
+	assert_false(cancel_button.visible)
+	assert_eq(card._status_badge, Strings.text("CONTENT_STATUS_CANCELED"))
+	assert_false(card.to_canvas_data().has("execution_status"))
 
 	var collapsed_card: Node = (
 		canvas

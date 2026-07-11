@@ -47,12 +47,15 @@ var _visible_output_ports: Array[String] = []
 var _is_ghost := false
 var _has_edge_error := false
 var _status_badge := ""
+var _execution_status_key := ""
 var _font: Font = null
 var _content_root: Control = null
 var _object_edit: TextEdit = null
 var _provider_option: OptionButton = null
 var _batch_size_spin: SpinBox = null
 var _seed_spin: SpinBox = null
+var _run_button: Button = null
+var _cancel_button: Button = null
 var _params_snapshot := {}
 
 
@@ -110,8 +113,10 @@ func get_content_control(control_name: String) -> Control:
 	return _content_root.find_child(control_name, true, false) as Control
 
 
-func set_execution_status(status: String) -> void:
-	_status_badge = status
+func set_execution_status(status_key: String) -> void:
+	_execution_status_key = status_key
+	_status_badge = Strings.text(status_key) if not status_key.is_empty() else ""
+	_sync_run_controls()
 	queue_redraw()
 
 
@@ -234,6 +239,8 @@ func _resolve_graph_node() -> void:
 	_is_ghost = false
 	if _has_edge_error:
 		_status_badge = Strings.GRAPH_NODE_BADGE_EDGE_ERROR
+	if not _execution_status_key.is_empty():
+		_status_badge = Strings.text(_execution_status_key)
 
 
 func _visible_input_ports_for_node(node_type: String, port_names: Array[String]) -> Array[String]:
@@ -328,6 +335,8 @@ func _rebuild_content_controls() -> void:
 	_provider_option = null
 	_batch_size_spin = null
 	_seed_spin = null
+	_run_button = null
+	_cancel_button = null
 	if collapsed or not _is_content_node() or _is_ghost:
 		return
 
@@ -394,15 +403,26 @@ func _build_generate_controls() -> void:
 	settings_row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_SEED"), _seed_spin))
 	_content_root.add_child(settings_row)
 
-	var run_button := Button.new()
-	run_button.name = "RunButton"
-	run_button.text = Strings.text("CONTENT_RUN_GENERATION")
-	run_button.pressed.connect(
+	var action_row := HBoxContainer.new()
+	_run_button = Button.new()
+	_run_button.name = "RunButton"
+	_run_button.text = Strings.text("CONTENT_RUN_GENERATION")
+	_run_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_run_button.pressed.connect(
 		func() -> void:
 			_commit_generate_params()
 			action_requested.emit(graph_id, node_id, "run")
 	)
-	_content_root.add_child(run_button)
+	action_row.add_child(_run_button)
+	_cancel_button = Button.new()
+	_cancel_button.name = "CancelButton"
+	_cancel_button.text = Strings.text("CONTENT_CANCEL_GENERATION")
+	_cancel_button.pressed.connect(
+		func() -> void: action_requested.emit(graph_id, node_id, "cancel")
+	)
+	action_row.add_child(_cancel_button)
+	_content_root.add_child(action_row)
+	_sync_run_controls()
 
 
 func _build_size_controls() -> void:
@@ -504,3 +524,11 @@ func _on_language_changed(_preference: String, _locale: String) -> void:
 	_resolve_graph_node()
 	_rebuild_content_controls()
 	queue_redraw()
+
+
+func _sync_run_controls() -> void:
+	if _run_button == null or _cancel_button == null:
+		return
+	var is_running := _execution_status_key == "CONTENT_STATUS_RUNNING"
+	_run_button.disabled = is_running
+	_cancel_button.visible = is_running

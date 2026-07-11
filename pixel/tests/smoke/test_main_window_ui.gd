@@ -254,6 +254,8 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 		assert_eq(canvas_item["graph_id"], graph_id)
 
 	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
+	var generate_item_id := _item_id_for_node(canvas_items, "generate")
+	var generate_card: Node = canvas._items_by_id[generate_item_id]
 	var first_asset_ids: Array = batch_node["params"]["asset_ids"].duplicate()
 	canvas.select_ids([batch_item_id])
 	controller.run_selected_mock_graph()
@@ -265,6 +267,7 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	assert_eq(rerun_asset_ids.size(), 10)
 	assert_ne(rerun_asset_ids, first_asset_ids)
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
+	assert_eq(generate_card._status_badge, Strings.text("CONTENT_STATUS_COMPLETE"))
 
 	canvas.select_ids([])
 	canvas._selected_graph_edge = {
@@ -329,6 +332,8 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	batch_node = graph_data["nodes"][3]
 	assert_eq(batch_node["params"]["asset_ids"], stable_asset_ids)
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), stable_asset_ids)
+	assert_eq(generate_card._status_badge, Strings.text("CONTENT_STATUS_FAILED"))
+	assert_false(canvas.export_canvas_data()["items"][2].has("execution_status"))
 
 
 func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:

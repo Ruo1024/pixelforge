@@ -309,6 +309,10 @@ func generate_openai_batch() -> void:
 	_openai_flow.generate_batch()
 
 
+func cancel_graph_run(graph_id: String) -> bool:
+	return _openai_flow.cancel_graph(graph_id)
+
+
 func run_selected_mock_graph() -> void:
 	var binding := _selected_graph_binding()
 	if binding.is_empty():
@@ -341,11 +345,13 @@ func run_selected_mock_graph() -> void:
 
 
 func _run_mock_graph(graph: PFGraph, batch_node_id: String, batch_card_id: String) -> void:
+	_canvas._set_graph_node_type_status(graph.id, "ai_generate", "CONTENT_STATUS_RUNNING")
 	var runner := GraphMockRunnerScript.new()
 	var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, batch_node_id, true)
 	if not bool(result.get("ok", false)):
 		var error: Dictionary = result.get("error", {})
 		Log.warn("Selected mock graph run failed", error)
+		_canvas._set_graph_node_type_status(graph.id, "ai_generate", "CONTENT_STATUS_FAILED")
 		_status_label.text = _graph_run_failure_status(error)
 		return
 
@@ -357,6 +363,7 @@ func _run_mock_graph(graph: PFGraph, batch_node_id: String, batch_card_id: Strin
 		)
 		return
 	_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
+	_canvas._set_graph_node_type_status(graph.id, "ai_generate", "CONTENT_STATUS_COMPLETE")
 	_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
 
 
