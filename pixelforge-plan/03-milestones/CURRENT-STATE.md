@@ -8,7 +8,7 @@
 - origin/main 基线：`a9003ab`；本地 main 基线：`bdfeafc`；长期 Goal 起点：`44a5081`
 - 当前施工分支：`codex/pixelforge-full-plan-goal`（仅本地，尚未合并 `main`，尚未 push）
 - 已继承本地工程提交：M3/M3.1 `bdfeafc..531aa86`，M4-V1 `44a5081`；2026-07-11 在 Goal 分支复跑 M4-V1/M3.1 门禁通过。
-- 当前阶段：M3 与 M3.1 AR-1～AR-3、M4-V1 工程准备及 M4-1 HTTP 基础设施工程完成；M4-V1 真实 API 与三人 A/B 尚待验。项目所有者授权普通人工门统一延后，并允许按既定规格继续下游工程，因此下一张卡为 M4-2。**当前仅为“暂定工程继续，产品 go/no-go 待最终统一验收”，不是 M3.1 通过、M4-V1 go 或受邀 alpha 签收。**
+- 当前阶段：M3 与 M3.1 AR-1～AR-3、M4-V1 工程准备及 M4-1～M4-2 工程完成；M4-V1 真实 API 与三人 A/B 尚待验。项目所有者授权普通人工门统一延后，并允许按既定规格继续下游工程，因此下一张卡为 M4-3。**当前仅为“暂定工程继续，产品 go/no-go 待最终统一验收”，不是 M3.1 通过、M4-V1 go 或受邀 alpha 签收。**
 - 当前自动化：M4-V1 开发态全量门禁 197/197 tests、1515 assertions 通过；新增 OpenAI Provider fixture、异步任务终态、会话密钥清除、错误映射和 provenance 覆盖。既有 orphan / 退出资源警告待后续归因，没有新增用户影响证据。
 - 当前候选：本地忽略文件 `pixel/build/PixelForge-0.1.0-alpha.1-macOS.zip`，SHA-256 `c3704e0d2d6d0dcb71e9c9a02b40a4a6657028e4c6b912d08d6ecde2f00baa8d`，64,761,252 bytes；尚未上传或发布。
 

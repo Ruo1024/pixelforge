@@ -21,7 +21,7 @@ func after_each() -> void:
 	get_tree().root.get_node("ProviderService").clear_session("openai_image")
 
 
-func test_capabilities_and_session_only_schema_match_contract() -> void:
+func test_capabilities_and_persistent_schema_match_contract() -> void:
 	assert_eq(_provider.get_id(), "openai_image")
 	assert_eq(_provider.get_api_version(), 1)
 	var capabilities := _provider.get_capabilities()
@@ -33,7 +33,7 @@ func test_capabilities_and_session_only_schema_match_contract() -> void:
 	var schema := _provider.get_config_schema()
 	assert_eq(schema.size(), 1)
 	assert_eq(schema[0]["kind"], "password")
-	assert_true(schema[0]["session_only"])
+	assert_false(schema[0].has("session_only"))
 
 
 func test_request_body_is_sanitized_and_adapts_target_size() -> void:

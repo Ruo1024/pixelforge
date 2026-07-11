@@ -125,6 +125,8 @@ func _make_control(schema: Dictionary, value: Variant) -> Control:
 		PFNode.KIND_ENUM, PFNode.KIND_PROVIDER:
 			var options := OptionButton.new()
 			var values: Array = schema.get("options", [])
+			if kind == PFNode.KIND_PROVIDER:
+				values = ProviderService.get_selectable_provider_ids()
 			if values.is_empty():
 				values = [String(value)]
 			for option in values:

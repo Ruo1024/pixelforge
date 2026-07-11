@@ -1,6 +1,7 @@
 # Changelog
 
 - M4-1: add cancellable per-request HTTP tasks with normalized failures, redacted logs, and deterministic retry coverage.
+- M4-2: add encrypted persistent Provider credentials, schema-driven settings, validation state, and verified node filtering.
 
 - M4-V1 engineering: add a session-only OpenAI GPT Image 2 provider, async queue integration, recorded response contract tests, graph/batch materialization with provenance, rerun support, and key-leak guards. Real API and three-person A/B acceptance remain pending.
 - M3.1 AR-1: New/Open/Quit 统一保护未保存项目，恢复副本和文件失败提供安全、可操作的反馈。

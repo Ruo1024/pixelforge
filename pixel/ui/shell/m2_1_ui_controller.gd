@@ -17,6 +17,7 @@ const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
 const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
 const ImportFlowControllerScript := preload("res://ui/shell/import_flow_controller.gd")
 const OpenAIGenerationControllerScript := preload("res://ui/shell/openai_generation_controller.gd")
+const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_settings_dialog.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
@@ -44,6 +45,7 @@ const FILE_MENU_FOCUS_LAST_IMPORT := 7
 const FILE_MENU_RETRY_IMPORT := 8
 const FILE_MENU_CONFIGURE_OPENAI_SESSION := 9
 const FILE_MENU_GENERATE_OPENAI_BATCH := 10
+const FILE_MENU_PROVIDER_SETTINGS := 11
 const GRAPH_ADD_MENU_ID_START := 100
 const BATCH_MENU_CLEANUP := 0
 const BATCH_MENU_MATTE := 1
@@ -89,6 +91,7 @@ var _batch_menu: PopupMenu = null
 var _batch_menu_card_id := ""
 var _import_flow: Node = null
 var _openai_flow: Node = null
+var _provider_settings_dialog: ConfirmationDialog = null
 
 
 func setup(
@@ -115,6 +118,9 @@ func setup(
 	_openai_flow.name = "OpenAIGenerationController"
 	add_child(_openai_flow)
 	_openai_flow.setup(_canvas, _status_label)
+	_provider_settings_dialog = ProviderSettingsDialogScript.new()
+	_provider_settings_dialog.name = "ProviderSettingsDialog"
+	add_child(_provider_settings_dialog)
 	_create_m2_dialogs()
 	_create_graph_node_params_dialog()
 	_create_batch_menu()
@@ -135,6 +141,7 @@ func add_file_menu(parent: Control) -> void:
 	popup.add_item(Strings.ACTION_RETRY_IMPORT, FILE_MENU_RETRY_IMPORT)
 	popup.add_separator()
 	popup.add_item(Strings.MENU_GENERATE_MOCK_BATCH, FILE_MENU_GENERATE_MOCK_BATCH)
+	popup.add_item(Strings.MENU_PROVIDER_SETTINGS, FILE_MENU_PROVIDER_SETTINGS)
 	popup.add_item(Strings.MENU_CONFIGURE_OPENAI_SESSION, FILE_MENU_CONFIGURE_OPENAI_SESSION)
 	popup.add_item(Strings.MENU_GENERATE_OPENAI_BATCH, FILE_MENU_GENERATE_OPENAI_BATCH)
 	popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
@@ -543,6 +550,8 @@ func _on_file_menu_pressed(id: int) -> void:
 			_import_flow.retry_import()
 		FILE_MENU_GENERATE_MOCK_BATCH:
 			generate_mock_batch()
+		FILE_MENU_PROVIDER_SETTINGS:
+			_provider_settings_dialog.show_settings()
 		FILE_MENU_CONFIGURE_OPENAI_SESSION:
 			configure_openai_session()
 		FILE_MENU_GENERATE_OPENAI_BATCH:

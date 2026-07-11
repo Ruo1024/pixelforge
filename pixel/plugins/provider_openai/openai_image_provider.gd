@@ -53,7 +53,6 @@ func get_config_schema() -> Array[Dictionary]:
 			"key": "api_key",
 			"label": "OpenAI API key",
 			"kind": "password",
-			"session_only": true,
 		}
 	]
 

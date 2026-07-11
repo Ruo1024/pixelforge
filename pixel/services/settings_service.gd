@@ -38,7 +38,9 @@ func get_setting(section: String, key: String, default_value: Variant = null) ->
 
 
 func set_setting(section: String, key: String, value: Variant, save_now: bool = true) -> void:
-	var old_value: Variant = _config.get_value(section, key, null)
+	var old_value: Variant = (
+		_config.get_value(section, key) if _config.has_section_key(section, key) else null
+	)
 	_config.set_value(section, key, value)
 	if old_value != value:
 		setting_changed.emit(section, key, value)

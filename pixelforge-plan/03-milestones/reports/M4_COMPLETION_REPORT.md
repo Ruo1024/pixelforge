@@ -60,3 +60,72 @@
 
 - 对应提交：`M4-1 complete production HTTP client`（哈希以 Goal 分支日志为准）。
 - diff 模式：占位 client 替换为 PFTask 异步实现；新增本地 server、7 个集成断言组与里程碑门禁；不内联全量源码。
+
+## 2026-07-11 M4-2 凭据管理与 Provider 设置 UI
+
+### 服务对象与用户动作
+
+- 服务对象：需要自行提供云 Provider key、又不希望 key 进入项目或日志的本地创作者。
+- 入口：`File > Provider Settings...`；反馈：能力摘要、保存/验证状态；出口：验证通过的 Provider；交接：AI Generate 节点只列 mock 与已验证项。
+- 原痛点：M4-V1 只有 OpenAI 会话输入，关闭即丢失；没有通用 schema UI、默认 Provider、重启解密或节点过滤闭环。
+
+### 本轮实现
+
+- `PFCredentialStore` 用设备标识 + 随机盐执行 PBKDF2-HMAC-SHA256，拆分 AES-256-CBC 与 HMAC-SHA256 密钥；PKCS#7 填充、随机 IV、encrypt-then-MAC，配置文件只留 base64 密文元数据。
+- 威胁模型诚实限定：防止 credentials.cfg 裸文本泄漏，不防同用户权限恶意程序；Godot 官方亦提示设备标识可能变化或被伪造，因此最终验收需覆盖设备变化后的可恢复错误。
+- ProviderService 补齐配置 CRUD、重启解密、默认 Provider、异步验证状态与最近验证持久化；更换或删除 key 会清除验证状态。
+- 设置对话框从每个 Provider 的 `get_config_schema()` 和 capabilities 自动生成；password 使用遮蔽输入，已保存值只显示占位，不回填明文。
+- Graph 参数对话框的 Provider 下拉只列 `mock` 与保存且验证通过的 Provider；未验证项不能误入运行链。
+- PBKDF2 实现依据 RFC 8018，并在 `06-algorithm-refs/pbkdf2/INTEGRATION.md` 记录来源、许可与本项目 profile。
+
+### 修改文件
+
+- `pixel/services/credential_store.gd`
+- `pixel/services/provider_service.gd`
+- `pixel/services/settings_service.gd`
+- `pixel/ui/dialogs/provider_settings_dialog.gd`
+- `pixel/ui/dialogs/graph_node_params_dialog.gd`
+- `pixel/ui/shell/m2_1_ui_controller.gd`
+- `pixel/ui/shell/strings.gd`
+- `pixel/plugins/provider_openai/openai_image_provider.gd`
+- `pixel/tests/unit/test_credential_store.gd`
+- `pixel/tests/integration/test_provider_service.gd`
+- `pixel/tests/fixtures/providers/fake_provider.gd`
+- 相关 UI/OpenAI 契约测试、门禁、CHANGELOG、CURRENT-STATE 与 PBKDF2 引用说明
+
+### 自动验证命令与结果
+
+- `./pixel/scripts/lint.sh`：133 files，无问题。
+- `./pixel/scripts/run_tests.sh`：211/211 tests、1584 assertions 通过；覆盖 PBKDF2-SHA256 已知向量、无明文、错误设备拒绝、服务重启解密、成功/失败验证与节点过滤。
+- 首轮完整门禁中既有 Magic Wand 性能哨兵出现一次 73.18ms 瞬时超限；未改代码，定向复测 27.35ms，随后两轮完整门禁分别 26.59ms、26.66ms 并全绿，记录为机器负载型波动而非 M4-2 回归。
+- `./pixel/scripts/check_ui_scaling.sh`：随 `verify_m4_2.sh` 复用门禁；新 UI 没有手动 scale、硬编码字号或组件级注入。
+- `./pixel/scripts/verify_m4_2.sh`：复用 M4-1/M4-V1/M3.1 全门禁，并静态检查 AES-CBC、PBKDF2 向量与节点过滤守护。
+- `git diff --check`：提交前执行。
+
+### Agent 实机冒烟
+
+- 环境：macOS Retina、Godot 4.6.3 独立窗口、全新 `/tmp` HOME，界面倍率 2.0。
+- `File > Provider Settings...` 可找到；对话框显示 OpenAI GPT Image 2 能力摘要，API key 输入以圆点遮蔽。
+- 使用明确虚构的 `fixture-not-a-real-key` 点击 Save Credentials；UI 清空输入并显示“Saved credential”占位和“validate before use”，未点击 Validate、未发起外部请求。
+- `credentials.cfg` 只出现 salt/iv/ciphertext/mac，grep 不含虚构明文；关闭并用同一干净 HOME 重启后仍显示已保存占位，证明生产迭代数下可解密恢复。
+- 本节是 agent 冒烟，不是用户人工通过，也不证明真实 key 有效。
+
+### 最终统一人工验收追加项
+
+1. 打开 Provider Settings，确认能力信息可理解、key 输入遮蔽；保存真实测试 key 后重启，预期仍显示已保存但不回填明文。
+2. 点击 Validate：正确 key 显示验证通过，错误 key 显示清晰原因；期间 UI 继续可操作。
+3. 新建/编辑 AI Generate 节点：未验证 Provider 不出现，验证后出现；更换或删除 key 后再次隐藏。
+4. 检查 `credentials.cfg`、settings、项目、日志与崩溃输出不含 key；模拟设备标识变化时给出可恢复失败，不静默破坏项目。
+
+人工状态：**待最终统一验收**。
+
+### 已知失败、限制和延期
+
+- 没有真实 key，因此 Validate 的真实 OpenAI 成功路径仍待最终统一验收；fixture Provider 仅证明服务状态机。
+- 设备标识变化会使旧密文无法解密；当前返回未配置状态，不提供跨设备密钥迁移，这符合本地威胁模型但必须写入最终 FAQ。
+- M4-V1 的会话输入入口暂留作实验兼容路径；M4-4 完整 OpenAI 集成时统一到 Provider Settings，避免两个长期入口并存。
+
+### 对应本地提交与关键 diff
+
+- 对应提交：`M4-2 add encrypted provider settings`（哈希以 Goal 分支日志为准）。
+- diff 模式：新增 credential store/schema UI/验证状态；ProviderService 从会话注册表扩为完整配置中心；测试不存任何真实 key。

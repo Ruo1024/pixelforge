@@ -10,11 +10,6 @@ if git grep -IEn 'sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}' -- pixel pixel
   exit 1
 fi
 
-if ! git grep -q 'session_only.*true' -- pixel/plugins/provider_openai pixel/tests; then
-  echo "OpenAI session-only credential contract is missing." >&2
-  exit 1
-fi
-
 if ! git grep -q 'openai_image_success.json' -- pixel/tests; then
   echo "OpenAI recorded response fixture is not covered by tests." >&2
   exit 1

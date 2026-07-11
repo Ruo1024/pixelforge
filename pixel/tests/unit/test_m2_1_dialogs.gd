@@ -5,8 +5,10 @@ const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
 const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
 const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
 const OpenAISessionDialogScript := preload("res://ui/dialogs/openai_session_dialog.gd")
+const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_settings_dialog.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const Matting := preload("res://core/pixel/matting.gd")
 const Outliner := preload("res://core/pixel/outliner.gd")
 
@@ -88,6 +90,31 @@ func test_openai_session_dialog_masks_and_clears_the_session_secret() -> void:
 
 	assert_eq(configured, ["temporary-session-value"])
 	assert_eq(secret_edit.text, "")
+
+
+func test_provider_settings_dialog_masks_schema_password_and_shows_capabilities() -> void:
+	var dialog: ConfirmationDialog = ProviderSettingsDialogScript.new()
+	add_child_autofree(dialog)
+	await wait_process_frames(1)
+
+	assert_eq(dialog.get_current_provider_id(), "openai_image")
+	var secret: LineEdit = dialog.get_field_control("api_key")
+	assert_not_null(secret)
+	assert_true(secret.secret)
+
+
+func test_ai_generate_provider_field_only_lists_verified_providers_plus_mock() -> void:
+	var dialog: ConfirmationDialog = GraphNodeParamsDialogScript.new()
+	add_child_autofree(dialog)
+	await wait_process_frames(1)
+	dialog.configure_for_node(
+		"graph_test",
+		"generate",
+		AiGenerateNodeScript.new(),
+		{"provider_id": "openai_image", "batch_size": 1, "seed": 1}
+	)
+
+	assert_eq(dialog.get_param_value("provider_id"), "mock")
 
 
 func _make_source_image() -> Image:
