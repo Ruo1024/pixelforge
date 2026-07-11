@@ -13,11 +13,26 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
         content_length = int(self.headers.get("Content-Length", "0"))
+        request_body = {}
         if content_length:
-            self.rfile.read(content_length)
+            raw_body = self.rfile.read(content_length)
+            try:
+                request_body = json.loads(raw_body)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                request_body = {}
 
         if self.path == "/success":
             self._json(200, {"ok": True})
+        elif self.path == "/retrodiffusion-success":
+            pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            image_count = max(1, min(4, int(request_body.get("num_images", 1))))
+            self._json(200, {
+                "created_at": 1783780000,
+                "balance_cost": 0.25 * image_count,
+                "base64_images": [pixel] * image_count,
+                "model": "rd_plus",
+                "remaining_balance": 99.75,
+            })
         elif self.path == "/auth":
             self._json(401, {"error": "bad credentials"})
         elif self.path == "/rate-limit":

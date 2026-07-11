@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 status=0
-gdscript_paths=(core infra services ui tests)
+gdscript_paths=(core infra services ui plugins tests)
 local_gdtoolkit_bin="$(pwd)/.godot/gdtoolkit-venv/bin"
 
 if [[ -d "${local_gdtoolkit_bin}" ]]; then

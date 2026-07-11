@@ -129,3 +129,57 @@
 
 - 对应提交：`M4-2 add encrypted provider settings`（哈希以 Goal 分支日志为准）。
 - diff 模式：新增 credential store/schema UI/验证状态；ProviderService 从会话注册表扩为完整配置中心；测试不存任何真实 key。
+
+## 2026-07-11 M4-3 RetroDiffusion Provider
+
+### 服务对象与用户动作
+
+- 服务对象：希望直接获得像素原生候选、减少伪像素清洗负担的本地创作者。
+- 入口：Provider Settings 保存并验证 RetroDiffusion，再在 AI Generate 节点选择它；反馈：统一队列进度与人话错误；出口：真实 batch 卡及逐图 provenance；交接：批次审阅、清洗与导出沿用既有工作台。
+- 原痛点：节点图只能跑 mock 或 M4-V1 OpenAI 特例，RetroDiffusion 没有插件、请求适配、worker 解码与费用元数据。
+
+### 本轮实现
+
+- 新增内置 `provider_retrodiffusion` 插件，按 2026-07-11 官方 `api-examples` 重新核对 `POST /v1/inferences`、`X-RD-Token`、`prompt_style`、`num_images`、`remove_bg`、`check_cost` 与响应字段。
+- 按当前官方模型限制把总能力边界诚实收窄为 16～384，而不是计划调研快照的 16～512；默认 style 按尺寸映射为 `rd_plus__low_res`、`rd_pro__default`、`rd_fast__default`，显式 provider hint 优先直传。
+- 生成经通用 PFHttpClient，base64 PNG 解码放入 WorkerThreadPool；返回 `raw_pixel=true`、逐图 seed、实际 credit 消耗与 model/balance/style 元数据。
+- 401/403、余额不足、429、网络、超时与服务端失败映射到统一 Provider 错误；请求任务、日志、fixture、项目与 provenance 均不含 key。
+- “Run Selected Graph” 从 OpenAI 特例扩为所有已验证非 mock Provider；本地真实 HTTP fixture 已走 UI 选中 graph → TaskQueue → worker 解码 → batch 替换 → provenance 的完整闭环。
+- 官方 README 只给出 RD_PRO 单图示例消耗 0.25，未提供可核验的完整静态 style 价目表；因此只对 `rd_pro__default` 给出带日期的确定性估算，其余返回未知，避免伪造精度。
+
+### 修改文件
+
+- `pixel/plugins/provider_retrodiffusion/` 插件清单、入口与 Provider
+- `pixel/infra/http_client.gd` worker transform 与单任务取消
+- `pixel/services/provider_service.gd`
+- `pixel/ui/shell/openai_generation_controller.gd` 与 `m2_1_ui_controller.gd` 的通用云 Provider 路由
+- `pixel/tests/fixtures/providers/retrodiffusion_success.json`、本地 HTTP server 与 RetroDiffusion 契约/UI 集成测试
+- `pixel/scripts/lint.sh`、`verify_m4_3.sh`、CHANGELOG、CURRENT-STATE 与本报告
+
+### 自动验证命令与结果
+
+- `./pixel/scripts/lint.sh`：138 files，无问题；同时把 `plugins/` 纳入全仓 gdformat/gdlint 门禁。
+- `./pixel/scripts/run_tests.sh`：218/218 tests、1639 assertions 通过；覆盖 4 图 fixture、实际本地 TCP、worker 解码、错误映射、费用与 provenance，以及 UI graph 闭环。
+- 首轮新增 UI 测试因 mock server 固定只回 1 图而失败；根因确认后让 server 按官方 `num_images` 回 1～4 图，未修改生产逻辑，复跑全绿。
+- `./pixel/scripts/verify_m4_3.sh`：复用 M4-2 及其上游完整门禁，并守护官方鉴权头、worker 解码、UI 闭环和 key 泄漏。
+- `git diff --check`：提交前执行。
+
+### 最终统一人工验收追加项
+
+1. 使用真实测试 key 分别生成 16×16、128×128 各一张，预期成功进入画布 batch，prompt/seed/model/cost provenance 完整。
+2. 在真实节点链选择 RetroDiffusion，运行后执行项目调色板清洗并导出；确认原生像素没有不必要的 detect 重采样，最终颜色属于目标调色板。
+3. 触发错误 key、余额不足、限流和断网，预期提示可理解、UI 不冻结、key 不出现在项目或日志。
+
+人工状态：**待最终统一验收（当前无真实 RetroDiffusion key，不能宣称真 API 通过）**。
+
+### 已知失败、限制和延期
+
+- 没有真实 key，故计划要求的公网 16×16/128×128 与真实 credit 扣费证据尚未执行；录制 fixture 和本地 TCP 只构成工程证据。
+- 当前最小 graph 仍由项目 style preset 直接进入生成请求，生成后的调色板对齐仍由批次菜单清洗完成；独立 style/cleanup 图节点不是本卡新增范围，最终旅程需在后续图执行扩展后统一验收。
+- RetroDiffusion 官方示例当前没有完整静态价目表，非 RD_PRO 估算显示未知；M4-5 的预算逻辑必须允许 unknown，不能假装为 0。
+- 既有 GUT `error_tracker.gd` orphan 与退出资源警告不变。
+
+### 对应本地提交与关键 diff
+
+- 对应提交：`M4-3 add RetroDiffusion provider`（哈希以 Goal 分支日志为准）。
+- diff 模式：新增 RetroDiffusion 插件、worker 解码与通用云 graph 路由；fixture/本地 HTTP 覆盖真实异步路径；不内联全量源码。

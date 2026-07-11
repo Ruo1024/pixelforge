@@ -309,7 +309,7 @@ func run_selected_mock_graph() -> void:
 		)
 		return
 	var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
-	if _route_openai_graph_run(graph, batch_node_id, batch_card_id):
+	if _route_provider_graph_run(graph, batch_node_id, batch_card_id):
 		return
 	_run_mock_graph(graph, batch_node_id, batch_card_id)
 
@@ -880,13 +880,29 @@ func _graph_provider_id(graph: PFGraph) -> String:
 	return "mock"
 
 
-func _route_openai_graph_run(graph: PFGraph, batch_node_id: String, batch_card_id: String) -> bool:
-	if _graph_provider_id(graph) != "openai_image":
+func _route_provider_graph_run(
+	graph: PFGraph, batch_node_id: String, batch_card_id: String
+) -> bool:
+	var provider_id := _graph_provider_id(graph)
+	if provider_id == "mock":
 		return false
 	if batch_card_id.is_empty():
 		_status_label.text = _graph_run_failure_status(
 			{"message": Strings.STATUS_GRAPH_RUN_MISSING_BATCH_CARD}
 		)
+		return true
+	var provider: PFProvider = ProviderService.get_provider(provider_id)
+	if provider == null:
+		_status_label.text = _graph_run_failure_status({"message": "Provider is unavailable"})
+		return true
+	if (
+		provider_id != "openai_image"
+		and ProviderService.get_validation_state(provider_id) != "verified"
+	):
+		_status_label.text = (
+			Strings.STATUS_PROVIDER_CREDENTIALS_REQUIRED_FORMAT % provider.get_display_name()
+		)
+		_provider_settings_dialog.show_settings()
 		return true
 	_openai_flow.run_graph(graph, batch_node_id, batch_card_id)
 	return true

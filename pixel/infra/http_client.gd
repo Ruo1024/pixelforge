@@ -49,6 +49,13 @@ func cancel_all() -> void:
 			task.cancel()
 
 
+func cancel(task_id: String) -> void:
+	if _requests.has(task_id):
+		var task: Variant = _requests[task_id].get("task")
+		if task != null:
+			task.cancel()
+
+
 func map_error(result: int, status_code: int, detail: Dictionary = {}) -> Dictionary:
 	var code := "provider_internal"
 	var message := "The request failed"
@@ -111,6 +118,9 @@ func _normalize_opts(opts: Dictionary) -> Dictionary:
 		"retries": maxi(0, int(opts.get("retries", DEFAULT_RETRIES))),
 		"backoff": maxf(0.0, float(opts.get("backoff", DEFAULT_BACKOFF_SECONDS))),
 		"log_requests": bool(opts.get("log_requests", false)),
+		"transform": opts.get("transform", Callable()),
+		"worker_transform": bool(opts.get("worker_transform", false)),
+		"error_mapper": opts.get("error_mapper", Callable()),
 	}
 
 
@@ -206,10 +216,50 @@ func _on_request_completed(
 		"raw_body": body,
 		"attempts": int(state["attempt"]) + 1,
 	}
+	var transform: Callable = state["opts"]["transform"]
+	if transform.is_valid():
+		if bool(state["opts"]["worker_transform"]):
+			_transform_response_on_worker(task_id, response, transform)
+			return
+		response = _apply_response_transform(response, transform)
+	_complete_success(task_id, response)
+
+
+func _complete_success(task_id: String, response: Dictionary) -> void:
+	if not _requests.has(task_id):
+		return
+	var state: Dictionary = _requests[task_id]
+	if state.has("transform_worker_id"):
+		WorkerThreadPool.wait_for_task_completion(int(state["transform_worker_id"]))
 	var task: Variant = state["task"]
+	if not bool(response.get("ok", true)) and response.has("error"):
+		_finish_failed(task_id, response["error"])
+		return
 	_requests.erase(task_id)
 	request_completed.emit(task_id, response)
 	task.resolve(response)
+
+
+func _transform_response_on_worker(
+	task_id: String, response: Dictionary, transform: Callable
+) -> void:
+	var worker := func() -> void:
+		var transformed := _apply_response_transform(response, transform)
+		call_deferred("_complete_success", task_id, transformed)
+	var worker_id := WorkerThreadPool.add_task(worker, false, "PFHttpTransform:%s" % task_id)
+	var state: Dictionary = _requests[task_id]
+	state["transform_worker_id"] = worker_id
+	_requests[task_id] = state
+
+
+func _apply_response_transform(response: Dictionary, transform: Callable) -> Dictionary:
+	var transformed: Variant = transform.call(response)
+	if transformed is Dictionary:
+		return transformed
+	return {
+		"ok": false,
+		"error": _error("provider_internal", "The service response could not be decoded"),
+	}
 
 
 func _handle_failure(
@@ -234,7 +284,13 @@ func _handle_failure(
 		var json := JSON.new()
 		if json.parse(response_body.get_string_from_utf8()) == OK and json.data is Dictionary:
 			detail["response"] = json.data
-	_finish_failed(task_id, map_error(result, status_code, detail))
+	var error_mapper: Callable = state["opts"]["error_mapper"]
+	var error: Dictionary = (
+		error_mapper.call(result, status_code, detail)
+		if error_mapper.is_valid()
+		else map_error(result, status_code, detail)
+	)
+	_finish_failed(task_id, error)
 
 
 func _retry_after(task_id: String, delay_seconds: float) -> void:

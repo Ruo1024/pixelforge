@@ -1,8 +1,8 @@
 class_name PFOpenAIGenerationController
 extends Node
 
-## M4-V1 OpenAI 会话与异步生成闭环。
-## 入口/反馈/出口：会话 key → 队列状态 → graph + batch + provenance。
+## 云端 Provider 会话与异步生成闭环。
+## 保留 M4-V1 OpenAI 会话入口，同时执行所有已验证的非 mock Provider graph。
 
 const Strings := preload("res://ui/shell/strings.gd")
 const OpenAISessionDialogScript := preload("res://ui/dialogs/openai_session_dialog.gd")
@@ -34,26 +34,42 @@ func configure_session() -> void:
 
 
 func generate_batch() -> void:
-	_queue_graph(_make_graph(), "batch_1", "")
+	_queue_graph(_make_graph(), "batch_1", "", "openai_image")
 
 
 func run_graph(graph: PFGraph, batch_node_id: String, batch_card_id: String) -> void:
-	_queue_graph(graph, batch_node_id, batch_card_id)
+	_queue_graph(graph, batch_node_id, batch_card_id, _provider_id_for_graph(graph))
 
 
-func _queue_graph(graph: PFGraph, batch_node_id: String, batch_card_id: String) -> void:
-	if not ProviderService.has_session_credentials("openai_image"):
-		_status_label.text = Strings.STATUS_OPENAI_SESSION_REQUIRED
-		configure_session()
+func _queue_graph(
+	graph: PFGraph, batch_node_id: String, batch_card_id: String, provider_id: String
+) -> void:
+	var provider: PFProvider = ProviderService.get_provider(provider_id)
+	if provider == null:
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "provider unavailable"
+		return
+	var display_name := provider.get_display_name()
+	if not ProviderService.has_session_credentials(provider_id):
+		if provider_id == "openai_image":
+			_status_label.text = Strings.STATUS_OPENAI_SESSION_REQUIRED
+			configure_session()
+		else:
+			_status_label.text = (
+				Strings.STATUS_PROVIDER_CREDENTIALS_REQUIRED_FORMAT % display_name
+			)
 		return
 	var request := _request_for_graph(graph)
-	var task: Variant = ProviderService.generate("openai_image", request)
+	var task: Variant = ProviderService.generate(provider_id, request)
 	if task == null:
-		_status_label.text = Strings.STATUS_OPENAI_GENERATE_FAILED_FORMAT % "provider unavailable"
+		_status_label.text = (
+			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, "provider unavailable"]
+		)
 		return
 	_pending_runs[task.id] = {
 		"graph": graph,
 		"request": request,
+		"provider_id": provider_id,
+		"provider_name": display_name,
 		"anchor": _canvas.get_mouse_world_position(),
 		"batch_node_id": batch_node_id,
 		"batch_card_id": batch_card_id,
@@ -63,7 +79,7 @@ func _queue_graph(graph: PFGraph, batch_node_id: String, batch_card_id: String) 
 	task.failed.connect(_on_failed.bind(task.id))
 	task.canceled.connect(_on_canceled.bind(task.id))
 	TaskQueue.submit(task)
-	_status_label.text = Strings.STATUS_OPENAI_GENERATE_QUEUED
+	_status_label.text = Strings.STATUS_PROVIDER_GENERATE_QUEUED_FORMAT % display_name
 
 
 func get_session_dialog() -> ConfirmationDialog:
@@ -80,8 +96,11 @@ func _on_session_configured(api_key: String) -> void:
 
 
 func _on_progress(_task_id: String, ratio: float, message: String) -> void:
+	var state: Dictionary = _pending_runs.get(_task_id, {})
+	var display_name := String(state.get("provider_name", "Provider"))
 	_status_label.text = (
-		Strings.STATUS_OPENAI_GENERATE_RUNNING_FORMAT % [roundi(ratio * 100.0), message]
+		Strings.STATUS_PROVIDER_GENERATE_RUNNING_FORMAT
+		% [display_name, roundi(ratio * 100.0), message]
 	)
 
 
@@ -92,6 +111,8 @@ func _on_finished(result: Variant, task_id: String) -> void:
 	_pending_runs.erase(task_id)
 	var graph: PFGraph = state["graph"]
 	var request: Dictionary = state["request"]
+	var provider_id := String(state["provider_id"])
+	var display_name := String(state["provider_name"])
 	var batch_node_id := String(state["batch_node_id"])
 	var batch_card_id := String(state["batch_card_id"])
 	var images: Array = result.get("images", [])
@@ -100,12 +121,15 @@ func _on_finished(result: Variant, task_id: String) -> void:
 		graph,
 		batch_node_id,
 		images,
-		_metadata(result, request, images.size()),
+		_metadata(result, request, images.size(), provider_id),
 		AssetLibrary,
 		not batch_card_id.is_empty()
 	)
 	if not bool(materialized.get("ok", false)):
-		_status_label.text = Strings.STATUS_OPENAI_GENERATE_FAILED_FORMAT % "invalid image response"
+		_status_label.text = (
+			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
+			% [display_name, "invalid image response"]
+		)
 		return
 	var asset_ids: Array = materialized["asset_ids"]
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
@@ -116,35 +140,47 @@ func _on_finished(result: Variant, task_id: String) -> void:
 	var items := _add_canvas_items(graph, asset_ids, state["anchor"])
 	if not items.is_empty():
 		_focus_bounds(_bounds_for_items(items))
-	_status_label.text = Strings.STATUS_OPENAI_GENERATE_DONE % asset_ids.size()
+	_status_label.text = (
+		Strings.STATUS_PROVIDER_GENERATE_DONE_FORMAT % [display_name, asset_ids.size()]
+	)
 
 
 func _on_failed(error: Dictionary, task_id: String) -> void:
+	var state: Dictionary = _pending_runs.get(task_id, {})
 	_pending_runs.erase(task_id)
 	var message := String(error.get("message", "unknown error"))
-	_status_label.text = Strings.STATUS_OPENAI_GENERATE_FAILED_FORMAT % message
+	_status_label.text = (
+		Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
+		% [String(state.get("provider_name", "Provider")), message]
+	)
 
 
 func _on_canceled(task_id: String) -> void:
+	var state: Dictionary = _pending_runs.get(task_id, {})
 	_pending_runs.erase(task_id)
-	_status_label.text = Strings.STATUS_OPENAI_GENERATE_CANCELED
+	_status_label.text = (
+		Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT
+		% String(state.get("provider_name", "Provider"))
+	)
 
 
-func _metadata(result: Dictionary, request: Dictionary, count: int) -> Array:
+func _metadata(result: Dictionary, request: Dictionary, count: int, provider_id: String) -> Array:
 	var metadata := []
 	var seeds: Array = result.get("seeds", [])
+	var provider_meta: Dictionary = result.get("provider_meta", {})
+	var total_cost := float(result.get("cost", -1.0))
 	for index in range(count):
 		(
 			metadata
 			. append(
 				{
-					"provider": "openai_image",
-					"model": "gpt-image-2",
+					"provider": provider_id,
+					"model": String(provider_meta.get("model", "")),
 					"prompt": request.get("prompt", ""),
 					"seed": seeds[index] if index < seeds.size() else null,
-					"cost": result.get("cost", -1.0),
-					"provider_meta": result.get("provider_meta", {}),
-					"name": "openai_%03d" % (index + 1),
+					"cost": total_cost / count if total_cost >= 0.0 and count > 0 else -1.0,
+					"provider_meta": provider_meta,
+					"name": "%s_%03d" % [provider_id, index + 1],
 				}
 			)
 		)
@@ -208,6 +244,14 @@ func _request_for_graph(graph: PFGraph) -> Dictionary:
 				request["batch"] = int(params.get("batch_size", request["batch"]))
 				request["seed"] = int(params.get("seed", request["seed"]))
 	return request
+
+
+func _provider_id_for_graph(graph: PFGraph) -> String:
+	for node_id in graph.nodes.keys():
+		var node: PFNode = graph.get_node(String(node_id))
+		if node != null and node.get_type() == "ai_generate":
+			return String(graph.get_node_params(String(node_id)).get("provider_id", "mock"))
+	return "mock"
 
 
 func _add_canvas_items(graph: PFGraph, asset_ids: Array, anchor: Vector2) -> Array:

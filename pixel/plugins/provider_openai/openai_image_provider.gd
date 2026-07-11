@@ -178,33 +178,44 @@ func decode_success_payload(payload: Dictionary, request: Dictionary) -> Diction
 
 
 func map_error(result: int, status_code: int, payload: Dictionary = {}) -> Dictionary:
+	var code := "provider_internal"
+	var result_message := "OpenAI image generation failed"
 	if result == HTTPRequest.RESULT_TIMEOUT:
-		return _error("timeout", "OpenAI image generation timed out; try again")
-	if result != HTTPRequest.RESULT_SUCCESS:
-		return _error("network", "Could not reach OpenAI; check the network and try again")
+		code = "timeout"
+		result_message = "OpenAI image generation timed out; try again"
+	elif result != HTTPRequest.RESULT_SUCCESS:
+		code = "network"
+		result_message = "Could not reach OpenAI; check the network and try again"
 	var api_error: Dictionary = (
 		payload.get("error", {}) if payload.get("error", {}) is Dictionary else {}
 	)
 	var api_code := String(api_error.get("code", ""))
 	var message := String(api_error.get("message", "")).strip_edges()
-	match status_code:
-		401, 403:
-			return _error("auth_failed", "OpenAI rejected the session key")
-		429:
-			return _error("rate_limited", "OpenAI is rate limited; wait and try again")
-		400:
-			if api_code in ["moderation_blocked", "content_policy_violation"]:
-				return _error("content_policy", "The prompt was blocked by OpenAI content policy")
-			return _error(
-				"invalid_request",
-				message if not message.is_empty() else "OpenAI rejected the request"
-			)
-		_:
-			if status_code >= 500:
-				return _error("provider_internal", "OpenAI image service failed; try again")
-	return _error(
-		"provider_internal", message if not message.is_empty() else "OpenAI image generation failed"
-	)
+	if result == HTTPRequest.RESULT_SUCCESS:
+		match status_code:
+			401, 403:
+				code = "auth_failed"
+				result_message = "OpenAI rejected the session key"
+			429:
+				code = "rate_limited"
+				result_message = "OpenAI is rate limited; wait and try again"
+			400:
+				code = (
+					"content_policy"
+					if api_code in ["moderation_blocked", "content_policy_violation"]
+					else "invalid_request"
+				)
+				result_message = (
+					"The prompt was blocked by OpenAI content policy"
+					if code == "content_policy"
+					else message if not message.is_empty() else "OpenAI rejected the request"
+				)
+			_:
+				if status_code >= 500:
+					result_message = "OpenAI image service failed; try again"
+				elif not message.is_empty():
+					result_message = message
+	return _error(code, result_message)
 
 
 func should_retry(result: int, status_code: int, attempt: int) -> bool:

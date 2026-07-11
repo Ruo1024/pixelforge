@@ -10,7 +10,10 @@ signal provider_validation_changed(provider_id: String, state: String, message: 
 
 const PluginAPIScript := preload("res://services/plugin_api.gd")
 const CredentialStoreScript := preload("res://services/credential_store.gd")
-const BUILTIN_OPENAI_PLUGIN := "res://plugins/provider_openai/main.gd"
+const BUILTIN_PROVIDER_PLUGINS := [
+	"res://plugins/provider_openai/main.gd",
+	"res://plugins/provider_retrodiffusion/main.gd",
+]
 const API_VERSION := 1
 const DEFAULT_PROVIDER := "mock"
 
@@ -25,7 +28,8 @@ func _ready() -> void:
 	if _credential_store == null:
 		_credential_store = CredentialStoreScript.new()
 	if load_builtin_plugins:
-		load_builtin_plugin(BUILTIN_OPENAI_PLUGIN)
+		for plugin_path in BUILTIN_PROVIDER_PLUGINS:
+			load_builtin_plugin(plugin_path)
 
 
 func _exit_tree() -> void:
