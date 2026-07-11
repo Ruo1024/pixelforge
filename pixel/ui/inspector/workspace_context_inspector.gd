@@ -18,6 +18,7 @@ var _title_label: Label = null
 var _kind_label: Label = null
 var _summary_label: Label = null
 var _graph_summary: VBoxContainer = null
+var _canvas: Control = null
 
 
 func _ready() -> void:
@@ -53,6 +54,7 @@ func _ready() -> void:
 	root.add_child(cleanup_inspector)
 
 	show_context({})
+	LocalizationService.language_changed.connect(_on_language_changed)
 
 
 func show_context(context: Dictionary) -> void:
@@ -63,12 +65,13 @@ func show_context(context: Dictionary) -> void:
 	_graph_summary.visible = is_graph_node or kind == "none"
 	cleanup_inspector.visible = kind in ["sprite", "batch", "multiple"]
 
-	_title_label.text = String(context.get("title", Strings.INSPECTOR_TITLE))
-	_kind_label.text = String(context.get("type", Strings.INSPECTOR_NO_SELECTION))
-	_summary_label.text = String(context.get("summary", Strings.INSPECTOR_SELECT_HINT))
+	_title_label.text = String(context.get("title", Strings.text("INSPECTOR_TITLE")))
+	_kind_label.text = String(context.get("type", Strings.text("INSPECTOR_NO_SELECTION")))
+	_summary_label.text = String(context.get("summary", Strings.text("INSPECTOR_SELECT_HINT")))
 
 
 func show_canvas_selection(canvas: Control) -> void:
+	_canvas = canvas
 	var selected_ids: Array = canvas.get_selected_ids()
 	if selected_ids.is_empty():
 		show_context({})
@@ -77,8 +80,8 @@ func show_canvas_selection(canvas: Control) -> void:
 		show_context(
 			{
 				"kind": "multiple",
-				"title": Strings.INSPECTOR_TITLE,
-				"summary": Strings.INSPECTOR_MULTIPLE_FORMAT % selected_ids.size(),
+				"title": Strings.text("INSPECTOR_TITLE"),
+				"summary": Strings.text("INSPECTOR_MULTIPLE_FORMAT") % selected_ids.size(),
 			}
 		)
 		return
@@ -99,8 +102,8 @@ func show_canvas_selection(canvas: Control) -> void:
 			{
 				"kind": "batch",
 				"title": item.label,
-				"type": Strings.BATCH_DEFAULT_LABEL,
-				"summary": Strings.INSPECTOR_BATCH_SUMMARY_FORMAT % item.asset_ids.size(),
+				"type": Strings.text("BATCH_DEFAULT_LABEL"),
+				"summary": Strings.text("INSPECTOR_BATCH_SUMMARY_FORMAT") % item.asset_ids.size(),
 			}
 		)
 	elif item.get_script() == CanvasItemSpriteScript:
@@ -118,11 +121,21 @@ func _sprite_context(item: Node) -> Dictionary:
 	return {
 		"kind": "sprite",
 		"title": display_name,
-		"type": Strings.INSPECTOR_SPRITE_TYPE,
+		"type": Strings.text("INSPECTOR_SPRITE_TYPE"),
 		"summary":
-		Strings.INSPECTOR_SPRITE_SUMMARY_FORMAT % [display_name, image_size.x, image_size.y],
+		(
+			Strings.text("INSPECTOR_SPRITE_SUMMARY_FORMAT")
+			% [display_name, image_size.x, image_size.y]
+		),
 	}
 
 
 func get_cleanup_inspector() -> Control:
 	return cleanup_inspector
+
+
+func _on_language_changed(_preference: String, _locale: String) -> void:
+	if _canvas == null:
+		show_context({})
+	else:
+		show_canvas_selection(_canvas)

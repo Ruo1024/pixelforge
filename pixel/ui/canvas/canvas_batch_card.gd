@@ -8,6 +8,7 @@ const IdUtil := preload("res://core/util/id_util.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
 const Strings := preload("res://ui/shell/strings.gd")
+const UIFont := preload("res://ui/widgets/ui_font.gd")
 
 const CARD_WIDTH := 600
 const HEADER_HEIGHT := 40
@@ -363,7 +364,7 @@ func _get_lod_profile() -> String:
 
 
 func _draw() -> void:
-	_font = ThemeDB.fallback_font if _font == null else _font
+	_font = UIFont.get_font() if _font == null else _font
 	var card_rect := Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, _card_height()))
 	draw_rect(card_rect, BACKGROUND, true)
 	draw_rect(card_rect, _border_color(), false, 1.0)

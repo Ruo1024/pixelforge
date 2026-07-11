@@ -5,6 +5,7 @@ const Strings := preload("res://ui/shell/strings.gd")
 
 
 func before_each() -> void:
+	LocalizationService.set_language("en")
 	ProjectService.new_project("Workspace Shell")
 	AssetLibrary.clear()
 
@@ -103,6 +104,28 @@ func test_navigation_buttons_focus_selected_and_all_canvas_content() -> void:
 	assert_almost_eq(
 		canvas.world_to_screen(first.get_canvas_bounds().get_center()).y, canvas.size.y * 0.5, 1.0
 	)
+
+
+func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> void:
+	var main := await _make_main()
+	var global_actions: Control = main.get_node("Root/TopBar/GlobalActions")
+	var canvas_actions: Control = main.get_node("Root/TopBar/CanvasActions")
+	var hint: Control = main.get_node("Root/Content/InfiniteCanvas/EmptyCanvasImportHint")
+
+	LocalizationService.set_language("zh_CN")
+	await wait_process_frames(2)
+
+	assert_true(_button_texts(global_actions).has(Strings.text("ACTION_NEW")))
+	assert_true(_button_texts(canvas_actions).has(Strings.text("ACTION_ADD_INPUT")))
+	assert_eq(
+		hint.get_node("EmptyContent/HintLabel").text, Strings.text("EMPTY_CANVAS_IMPORT_HINT")
+	)
+	(hint.get_node("EmptyContent/EmptyActions/AddInput") as Button).pressed.emit()
+	await wait_process_frames(2)
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var card: Node = canvas._items_by_id.values()[0]
+	assert_eq(card._display_name, Strings.text("NODE_OBJECT_LIST"))
+	assert_eq(SettingsService.get_setting("ui", "language", "auto"), "zh_CN")
 
 
 func _make_main() -> Control:

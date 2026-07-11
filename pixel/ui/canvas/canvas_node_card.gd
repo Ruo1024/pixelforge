@@ -11,6 +11,7 @@ const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Strings := preload("res://ui/shell/strings.gd")
+const UIFont := preload("res://ui/widgets/ui_font.gd")
 
 const SUMMARY_CARD_SIZE := Vector2(220, 116)
 const CONTENT_CARD_SIZE := Vector2(240, 238)
@@ -65,6 +66,8 @@ func setup_from_data(data: Dictionary) -> void:
 	var raw_position: Variant = data.get("position", [0, 0])
 	position = Vector2(float(raw_position[0]), float(raw_position[1])).round()
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	if not LocalizationService.language_changed.is_connected(_on_language_changed):
+		LocalizationService.language_changed.connect(_on_language_changed)
 	_resolve_graph_node()
 	_rebuild_content_controls()
 	queue_redraw()
@@ -130,7 +133,7 @@ func _graph_port_at_world(world_position: Vector2) -> Dictionary:
 
 
 func _draw() -> void:
-	_font = ThemeDB.fallback_font if _font == null else _font
+	_font = UIFont.get_font() if _font == null else _font
 	var card_size := _card_size()
 	var rect := Rect2(Vector2.ZERO, card_size)
 	draw_rect(rect, BACKGROUND, true)
@@ -221,7 +224,7 @@ func _resolve_graph_node() -> void:
 		_status_badge = Strings.GRAPH_NODE_BADGE_MISSING
 		return
 
-	_display_name = node.get_display_name()
+	_display_name = _localized_display_name(node)
 	_input_ports = _port_names(node.get_input_ports())
 	_output_ports = _port_names(node.get_output_ports())
 	_visible_input_ports = _visible_input_ports_for_node(_node_type, _input_ports)
@@ -347,18 +350,18 @@ func _rebuild_content_controls() -> void:
 func _build_object_list_controls() -> void:
 	var count_label := Label.new()
 	count_label.name = "ItemCount"
-	count_label.text = Strings.CONTENT_OBJECT_COUNT_FORMAT % _object_count()
+	count_label.text = Strings.text("CONTENT_OBJECT_COUNT_FORMAT") % _object_count()
 	_content_root.add_child(count_label)
 	_object_edit = TextEdit.new()
 	_object_edit.name = "ObjectEdit"
 	_object_edit.text = String(_params_snapshot.get("items", ""))
 	_object_edit.custom_minimum_size = OBJECT_EDITOR_MIN_SIZE
-	_object_edit.placeholder_text = Strings.CONTENT_OBJECT_PLACEHOLDER
+	_object_edit.placeholder_text = Strings.text("CONTENT_OBJECT_PLACEHOLDER")
 	_object_edit.focus_exited.connect(_commit_object_items)
 	_content_root.add_child(_object_edit)
 	var apply_button := Button.new()
 	apply_button.name = "ApplyButton"
-	apply_button.text = Strings.DIALOG_APPLY
+	apply_button.text = Strings.text("ACTION_APPLY")
 	apply_button.pressed.connect(_commit_object_items)
 	_content_root.add_child(apply_button)
 
@@ -366,7 +369,7 @@ func _build_object_list_controls() -> void:
 func _build_generate_controls() -> void:
 	var provider_row := HBoxContainer.new()
 	var provider_label := Label.new()
-	provider_label.text = Strings.GRAPH_PARAM_PROVIDER
+	provider_label.text = Strings.text("GRAPH_PARAM_PROVIDER")
 	provider_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	provider_row.add_child(provider_label)
 	_provider_option = OptionButton.new()
@@ -385,13 +388,15 @@ func _build_generate_controls() -> void:
 	var settings_row := HBoxContainer.new()
 	_batch_size_spin = _make_spin("BatchSize", 1, 16, int(_params_snapshot.get("batch_size", 1)))
 	_seed_spin = _make_spin("Seed", 0, 2147483647, int(_params_snapshot.get("seed", 1)))
-	settings_row.add_child(_labeled_control(Strings.GRAPH_PARAM_BATCH_SIZE, _batch_size_spin))
-	settings_row.add_child(_labeled_control(Strings.GRAPH_PARAM_SEED, _seed_spin))
+	settings_row.add_child(
+		_labeled_control(Strings.text("GRAPH_PARAM_BATCH_SIZE"), _batch_size_spin)
+	)
+	settings_row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_SEED"), _seed_spin))
 	_content_root.add_child(settings_row)
 
 	var run_button := Button.new()
 	run_button.name = "RunButton"
-	run_button.text = Strings.CONTENT_RUN_GENERATION
+	run_button.text = Strings.text("CONTENT_RUN_GENERATION")
 	run_button.pressed.connect(
 		func() -> void:
 			_commit_generate_params()
@@ -405,13 +410,13 @@ func _build_size_controls() -> void:
 	var width := _make_spin("Width", 1, 512, int(_params_snapshot.get("width", 32)))
 	var height := _make_spin("Height", 1, 512, int(_params_snapshot.get("height", 32)))
 	var count := _make_spin("PerSubject", 1, 16, int(_params_snapshot.get("per_subject", 1)))
-	row.add_child(_labeled_control(Strings.GRAPH_PARAM_WIDTH, width))
-	row.add_child(_labeled_control(Strings.GRAPH_PARAM_HEIGHT, height))
-	row.add_child(_labeled_control(Strings.GRAPH_PARAM_PER_SUBJECT, count))
+	row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_WIDTH"), width))
+	row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_HEIGHT"), height))
+	row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_PER_SUBJECT"), count))
 	_content_root.add_child(row)
 	var apply_button := Button.new()
 	apply_button.name = "ApplyButton"
-	apply_button.text = Strings.DIALOG_APPLY
+	apply_button.text = Strings.text("ACTION_APPLY")
 	apply_button.pressed.connect(
 		func() -> void:
 			params_commit_requested.emit(
@@ -479,3 +484,23 @@ func _object_count() -> int:
 		if not String(raw_line).strip_edges().is_empty():
 			count += 1
 	return count
+
+
+func _localized_display_name(node: PFNode) -> String:
+	var key_by_type := {
+		"object_list": "NODE_OBJECT_LIST",
+		"size_spec": "NODE_SIZE_SPEC",
+		"ai_generate": "NODE_AI_GENERATE",
+	}
+	var key := String(key_by_type.get(node.get_type(), ""))
+	return (
+		Strings.text(key, node.get_display_name())
+		if not key.is_empty()
+		else node.get_display_name()
+	)
+
+
+func _on_language_changed(_preference: String, _locale: String) -> void:
+	_resolve_graph_node()
+	_rebuild_content_controls()
+	queue_redraw()

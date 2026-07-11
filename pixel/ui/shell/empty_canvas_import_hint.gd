@@ -31,7 +31,7 @@ func _ready() -> void:
 	add_child(content)
 
 	var label := Label.new()
-	label.text = Strings.EMPTY_CANVAS_IMPORT_HINT
+	label.name = "HintLabel"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(label)
 
@@ -41,26 +41,36 @@ func _ready() -> void:
 	actions.add_theme_constant_override("separation", CONTENT_GAP)
 	content.add_child(actions)
 
-	_add_action(actions, "AddInput", Strings.ACTION_ADD_INPUT, add_input_requested.emit)
+	_add_action(actions, "AddInput", "ACTION_ADD_INPUT", add_input_requested.emit)
 	_add_action(
 		actions,
 		"ImportReference",
-		Strings.ACTION_IMPORT_REFERENCE,
+		"ACTION_IMPORT_REFERENCE",
 		func() -> void:
 			import_reference_requested.emit()
 			import_requested.emit()
 	)
-	_add_action(actions, "OpenExample", Strings.ACTION_OPEN_EXAMPLE, open_example_requested.emit)
+	_add_action(actions, "OpenExample", "ACTION_OPEN_EXAMPLE", open_example_requested.emit)
+	LocalizationService.language_changed.connect(_refresh_text)
+	_refresh_text("", "")
 
 
 func set_canvas_empty(is_empty: bool) -> void:
 	visible = is_empty
 
 
-func _add_action(parent: Control, button_name: String, text: String, callback: Callable) -> void:
+func _add_action(
+	parent: Control, button_name: String, text_key: String, callback: Callable
+) -> void:
 	var button := Button.new()
 	button.name = button_name
-	button.text = text
+	button.set_meta("text_key", text_key)
 	button.focus_mode = Control.FOCUS_NONE
 	button.pressed.connect(callback)
 	parent.add_child(button)
+
+
+func _refresh_text(_preference: String, _locale: String) -> void:
+	get_node("EmptyContent/HintLabel").text = Strings.text("EMPTY_CANVAS_IMPORT_HINT")
+	for button in get_node("EmptyContent/EmptyActions").get_children():
+		button.text = Strings.text(String(button.get_meta("text_key", "")))

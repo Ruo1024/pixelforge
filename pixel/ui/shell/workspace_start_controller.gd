@@ -53,5 +53,5 @@ func create_input_workspace() -> String:
 		_canvas.select_ids([])
 		_canvas._emit_canvas_changed()
 	UndoService.perform_action("Add input module", do_add, undo_add)
-	_status_label.text = Strings.STATUS_INPUT_WORKSPACE_CREATED
+	_status_label.text = Strings.text("STATUS_INPUT_WORKSPACE_CREATED")
 	return item_id

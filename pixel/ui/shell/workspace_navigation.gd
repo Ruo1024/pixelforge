@@ -12,6 +12,7 @@ const CONTENT_GAP := 8
 const OVERLAY_Z_INDEX := 4095
 
 var _canvas: Control = null
+var _buttons: Array[Button] = []
 
 
 func setup(canvas: Control) -> void:
@@ -32,18 +33,28 @@ func setup(canvas: Control) -> void:
 	row.add_theme_constant_override("separation", CONTENT_GAP)
 	add_child(row)
 
-	_add_button(row, "FocusSelected", Strings.ACTION_FOCUS_SELECTED, _focus_selected)
-	_add_button(row, "FocusAll", Strings.ACTION_FOCUS_ALL, _focus_all)
+	_add_button(row, "FocusSelected", "ACTION_FOCUS_SELECTED", _focus_selected)
+	_add_button(row, "FocusAll", "ACTION_FOCUS_ALL", _focus_all)
+	LocalizationService.language_changed.connect(_refresh_text)
 
 
-func _add_button(parent: Control, button_name: String, text: String, callback: Callable) -> void:
+func _add_button(
+	parent: Control, button_name: String, text_key: String, callback: Callable
+) -> void:
 	var button := Button.new()
 	button.name = button_name
-	button.text = text
+	button.text = Strings.text(text_key)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.focus_mode = Control.FOCUS_NONE
 	button.pressed.connect(callback)
+	button.set_meta("text_key", text_key)
 	parent.add_child(button)
+	_buttons.append(button)
+
+
+func _refresh_text(_preference: String, _locale: String) -> void:
+	for button in _buttons:
+		button.text = Strings.text(String(button.get_meta("text_key", "")))
 
 
 func _focus_selected() -> void:

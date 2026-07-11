@@ -3,9 +3,12 @@ extends RefCounted
 
 ## 根窗口主题的单点构建器；具体字体资源由 B2-D 诊断结论接入这里。
 
+const UIFont := preload("res://ui/widgets/ui_font.gd")
+
 
 static func build(default_font_size: int, small_font_size: int) -> Theme:
 	var app_theme := Theme.new()
+	app_theme.default_font = UIFont.get_font()
 	app_theme.default_font_size = default_font_size
 	for type_name in [
 		"Button",

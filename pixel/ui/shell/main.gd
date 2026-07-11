@@ -74,10 +74,12 @@ var _rescale_pending := false
 var _rescale_in_progress := false
 var _last_screen_snapshot := {}
 var _pending_screen_snapshot := {}
+var _localized_toolbar_buttons: Array[Button] = []
 
 
 func _ready() -> void:
 	get_tree().auto_accept_quit = false
+	LocalizationService.language_changed.connect(_refresh_toolbar_text)
 	var startup_snapshot := InterfaceScalePolicy.read_current_screen_snapshot()
 	_interface_scale = _resolve_interface_scale_from_snapshot(startup_snapshot, "startup")
 	_live_rescale_enabled = bool(SettingsService.get_setting("ui", "live_rescale", true))
@@ -328,18 +330,10 @@ func _build_ui() -> void:
 	var global_actions := HBoxContainer.new()
 	global_actions.name = "GlobalActions"
 	top_bar.add_child(global_actions)
-	_add_toolbar_button(
-		global_actions, Strings.ACTION_NEW, _create_new_project, COMPACT_BUTTON_WIDTH
-	)
-	_add_toolbar_button(
-		global_actions, Strings.ACTION_OPEN, _show_open_dialog, COMPACT_BUTTON_WIDTH
-	)
-	_add_toolbar_button(
-		global_actions, Strings.ACTION_SAVE, _save_current_project, COMPACT_BUTTON_WIDTH
-	)
-	_add_toolbar_button(
-		global_actions, Strings.ACTION_EXPORT_PNG, _export_selected_png, TOOLBAR_BUTTON_WIDTH
-	)
+	_add_toolbar_button(global_actions, "ACTION_NEW", _create_new_project, COMPACT_BUTTON_WIDTH)
+	_add_toolbar_button(global_actions, "ACTION_OPEN", _show_open_dialog, COMPACT_BUTTON_WIDTH)
+	_add_toolbar_button(global_actions, "ACTION_SAVE", _save_current_project, COMPACT_BUTTON_WIDTH)
+	_add_toolbar_button(global_actions, "ACTION_EXPORT_PNG", _export_selected_png)
 	var settings_controller := WorkspaceSettingsControllerScript.new()
 	settings_controller.name = "WorkspaceSettingsController"
 	add_child(settings_controller)
@@ -415,33 +409,33 @@ func _build_ui() -> void:
 	_m2_1_ui.add_tool_buttons(canvas_actions)
 	_add_toolbar_button(
 		canvas_actions,
-		Strings.ACTION_ADD_INPUT,
+		"ACTION_ADD_INPUT",
 		_workspace_start.create_input_workspace,
 		TOOLBAR_BUTTON_WIDTH
 	)
 	_add_toolbar_button(
 		canvas_actions,
-		Strings.ACTION_IMPORT_REFERENCE,
+		"ACTION_IMPORT_REFERENCE",
 		_workspace_start.import_reference,
 		TOOLBAR_BUTTON_WIDTH
 	)
 	_add_toolbar_button(
 		canvas_actions,
-		Strings.ACTION_OPEN_EXAMPLE,
+		"ACTION_OPEN_EXAMPLE",
 		_workspace_start.open_example_workspace,
 		TOOLBAR_BUTTON_WIDTH
 	)
 	_add_toolbar_button(
-		canvas_actions, Strings.ACTION_BATCH, _m2_1_ui.batch_selected_sprites, COMPACT_BUTTON_WIDTH
+		canvas_actions, "ACTION_BATCH", _m2_1_ui.batch_selected_sprites, COMPACT_BUTTON_WIDTH
 	)
 	_add_toolbar_button(
-		canvas_actions, Strings.ACTION_MATTE, _m2_1_ui.open_matte_dialog, COMPACT_BUTTON_WIDTH
+		canvas_actions, "ACTION_MATTE", _m2_1_ui.open_matte_dialog, COMPACT_BUTTON_WIDTH
 	)
 	_add_toolbar_button(
-		canvas_actions, Strings.ACTION_SLICE, _m2_1_ui.open_slice_dialog, COMPACT_BUTTON_WIDTH
+		canvas_actions, "ACTION_SLICE", _m2_1_ui.open_slice_dialog, COMPACT_BUTTON_WIDTH
 	)
 	_add_toolbar_button(
-		canvas_actions, Strings.ACTION_OUTLINE, _m2_1_ui.open_outline_dialog, COMPACT_BUTTON_WIDTH
+		canvas_actions, "ACTION_OUTLINE", _m2_1_ui.open_outline_dialog, COMPACT_BUTTON_WIDTH
 	)
 	_zoom_overlay = ZoomOverlayControllerScript.new()
 	_zoom_overlay.setup(_canvas, ZOOM_CONTROL_MARGIN)
@@ -451,15 +445,23 @@ func _build_ui() -> void:
 
 
 func _add_toolbar_button(
-	parent: Control, text: String, callback: Callable, button_width: int = TOOLBAR_BUTTON_WIDTH
+	parent: Control, text_key: String, callback: Callable, button_width: int = TOOLBAR_BUTTON_WIDTH
 ) -> void:
 	var button := Button.new()
-	button.text = text
+	button.text = Strings.text(text_key)
 	button.custom_minimum_size = Vector2(button_width, TOOLBAR_BUTTON_HEIGHT)
 	button.focus_mode = Control.FOCUS_NONE
 	button.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
 	button.pressed.connect(callback)
 	parent.add_child(button)
+	button.set_meta("text_key", text_key)
+	_localized_toolbar_buttons.append(button)
+
+
+func _refresh_toolbar_text(_preference: String, _locale: String) -> void:
+	for button in _localized_toolbar_buttons:
+		if is_instance_valid(button):
+			button.text = Strings.text(String(button.get_meta("text_key", "")))
 
 
 func _create_file_dialogs() -> void:

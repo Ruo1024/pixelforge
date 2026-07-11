@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
 const Catalog := preload("res://infra/localization_catalog.gd")
 const Localization := preload("res://services/localization_service.gd")
 const LanguageSelector := preload("res://ui/widgets/language_selector.gd")
+const UIFont := preload("res://ui/widgets/ui_font.gd")
 
 
 func test_system_locale_resolution_is_deliberately_narrow() -> void:
@@ -66,3 +67,11 @@ func test_language_selector_refreshes_after_language_change() -> void:
 	assert_eq(selector._label.text, "语言")
 	assert_eq(selector._options.get_item_text(0), "跟随系统")
 	localization.set_language(original)
+
+
+func test_bundled_ui_font_covers_representative_english_and_simplified_chinese() -> void:
+	var font := UIFont.get_font()
+	assert_not_null(font)
+	for character in ["A", "中", "文", "像", "素"]:
+		assert_true(font.has_char(character.unicode_at(0)), "Missing UI glyph: %s" % character)
+	assert_true(FileAccess.file_exists("res://assets/fonts/OFL.txt"))
