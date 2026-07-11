@@ -171,7 +171,7 @@ func estimate_cache_bytes(image: Image) -> int:
 
 
 func remove_asset(asset_id: String) -> Error:
-	if get_ref_count(asset_id) > 0:
+	if get_ref_count(asset_id) > 0 or _is_referenced_by_project(asset_id):
 		return ERR_BUSY
 
 	_metadata.erase(asset_id)
@@ -181,6 +181,25 @@ func remove_asset(asset_id: String) -> Error:
 	asset_removed.emit(asset_id)
 	EventBus.asset_removed.emit(asset_id)
 	return OK
+
+
+func _is_referenced_by_project(asset_id: String) -> bool:
+	var project_service := get_tree().root.get_node_or_null("ProjectService")
+	if project_service == null or project_service.current_project == null:
+		return false
+	for board_data in project_service.current_project.boards.values():
+		for layer_value in Dictionary(board_data).get("layers", []):
+			var layer: Dictionary = layer_value
+			for cell_value in Dictionary(layer.get("cells", {})).values():
+				if String(Dictionary(cell_value).get("asset_id", "")) == asset_id:
+					return true
+			for item_value in layer.get("items", []):
+				if String(Dictionary(item_value).get("asset_id", "")) == asset_id:
+					return true
+	for anim_data in project_service.current_project.animations.values():
+		if asset_id in Dictionary(anim_data).get("frames", []):
+			return true
+	return false
 
 
 func _store_in_cache(asset_id: String, image: Image) -> void:

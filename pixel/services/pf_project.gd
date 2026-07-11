@@ -11,6 +11,8 @@ var project_path := ""
 var manifest := {}
 var canvas := {}
 var graphs := {}
+var boards := {}
+var animations := {}
 var dirty := false
 var recovered_from_path := ""
 
@@ -42,6 +44,8 @@ func reset(name: String = "Untitled") -> void:
 		"items": [],
 	}
 	graphs = {}
+	boards = {}
+	animations = {}
 	project_path = ""
 	dirty = false
 	recovered_from_path = ""

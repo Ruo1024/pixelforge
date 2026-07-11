@@ -66,6 +66,26 @@ func set_graph_data(graph_id: String, graph_data: Dictionary, mark_dirty: bool =
 		_emit_dirty(true)
 
 
+func set_document_data(
+	kind: String, document_id: String, document_data: Dictionary, mark_dirty: bool = true
+) -> void:
+	if document_id.is_empty() or kind not in ["boards", "animations"]:
+		return
+	var collection: Dictionary = current_project.get(kind)
+	collection[document_id] = document_data.duplicate(true)
+	if mark_dirty:
+		_emit_dirty(true)
+
+
+func remove_document(kind: String, document_id: String, mark_dirty: bool = true) -> void:
+	if kind not in ["boards", "animations"]:
+		return
+	var collection: Dictionary = current_project.get(kind)
+	collection.erase(document_id)
+	if mark_dirty:
+		_emit_dirty(true)
+
+
 func mark_dirty() -> void:
 	_emit_dirty(true)
 
@@ -80,6 +100,17 @@ func get_graphs_data() -> Dictionary:
 
 func get_graph_data(graph_id: String) -> Dictionary:
 	return Dictionary(current_project.graphs.get(graph_id, {})).duplicate(true)
+
+
+func get_document_data(kind: String, document_id: String = "") -> Dictionary:
+	if kind not in ["boards", "animations"]:
+		return {}
+	var collection: Dictionary = current_project.get(kind)
+	return (
+		collection.duplicate(true)
+		if document_id.is_empty()
+		else Dictionary(collection.get(document_id, {})).duplicate(true)
+	)
 
 
 func save_project(path: String = "") -> Error:
@@ -128,7 +159,13 @@ func _open_project(path: String, as_recovered_copy: bool) -> Error:
 
 	_normalize_loaded_project(manifest, canvas)
 	var loaded_graphs := _load_graphs_from_files(files, manifest)
+	var loaded_boards := _load_json_collection(files, manifest, "boards", "boards")
+	var loaded_animations := _load_json_collection(files, manifest, "animations", "anim", ".anim")
 	var load_error := int(loaded_graphs.get("error", OK))
+	if load_error == OK:
+		load_error = int(loaded_boards.get("error", OK))
+	if load_error == OK:
+		load_error = int(loaded_animations.get("error", OK))
 	if load_error == OK:
 		load_error = PaletteRegistry.load_custom_palettes_from_project(files, manifest)
 	if load_error == OK:
@@ -140,6 +177,8 @@ func _open_project(path: String, as_recovered_copy: bool) -> Error:
 	current_project.manifest = manifest
 	current_project.canvas = canvas
 	current_project.graphs = loaded_graphs["graphs"]
+	current_project.boards = loaded_boards["items"]
+	current_project.animations = loaded_animations["items"]
 	current_project.project_path = "" if as_recovered_copy else path
 	current_project.recovered_from_path = path if as_recovered_copy else ""
 	current_project.dirty = false
@@ -211,6 +250,10 @@ func _save_to_path(path: String) -> Error:
 	}
 	for graph_id in _sorted_graph_ids():
 		entries["graphs/%s.json" % graph_id] = current_project.graphs[graph_id]
+	for board_id in _sorted_ids(current_project.boards):
+		entries["boards/%s.json" % board_id] = current_project.boards[board_id]
+	for anim_id in _sorted_ids(current_project.animations):
+		entries["anim/%s.anim.json" % anim_id] = current_project.animations[anim_id]
 	var asset_entries := AssetLibrary.export_zip_entries()
 	for asset_path in asset_entries.keys():
 		entries[asset_path] = asset_entries[asset_path]
@@ -227,6 +270,8 @@ func _update_manifest_before_save() -> void:
 	var entries: Dictionary = current_project.manifest.get("entries", {})
 	entries["canvases"] = ["canvas"]
 	entries["graphs"] = _sorted_graph_ids()
+	entries["boards"] = _sorted_ids(current_project.boards)
+	entries["animations"] = _sorted_ids(current_project.animations)
 	entries["asset_count"] = AssetLibrary.get_all_meta().size()
 	current_project.manifest["entries"] = entries
 	var custom_palettes := PaletteRegistry.get_custom_manifest_entries()
@@ -260,6 +305,10 @@ func _normalize_loaded_project(manifest: Dictionary, canvas: Dictionary) -> void
 	entries["asset_count"] = int(entries.get("asset_count", 0))
 	if not entries.has("graphs"):
 		entries["graphs"] = []
+	if not entries.has("boards"):
+		entries["boards"] = []
+	if not entries.has("animations"):
+		entries["animations"] = []
 	manifest["entries"] = entries
 
 	var camera: Dictionary = canvas.get("camera", {})
@@ -329,6 +378,33 @@ func _sorted_graph_ids() -> Array:
 	var graph_ids: Array = current_project.graphs.keys()
 	graph_ids.sort()
 	return graph_ids
+
+
+func _sorted_ids(items: Dictionary) -> Array:
+	var ids: Array = items.keys()
+	ids.sort()
+	return ids
+
+
+func _load_json_collection(
+	files: Dictionary,
+	manifest: Dictionary,
+	entry_key: String,
+	directory: String,
+	name_suffix: String = ""
+) -> Dictionary:
+	var items := {}
+	var entries: Dictionary = manifest.get("entries", {})
+	for raw_id in entries.get(entry_key, []):
+		var item_id := String(raw_id)
+		var path := "%s/%s%s.json" % [directory, item_id, name_suffix]
+		if not files.has(path):
+			return {"error": ERR_FILE_CORRUPT, "items": {}}
+		var data: Variant = FileIOScript.bytes_to_json(files[path])
+		if not (data is Dictionary):
+			return {"error": ERR_PARSE_ERROR, "items": {}}
+		items[item_id] = data
+	return {"error": OK, "items": items}
 
 
 func _emit_dirty(value: bool) -> void:

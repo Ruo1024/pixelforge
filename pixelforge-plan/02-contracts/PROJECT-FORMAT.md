@@ -21,7 +21,7 @@ my_project.pxproj (ZIP)
 ├── boards/
 │   └── {board_id}.json    # 地图拼接画板（M5 定义详细 schema）
 ├── anim/
-│   └── {asset_id}.anim.json  # 动画数据（帧序列、时长；M6 定义）
+│   └── {anim_id}.anim.json   # 动画数据（帧序列、时长；M5 定义）
 └── thumbs/                # 缩略图缓存（可丢弃，加载时可重建）
 ```
 
@@ -139,6 +139,41 @@ my_project.pxproj (ZIP)
 - `batch` 是 `type:"node"` 的一种（其 graphs 节点 `type=batch`），渲染为容器卡（队列网格 + 边框菜单）；物化的 `asset_id` 队列存在 graphs 节点 params 中。这就是「一等节点 + 画布卡」双身份的落地方式（见 GRAPH-SCHEMA §5a）。
 - **M2.1 临时例外**：M3 前尚无正式 graph 持久化，alpha 清洗台先允许 `type:"batch_card"` 直接在 canvas.json 中保存 `asset_ids` 队列、卡片位置和卡内勾选状态。它不含端口、不含连线、不写 graphs；M3 实施正式 batch 节点时，应把该形态迁入 `type:"node"` + `graphs/{graph_id}.json` 的 `type=batch` params。
 - `graph_anchor` 标记为 **legacy**：统一画布后整张图直接长在画布上，锚点退化；保留仅为读取早期数据，不再新写。
+
+## 4a. boards/{board_id}.json（M5）
+
+```json
+{
+  "id": "board_uuid", "name": "farm_scene",
+  "grid": {"tile_size": 16, "cols": 60, "rows": 40},
+  "layers": [
+    {"id": "layer_uuid", "name": "terrain", "kind": "tile", "visible": true,
+     "opacity": 1.0, "blend": "normal", "cells": {"12,7": {"asset_id": "...", "variant": 0}}},
+    {"id": "layer_uuid", "name": "props", "kind": "free", "visible": true,
+     "opacity": 1.0, "blend": "normal", "items": [
+       {"id": "item_uuid", "asset_id": "...", "anim_id": null, "pos": [192,112],
+        "z": 0, "flip_h": false, "anim_offset_ms": 0}
+     ]}
+  ]
+}
+```
+
+规则：grid 的 tile_size/cols/rows 均为正整数；layer kind 仅 `tile|free`，blend 仅
+`normal|add|multiply`；tile cell key 固定为 `x,y` 且必须在边界内；free item 至少引用
+`asset_id` 或 `anim_id` 之一。未知字段往返保留，引用缺失时显示警告而不丢弃数据。
+
+## 4b. anim/{anim_id}.anim.json（M5）
+
+```json
+{
+  "id": "anim_uuid", "name": "torch",
+  "frames": ["asset_uuid_1", "asset_uuid_2"],
+  "durations_ms": [100, 100], "loop": true
+}
+```
+
+规则：frames 与 durations_ms 等长且非空，duration 最小 1ms；帧是独立素材引用。删除被
+board/animation 引用的素材必须拒绝或先由用户解除引用。
 
 ## 5. 读写规则
 

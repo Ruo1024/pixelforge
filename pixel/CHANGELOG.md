@@ -5,6 +5,7 @@
 - M4-3: add the RetroDiffusion provider, worker-thread PNG decode, normalized quota errors, and verified graph-to-batch execution.
 - M4-4: migrate OpenAI GPT Image 2 to shared HTTP/worker decode and request transparent PNG output using the current official API contract.
 - M4-5: add per-provider monthly spend tracking, pre-run estimates, a visible monthly total, and budget-overage confirmation.
+- M5: add persisted finite Boards, tile/free layers, 16/47-blob terrain tools, offset animations, exact layer blending, and flat/layer/frame/Godot exports.
 
 - M4-V1 engineering: add a session-only OpenAI GPT Image 2 provider, async queue integration, recorded response contract tests, graph/batch materialization with provenance, rerun support, and key-leak guards. Real API and three-person A/B acceptance remain pending.
 - M3.1 AR-1: New/Open/Quit 统一保护未保存项目，恢复副本和文件失败提供安全、可操作的反馈。

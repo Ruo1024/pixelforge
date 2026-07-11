@@ -118,6 +118,52 @@ func test_project_graphs_survive_zip_roundtrip() -> void:
 	assert_eq(project_service.current_project.canvas["items"][0]["node_id"], "batch_1")
 
 
+func test_board_and_animation_documents_survive_zip_roundtrip() -> void:
+	var project_service := get_tree().root.get_node("ProjectService")
+	var board_data := {
+		"id": "board_farm",
+		"name": "Farm",
+		"grid": {"tile_size": 16, "cols": 60, "rows": 40},
+		"layers":
+		[
+			{
+				"id": "terrain",
+				"name": "Terrain",
+				"kind": "tile",
+				"visible": true,
+				"opacity": 1.0,
+				"blend": "normal",
+				"cells": {"12,7": {"asset_id": "tile-a", "variant": 3}},
+			}
+		],
+	}
+	var anim_data := {
+		"id": "anim_fire",
+		"name": "Fire",
+		"frames": ["frame-a", "frame-b"],
+		"durations_ms": [100, 120],
+		"loop": true,
+	}
+	project_service.set_document_data("boards", "board_farm", board_data)
+	project_service.set_document_data("animations", "anim_fire", anim_data)
+	var path := "user://tests/board_anim_roundtrip_m5.pxproj"
+	assert_eq(project_service.save_project(path), OK)
+	var unpacked: Dictionary = FileIOScript.zip_unpack(path)
+	assert_true(unpacked["files"].has("boards/board_farm.json"))
+	assert_true(unpacked["files"].has("anim/anim_fire.anim.json"))
+	assert_eq(project_service.open_project(path), OK)
+	var loaded_board: Dictionary = project_service.get_document_data("boards", "board_farm")
+	var loaded_anim: Dictionary = project_service.get_document_data("animations", "anim_fire")
+	assert_eq(String(loaded_board["id"]), "board_farm")
+	assert_eq(int(loaded_board["grid"]["cols"]), 60)
+	assert_eq(int(loaded_board["layers"][0]["cells"]["12,7"]["variant"]), 3)
+	assert_eq(String(loaded_anim["id"]), "anim_fire")
+	assert_eq(Array(loaded_anim["frames"]), ["frame-a", "frame-b"])
+	assert_eq(
+		[int(loaded_anim["durations_ms"][0]), int(loaded_anim["durations_ms"][1])], [100, 120]
+	)
+
+
 func test_project_open_normalizes_graph_edge_schema() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var graph_data := {

@@ -18,6 +18,7 @@ const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params
 const ImportFlowControllerScript := preload("res://ui/shell/import_flow_controller.gd")
 const OpenAIGenerationControllerScript := preload("res://ui/shell/openai_generation_controller.gd")
 const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_settings_dialog.gd")
+const BoardEditorScript := preload("res://ui/board/board_editor.gd")
 const Pipeline := preload("res://core/pixel/pipeline.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
@@ -46,6 +47,7 @@ const FILE_MENU_RETRY_IMPORT := 8
 const FILE_MENU_CONFIGURE_OPENAI_SESSION := 9
 const FILE_MENU_GENERATE_OPENAI_BATCH := 10
 const FILE_MENU_PROVIDER_SETTINGS := 11
+const FILE_MENU_OPEN_BOARD := 12
 const GRAPH_ADD_MENU_ID_START := 100
 const BATCH_MENU_CLEANUP := 0
 const BATCH_MENU_MATTE := 1
@@ -93,6 +95,7 @@ var _batch_menu_card_id := ""
 var _import_flow: Node = null
 var _openai_flow: Node = null
 var _provider_settings_dialog: ConfirmationDialog = null
+var _board_editor: ConfirmationDialog = null
 
 
 func setup(
@@ -124,6 +127,9 @@ func setup(
 	_provider_settings_dialog = ProviderSettingsDialogScript.new()
 	_provider_settings_dialog.name = "ProviderSettingsDialog"
 	add_child(_provider_settings_dialog)
+	_board_editor = BoardEditorScript.new()
+	_board_editor.name = "BoardEditor"
+	add_child(_board_editor)
 	_create_m2_dialogs()
 	_create_graph_node_params_dialog()
 	_create_batch_menu()
@@ -150,6 +156,7 @@ func add_file_menu(parent: Control) -> void:
 	popup.add_item(Strings.MENU_RUN_SELECTED_GRAPH, FILE_MENU_RUN_SELECTED_GRAPH)
 	_add_graph_node_submenu(popup)
 	popup.add_item(Strings.MENU_EDIT_SELECTED_GRAPH_NODE, FILE_MENU_EDIT_SELECTED_GRAPH_NODE)
+	popup.add_item(Strings.MENU_OPEN_BOARD, FILE_MENU_OPEN_BOARD)
 	popup.add_separator()
 	popup.add_item(Strings.ACTION_NEW, FILE_MENU_NEW)
 	popup.add_item(Strings.ACTION_OPEN, FILE_MENU_OPEN)
@@ -563,6 +570,8 @@ func _on_file_menu_pressed(id: int) -> void:
 			run_selected_mock_graph()
 		FILE_MENU_EDIT_SELECTED_GRAPH_NODE:
 			edit_selected_graph_node()
+		FILE_MENU_OPEN_BOARD:
+			_board_editor.show_editor()
 		FILE_MENU_NEW:
 			_new_project_callback.call()
 		FILE_MENU_OPEN:
