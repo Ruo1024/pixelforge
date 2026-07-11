@@ -183,3 +183,32 @@
 
 - 对应提交：`M4-3 add RetroDiffusion provider`（哈希以 Goal 分支日志为准）。
 - diff 模式：新增 RetroDiffusion 插件、worker 解码与通用云 graph 路由；fixture/本地 HTTP 覆盖真实异步路径；不内联全量源码。
+
+## 2026-07-11 M4-4 OpenAI GPT Image 2 Provider
+
+### 服务对象与用户动作
+
+- 服务对象：需要通用生成兜底、并依赖 PixelForge 把高分辨率伪像素清洗为项目素材的创作者。
+- 入口沿用 Provider Settings 与 AI Generate 节点；出口仍是统一 batch/provenance，不再保留 Provider 内自建 HTTPRequest 的第二套生命周期。
+
+### 本轮实现
+
+- 使用 openai-docs 技能核对官方开发者文档；Docs MCP 已安装但需重启 Codex 才能在当前任务暴露，故按技能规则回退到 OpenAI 官方域名。
+- 当前官方模型页确认 `gpt-image-2` 与 `/v1/images/generations`；API reference 明确 GPT Image 模型支持 `background=transparent`、`output_format=png`、low/medium/high 与三档尺寸。该证据覆盖并修正计划快照中“GPT Image 2 不支持透明背景”的过期假设。
+- OpenAI Provider 迁移到 PFHttpClient，验证与生成共用脱敏、取消、超时和退避；base64 PNG 解码放 WorkerThreadPool。
+- 生成请求固定透明 PNG、low quality，并按目标横纵比映射 1024×1024 / 1536×1024 / 1024×1536；目标真像素尺寸和风格约束仍写入 provider 适配 prompt。
+- 返回保留 `raw_pixel=false`，并记录 usage、目标尺寸、输出尺寸、quality、background、format；错误映射覆盖 content policy、auth、rate limit、timeout、network 与 5xx。
+- 官方 GPT Image 2 模型页当前只引导动态 pricing calculator，没有稳定可核验的逐图静态表，因此 estimate 继续返回 unknown，避免硬编码推测价格。
+
+### 自动验证命令与结果
+
+- `./pixel/scripts/lint.sh`：138 files，无问题。
+- `./pixel/scripts/run_tests.sh`：219/219 tests、1648 assertions 通过；新增真实本地 TCP、共享 HTTP 与 worker 解码测试。
+- `./pixel/scripts/verify_m4_4.sh`：复用全部上游门禁，并守护模型、透明 PNG、worker 测试和 key 泄漏。
+- 按用户最新指令，不执行逐模块实机冒烟；统一留到 M7 后总验收。
+
+### 最终统一验收与限制
+
+- 待真实 OpenAI key 验证组织权限、透明 PNG 输出、网络错误和同提示词双 Provider 对比；当前 fixture 不能替代公网证据。
+- 对比图不写入仓库：真实/生成测试图片受工作区红线约束；最终可由用户在本地临时目录审阅。
+- 对应本地提交：`M4-4 complete OpenAI image provider`（哈希以 Goal 分支日志为准）。

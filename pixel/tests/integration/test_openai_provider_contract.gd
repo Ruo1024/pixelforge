@@ -9,10 +9,17 @@ const FIXTURE_PATH := "res://tests/fixtures/providers/openai_image_success.json"
 const SECRET_SENTINEL := "sk-pf-m4-v1-contract-secret"
 
 var _provider: PFOpenAIImageProvider
+var _host: Node
+var _queue: Node
 
 
 func before_each() -> void:
+	_queue = get_tree().root.get_node("TaskQueue")
+	_queue.clear()
+	_host = Node.new()
+	add_child_autofree(_host)
 	_provider = ProviderScript.new()
+	_provider.attach_request_host(_host)
 	get_tree().root.get_node("ProjectService").new_project("M4 V1 Contract")
 
 
@@ -26,7 +33,7 @@ func test_capabilities_and_persistent_schema_match_contract() -> void:
 	assert_eq(_provider.get_api_version(), 1)
 	var capabilities := _provider.get_capabilities()
 	assert_true(capabilities["txt2img"])
-	assert_false(capabilities["transparent_bg"])
+	assert_true(capabilities["transparent_bg"])
 	assert_false(capabilities["native_pixel"])
 	assert_eq(capabilities["max_batch"], 4)
 	assert_false(capabilities["cost_estimate"])
@@ -49,6 +56,8 @@ func test_request_body_is_sanitized_and_adapts_target_size() -> void:
 	assert_eq(body["quality"], "low")
 	assert_eq(body["size"], "1024x1024")
 	assert_eq(body["n"], 4)
+	assert_eq(body["background"], "transparent")
+	assert_eq(body["output_format"], "png")
 	assert_string_contains(body["prompt"], "wooden barrel")
 	assert_string_contains(body["prompt"], "32x32 true-pixel target")
 	assert_false(JSON.stringify(body).contains(SECRET_SENTINEL))
@@ -124,9 +133,57 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 	assert_false(JSON.stringify(meta).contains(SECRET_SENTINEL))
 
 
+func test_generate_uses_shared_http_worker_decode_and_official_response_metadata() -> void:
+	assert_null(
+		(
+			_provider
+			. configure(
+				{
+					"api_key": SECRET_SENTINEL,
+					"generation_url":
+					OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-image-success",
+					"validation_url": OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-model",
+				}
+			)
+		)
+	)
+	var task: Variant = _provider.generate(
+		{"prompt": "barrel", "width": 32, "height": 32, "batch": 2}
+	)
+	var outcome := {"status": "pending", "value": null}
+	task.finished.connect(
+		func(result: Variant) -> void:
+			outcome["status"] = "finished"
+			outcome["value"] = result
+	)
+	task.failed.connect(
+		func(error: Dictionary) -> void:
+			outcome["status"] = "failed"
+			outcome["value"] = error
+	)
+	_queue.submit(task)
+	assert_true(await _wait_until(func() -> bool: return outcome["status"] != "pending"))
+
+	assert_eq(outcome["status"], "finished")
+	assert_eq(outcome["value"]["images"].size(), 2)
+	assert_eq(outcome["value"]["provider_meta"]["background"], "transparent")
+	assert_eq(outcome["value"]["provider_meta"]["output_format"], "png")
+	assert_false(JSON.stringify(task.payload).contains(SECRET_SENTINEL))
+
+
 func _load_fixture() -> Dictionary:
 	var file := FileAccess.open(FIXTURE_PATH, FileAccess.READ)
 	assert_not_null(file)
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	assert_true(parsed is Dictionary)
 	return parsed
+
+
+func _wait_until(check: Callable, timeout_seconds: float = 2.0) -> bool:
+	var elapsed := 0.0
+	while elapsed < timeout_seconds:
+		if check.call():
+			return true
+		await wait_seconds(0.02)
+		elapsed += 0.02
+	return false

@@ -11,6 +11,12 @@ from pathlib import Path
 class Handler(BaseHTTPRequestHandler):
     retry_count = 0
 
+    def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
+        if self.path == "/openai-model":
+            self._json(200, {"id": "gpt-image-2", "object": "model"})
+        else:
+            self._json(404, {"error": {"message": "missing"}})
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
         content_length = int(self.headers.get("Content-Length", "0"))
         request_body = {}
@@ -32,6 +38,18 @@ class Handler(BaseHTTPRequestHandler):
                 "base64_images": [pixel] * image_count,
                 "model": "rd_plus",
                 "remaining_balance": 99.75,
+            })
+        elif self.path == "/openai-image-success":
+            pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            image_count = max(1, min(4, int(request_body.get("n", 1))))
+            self._json(200, {
+                "created": 1783770000,
+                "background": "transparent",
+                "output_format": "png",
+                "quality": "low",
+                "size": request_body.get("size", "1024x1024"),
+                "data": [{"b64_json": pixel}] * image_count,
+                "usage": {"total_tokens": 42},
             })
         elif self.path == "/auth":
             self._json(401, {"error": "bad credentials"})
