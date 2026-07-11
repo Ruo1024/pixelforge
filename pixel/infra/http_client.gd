@@ -1,61 +1,313 @@
 class_name PFHttpClient
-extends RefCounted
+extends Node
 
-## HTTP 客户端接口占位。
-## M4 会实现重试、超时和 Provider 鉴权；M0 先固定调用形状，避免后续移动 infra 目录。
-## 设计意图：上层只依赖 request_raw/request_json 的结果字典，不直接绑定 Godot HTTPRequest 节点。
-## M4 实现时保持返回字段 ok/status_code/headers/body/error，调用方就不需要改签名。
+## 生产级异步 HTTP 封装；每次尝试使用独立 HTTPRequest，并把终态归一化为 PFTask。
+## contract: 02-contracts/PROVIDER-API.md §6；本层不知道凭据语义，只负责头部脱敏。
 
-signal request_started(url: String, method: int)
-signal request_completed(result: Dictionary)
+signal request_started(task_id: String, url: String, method: int)
+signal request_attempted(task_id: String, attempt: int, timestamp_msec: int)
+signal request_completed(task_id: String, result: Dictionary)
 
+const TaskScript := preload("res://services/pf_task.gd")
+const Log := preload("res://core/util/log_util.gd")
 
-func request_raw(
-	url: String,
-	method: int = HTTPClient.METHOD_GET,
-	headers: PackedStringArray = PackedStringArray(),
-	body: PackedByteArray = PackedByteArray(),
-	timeout_seconds: float = 30.0
-) -> Dictionary:
-	request_started.emit(url, method)
-	var result := _unavailable_result(url, method, headers, body, timeout_seconds)
-	request_completed.emit(result)
-	return result
+const DEFAULT_TIMEOUT_SECONDS := 60.0
+const DEFAULT_RETRIES := 0
+const DEFAULT_BACKOFF_SECONDS := 0.5
+const GENERATION_TIMEOUT_SECONDS := 180.0
+
+var _requests := {}
 
 
 func request_json(
+	method: int,
 	url: String,
-	method: int = HTTPClient.METHOD_GET,
 	headers: PackedStringArray = PackedStringArray(),
 	body: Variant = null,
-	timeout_seconds: float = 30.0
-) -> Dictionary:
+	opts: Dictionary = {}
+) -> Variant:
 	var body_bytes := PackedByteArray()
 	if body != null:
 		body_bytes = JSON.stringify(body).to_utf8_buffer()
-	return request_raw(url, method, headers, body_bytes, timeout_seconds)
+	return _make_task(method, url, headers, body_bytes, true, opts)
+
+
+func request_raw(
+	method: int,
+	url: String,
+	headers: PackedStringArray = PackedStringArray(),
+	body: PackedByteArray = PackedByteArray(),
+	opts: Dictionary = {}
+) -> Variant:
+	return _make_task(method, url, headers, body, false, opts)
 
 
 func cancel_all() -> void:
-	return
+	for task_id in _requests.keys():
+		var task: Variant = _requests[task_id].get("task")
+		if task != null:
+			task.cancel()
 
 
-func _unavailable_result(
-	url: String,
+func map_error(result: int, status_code: int, detail: Dictionary = {}) -> Dictionary:
+	var code := "provider_internal"
+	var message := "The request failed"
+	if result == HTTPRequest.RESULT_TIMEOUT:
+		code = "timeout"
+		message = "The request timed out; try again"
+	elif result != HTTPRequest.RESULT_SUCCESS:
+		code = "network"
+		message = "The service could not be reached; check the network"
+	else:
+		match status_code:
+			401, 403:
+				code = "auth_failed"
+				message = "The service rejected the credentials"
+			402:
+				code = "quota_exceeded"
+				message = "The service quota is exhausted"
+			429:
+				code = "rate_limited"
+				message = "The service is rate limited; retry later"
+			400, 404, 405, 409, 422:
+				code = "invalid_request"
+				message = "The service rejected the request"
+			_:
+				if status_code >= 500:
+					message = "The service failed; try again"
+	return _error(code, message, detail)
+
+
+func _make_task(
 	method: int,
+	url: String,
 	headers: PackedStringArray,
 	body: PackedByteArray,
-	timeout_seconds: float
-) -> Dictionary:
+	expect_json: bool,
+	opts: Dictionary
+) -> Variant:
+	var safe_opts := _normalize_opts(opts)
+	var task := (
+		TaskScript
+		. new(
+			"http_request",
+			{
+				"method": method,
+				"url": url,
+				"timeout_seconds": safe_opts["timeout"],
+				"retries": safe_opts["retries"],
+			}
+		)
+	)
+	task.configure_external(
+		_start_request.bind(method, url, headers, body, expect_json, safe_opts), _cancel_task
+	)
+	return task
+
+
+func _normalize_opts(opts: Dictionary) -> Dictionary:
 	return {
-		"ok": false,
-		"status_code": 0,
-		"headers": PackedStringArray(),
-		"body": PackedByteArray(),
-		"error": "HTTP client is reserved for M4.",
-		"url": url,
-		"method": method,
-		"request_headers": headers,
-		"request_body": body,
-		"timeout_seconds": timeout_seconds,
+		"timeout": maxf(0.01, float(opts.get("timeout", DEFAULT_TIMEOUT_SECONDS))),
+		"retries": maxi(0, int(opts.get("retries", DEFAULT_RETRIES))),
+		"backoff": maxf(0.0, float(opts.get("backoff", DEFAULT_BACKOFF_SECONDS))),
+		"log_requests": bool(opts.get("log_requests", false)),
 	}
+
+
+func _start_request(
+	task: Variant,
+	method: int,
+	url: String,
+	headers: PackedStringArray,
+	body: PackedByteArray,
+	expect_json: bool,
+	opts: Dictionary
+) -> void:
+	if not is_inside_tree():
+		task.reject(_error("provider_internal", "HTTP request host is unavailable"))
+		return
+	_requests[task.id] = {
+		"task": task,
+		"request": null,
+		"method": method,
+		"url": url,
+		"headers": headers,
+		"body": body,
+		"expect_json": expect_json,
+		"opts": opts,
+		"attempt": 0,
+	}
+	request_started.emit(task.id, url, method)
+	_attempt_request(task.id)
+
+
+func _attempt_request(task_id: String) -> void:
+	if not _requests.has(task_id):
+		return
+	var state: Dictionary = _requests[task_id]
+	var task: Variant = state["task"]
+	if task.cancel_requested:
+		_cancel_task(task)
+		return
+	var request := HTTPRequest.new()
+	request.timeout = float(state["opts"]["timeout"])
+	add_child(request)
+	state["request"] = request
+	_requests[task_id] = state
+	request.request_completed.connect(_on_request_completed.bind(task_id))
+	var attempt := int(state["attempt"])
+	request_attempted.emit(task_id, attempt, Time.get_ticks_msec())
+	_log_request_if_enabled(state)
+	var request_error := request.request(
+		String(state["url"]),
+		state["headers"],
+		int(state["method"]),
+		state["body"].get_string_from_utf8()
+	)
+	if request_error != OK:
+		_dispose_request(state)
+		_handle_failure(task_id, HTTPRequest.RESULT_REQUEST_FAILED, 0, PackedByteArray())
+
+
+func _on_request_completed(
+	result: int,
+	status_code: int,
+	response_headers: PackedStringArray,
+	body: PackedByteArray,
+	task_id: String
+) -> void:
+	if not _requests.has(task_id):
+		return
+	var state: Dictionary = _requests[task_id]
+	_dispose_request(state)
+	if result != HTTPRequest.RESULT_SUCCESS or status_code < 200 or status_code >= 300:
+		_handle_failure(task_id, result, status_code, body)
+		return
+	var response_body: Variant = body
+	if bool(state["expect_json"]):
+		var json := JSON.new()
+		var parse_error := json.parse(body.get_string_from_utf8())
+		if parse_error != OK:
+			_finish_failed(
+				task_id,
+				_error(
+					"provider_internal",
+					"The service returned malformed JSON",
+					{"reason": "malformed_json", "status_code": status_code}
+				)
+			)
+			return
+		response_body = json.data
+	var response := {
+		"ok": true,
+		"status_code": status_code,
+		"headers": response_headers,
+		"body": response_body,
+		"raw_body": body,
+		"attempts": int(state["attempt"]) + 1,
+	}
+	var task: Variant = state["task"]
+	_requests.erase(task_id)
+	request_completed.emit(task_id, response)
+	task.resolve(response)
+
+
+func _handle_failure(
+	task_id: String, result: int, status_code: int, response_body: PackedByteArray
+) -> void:
+	if not _requests.has(task_id):
+		return
+	var state: Dictionary = _requests[task_id]
+	var attempt := int(state["attempt"])
+	var retries := int(state["opts"]["retries"])
+	if attempt < retries and _is_retryable(result, status_code):
+		var next_attempt := attempt + 1
+		var delay_seconds := float(state["opts"]["backoff"]) * pow(2.0, float(attempt))
+		state["attempt"] = next_attempt
+		_requests[task_id] = state
+		var task: Variant = state["task"]
+		task.report_progress(0.0, "Retrying network request (%d/%d)" % [next_attempt, retries])
+		_retry_after(task_id, delay_seconds)
+		return
+	var detail := {"status_code": status_code, "attempts": attempt + 1}
+	if not response_body.is_empty():
+		var json := JSON.new()
+		if json.parse(response_body.get_string_from_utf8()) == OK and json.data is Dictionary:
+			detail["response"] = json.data
+	_finish_failed(task_id, map_error(result, status_code, detail))
+
+
+func _retry_after(task_id: String, delay_seconds: float) -> void:
+	await get_tree().create_timer(delay_seconds).timeout
+	if _requests.has(task_id):
+		_attempt_request(task_id)
+
+
+func _finish_failed(task_id: String, error: Dictionary) -> void:
+	if not _requests.has(task_id):
+		return
+	var state: Dictionary = _requests[task_id]
+	var task: Variant = state["task"]
+	_dispose_request(state)
+	_requests.erase(task_id)
+	task.reject(error)
+
+
+func _cancel_task(task: Variant) -> void:
+	if _requests.has(task.id):
+		var state: Dictionary = _requests[task.id]
+		var request: HTTPRequest = state.get("request")
+		if request != null:
+			request.cancel_request()
+		_dispose_request(state)
+		_requests.erase(task.id)
+	task.resolve(null)
+
+
+func _dispose_request(state: Dictionary) -> void:
+	var request: HTTPRequest = state.get("request")
+	if request != null and is_instance_valid(request):
+		request.queue_free()
+	state["request"] = null
+
+
+func _is_retryable(result: int, status_code: int) -> bool:
+	return result != HTTPRequest.RESULT_SUCCESS or status_code == 429 or status_code >= 500
+
+
+func _log_request_if_enabled(state: Dictionary) -> void:
+	if not bool(state["opts"]["log_requests"]) and not _global_request_logging_enabled():
+		return
+	(
+		Log
+		. debug(
+			"HTTP request",
+			{
+				"method": state["method"],
+				"url": state["url"],
+				"headers": _redacted_headers(state["headers"]),
+				"attempt": state["attempt"],
+			}
+		)
+	)
+
+
+func _global_request_logging_enabled() -> bool:
+	var settings := get_tree().root.get_node_or_null("SettingsService")
+	return settings != null and bool(settings.get_setting("network", "request_logging", false))
+
+
+func _redacted_headers(headers: PackedStringArray) -> PackedStringArray:
+	var redacted := PackedStringArray()
+	for header in headers:
+		var separator := header.find(":")
+		var name := header.substr(0, separator).strip_edges() if separator >= 0 else header
+		if name.to_lower() in ["authorization", "proxy-authorization", "x-api-key", "api-key"]:
+			redacted.append("%s: [REDACTED]" % name)
+		else:
+			redacted.append(header)
+	return redacted
+
+
+func _error(code: String, message: String, detail: Dictionary = {}) -> Dictionary:
+	return {"code": code, "message": message, "detail": detail, "recoverable": true}

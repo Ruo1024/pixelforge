@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Deterministic local server for the M4 HTTP contract tests."""
+
+import json
+import sys
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+
+class Handler(BaseHTTPRequestHandler):
+    retry_count = 0
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
+        content_length = int(self.headers.get("Content-Length", "0"))
+        if content_length:
+            self.rfile.read(content_length)
+
+        if self.path == "/success":
+            self._json(200, {"ok": True})
+        elif self.path == "/auth":
+            self._json(401, {"error": "bad credentials"})
+        elif self.path == "/rate-limit":
+            self._json(429, {"error": "slow down"})
+        elif self.path == "/retry-three":
+            Handler.retry_count += 1
+            if Handler.retry_count <= 3:
+                self._json(429, {"error": "retry", "attempt": Handler.retry_count})
+            else:
+                self._json(200, {"ok": True, "attempt": Handler.retry_count})
+        elif self.path == "/timeout":
+            time.sleep(0.3)
+            self._json(200, {"ok": True})
+        elif self.path == "/malformed":
+            payload = b"{not-json"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        else:
+            self._json(404, {"error": "missing"})
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def _json(self, status: int, body: dict) -> None:
+        payload = json.dumps(body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        try:
+            self.wfile.write(payload)
+        except BrokenPipeError:
+            pass
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: mock_http_server.py PORT_FILE")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    Path(sys.argv[1]).write_text(str(server.server_port), encoding="utf-8")
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

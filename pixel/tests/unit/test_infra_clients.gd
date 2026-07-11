@@ -4,23 +4,24 @@ const HttpClientScript := preload("res://infra/http_client.gd")
 const WsClientScript := preload("res://infra/ws_client.gd")
 
 
-func test_http_client_stub_keeps_m4_result_shape() -> void:
+func test_http_client_builds_external_task_without_leaking_request_headers() -> void:
 	var client := HttpClientScript.new()
-	var result: Dictionary = client.request_json(
-		"https://example.test/api",
+	var task: Variant = client.request_json(
 		HTTPClient.METHOD_POST,
+		"https://example.test/api",
 		PackedStringArray(["Content-Type: application/json"]),
 		{"hello": "world"},
-		5.0
+		{"timeout": 5.0, "retries": 2}
 	)
 
-	assert_false(result["ok"])
-	assert_eq(result["status_code"], 0)
-	assert_true(result.has("headers"))
-	assert_true(result.has("body"))
-	assert_eq(result["url"], "https://example.test/api")
-	assert_eq(result["method"], HTTPClient.METHOD_POST)
-	assert_eq(result["timeout_seconds"], 5.0)
+	assert_true(task.is_external_async())
+	assert_eq(task.payload["url"], "https://example.test/api")
+	assert_eq(task.payload["method"], HTTPClient.METHOD_POST)
+	assert_eq(task.payload["timeout_seconds"], 5.0)
+	assert_eq(task.payload["retries"], 2)
+	assert_false(task.payload.has("headers"))
+	assert_false(task.payload.has("body"))
+	client.free()
 
 
 func test_websocket_client_stub_keeps_m7_connection_shape() -> void:
