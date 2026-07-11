@@ -84,7 +84,7 @@ static func _collect_control_audit(owner: Node) -> Array:
 		"Root/TopBar",
 		"Root/Content",
 		"Root/Content/InfiniteCanvas",
-		"Root/Content/CleanupInspector",
+		"Root/Content/ContextInspector",
 		"Root/BottomBar",
 		"ZoomControl",
 	]:

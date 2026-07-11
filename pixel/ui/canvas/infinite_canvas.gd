@@ -302,6 +302,7 @@ func _refresh_graph_node_card(graph_id: String, node_id: String) -> bool:
 		refreshed = true
 	if refreshed:
 		queue_redraw()
+		selection_changed.emit(_selection.get_selected_ids())
 	return refreshed
 
 

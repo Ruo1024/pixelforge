@@ -3,6 +3,9 @@ extends Node
 
 ## 图片导入交互：稳定落点、原子预检、失败重试、空画布提示与最近导入聚焦。
 
+signal add_input_requested
+signal open_example_requested
+
 const Strings := preload("res://ui/shell/strings.gd")
 const FileIOScript := preload("res://infra/file_io.gd")
 const EmptyImportHintScript := preload("res://ui/shell/empty_canvas_import_hint.gd")
@@ -99,6 +102,8 @@ func _create_dialogs(dialog_parent: Node) -> void:
 func _create_empty_hint() -> void:
 	_empty_import_hint = EmptyImportHintScript.new()
 	_empty_import_hint.import_requested.connect(show_import_dialog)
+	_empty_import_hint.add_input_requested.connect(func() -> void: add_input_requested.emit())
+	_empty_import_hint.open_example_requested.connect(func() -> void: open_example_requested.emit())
 	_canvas.add_child(_empty_import_hint)
 
 

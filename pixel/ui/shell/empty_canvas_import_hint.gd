@@ -1,14 +1,17 @@
 class_name PFEmptyCanvasImportHint
 extends PanelContainer
 
-## 空画布上的低干扰导入入口；只提供最小旅程第一步，不承担完整欢迎页职责。
+## 空画布上的首步入口；实际动作由 shell controller 接入真实服务。
 
 signal import_requested
+signal add_input_requested
+signal import_reference_requested
+signal open_example_requested
 
 const Strings := preload("res://ui/shell/strings.gd")
 
-const HINT_WIDTH := 360
-const HINT_HEIGHT := 116
+const HINT_WIDTH := 560
+const HINT_HEIGHT := 144
 const CONTENT_GAP := 10
 
 
@@ -22,6 +25,7 @@ func _ready() -> void:
 	offset_bottom = HINT_HEIGHT * 0.5
 
 	var content := VBoxContainer.new()
+	content.name = "EmptyContent"
 	content.alignment = BoxContainer.ALIGNMENT_CENTER
 	content.add_theme_constant_override("separation", CONTENT_GAP)
 	add_child(content)
@@ -31,11 +35,32 @@ func _ready() -> void:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(label)
 
-	var button := Button.new()
-	button.text = Strings.ACTION_IMPORT_IMAGES
-	button.pressed.connect(func() -> void: import_requested.emit())
-	content.add_child(button)
+	var actions := HBoxContainer.new()
+	actions.name = "EmptyActions"
+	actions.alignment = BoxContainer.ALIGNMENT_CENTER
+	actions.add_theme_constant_override("separation", CONTENT_GAP)
+	content.add_child(actions)
+
+	_add_action(actions, "AddInput", Strings.ACTION_ADD_INPUT, add_input_requested.emit)
+	_add_action(
+		actions,
+		"ImportReference",
+		Strings.ACTION_IMPORT_REFERENCE,
+		func() -> void:
+			import_reference_requested.emit()
+			import_requested.emit()
+	)
+	_add_action(actions, "OpenExample", Strings.ACTION_OPEN_EXAMPLE, open_example_requested.emit)
 
 
 func set_canvas_empty(is_empty: bool) -> void:
 	visible = is_empty
+
+
+func _add_action(parent: Control, button_name: String, text: String, callback: Callable) -> void:
+	var button := Button.new()
+	button.name = button_name
+	button.text = text
+	button.focus_mode = Control.FOCUS_NONE
+	button.pressed.connect(callback)
+	parent.add_child(button)

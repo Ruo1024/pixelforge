@@ -198,7 +198,9 @@ func test_cleanup_inspector_keeps_apply_actions_reachable_below_scroll() -> void
 	add_child_autofree(main)
 	await wait_process_frames(2)
 
-	var inspector: Control = main.get_node("Root/Content/CleanupInspector")
+	var inspector: Control = main.get_node(
+		"Root/Content/ContextInspector/ContextRoot/CleanupInspector"
+	)
 	var root: VBoxContainer = inspector.get_node("InspectorRoot")
 
 	assert_gte(inspector.custom_minimum_size.x, 420.0)
@@ -215,11 +217,14 @@ func test_selection_tool_buttons_are_hidden_until_selection_actions_are_wired() 
 	await wait_process_frames(2)
 
 	var top_bar: Control = main.get_node("Root/TopBar")
-	for child in top_bar.get_children():
+	var checked_buttons := 0
+	for child in top_bar.find_children("*", "Button", true, false):
 		if child is Button:
+			checked_buttons += 1
 			assert_ne(child.text, "W")
 			assert_ne(child.text, "M")
 			assert_ne(child.text, "L")
+	assert_gt(checked_buttons, 0)
 
 
 func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
