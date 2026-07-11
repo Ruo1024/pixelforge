@@ -27,6 +27,7 @@ UndoService="*res://services/undo_service.gd"
 TaskQueue="*res://services/task_queue.gd"
 ProjectService="*res://services/project_service.gd"
 ProviderService="*res://services/provider_service.gd"
+CostService="*res://services/cost_service.gd"
 
 [display]
 

@@ -16,17 +16,32 @@ const IdUtil := preload("res://core/util/id_util.gd")
 
 var _canvas: Control = null
 var _status_label: Label = null
+var _cost_label: Label = null
 var _session_dialog: ConfirmationDialog = null
+var _budget_dialog: ConfirmationDialog = null
 var _pending_runs := {}
+var _pending_budget_run := {}
 
 
-func setup(canvas: Control, status_label: Label) -> void:
+func setup(canvas: Control, status_label: Label, cost_label: Label = null) -> void:
 	_canvas = canvas
 	_status_label = status_label
+	_cost_label = cost_label
 	_session_dialog = OpenAISessionDialogScript.new()
 	_session_dialog.name = "OpenAISessionDialog"
 	_session_dialog.session_configured.connect(_on_session_configured)
 	add_child(_session_dialog)
+	_budget_dialog = ConfirmationDialog.new()
+	_budget_dialog.name = "ProviderBudgetDialog"
+	_budget_dialog.title = Strings.DIALOG_PROVIDER_BUDGET_TITLE
+	_budget_dialog.confirmed.connect(_confirm_budget_run)
+	_budget_dialog.canceled.connect(func() -> void: _pending_budget_run.clear())
+	add_child(_budget_dialog)
+	CostService.cost_changed.connect(
+		func(_month: String, _total: float) -> void: _refresh_cost_label()
+	)
+	CostService.budget_changed.connect(func(_limit: float) -> void: _refresh_cost_label())
+	_refresh_cost_label()
 
 
 func configure_session() -> void:
@@ -59,13 +74,8 @@ func _queue_graph(
 			)
 		return
 	var request := _request_for_graph(graph)
-	var task: Variant = ProviderService.generate(provider_id, request)
-	if task == null:
-		_status_label.text = (
-			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, "provider unavailable"]
-		)
-		return
-	_pending_runs[task.id] = {
+	var estimate := CostService.estimate_request(provider_id, request)
+	var run_state := {
 		"graph": graph,
 		"request": request,
 		"provider_id": provider_id,
@@ -73,7 +83,32 @@ func _queue_graph(
 		"anchor": _canvas.get_mouse_world_position(),
 		"batch_node_id": batch_node_id,
 		"batch_card_id": batch_card_id,
+		"estimate": estimate,
 	}
+	_refresh_cost_label(estimate)
+	if CostService.requires_confirmation(estimate):
+		_pending_budget_run = run_state
+		_budget_dialog.dialog_text = (
+			Strings.STATUS_PROVIDER_BUDGET_CONFIRM_FORMAT
+			% [estimate, CostService.get_monthly_budget()]
+		)
+		_status_label.text = _budget_dialog.dialog_text
+		_budget_dialog.popup_centered()
+		return
+	_submit_provider_run(run_state)
+
+
+func _submit_provider_run(run_state: Dictionary) -> void:
+	var provider_id := String(run_state["provider_id"])
+	var display_name := String(run_state["provider_name"])
+	var request: Dictionary = run_state["request"]
+	var task: Variant = ProviderService.generate(provider_id, request)
+	if task == null:
+		_status_label.text = (
+			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, "provider unavailable"]
+		)
+		return
+	_pending_runs[task.id] = run_state
 	task.progress_reported.connect(_on_progress)
 	task.finished.connect(_on_finished.bind(task.id))
 	task.failed.connect(_on_failed.bind(task.id))
@@ -84,6 +119,18 @@ func _queue_graph(
 
 func get_session_dialog() -> ConfirmationDialog:
 	return _session_dialog
+
+
+func get_budget_dialog() -> ConfirmationDialog:
+	return _budget_dialog
+
+
+func _confirm_budget_run() -> void:
+	if _pending_budget_run.is_empty():
+		return
+	var run_state := _pending_budget_run
+	_pending_budget_run = {}
+	_submit_provider_run(run_state)
 
 
 func _on_session_configured(api_key: String) -> void:
@@ -116,6 +163,7 @@ func _on_finished(result: Variant, task_id: String) -> void:
 	var batch_node_id := String(state["batch_node_id"])
 	var batch_card_id := String(state["batch_card_id"])
 	var images: Array = result.get("images", [])
+	CostService.record_cost(provider_id, float(result.get("cost", -1.0)))
 	var runner := GraphRunnerScript.new()
 	var materialized := runner.materialize_provider_batch(
 		graph,
@@ -161,6 +209,18 @@ func _on_canceled(task_id: String) -> void:
 	_status_label.text = (
 		Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT
 		% String(state.get("provider_name", "Provider"))
+	)
+	_refresh_cost_label()
+
+
+func _refresh_cost_label(estimate: float = -1.0) -> void:
+	if _cost_label == null:
+		return
+	var total := CostService.get_month_total()
+	_cost_label.text = (
+		Strings.COST_MONTH_ESTIMATE_FORMAT % [total, estimate]
+		if estimate >= 0.0
+		else Strings.COST_MONTH_FORMAT % total
 	)
 
 

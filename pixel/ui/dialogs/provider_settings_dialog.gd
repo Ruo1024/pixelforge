@@ -15,6 +15,7 @@ var _provider_options: OptionButton = null
 var _capabilities_label: Label = null
 var _form: VBoxContainer = null
 var _status_label: Label = null
+var _budget_spin: SpinBox = null
 var _fields := {}
 var _provider_id := ""
 
@@ -27,6 +28,7 @@ func _ready() -> void:
 
 func show_settings(provider_id: String = "") -> void:
 	_refresh_provider_list()
+	_budget_spin.value = CostService.get_monthly_budget()
 	if not provider_id.is_empty():
 		_select_provider(provider_id)
 	popup_centered()
@@ -41,6 +43,7 @@ func get_current_provider_id() -> String:
 
 
 func save_current_config() -> Dictionary:
+	CostService.set_monthly_budget(_budget_spin.value)
 	var config := {}
 	for key in _fields.keys():
 		config[String(key)] = _control_value(_fields[key])
@@ -79,6 +82,16 @@ func _build() -> void:
 	_provider_options.custom_minimum_size.y = CONTROL_HEIGHT
 	_provider_options.item_selected.connect(_on_provider_selected)
 	root.add_child(_provider_options)
+	var budget_label := Label.new()
+	budget_label.text = Strings.PROVIDER_MONTHLY_BUDGET
+	root.add_child(budget_label)
+	_budget_spin = SpinBox.new()
+	_budget_spin.min_value = 0.0
+	_budget_spin.max_value = 1000000.0
+	_budget_spin.step = 0.01
+	_budget_spin.value = CostService.get_monthly_budget()
+	_budget_spin.custom_minimum_size.y = CONTROL_HEIGHT
+	root.add_child(_budget_spin)
 
 	_capabilities_label = Label.new()
 	_capabilities_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

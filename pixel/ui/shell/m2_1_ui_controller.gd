@@ -73,6 +73,7 @@ const EDITABLE_GRAPH_NODE_TYPES := ["object_list", "size_spec", "ai_generate"]
 var _canvas: Control = null
 var _cleanup_inspector: Control = null
 var _status_label: Label = null
+var _cost_label: Label = null
 var _m2_actions: Variant = null
 var _new_project_callback: Callable
 var _open_project_callback: Callable
@@ -98,6 +99,7 @@ func setup(
 	canvas: Control,
 	cleanup_inspector: Control,
 	status_label: Label,
+	cost_label: Label,
 	m2_actions: Variant,
 	new_project_callback: Callable,
 	open_project_callback: Callable,
@@ -106,6 +108,7 @@ func setup(
 	_canvas = canvas
 	_cleanup_inspector = cleanup_inspector
 	_status_label = status_label
+	_cost_label = cost_label
 	_m2_actions = m2_actions
 	_new_project_callback = new_project_callback
 	_open_project_callback = open_project_callback
@@ -117,7 +120,7 @@ func setup(
 	_openai_flow = OpenAIGenerationControllerScript.new()
 	_openai_flow.name = "OpenAIGenerationController"
 	add_child(_openai_flow)
-	_openai_flow.setup(_canvas, _status_label)
+	_openai_flow.setup(_canvas, _status_label, _cost_label)
 	_provider_settings_dialog = ProviderSettingsDialogScript.new()
 	_provider_settings_dialog.name = "ProviderSettingsDialog"
 	add_child(_provider_settings_dialog)

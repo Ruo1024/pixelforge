@@ -48,6 +48,7 @@ var _canvas: Control = null
 var _cleanup_inspector: Control = null
 var _title_label: Label = null
 var _status_label: Label = null
+var _cost_label: Label = null
 var _save_dialog: FileDialog = null
 var _open_dialog: FileDialog = null
 var _recovery_dialog: ConfirmationDialog = null
@@ -376,6 +377,12 @@ func _build_ui() -> void:
 	_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_status_label.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
 	bottom_bar.add_child(_status_label)
+	_cost_label = Label.new()
+	_cost_label.name = "CostLabel"
+	_cost_label.text = Strings.COST_MONTH_FORMAT % CostService.get_month_total()
+	_cost_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_cost_label.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
+	bottom_bar.add_child(_cost_label)
 
 	_create_file_dialogs()
 	_m2_actions = M2ActionController.new()
@@ -387,6 +394,7 @@ func _build_ui() -> void:
 		_canvas,
 		_cleanup_inspector,
 		_status_label,
+		_cost_label,
 		_m2_actions,
 		_create_new_project,
 		_show_open_dialog,

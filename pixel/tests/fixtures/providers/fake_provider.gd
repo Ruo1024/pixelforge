@@ -56,6 +56,10 @@ func validate_credentials() -> Variant:
 	return task
 
 
+func estimate_cost(request: Dictionary) -> float:
+	return 0.25 * maxi(1, int(request.get("batch", 1)))
+
+
 func clear_session_config() -> void:
 	configured_key = ""
 	configured_endpoint = ""

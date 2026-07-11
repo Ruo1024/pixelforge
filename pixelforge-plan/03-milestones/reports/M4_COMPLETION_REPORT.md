@@ -212,3 +212,25 @@
 - 待真实 OpenAI key 验证组织权限、透明 PNG 输出、网络错误和同提示词双 Provider 对比；当前 fixture 不能替代公网证据。
 - 对比图不写入仓库：真实/生成测试图片受工作区红线约束；最终可由用户在本地临时目录审阅。
 - 对应本地提交：`M4-4 complete OpenAI image provider`（哈希以 Goal 分支日志为准）。
+
+## 2026-07-11 M4-5 费用与预算仪表
+
+### 本轮实现
+
+- 新增 CostService，按自然月与 Provider 分桶持久化实际费用；未知费用使用 -1 且绝不按 0 计入，避免误导。
+- 云生成完成即按 Provider 响应的总 cost 入账；画布底栏持续显示本月累计，已知 run estimate 时显示“Next ≈”。
+- Provider Settings 增加全局月度 USD 预算（0 表示无限制）；已知估算导致本月超预算时，在任务创建前弹确认框，取消不会发送请求，确认才继续。
+- estimate 统一调用 Provider 合同；RetroDiffusion 当前可核验 RD_PRO 价目参与预算，OpenAI 与 Retro 其他 style 的未知价不做虚假拦截。
+
+### 自动验证与统一验收口径
+
+- `./pixel/scripts/lint.sh`：140 files，无问题。
+- `./pixel/scripts/run_tests.sh`：222/222 tests、1661 assertions 通过。
+- 覆盖虚拟 Provider 估算与实际误差 0、按月/provider 累加、unknown 忽略、无预算放行、已知超额拦截，以及真实 Retro UI graph 确认后继续执行。
+- `./pixel/scripts/verify_m4_5.sh` 复用 M4 全部上游门禁；按用户指令不做模块级实机冒烟，M4 的真实 key、网络波动、费用显示与双路对比统一留到最终一次验收。
+
+### M4 工程结论
+
+- M4-1～M4-5 工程闭环完成于 Goal 隔离分支；两 Provider、凭据、异步传输、费用与节点运行均有自动化证据。
+- 产品 go/no-go、真实 API、三人 A/B 和真人体验均仍是**待最终统一验收**；不得把本节解释为 M4 产品 go。
+- 对应本地提交：`M4-5 add provider cost and budget controls`（哈希以 Goal 分支日志为准）。

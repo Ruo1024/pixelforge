@@ -39,6 +39,8 @@ func after_each() -> void:
 	_provider.clear_session_config()
 	ProviderService.clear_session("retrodiffusion")
 	ProviderService._set_validation_state("retrodiffusion", "unconfigured", "")
+	CostService.set_monthly_budget(0.0)
+	CostService.reset_month_for_tests(CostService.get_month_key())
 
 
 func test_capabilities_and_schema_match_provider_contract() -> void:
@@ -186,6 +188,9 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	var generate_node := _node_data_for_id(graph_data["nodes"], "generate")
 	generate_node["params"]["provider_id"] = "retrodiffusion"
 	generate_node["params"]["batch_size"] = 4
+	var size_node := _node_data_for_id(graph_data["nodes"], "size")
+	size_node["params"]["width"] = 256
+	size_node["params"]["height"] = 256
 	ProjectService.set_graph_data(graph_id, graph_data, true)
 	assert_null(
 		(
@@ -200,10 +205,16 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 		)
 	)
 	ProviderService._set_validation_state("retrodiffusion", "verified", "Fixture verified")
+	CostService.set_monthly_budget(0.1)
 
 	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
 	canvas.select_ids([batch_item_id])
 	controller.run_selected_mock_graph()
+	var budget_dialog: ConfirmationDialog = controller._openai_flow.get_budget_dialog()
+	assert_true(budget_dialog.visible)
+	assert_string_contains(budget_dialog.dialog_text, "$1.00")
+	assert_true(TaskQueue.is_idle())
+	budget_dialog.confirmed.emit()
 	assert_true(
 		await _wait_until(
 			func() -> bool: return _status_label(main).text == Strings.STATUS_GRAPH_RUN_DONE % 4,

@@ -125,6 +125,13 @@ const STATUS_PROVIDER_GENERATE_RUNNING_FORMAT := "%s generation: %d%% — %s"
 const STATUS_PROVIDER_GENERATE_DONE_FORMAT := "%s batch generated: %d sprites"
 const STATUS_PROVIDER_GENERATE_FAILED_FORMAT := "%s generation failed: %s"
 const STATUS_PROVIDER_GENERATE_CANCELED_FORMAT := "%s generation canceled"
+const STATUS_PROVIDER_BUDGET_CONFIRM_FORMAT := (
+	"Estimated $%.2f would exceed the $%.2f monthly budget. " + "Confirm to continue."
+)
+const COST_MONTH_FORMAT := "This month: $%.2f"
+const COST_MONTH_ESTIMATE_FORMAT := "This month: $%.2f · Next ≈$%.2f"
+const PROVIDER_MONTHLY_BUDGET := "Monthly AI budget (USD, 0 = no limit)"
+const DIALOG_PROVIDER_BUDGET_TITLE := "Confirm AI generation cost"
 const PROVIDER_SETTINGS_SAVED := "Credentials saved locally. Validate before using this provider."
 const PROVIDER_SETTINGS_SAVE_FAILED := "Credentials could not be saved. Check local file permissions."
 const PROVIDER_SETTINGS_VALIDATE_UNAVAILABLE := "This provider cannot validate credentials."
