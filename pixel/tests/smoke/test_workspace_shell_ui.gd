@@ -120,6 +120,26 @@ func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> vo
 	assert_eq(
 		hint.get_node("EmptyContent/HintLabel").text, Strings.text("EMPTY_CANVAS_IMPORT_HINT")
 	)
+	var controller: Node = main.get_node("M21UiController")
+	var file_menu: MenuButton = null
+	for child in global_actions.get_children():
+		if child is MenuButton:
+			file_menu = child
+			break
+	assert_not_null(file_menu)
+	assert_eq(file_menu.text, Strings.text("MENU_FILE"))
+	assert_eq(
+		file_menu.get_popup().get_item_text(
+			file_menu.get_popup().get_item_index(controller.FILE_MENU_IMPORT_IMAGES)
+		),
+		Strings.text("MENU_IMPORT_IMAGES")
+	)
+	assert_eq(
+		controller._batch_menu.get_item_text(
+			controller._batch_menu.get_item_index(controller.BATCH_MENU_MARK_KEEP)
+		),
+		Strings.text("BATCH_ACTION_MARK_KEEP")
+	)
 	(hint.get_node("EmptyContent/EmptyActions/AddInput") as Button).pressed.emit()
 	await wait_process_frames(2)
 	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")

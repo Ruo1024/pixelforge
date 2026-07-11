@@ -82,6 +82,22 @@ func test_spritesheet_export_writes_png_and_json_manifest() -> void:
 	assert_true(Dictionary(parsed)["frames"].has("two.png"))
 
 
+func test_simplified_chinese_directory_and_asset_names_export_without_loss() -> void:
+	var directory := "user://tests/m2_export/中文导出"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory))
+	var result: Dictionary = Exporter.export_files(
+		[{"name": "稻草人 待机", "image": _solid_image(Vector2i(3, 4), Color.ORANGE)}], directory
+	)
+	var expected_path := directory.path_join("稻草人_待机.png")
+
+	assert_true(result["ok"])
+	assert_eq(result["files"], [expected_path])
+	assert_true(FileAccess.file_exists(expected_path))
+	var loaded := FileIOScript.load_png(expected_path)
+	assert_not_null(loaded)
+	assert_eq(loaded.get_size(), Vector2i(3, 4))
+
+
 func _solid_image(size: Vector2i, color: Color) -> Image:
 	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
 	image.fill(color)

@@ -118,6 +118,44 @@ func test_project_graphs_survive_zip_roundtrip() -> void:
 	assert_eq(project_service.current_project.canvas["items"][0]["node_id"], "batch_1")
 
 
+func test_simplified_chinese_project_path_name_and_prompt_roundtrip() -> void:
+	var project_service := get_tree().root.get_node("ProjectService")
+	project_service.new_project("像素农场")
+	(
+		project_service
+		. set_graph_data(
+			"graph_main",
+			{
+				"graph_version": 1,
+				"id": "graph_main",
+				"name": "农场道具生成",
+				"nodes":
+				[
+					{
+						"id": "objects",
+						"type": "object_list",
+						"position": [0, 0],
+						"params": {"items": "木桶\n栅栏\n稻草人"},
+					}
+				],
+				"edges": [],
+			},
+			true
+		)
+	)
+	var directory := "user://tests/中文项目目录"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory))
+	var path := directory.path_join("像素农场.pxproj")
+
+	assert_eq(project_service.save_project(path), OK)
+	assert_true(FileAccess.file_exists(path))
+	assert_eq(project_service.open_project(path), OK)
+	assert_eq(project_service.current_project.manifest["name"], "像素农场")
+	var graph: Dictionary = project_service.current_project.graphs["graph_main"]
+	assert_eq(graph["name"], "农场道具生成")
+	assert_eq(graph["nodes"][0]["params"]["items"], "木桶\n栅栏\n稻草人")
+
+
 func test_board_and_animation_documents_survive_zip_roundtrip() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var board_data := {
