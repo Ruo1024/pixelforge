@@ -22,7 +22,7 @@ cd pixel
 
 Windows fresh clone 不要求人工先 import；`run_tests.sh` 会先执行 `godot --headless --import --quit`，并把 `HOME`、`APPDATA`、`LOCALAPPDATA` 隔离到项目内 `.godot/home`。
 
-M0 精简索引见 `pixel/docs/m0-brief.md`；完整完成报告见 `pixel/M0_COMPLETION_REPORT.md`。
+M0 精简索引见 `pixel/docs/m0-brief.md`；完整完成报告见 `reports/M0_COMPLETION_REPORT.md`。
 
 ### 精简实施流程
 

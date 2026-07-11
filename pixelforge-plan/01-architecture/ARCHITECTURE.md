@@ -148,9 +148,9 @@ class_name PFTask
 - 类名 `PF` 前缀 PascalCase（PFGraph, PFTask）；文件 snake_case。
 - 所有公共函数显式类型标注（参数与返回值）。
 - 信号命名过去式（`task_finished`），方法命令式（`run_task`）。
-- 每个 core 类文件头部注释块：职责一句话 + 输入输出契约 + 引用的契约文档（如 `# contract: 02-contracts/GRAPH-SCHEMA.md §3`）。
-- 魔法数字一律提常量；用户可见字符串集中到 `ui/shell/strings.gd`（为未来 i18n 留口，v1.0 前 UI 英文、注释与文档中文——与 HexDungeon 项目同样的 CJK 字体考量，待打包自带 CJK 字体后再上中文 UI）。
-- **UI 缩放**：界面缩放由 `Window.content_scale_factor`（启动按 `_resolve_interface_scale()` 检测）统一驱动，所有 Control 尺寸/字号写逻辑常量、由 factor 等比放大，禁止 `_scaled_int()` 与组件级 `ui_scale` 注入。画布美术不随 chrome 二次放大：设备倍率 `F_canvas = max(1, round(F))`，净美术放大 = `camera_zoom × F_canvas`（整数对齐、NEAREST 硬边）。新增 UI 不需要任何缩放接线；`scripts/check_ui_scaling.sh` 做静态守护，合法例外用 `# scale-exempt:` 放行。
+- 注释只写关键节点：模块职责、契约引用、非显然不变量、兼容/安全原因和影响应用行为的重要实现决策。不要逐行复述代码或用注释保存临时思考。
+- 魔法数字提取为有语义的常量。用户可见字符串经过集中 i18n 目录/访问层；`ui/shell/strings.gd` 在 Beta 0.2 可作为迁移兼容入口，不再作为英文常量终点。
+- **UI 缩放**：现有基线由根 `Window.content_scale_factor` 统一驱动，组件不得私设第二套倍率或用局部 padding/字号补丁绕过根因；画布美术仍按设备像素整数对齐与 NEAREST 自管。2026-07-12 的 macOS 实机证据表明现有根策略尚未完成视觉验收，Beta 0.2 必须按 `BETA-0.2-UI-DIAGNOSTICS.md` 先归因再决定是否修订根策略。`scripts/check_ui_scaling.sh` 继续作为静态守护，但不能替代真实字形与跨屏测试。
 - PixelForge 的编辑器调试默认禁用 Godot Game embedding（全局 editor setting `run/window_placement/game_embed_mode=2`，可运行 `pixel/scripts/configure_editor_game_view.sh` 设置），让 Play 行为接近导出后的独立桌面窗口。若临时启用 Game bar 调试，内嵌 Game View 必须使用 `Stretch to Fit`（本地 `.godot/editor/project_metadata.cfg` 的 `embed_size_mode=2`）；默认 `Fixed Size` 会按项目基准分辨率居中显示并暴露外圈盲区，这是编辑器调试视图设置，不应在产品窗口代码中补偿。
 
 - **文件行数**：单文件软上限约 1000 行（gdlint `max-file-lines: 1000`）。这是**软目标不是硬指标**——不要为压行数而把内聚逻辑拆散、牺牲可读性；只有当拆分本身让代码更清晰时才拆（按职责拆，不按行数）。
@@ -160,8 +160,8 @@ class_name PFTask
 
 - core 层：纯单元测试，目标行覆盖 ≥80%。算法用 `tests/fixtures/` 合成样本（程序生成已知答案的伪像素图）做黄金测试。
 - services 层：集成测试（项目保存→重开→比对；任务队列并发与取消）。
-- ui 层：冒烟测试为主（场景能实例化、关键信号连通），不追求 UI 自动化覆盖。
-- 每张任务卡的验收标准包含其测试要求；CI 红灯禁止合并。
+- ui 层：组件状态与数据映射尽量自动化；真实窗口 agent 冒烟集中在一个可使用的整体切片完成后，不要求每个小模块单独冒烟。
+- 卡内运行定向测试，集成边界运行全量回归；自动化红灯禁止进入下一阶段。项目所有者人工测试默认集中到 Beta 候选。
 
 ## 7. 性能预算与逃生舱
 

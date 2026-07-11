@@ -1,57 +1,60 @@
-# PixelForge 工作区约定（所有 agent 必读：Claude / Codex / 其他）
+# PixelForge 工作区约定（所有 agent 必读）
 
-## 文件落点
-- 代码只写入 `pixel/`，计划与报告只写入 `pixelforge-plan/`。
-- 里程碑/修复完成报告 → `pixelforge-plan/03-milestones/reports/`。
-- 算法研究 → `pixelforge-plan/04-research/`；外部算法参考 → `pixelforge-plan/06-algorithm-refs/`。
-- 临时文件/草稿 → `scratch/`（已 gitignore）。禁止在仓库根目录新建文件。
-- `垃圾桶/`、`godot-interactive-guide/` 是用户保留的本地资料，不要修改、不要纳入 git。
+## 1. 文件范围与安全红线
 
-## 测试图片红线
-- `test picture/` 与 `pixel/tests/fixtures/real/` 中的图片是基于其他画师作品的 AI 生成图像，**未获公开许可，绝不允许 commit 或 push**（已 gitignore，不要绕过）。
+- 代码只写入 `pixel/`；计划、研究与报告只写入 `pixelforge-plan/`；临时草稿写入已忽略的 `scratch/`。除既有工作区规则文件外，不在仓库根目录新增文件。
+- 里程碑/修复报告写入 `pixelforge-plan/03-milestones/reports/`；算法研究写入 `04-research/`；外部算法参考写入 `06-algorithm-refs/`。
+- 不修改、不纳入 git：`垃圾桶/`、`godot-interactive-guide/`。
+- `test picture/` 与 `pixel/tests/fixtures/real/` 含未获公开许可的图像，绝不 commit 或 push，也不得绕过 ignore 规则。
 
-## Git 纪律
-- 每个里程碑出口必须 git commit，完成报告用 diff 模式（不内联全量代码）。
-- 多 agent 并行时各用独立 `git worktree` + 分支，完成后 merge 回 main。
-- commit 前自查：`git diff --cached --name-only | grep -iE '\.png$|\.jpg$'` 应无输出（addons/gut 内置图标除外）。
+## 2. 产品与工程默认规则
 
-## 工程约定
-- UI 字符串集中在 `pixel/ui/shell/strings.gd`；禁止裸 print。
-- UI 缩放统一由 `Window.content_scale_factor` 继承，禁止 `_scaled_int()` / 手动 `ui_scale` 注入 / 硬编码像素字号；画布美术按"反向补偿 + 设备像素整数对齐"自管（规范本体见 `ARCHITECTURE.md §5`，守护见 `pixel/scripts/check_ui_scaling.sh`）。
-- 算法参考 perfectPixel（MIT，https://github.com/theamusing/perfectPixel）已在 README 标注；新增外部算法参考时同样需标注来源与协议。
+- 新功能先说明它服务哪段用户旅程；“完成”表示入口、过程反馈、结果和下一步在应用中连通，不能只以代码或单测存在为准。
+- `pixelforge-plan/02-contracts/` 是跨模块接口的唯一事实来源。发现契约缺陷时提出修订并等待批准，禁止静默绕过。
+- 用户可见文案必须经过集中 i18n 目录/访问层；不得在组件中散落裸字符串。`pixel/ui/shell/strings.gd` 可作为迁移期兼容入口。
+- UI chrome 继承根窗口统一缩放策略；画布美术继续按设备像素整数对齐自管。不要在组件内私设第二套缩放倍率或硬编码像素字号；具体规则与守护见 `ARCHITECTURE.md §5` 和 `pixel/scripts/check_ui_scaling.sh`。
+- 禁止裸 `print`；使用项目日志工具，并避免输出密钥、用户素材或完整外部响应。
+- 注释只保留在关键逻辑节点：模块职责、契约边界、非显然不变量、兼容/安全原因，以及影响应用行为的重要实现决策。不要逐行复述代码、记录临时思考或用长注释代替文档。
+- 文件约 1000 行是软目标；只按职责拆分，不为压行数破坏内聚性。
+- 新增外部算法或资产参考时记录来源与许可证。既有 perfectPixel 集成说明见 `06-algorithm-refs/perfectPixel/INTEGRATION.md`。
 
-- 文件行数软上限约 1000 行（gdlint `max-file-lines`），是软目标——不为压行数而拆散内聚逻辑、牺牲可读性（按职责拆，不按行数）。
-- 任何新功能先确认它在**使用体验闭环**中的角色（见 `00-vision/PRODUCT.md` 统领原则）；「完成」＝在闭环里走通，非孤立单测绿。
+## 3. 开发节奏与验收
 
-## 用户协作与迭代习惯
-- 开发采用小步闭环：一次只推进一张任务卡或一个边界清晰的小闭环，避免在单次会话中铺开整个里程碑。
-- 原型阶段追求“从无到可用”，不要求一次达到最终形态；但基础功能如果还不能被用户直接操作，就不能停在仅有代码或单测的状态。
-- 自动化测试通过不等于体验验收通过。涉及 UI、交互、视觉或工作流的能力，必须提供明确的人工测试步骤；实机体验失败时不得标记完成。
-- 需要人工验证的改动，在开发、自动测试、提交和报告完成后暂停，向用户说明具体测试入口、操作步骤和预期结果，等待反馈后再继续扩展。
-- 用户反馈某个原型未通过时，应明确标记为未通过、撤销或登记设计债；禁止在后续交接中把它继续描述为已完成能力。
-- 修复复杂故障时先定位根因，再确定方案。诊断期间使用隔离分支或 worktree；在根因未确认、问题未真正修复前不得提交“碰巧有效”的补丁。
-- 产品方向、体验取舍或契约含义存在实质歧义时，把选项、依据和影响交给用户决策，不替用户静默选择产品方向。
-- 使用子 agent 时，可以让其收集资料、定位代码或并行完成边界明确的工作；最终技术结论、设计判断和集成责任由主 agent 承担。
-- 交接信息应记录当前完成位置、关键 commit、验证命令、已知失败项和下一张建议任务卡，避免下一会话重新通读超长报告。
+- 任务卡仍是边界清晰的实现单元，但一个 Goal 可以连续完成同一集成阶段内的多张卡；无需每张卡后停下等待用户。
+- 开发中持续运行定向自动化测试；在集成边界运行全量回归。自动化红灯不得带入下一阶段。
+- 不为单个小模块反复做 UI 冒烟或请求人工测试。完成一个可独立使用的整体切片后，统一做一次 agent 实机冒烟；项目所有者的人工测试默认集中到 Beta 候选收口，除非用户明确要求分段验收。
+- 报告必须区分：`工程通过`、`人工通过`、`发布通过`。自动化或 agent 冒烟不能替代项目所有者签收。
+- UI、缩放、字体、跨平台等难定位问题先在隔离分支建立复现矩阵、证据和根因，再实施最小修复；禁止把未经验证的猜测写成既定方案。
+- 用户否决的原型必须标记为未通过、撤销或登记设计债，后续不得描述为已完成能力。
+- 产品方向、体验取舍或契约含义存在实质歧义时，把选项、依据和影响交给用户决定。
+- 子 agent 适合做原始资料收集、历史/源码定位和边界明确的并行实现；主 agent 负责产品判断、技术结论、集成与最终验收口径。
+- 交接只记录当前阶段、关键提交、验证命令、已知失败和下一步，避免重复粘贴大段源码或历史报告。
 
-## 工程设计规范索引（按需精读，不要凭记忆写代码）
+## 4. Git 纪律
 
-规范本体在 `pixelforge-plan/`，本节只是路标。**首次接触本项目：先读 `pixelforge-plan/README.md`**——它定义了文档消费顺序、任务卡执行流程、以及"契约即法律"原则（发现契约缺陷不许静默绕过，须提修订建议待批准）。
+- 开发在本地 `codex/` 分支或独立 worktree 进行；按完整任务卡/整体切片保留可回退提交，集成阶段出口必须有提交和 diff 模式报告。
+- 项目所有者统一人工验收通过前，不合并到 `main`、不 push。若候选不通过，优先修复当前未推送分支；需要整体放弃时保留证据并等待用户确认后再执行破坏性操作。
+- 多 agent 并行改代码时各用独立 worktree 与分支，完成后由主 agent 审核并集成。
+- commit 前检查 staged 文件；下列命令应无输出（`addons/gut` 自带图标除外）：
 
-按操作场景的必读对照：
+  ```bash
+  git diff --cached --name-only | grep -iE '\.(png|jpg|jpeg)$'
+  ```
 
-| 你要做的事 | 动手前必读 |
+## 5. 按需阅读索引
+
+首次接触先读 `pixelforge-plan/README.md` 和 `03-milestones/CURRENT-STATE.md`，再按任务选择：
+
+| 场景 | 必读 |
 |---|---|
-| 任何写代码任务 | `01-architecture/ARCHITECTURE.md`（分层依赖规则、目录结构、编码规范、性能预算） |
-| 涉及 UI/交互决策 | `00-vision/PRODUCT.md`（UX 原则：像素清晰度优先、不打断创作流、批量优先） |
-| 改 .pxproj 读写 / 项目数据结构 / 画布元素布局 | `02-contracts/PROJECT-FORMAT.md`（含 §4 canvas.json `node` 引用；改格式须升版+迁移，预发布期见 §6 例外） |
-| 改节点图模型/执行器 | `02-contracts/GRAPH-SCHEMA.md`（含批次内容节点 §5a、菜单/节点 both-and） |
-| 改 AI provider / 任务队列 | `02-contracts/PROVIDER-API.md` |
-| 改插件加载 / 新内置模块 | `02-contracts/PLUGIN-API.md`（内置 provider 也按插件形态实现） |
-| 改风格预设 / 调色板 schema | `02-contracts/STYLE-PRESETS.md` |
-| 开工某里程碑/任务卡 | `03-milestones/` 对应文件 + `05-quality/QUALITY.md` 的 DoD 核查表 |
-| 改 core/pixel 算法 | `04-research/ALGORITHM_RESEARCH.md` + `06-algorithm-refs/perfectPixel/INTEGRATION.md`（哪些思路已吸收、哪些差异是有意为之） |
-| 写/补测试 | `05-quality/QUALITY.md`（测试金字塔、覆盖矩阵口径）；M1 覆盖现状见 `05-quality/COVERAGE-MATRIX-M1.md` |
-| 里程碑收尾 | 完成报告（diff 模式）→ `03-milestones/reports/`；跑对应 verify 脚本（含 git 干净度检查） |
+| 写代码或调整分层 | `01-architecture/ARCHITECTURE.md` |
+| UI / 交互 / 用户旅程 | `00-vision/PRODUCT.md` |
+| 项目格式、画布持久化 | `02-contracts/PROJECT-FORMAT.md` |
+| 节点模型与执行 | `02-contracts/GRAPH-SCHEMA.md` |
+| Provider / 队列 | `02-contracts/PROVIDER-API.md` |
+| 插件 / 内置扩展 | `02-contracts/PLUGIN-API.md` |
+| 风格与调色板 | `02-contracts/STYLE-PRESETS.md` |
+| 测试与阶段出口 | `05-quality/QUALITY.md` + 当前 Beta 计划 |
+| 像素算法 | `04-research/ALGORITHM_RESEARCH.md` + 对应 `06-algorithm-refs/` |
 
-硬性提醒：`02-contracts/` 是跨模块接口的唯一事实来源，禁止私自更改；技术选型疑问先查 `04-research/RESEARCH-NOTES.md` 再做决定，不要重新调研已有结论。
+技术选型疑问先查 `04-research/RESEARCH-NOTES.md`，避免重复调研已有结论。
