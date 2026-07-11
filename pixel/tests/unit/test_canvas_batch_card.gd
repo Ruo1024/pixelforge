@@ -533,6 +533,88 @@ func test_graph_node_card_exports_node_reference_and_survives_load() -> void:
 	assert_eq(reloaded_canvas.export_canvas_data()["items"][0]["node_id"], "objects")
 
 
+func test_object_node_card_exposes_content_and_emits_atomic_param_commit() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var graph := GraphScript.new()
+	graph.id = "graph_content_card"
+	graph.add_node(
+		ObjectListNodeScript.new(), "objects", {"items": "barrel\ncrate"}, Vector2(24, 32)
+	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+	var commits := []
+	canvas.graph_node_params_commit_requested.connect(
+		func(graph_id: String, node_id: String, params: Dictionary) -> void:
+			commits.append([graph_id, node_id, params])
+	)
+
+	var card: Node = canvas._add_graph_node_card(
+		graph.id, "objects", Vector2(24, 32), "node_item_objects", false
+	)
+	var edit: TextEdit = card.get_content_control("ObjectEdit")
+	var apply_button: Button = card.get_content_control("ApplyButton")
+
+	assert_not_null(edit)
+	assert_not_null(apply_button)
+	assert_gt(card.get_canvas_bounds().size.y, 116.0)
+	assert_eq(card.get_content_control("ItemCount").text, Strings.CONTENT_OBJECT_COUNT_FORMAT % 2)
+	edit.text = "barrel\ncrate\nwell"
+	apply_button.pressed.emit()
+	assert_eq(commits, [[graph.id, "objects", {"items": "barrel\ncrate\nwell"}]])
+
+
+func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var graph := GraphScript.new()
+	graph.id = "graph_generate_card"
+	graph.add_node(
+		AiGenerateNodeScript.new(),
+		"generate",
+		{"provider_id": "mock", "batch_size": 2, "seed": 7},
+		Vector2(24, 32)
+	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+	var actions := []
+	canvas.graph_node_action_requested.connect(
+		func(graph_id: String, node_id: String, action_id: String) -> void:
+			actions.append([graph_id, node_id, action_id])
+	)
+	var card: Node = canvas._add_graph_node_card(
+		graph.id, "generate", Vector2(24, 32), "node_item_generate", false
+	)
+	var run_button: Button = card.get_content_control("RunButton")
+
+	assert_not_null(card.get_content_control("ProviderOption"))
+	assert_not_null(run_button)
+	run_button.pressed.emit()
+	assert_eq(actions, [[graph.id, "generate", "run"]])
+
+	var collapsed_card: Node = (
+		canvas
+		. _add_node_direct(
+			{
+				"id": "node_item_collapsed",
+				"type": "node",
+				"graph_id": graph.id,
+				"node_id": "generate",
+				"position": [320, 32],
+				"collapsed": true,
+			}
+		)
+	)
+	assert_eq(collapsed_card.get_canvas_bounds().size, Vector2(220, 116))
+	assert_null(collapsed_card.get_content_control("RunButton"))
+	var collapsed_data: Dictionary = collapsed_card.to_canvas_data()
+	assert_true(collapsed_data["collapsed"])
+
+
 func test_graph_node_card_marks_ghost_node_status() -> void:
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(512, 512)

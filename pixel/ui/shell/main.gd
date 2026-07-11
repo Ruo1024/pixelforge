@@ -466,6 +466,12 @@ func _connect_services() -> void:
 	_canvas.cleanup_grid_changed.connect(_on_cleanup_grid_changed)
 	_canvas.graph_connect_failed.connect(_on_canvas_graph_connect_failed)
 	_canvas.graph_status.connect(_on_canvas_graph_status)
+	_canvas.graph_node_params_commit_requested.connect(_m2_1_ui.apply_graph_node_params)
+	_canvas.graph_node_action_requested.connect(
+		func(_graph_id: String, _node_id: String, action_id: String) -> void:
+			if action_id == "run":
+				_m2_1_ui.run_selected_mock_graph()
+	)
 	_cleanup_inspector.apply_requested.connect(_apply_cleanup_to_selection)
 	_cleanup_inspector.preview_requested.connect(_request_cleanup_preview)
 	_cleanup_inspector.cancel_requested.connect(_cancel_cleanup_task)

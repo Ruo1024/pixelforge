@@ -13,6 +13,8 @@ signal zoom_changed(zoom_index: int, camera_zoom: float)
 signal graph_connect_failed(reason: String)
 signal graph_status(event: Dictionary)
 signal asset_edit_requested(asset_id: String, batch_id: String)
+signal graph_node_params_commit_requested(graph_id: String, node_id: String, params: Dictionary)
+signal graph_node_action_requested(graph_id: String, node_id: String, action_id: String)
 
 const ZOOM_LEVELS := [0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
 const DEFAULT_ZOOM_INDEX := 4
@@ -889,6 +891,15 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 func _add_node_direct(item_data: Dictionary) -> Node:
 	var item: Node = CanvasNodeCardScript.new()
 	item.setup_from_data(item_data)
+	item.params_commit_requested.connect(
+		func(graph_id: String, node_id: String, params: Dictionary) -> void:
+			graph_node_params_commit_requested.emit(graph_id, node_id, params)
+	)
+	item.action_requested.connect(
+		func(graph_id: String, node_id: String, action_id: String) -> void:
+			_select_only([item.item_id])
+			graph_node_action_requested.emit(graph_id, node_id, action_id)
+	)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
 	_update_item_visibility()

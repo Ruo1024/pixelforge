@@ -4,12 +4,16 @@ extends Node2D
 ## M3 画布轻节点卡。
 ## contract: 02-contracts/PROJECT-FORMAT.md §4；只保存 graph/node 引用，节点逻辑从 graphs 读取。
 
+signal params_commit_requested(graph_id: String, node_id: String, params: Dictionary)
+signal action_requested(graph_id: String, node_id: String, action_id: String)
+
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 
-const CARD_SIZE := Vector2(220, 116)
+const SUMMARY_CARD_SIZE := Vector2(220, 116)
+const CONTENT_CARD_SIZE := Vector2(240, 238)
 const HEADER_HEIGHT := 32
 const PADDING := 12
 const BACKGROUND := Color(0.13, 0.145, 0.155, 0.98)
@@ -21,11 +25,14 @@ const BADGE_BACKGROUND := Color(0.12, 0.08, 0.06, 0.92)
 const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
 const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
 const PORT_HIT_RADIUS := 10.0
+const OBJECT_EDITOR_MIN_SIZE := Vector2(0, 116)
+const SPIN_CONTROL_MIN_SIZE := Vector2(76, 30)
 
 var item_id := ""
 var graph_id := ""
 var node_id := ""
 var locked := false
+var collapsed := false
 
 var _node_type := ""
 var _display_name := "Missing Node"
@@ -40,6 +47,12 @@ var _is_ghost := false
 var _has_edge_error := false
 var _status_badge := ""
 var _font: Font = null
+var _content_root: Control = null
+var _object_edit: TextEdit = null
+var _provider_option: OptionButton = null
+var _batch_size_spin: SpinBox = null
+var _seed_spin: SpinBox = null
+var _params_snapshot := {}
 
 
 func setup_from_data(data: Dictionary) -> void:
@@ -47,11 +60,13 @@ func setup_from_data(data: Dictionary) -> void:
 	graph_id = String(data.get("graph_id", ""))
 	node_id = String(data.get("node_id", ""))
 	locked = bool(data.get("locked", false))
+	collapsed = bool(data.get("collapsed", false))
 	z_index = int(data.get("z_index", 0))
 	var raw_position: Variant = data.get("position", [0, 0])
 	position = Vector2(float(raw_position[0]), float(raw_position[1])).round()
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_resolve_graph_node()
+	_rebuild_content_controls()
 	queue_redraw()
 
 
@@ -63,13 +78,13 @@ func to_canvas_data() -> Dictionary:
 		"node_id": node_id,
 		"position": [int(round(position.x)), int(round(position.y))],
 		"z_index": z_index,
-		"collapsed": false,
+		"collapsed": collapsed,
 		"locked": locked,
 	}
 
 
 func get_canvas_bounds() -> Rect2:
-	return Rect2(position, CARD_SIZE)
+	return Rect2(position, _card_size())
 
 
 func contains_world_point(world_position: Vector2) -> bool:
@@ -82,13 +97,25 @@ func is_graph_node() -> bool:
 
 func refresh_from_graph() -> void:
 	_resolve_graph_node()
+	_rebuild_content_controls()
+	queue_redraw()
+
+
+func get_content_control(control_name: String) -> Control:
+	if _content_root == null:
+		return null
+	return _content_root.find_child(control_name, true, false) as Control
+
+
+func set_execution_status(status: String) -> void:
+	_status_badge = status
 	queue_redraw()
 
 
 func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
 	var count := _input_count if is_input else _output_count
 	if count <= 0:
-		return position + Vector2(0.0 if is_input else CARD_SIZE.x, CARD_SIZE.y * 0.5)
+		return position + Vector2(0.0 if is_input else _card_size().x, _card_size().y * 0.5)
 	var index := _port_index(port_name, is_input)
 	if index < 0:
 		index = 0
@@ -104,9 +131,10 @@ func _graph_port_at_world(world_position: Vector2) -> Dictionary:
 
 func _draw() -> void:
 	_font = ThemeDB.fallback_font if _font == null else _font
-	var rect := Rect2(Vector2.ZERO, CARD_SIZE)
+	var card_size := _card_size()
+	var rect := Rect2(Vector2.ZERO, card_size)
 	draw_rect(rect, BACKGROUND, true)
-	draw_rect(Rect2(Vector2.ZERO, Vector2(CARD_SIZE.x, HEADER_HEIGHT)), HEADER, true)
+	draw_rect(Rect2(Vector2.ZERO, Vector2(card_size.x, HEADER_HEIGHT)), HEADER, true)
 	draw_rect(rect, _border_color(), false, 1.4)
 	_draw_ports()
 	if _font == null:
@@ -116,29 +144,30 @@ func _draw() -> void:
 		Vector2(PADDING, 22),
 		_display_name,
 		HORIZONTAL_ALIGNMENT_LEFT,
-		CARD_SIZE.x - PADDING * 2,
+		card_size.x - PADDING * 2,
 		16,
 		Color(0.92, 0.94, 0.94, 1.0)
 	)
 	_draw_status_badge()
-	draw_string(
-		_font,
-		Vector2(PADDING, 54),
-		_node_type,
-		HORIZONTAL_ALIGNMENT_LEFT,
-		CARD_SIZE.x - PADDING * 2,
-		13,
-		Color(0.66, 0.72, 0.74, 1.0)
-	)
-	draw_string(
-		_font,
-		Vector2(PADDING, 82),
-		_summary,
-		HORIZONTAL_ALIGNMENT_LEFT,
-		CARD_SIZE.x - PADDING * 2,
-		13,
-		Color(0.82, 0.84, 0.82, 1.0)
-	)
+	if collapsed or not _is_content_node():
+		draw_string(
+			_font,
+			Vector2(PADDING, 54),
+			_node_type,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			card_size.x - PADDING * 2,
+			13,
+			Color(0.66, 0.72, 0.74, 1.0)
+		)
+		draw_string(
+			_font,
+			Vector2(PADDING, 82),
+			_summary,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			card_size.x - PADDING * 2,
+			13,
+			Color(0.82, 0.84, 0.82, 1.0)
+		)
 
 
 func _draw_ports() -> void:
@@ -149,9 +178,9 @@ func _draw_ports() -> void:
 
 
 func _port_position(index: int, count: int, is_input: bool) -> Vector2:
-	var usable_height := CARD_SIZE.y - HEADER_HEIGHT - PADDING * 2
+	var usable_height := _card_size().y - HEADER_HEIGHT - PADDING * 2
 	var y := HEADER_HEIGHT + PADDING + usable_height * float(index + 1) / float(count + 1)
-	return Vector2(0.0 if is_input else CARD_SIZE.x, y)
+	return Vector2(0.0 if is_input else _card_size().x, y)
 
 
 func _port_index(port_name: String, is_input: bool) -> int:
@@ -172,6 +201,7 @@ func _port_hit_at_world(world_position: Vector2, is_input: bool) -> Dictionary:
 func _resolve_graph_node() -> void:
 	var node_data := _find_node_data()
 	_node_type = String(node_data.get("type", "missing"))
+	_params_snapshot = node_data.get("params", {}).duplicate(true)
 	_summary = _summarize_params(node_data.get("params", {}))
 	_has_edge_error = _graph_has_edge_error()
 	_status_badge = ""
@@ -250,7 +280,7 @@ func _draw_status_badge() -> void:
 	if _status_badge.is_empty() or _font == null:
 		return
 	var badge_size := Vector2(72, 18)
-	var badge_rect := Rect2(Vector2(CARD_SIZE.x - PADDING - badge_size.x, 8), badge_size)
+	var badge_rect := Rect2(Vector2(_card_size().x - PADDING - badge_size.x, 8), badge_size)
 	draw_rect(badge_rect, BADGE_BACKGROUND, true)
 	draw_rect(badge_rect, _border_color(), false, 1.0)
 	draw_string(
@@ -276,3 +306,176 @@ func _summarize_params(params: Variant) -> String:
 	if source.has("provider_id"):
 		return "%s seed %d" % [String(source["provider_id"]), int(source.get("seed", 0))]
 	return ""
+
+
+func _card_size() -> Vector2:
+	return CONTENT_CARD_SIZE if _is_content_node() and not collapsed else SUMMARY_CARD_SIZE
+
+
+func _is_content_node() -> bool:
+	return _node_type == "object_list" or _node_type == "ai_generate" or _node_type == "size_spec"
+
+
+func _rebuild_content_controls() -> void:
+	if _content_root != null:
+		remove_child(_content_root)
+		_content_root.queue_free()
+		_content_root = null
+	_object_edit = null
+	_provider_option = null
+	_batch_size_spin = null
+	_seed_spin = null
+	if collapsed or not _is_content_node() or _is_ghost:
+		return
+
+	_content_root = VBoxContainer.new()
+	_content_root.name = "Content"
+	_content_root.position = Vector2(PADDING, HEADER_HEIGHT + PADDING)
+	_content_root.size = CONTENT_CARD_SIZE - Vector2(PADDING * 2, HEADER_HEIGHT + PADDING * 2)
+	_content_root.mouse_filter = Control.MOUSE_FILTER_PASS
+	_content_root.add_theme_constant_override("separation", 8)
+	add_child(_content_root)
+	match _node_type:
+		"object_list":
+			_build_object_list_controls()
+		"ai_generate":
+			_build_generate_controls()
+		"size_spec":
+			_build_size_controls()
+
+
+func _build_object_list_controls() -> void:
+	var count_label := Label.new()
+	count_label.name = "ItemCount"
+	count_label.text = Strings.CONTENT_OBJECT_COUNT_FORMAT % _object_count()
+	_content_root.add_child(count_label)
+	_object_edit = TextEdit.new()
+	_object_edit.name = "ObjectEdit"
+	_object_edit.text = String(_params_snapshot.get("items", ""))
+	_object_edit.custom_minimum_size = OBJECT_EDITOR_MIN_SIZE
+	_object_edit.placeholder_text = Strings.CONTENT_OBJECT_PLACEHOLDER
+	_object_edit.focus_exited.connect(_commit_object_items)
+	_content_root.add_child(_object_edit)
+	var apply_button := Button.new()
+	apply_button.name = "ApplyButton"
+	apply_button.text = Strings.DIALOG_APPLY
+	apply_button.pressed.connect(_commit_object_items)
+	_content_root.add_child(apply_button)
+
+
+func _build_generate_controls() -> void:
+	var provider_row := HBoxContainer.new()
+	var provider_label := Label.new()
+	provider_label.text = Strings.GRAPH_PARAM_PROVIDER
+	provider_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	provider_row.add_child(provider_label)
+	_provider_option = OptionButton.new()
+	_provider_option.name = "ProviderOption"
+	var providers: Array = ProviderService.get_selectable_provider_ids()
+	if not providers.has("mock"):
+		providers.push_front("mock")
+	for provider_id in providers:
+		_provider_option.add_item(String(provider_id))
+	var provider_index := providers.find(String(_params_snapshot.get("provider_id", "mock")))
+	_provider_option.select(maxi(0, provider_index))
+	_provider_option.item_selected.connect(func(_index: int) -> void: _commit_generate_params())
+	provider_row.add_child(_provider_option)
+	_content_root.add_child(provider_row)
+
+	var settings_row := HBoxContainer.new()
+	_batch_size_spin = _make_spin("BatchSize", 1, 16, int(_params_snapshot.get("batch_size", 1)))
+	_seed_spin = _make_spin("Seed", 0, 2147483647, int(_params_snapshot.get("seed", 1)))
+	settings_row.add_child(_labeled_control(Strings.GRAPH_PARAM_BATCH_SIZE, _batch_size_spin))
+	settings_row.add_child(_labeled_control(Strings.GRAPH_PARAM_SEED, _seed_spin))
+	_content_root.add_child(settings_row)
+
+	var run_button := Button.new()
+	run_button.name = "RunButton"
+	run_button.text = Strings.CONTENT_RUN_GENERATION
+	run_button.pressed.connect(
+		func() -> void:
+			_commit_generate_params()
+			action_requested.emit(graph_id, node_id, "run")
+	)
+	_content_root.add_child(run_button)
+
+
+func _build_size_controls() -> void:
+	var row := HBoxContainer.new()
+	var width := _make_spin("Width", 1, 512, int(_params_snapshot.get("width", 32)))
+	var height := _make_spin("Height", 1, 512, int(_params_snapshot.get("height", 32)))
+	var count := _make_spin("PerSubject", 1, 16, int(_params_snapshot.get("per_subject", 1)))
+	row.add_child(_labeled_control(Strings.GRAPH_PARAM_WIDTH, width))
+	row.add_child(_labeled_control(Strings.GRAPH_PARAM_HEIGHT, height))
+	row.add_child(_labeled_control(Strings.GRAPH_PARAM_PER_SUBJECT, count))
+	_content_root.add_child(row)
+	var apply_button := Button.new()
+	apply_button.name = "ApplyButton"
+	apply_button.text = Strings.DIALOG_APPLY
+	apply_button.pressed.connect(
+		func() -> void:
+			params_commit_requested.emit(
+				graph_id,
+				node_id,
+				{
+					"width": int(width.value),
+					"height": int(height.value),
+					"per_subject": int(count.value)
+				}
+			)
+	)
+	_content_root.add_child(apply_button)
+
+
+func _make_spin(control_name: String, minimum: int, maximum: int, value: int) -> SpinBox:
+	var spin := SpinBox.new()
+	spin.name = control_name
+	spin.min_value = minimum
+	spin.max_value = maximum
+	spin.value = value
+	spin.custom_minimum_size = SPIN_CONTROL_MIN_SIZE
+	return spin
+
+
+func _labeled_control(label_text: String, control: Control) -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var label := Label.new()
+	label.text = label_text
+	box.add_child(label)
+	box.add_child(control)
+	return box
+
+
+func _commit_object_items() -> void:
+	if _object_edit == null:
+		return
+	var items := _object_edit.text
+	if items == String(_params_snapshot.get("items", "")):
+		return
+	params_commit_requested.emit(graph_id, node_id, {"items": items})
+
+
+func _commit_generate_params() -> void:
+	if _provider_option == null or _batch_size_spin == null or _seed_spin == null:
+		return
+	(
+		params_commit_requested
+		. emit(
+			graph_id,
+			node_id,
+			{
+				"provider_id": _provider_option.get_item_text(_provider_option.selected),
+				"batch_size": int(_batch_size_spin.value),
+				"seed": int(_seed_spin.value),
+			}
+		)
+	)
+
+
+func _object_count() -> int:
+	var count := 0
+	for raw_line in String(_params_snapshot.get("items", "")).split("\n", false):
+		if not String(raw_line).strip_edges().is_empty():
+			count += 1
+	return count
