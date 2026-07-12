@@ -275,6 +275,10 @@ func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> vo
 		Strings.text("MENU_IMPORT_IMAGES")
 	)
 	assert_eq(
+		file_menu.get_popup().get_item_text(controller._graph_add_parent_index),
+		Strings.text("MENU_ADD_GRAPH_NODE")
+	)
+	assert_eq(
 		controller._batch_menu.get_item_text(
 			controller._batch_menu.get_item_index(controller.BATCH_MENU_MARK_KEEP)
 		),

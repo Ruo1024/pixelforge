@@ -94,6 +94,8 @@ var _outline_dialog: ConfirmationDialog = null
 var _graph_node_params_dialog: ConfirmationDialog = null
 var _graph_add_menu: PopupMenu = null
 var _graph_quick_add_menu: PopupMenu = null
+var _graph_add_parent_menu: PopupMenu = null
+var _graph_add_parent_index := -1
 var _graph_add_types := {}
 var _graph_quick_add_world_position := Vector2.ZERO
 var _batch_menu: PopupMenu = null
@@ -577,6 +579,7 @@ func _on_reference_asset_imported(target: Dictionary, asset_id: String) -> void:
 
 
 func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
+	_graph_add_parent_menu = parent_menu
 	_graph_add_menu = PopupMenu.new()
 	_graph_add_menu.name = "GraphNodeAddMenu"
 	_graph_quick_add_menu = PopupMenu.new()
@@ -597,6 +600,7 @@ func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
 	_graph_quick_add_menu.id_pressed.connect(_on_graph_quick_add_menu_pressed)
 	add_child(_graph_quick_add_menu)
 	parent_menu.add_child(_graph_add_menu)
+	_graph_add_parent_index = parent_menu.item_count
 	parent_menu.add_submenu_item(
 		Strings.text("MENU_ADD_GRAPH_NODE", Strings.MENU_ADD_GRAPH_NODE), _graph_add_menu.name
 	)
@@ -621,6 +625,11 @@ func _localized_node_display_name(node: PFNode) -> String:
 func _on_language_changed(_preference: String, _locale: String) -> void:
 	if _graph_add_menu == null or _graph_quick_add_menu == null:
 		return
+	if _graph_add_parent_menu != null and _graph_add_parent_index >= 0:
+		_graph_add_parent_menu.set_item_text(
+			_graph_add_parent_index,
+			Strings.text("MENU_ADD_GRAPH_NODE", Strings.MENU_ADD_GRAPH_NODE)
+		)
 	var registry := NodeRegistryScript.new()
 	for menu in [_graph_add_menu, _graph_quick_add_menu]:
 		for index in range(menu.item_count):
