@@ -88,7 +88,18 @@ func is_canvas_resident() -> bool
 func get_canvas_actions() -> Array[Dictionary]
 ```
 
-`get_param_schema()` 条目：`{key, label, kind(enum: int|float|bool|text|text_multiline|enum|palette|provider|seed), default, min, max, options}` —— 检查器据此自动渲染参数面板，新节点零 UI 代码。
+`get_param_schema()` 条目：`{key, label_key, kind(enum: int|float|bool|text|text_multiline|enum|palette|provider|seed|asset_ref), default, min, max, options}` —— 检查器据此自动渲染参数面板，新节点零 UI 代码。`asset_ref` 是项目内素材选择/导入/替换控件，不得退化为自由文本或由检查器按节点类型写特例。
+
+### 3a. PFGraphContext
+
+节点不得直接依赖全局 autoload、AssetLibrary Node 或本地绝对路径。图运行器为每次执行创建受控 `PFGraphContext`；Beta 0.2 最小素材接口为：
+
+```gdscript
+func has_asset(asset_id: String) -> bool
+func get_asset_image(asset_id: String) -> Image
+```
+
+`has_asset()` 表示素材元数据存在；`get_asset_image()` 成功时返回规范化 RGBA8 Image 的安全副本，位图缺失或无法解码时返回 `null`。后续进度、取消和缓存能力仍通过同一上下文扩展，不把服务对象直接暴露给节点。
 
 ## 4. 执行语义（executor.gd）
 
@@ -99,6 +110,7 @@ func get_canvas_actions() -> Array[Dictionary]
 5. **缓存**：节点输出按 `(node_id, params_hash, input_hashes)` 记忆化缓存于内存；重跑只算脏节点。`ai_generate` 默认不缓存（除非 seed 固定）。`batch` 等 `is_canvas_resident()` 节点的物化输出持久保存，重算整图不重生成。
 6. **结果落地**：生成/处理结果默认流入一个**批次内容节点**（§5a）——它在画布上持久呈现该批次队列，并作为下游供图源。`output_to_library` 仍可把批次入库得到 `asset_list`。（旧的"在锚点附近散铺"退化为批次卡内的网格排布。）
 7. **菜单处理路径（both-and）**：批次节点 `get_canvas_actions()` 声明的动作直接对批内每张图调 core 算法（与对应 process 节点**同一函数**），结果作为新素材版本写回批次（provenance.origin="edited"/"cleaned"，parent_asset 链，graph_id 可空），并进 undo 栈。**不**向图中插入节点。需要可复现、可重跑的流水线时，改用 process 节点（入图、参与拓扑执行）。
+8. **目标闭包**：执行到指定批次时，只调度该目标的上游依赖闭包；未连接、未进入闭包的空输入节点不得阻断其他生成链。
 
 ## 5. v1 内置节点清单（M3/M4 任务卡逐一实现）
 
@@ -133,11 +145,21 @@ func get_canvas_actions() -> Array[Dictionary]
 - **分离单图**：把某张拖出批次卡 → 成为独立 sprite 卡（仍在同一画布，见 PROJECT-FORMAT §4 `sprite`）。
 - **下游**：`batch` 的 `image_list` 输出可继续接预设工具节点或另一个 `batch`，因此既是"输出"又是"来源"。
 
+## 5b. 参考图输入节点（image_input）
+
+- **参数**：稳定数据只有 `params.asset_id: String`，默认 `""`；schema 为 `{key:"asset_id", label_key:"GRAPH_PARAM_REFERENCE_ASSET", kind:"asset_ref", default:""}`。名称、origin、尺寸和预览只从 AssetLibrary 读取，不复制进图参数。
+- **端口**：无输入；输出 `image:image`。成功执行返回安全副本 `{"image": Image}`。
+- **导入/替换**：文件先注册进 AssetLibrary，再以一个用户可见的原子 Undo/Redo 动作创建或更新引用及同入口产生的图/画布状态。Undo/替换/解除引用不隐式删除素材；Redo 重新引用同一 asset id。
+- **执行范围**：只有进入本次目标上游闭包的节点才解析素材。空 id 返回 `missing_asset_reference`；元数据不存在返回 `asset_not_found`；元数据存在但位图缺失或无法解码返回 `asset_decode_failed`。错误归属本节点、保留原引用、连线、旧结果和素材数据，允许替换后重跑。
+- **生成适配**：`ai_generate.image` 保持可选。连接时离线 mock 与真实 Provider 都从图输入接收 Image，UI 不得旁路上传。mock 必须把规范化参考图内容哈希确定性纳入输出或元数据；Provider 不支持参考图时由 `ai_generate`/capability 层报错。
+- **结果溯源**：成功使用参考图的生成结果 provenance 写入执行时的 `reference_asset_id` 和 `reference_content_sha256`。哈希基于规范化 RGBA8 像素及尺寸；未连接时字段可缺省。该 asset id 是 PROJECT-FORMAT §5 的 history 引用。
+- **未知字段**：已知节点仍往返保留未知参数；执行只读取 `asset_id`。旧 `path`/`file_path` 等字段不猜测、不自动导入或迁移。
+
 ## 6. 版本与迁移
 
 机制：`graph_version` + 迁移链（同 PROJECT-FORMAT §6）。节点类型缺失（插件未装）时图仍可加载，缺失节点渲染为"幽灵节点"（保留参数原文，禁止执行），**不丢用户数据**。
 
-> **预发布期约定（M3 之前）**：本软件在 M3 前无可持久使用的真实项目（仅测试夹具），故 schema 变更**直接在 graph_version = 1 定义内就地修订，不写迁移函数**；受影响的测试夹具随之重生成。升版 + 迁移纪律自**首个公开版本**起启用。
+> **预发布期约定**：首个公开分发或项目所有者明确冻结项目格式之前，未发布工程候选可经项目所有者逐次批准，在 `graph_version = 1` 内补全定义而不写迁移函数；受影响测试夹具随之更新。首个公开分发或格式冻结后恢复“升版 + 迁移”纪律。本次 `image_input` 补全已获项目所有者批准。
 
 ## 7. 插件扩展点
 

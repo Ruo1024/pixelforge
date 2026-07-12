@@ -75,6 +75,8 @@ my_project.pxproj (ZIP)
     "seed": 12345,
     "parent_asset": null,          // 切分/编辑的来源素材 id
     "graph_id": "graph_main",      // 由哪张图产出（可空；菜单处理路径下为空，见 GRAPH-SCHEMA §4.7）
+    "reference_asset_id": null,    // 执行时使用的参考素材 id（history 引用）
+    "reference_content_sha256": null, // 规范化 RGBA8 像素及尺寸的 SHA-256
     "created_at": "...",
     "cleanup": {                   // 可选；M1 清洗产物写入，旧项目可缺省
       "source_asset": "parent-id",
@@ -180,10 +182,30 @@ board/animation 引用的素材必须拒绝或先由用户解除引用。
 
 - **原子写**：先写临时文件 `.pxproj.tmp`，成功后 rename 替换。崩溃恢复靠 `user://autosave/` 周期快照（默认 3 分钟，保留最近 5 份）。
 - **延迟加载**：打开项目只读 manifest + canvas + 视口内素材；其余素材按需加载（asset_library 负责 LRU 缓存）。
-- **引用完整性**：保存时校验 canvas/boards 引用的 asset_id、canvas 的 `node` 元素引用的 node_id 都存在；删除素材时若被引用，UI 必须警告；node_id 对账失败标幽灵节点（不丢数据）。
+- **坏素材降级**：单个素材 PNG 缺失或解码失败不得阻止项目打开。保留元数据；存在但损坏的 PNG 字节原样保留，缺失 PNG 不伪造空白图。项目可在保留失效引用的情况下另存修复副本。
+- **结构化警告**：ProjectService 在打开后和每次保存校验后刷新 `get_validation_warnings() -> Array[Dictionary]`。条目至少为 `{code, path, asset_id, strength}`；code 区分 `asset_reference_not_found|asset_bitmap_missing|asset_decode_failed`，strength 为 `live|history`。服务层不返回最终展示文案。
+- **node 引用**：canvas 的 `node` 元素引用不到 graph/node 时标幽灵节点并保留原文。
+
+### 5a. 素材引用强度与完整性
+
+引用扫描只识别下表明确字段，不递归猜测任意 JSON 字符串：
+
+| 项目路径 | 强度 | 删除语义 |
+|---|---|---|
+| `canvas.items[type=sprite].asset_id` | live | 阻止删除 |
+| 过渡 `batch_card` 的 `asset_ids[]`、`selected_asset_ids[]`、`focus_asset_id`、`compare_asset_ids[]`、`review_states` 键 | live | 阻止删除 |
+| `graphs/*` 的 `image_input.params.asset_id` | live | 阻止删除 |
+| `graphs/*` 的 `batch.params.asset_ids[]`、`focus_asset_id`、`compare_asset_ids[]`、`review_states` 键 | live | 阻止删除 |
+| boards tile/free item 的明确 `asset_id` | live | 阻止删除 |
+| animations `frames[]` | live | 阻止删除 |
+| provenance `parent_asset`、`cleanup.source_asset`、`reference_asset_id` | history | 只警告，不阻止删除 |
+
+- 保存扫描 live 与 history 引用；失效引用原文保留并产生结构化警告，成功写出的可恢复项目不因此变成保存错误。
+- 素材只要仍有 live 引用或运行时占用，显式删除返回 `ERR_BUSY`；只有 history 引用时允许删除，历史 id 与内容哈希继续保留并在后续校验中警告。
+- 引用扫描由 ProjectService/AssetLibrary 的单一服务边界实现。卡片不得维护独立真相；插件私有引用须显式注册或自行拥有删除策略。
 
 ## 6. 迁移
 
 `project_service.gd` 维护 `MIGRATIONS: Array[Callable]`，索引 i 把 version i 升到 i+1。打开旧文件时依次执行，全部成功才进入内存模型。每个迁移函数配 `tests/fixtures/projects/v{i}_sample.pxproj` 回归样本。
 
-> **预发布期约定（M3 之前）**：本软件在 M3 前无可持久使用的真实项目（仅测试夹具），故格式变更（如本轮新增 `node` 元素类型）**直接在 format_version = 1 定义内就地修订，不写迁移函数**；受影响的测试夹具随之重生成。升版 + 迁移纪律自**首个公开版本**起启用。
+> **预发布期约定**：首个公开分发或项目所有者明确冻结项目格式之前，未发布工程候选可经项目所有者逐次批准，在 `format_version = 1` 内补全定义而不写迁移函数；受影响测试夹具随之更新。首个公开分发或格式冻结后恢复“升版 + 迁移”纪律。本次引用完整性与坏素材降级补全已获项目所有者批准。
