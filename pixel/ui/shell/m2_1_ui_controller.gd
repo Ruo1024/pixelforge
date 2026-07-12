@@ -319,6 +319,10 @@ func handle_graph_node_action(graph_id: String, node_id: String, action_id: Stri
 			cancel_graph_run(graph_id, node_id)
 		"import_reference":
 			_import_reference_for_node(graph_id, node_id)
+		"import_reference_set":
+			_import_flow.show_reference_import_dialog(
+				{"mode": "reference_set", "graph_id": graph_id, "node_id": node_id}
+			)
 
 
 func run_selected_mock_graph() -> void:
@@ -650,12 +654,24 @@ func _create_graph_node_params_dialog() -> void:
 
 
 func _on_reference_asset_imported(target: Dictionary, asset_id: String) -> void:
-	if String(target.get("mode", "")) != "node":
+	var mode := String(target.get("mode", ""))
+	if mode not in ["node", "reference_set"]:
 		return
+	var params := {"asset_id": asset_id}
+	if mode == "reference_set":
+		var graph := GraphScript.from_json(
+			ProjectService.get_graph_data(String(target.get("graph_id", "")))
+		)
+		var asset_ids: Array = (
+			graph
+			. get_node_params(String(target.get("node_id", "")))
+			. get("asset_ids", [])
+			. duplicate()
+		)
+		asset_ids.append(asset_id)
+		params = {"asset_ids": asset_ids}
 	apply_graph_node_params(
-		String(target.get("graph_id", "")),
-		String(target.get("node_id", "")),
-		{"asset_id": asset_id}
+		String(target.get("graph_id", "")), String(target.get("node_id", "")), params
 	)
 
 

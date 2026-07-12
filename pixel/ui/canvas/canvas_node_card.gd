@@ -19,6 +19,7 @@ const SUMMARY_CARD_SIZE := Vector2(220, 116)
 const CONTENT_CARD_SIZE := Vector2(240, 238)
 const GENERATE_CARD_SIZE := Vector2(280, 390)
 const REFERENCE_CARD_SIZE := Vector2(260, 330)
+const REFERENCE_SET_CARD_SIZE := Vector2(320, 430)
 const HEADER_HEIGHT := 32
 const PADDING := 12
 const BACKGROUND := Color(0.13, 0.145, 0.155, 0.98)
@@ -376,6 +377,8 @@ func _summarize_params(params: Variant) -> String:
 			Strings.text("CONTENT_GENERATE_MODEL_SUMMARY_FORMAT")
 			% [model_label, int(source.get("batch_size", 1))]
 		)
+	elif source.has("asset_ids"):
+		result = Strings.text("CONTENT_REFERENCE_SET_COUNT_FORMAT") % source["asset_ids"].size()
 	return result
 
 
@@ -387,6 +390,8 @@ func _card_size() -> Vector2:
 			return GENERATE_CARD_SIZE
 		"image_input":
 			return REFERENCE_CARD_SIZE
+		"reference_set":
+			return REFERENCE_SET_CARD_SIZE
 	return CONTENT_CARD_SIZE
 
 
@@ -400,6 +405,7 @@ func _is_content_node() -> bool:
 			"ai_generate",
 			"size_spec",
 			"image_input",
+			"reference_set",
 		]
 	)
 
@@ -445,6 +451,8 @@ func _rebuild_content_controls() -> void:
 			_build_size_controls()
 		"image_input":
 			_build_reference_controls()
+		"reference_set":
+			_build_reference_set_controls()
 		"style_preset":
 			_build_style_controls()
 
@@ -685,6 +693,115 @@ func _build_reference_controls() -> void:
 	_content_root.add_child(_reference_field)
 
 
+func _build_reference_set_controls() -> void:
+	var asset_ids: Array = _params_snapshot.get("asset_ids", []).duplicate()
+	var scroll := ScrollContainer.new()
+	scroll.name = "ReferenceSetScroll"
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var rows := VBoxContainer.new()
+	rows.name = "ReferenceSetRows"
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for index in range(asset_ids.size()):
+		rows.add_child(_reference_set_row(asset_ids, index))
+	scroll.add_child(rows)
+	_content_root.add_child(scroll)
+	var add_field := AssetRefFieldScript.new()
+	add_field.name = "ReferenceSetAddField"
+	add_field.set_value("")
+	add_field.value_changed.connect(
+		func(asset_id: String) -> void:
+			if asset_id.is_empty():
+				return
+			var updated := asset_ids.duplicate()
+			updated.append(asset_id)
+			params_commit_requested.emit(graph_id, node_id, {"asset_ids": updated})
+	)
+	add_field.import_requested.connect(
+		func() -> void: action_requested.emit(graph_id, node_id, "import_reference_set")
+	)
+	_content_root.add_child(add_field)
+
+
+func _reference_set_row(asset_ids: Array, index: int) -> Control:
+	var asset_id := String(asset_ids[index])
+	var row := HBoxContainer.new()
+	row.name = "ReferenceSetRow%d" % index
+	var preview := TextureRect.new()
+	preview.name = "ReferenceSetPreview%d" % index
+	preview.custom_minimum_size = Vector2(52, 52)
+	preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	var detail := Label.new()
+	detail.name = "ReferenceSetDetail%d" % index
+	detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if asset_id.is_empty():
+		detail.text = Strings.text("CONTENT_REFERENCE_NONE")
+	elif not AssetLibrary.has_asset(asset_id):
+		detail.text = Strings.text("CONTENT_REFERENCE_MISSING_FORMAT") % asset_id.left(8)
+	else:
+		var image: Image = AssetLibrary.get_image(asset_id)
+		var meta: Dictionary = AssetLibrary.get_asset_meta(asset_id)
+		if image == null:
+			detail.text = Strings.text("CONTENT_REFERENCE_DECODE_FAILED_FORMAT") % asset_id.left(8)
+		else:
+			preview.texture = ImageTexture.create_from_image(image)
+			detail.text = (
+				"%d. %s\n%s"
+				% [
+					index + 1,
+					String(meta.get("name", asset_id.left(8))),
+					(
+						Strings.text("CONTENT_REFERENCE_ORIGIN_FORMAT")
+						% String(meta.get("origin", "imported"))
+					),
+				]
+			)
+	row.add_child(preview)
+	row.add_child(detail)
+	var controls := VBoxContainer.new()
+	var field := AssetRefFieldScript.new()
+	field.name = "ReferenceSetField%d" % index
+	field.set_value(asset_id)
+	field.value_changed.connect(_replace_reference_set_item.bind(asset_ids, index))
+	controls.add_child(field)
+	var action_row := HBoxContainer.new()
+	for action in ["up", "down", "remove"]:
+		var button := Button.new()
+		button.name = "ReferenceSet%s%d" % [String(action).capitalize(), index]
+		button.text = Strings.text("ACTION_REFERENCE_%s" % String(action).to_upper())
+		button.disabled = (
+			(action == "up" and index == 0) or (action == "down" and index == asset_ids.size() - 1)
+		)
+		button.pressed.connect(_change_reference_set_item.bind(asset_ids, index, action))
+		action_row.add_child(button)
+	controls.add_child(action_row)
+	row.add_child(controls)
+	return row
+
+
+func _replace_reference_set_item(asset_id: String, asset_ids: Array, index: int) -> void:
+	var updated := asset_ids.duplicate()
+	updated[index] = asset_id
+	params_commit_requested.emit(graph_id, node_id, {"asset_ids": updated})
+
+
+func _change_reference_set_item(asset_ids: Array, index: int, action: String) -> void:
+	var updated := asset_ids.duplicate()
+	match action:
+		"up":
+			var previous: Variant = updated[index - 1]
+			updated[index - 1] = updated[index]
+			updated[index] = previous
+		"down":
+			var following: Variant = updated[index + 1]
+			updated[index + 1] = updated[index]
+			updated[index] = following
+		"remove":
+			updated.remove_at(index)
+	params_commit_requested.emit(graph_id, node_id, {"asset_ids": updated})
+
+
 func _make_spin(control_name: String, minimum: int, maximum: int, value: int) -> SpinBox:
 	var spin := SpinBox.new()
 	spin.name = control_name
@@ -877,6 +994,7 @@ func _localized_display_name(node: PFNode) -> String:
 		"object_list": "NODE_OBJECT_LIST",
 		"style_preset": "NODE_STYLE_PRESET",
 		"image_input": "NODE_IMAGE_INPUT",
+		"reference_set": "NODE_REFERENCE_SET",
 		"size_spec": "NODE_SIZE_SPEC",
 		"ai_generate": "NODE_AI_GENERATE",
 	}
