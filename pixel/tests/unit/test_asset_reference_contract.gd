@@ -53,6 +53,46 @@ func test_graph_batch_board_animation_and_transition_batch_are_live() -> void:
 		assert_eq(AssetLibrary.remove_asset(String(asset_id)), ERR_BUSY)
 
 
+func test_reference_set_is_live_and_plural_provenance_is_history_in_order() -> void:
+	var image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	var first_id: String = AssetLibrary.register_image(image, "first")
+	var second_id: String = AssetLibrary.register_image(image, "second")
+	ProjectService.current_project.graphs["graph"] = {
+		"graph_version": 1,
+		"id": "graph",
+		"nodes":
+		[
+			{
+				"id": "references",
+				"type": "reference_set",
+				"params": {"asset_ids": [second_id, first_id]},
+			}
+		],
+		"edges": [],
+	}
+	AssetLibrary.register_image(
+		image, "derived", {"provenance": {"reference_asset_ids": [first_id, second_id]}}
+	)
+
+	var first_locations := ProjectService.get_asset_reference_locations(first_id)
+	var second_locations := ProjectService.get_asset_reference_locations(second_id)
+
+	assert_eq(first_locations.size(), 2)
+	assert_eq(first_locations[0]["strength"], "live")
+	assert_eq(first_locations[0]["path"], "graphs/graph/nodes/references/params/asset_ids/1")
+	assert_eq(first_locations[1]["strength"], "history")
+	assert_true(String(first_locations[1]["path"]).ends_with("/reference_asset_ids/0"))
+	assert_eq(second_locations.size(), 2)
+	assert_eq(second_locations[0]["path"], "graphs/graph/nodes/references/params/asset_ids/0")
+	assert_true(String(second_locations[1]["path"]).ends_with("/reference_asset_ids/1"))
+	assert_eq(AssetLibrary.remove_asset(first_id), ERR_BUSY)
+	assert_eq(AssetLibrary.remove_asset(second_id), ERR_BUSY)
+
+	ProjectService.current_project.graphs.clear()
+	assert_eq(AssetLibrary.remove_asset(first_id), OK)
+	assert_eq(AssetLibrary.remove_asset(second_id), OK)
+
+
 func test_bad_and_missing_png_remain_exportable_with_health_status() -> void:
 	var broken_meta := {"id": "broken", "name": "broken", "provenance": {}}
 	var missing_meta := {"id": "missing", "name": "missing", "provenance": {}}

@@ -46,6 +46,7 @@ func test_node_registry_registers_batch_and_rejects_duplicate_type() -> void:
 			"comfyui.run_workflow",
 			"image_input",
 			"object_list",
+			"reference_set",
 			"size_spec",
 			"style_preset",
 			"text_prompt",

@@ -43,6 +43,8 @@ static func _scan_graphs(graphs: Dictionary, references: Array[Dictionary]) -> v
 			match String(node.get("type", "")):
 				"image_input":
 					_add(references, params.get("asset_id", ""), "%s/asset_id" % base, "live")
+				"reference_set":
+					_scan_array_field(params, "asset_ids", base, "live", references)
 				"batch":
 					_scan_batch_fields(params, base, references)
 
@@ -118,10 +120,21 @@ static func _scan_history(asset_library: Node, references: Array[Dictionary]) ->
 			"%s/reference_asset_id" % base,
 			"history"
 		)
+		_scan_array_field(provenance, "reference_asset_ids", base, "history", references)
 		var cleanup: Dictionary = provenance.get("cleanup", {})
 		_add(
 			references, cleanup.get("source_asset", ""), "%s/cleanup/source_asset" % base, "history"
 		)
+
+
+static func _scan_array_field(
+	data: Dictionary, key: String, base: String, strength: String, references: Array[Dictionary]
+) -> void:
+	var values: Variant = data.get(key, [])
+	if not (values is Array or values is PackedStringArray):
+		return
+	for index in range(values.size()):
+		_add(references, values[index], "%s/%s/%d" % [base, key, index], strength)
 
 
 static func _add(

@@ -9,6 +9,7 @@ const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.g
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+const ReferenceSetNodeScript := preload("res://core/graph/nodes/reference_set_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 const StylePresetNodeScript := preload("res://core/graph/nodes/style_preset_node.gd")
 const TextPromptNodeScript := preload("res://core/graph/nodes/text_prompt_node.gd")
@@ -24,6 +25,7 @@ func _init(register_builtins: bool = true) -> void:
 		register("style_preset", StylePresetNodeScript)
 		register("size_spec", SizeSpecNodeScript)
 		register("image_input", ImageInputNodeScript)
+		register("reference_set", ReferenceSetNodeScript)
 		register("ai_generate", AiGenerateNodeScript)
 		register("batch", BatchNodeScript)
 	for type_name in _plugin_scripts:
