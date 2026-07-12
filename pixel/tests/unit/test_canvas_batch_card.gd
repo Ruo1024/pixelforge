@@ -10,6 +10,8 @@ const Strings := preload("res://ui/shell/strings.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+const StylePresetNodeScript := preload("res://core/graph/nodes/style_preset_node.gd")
+const TextPromptNodeScript := preload("res://core/graph/nodes/text_prompt_node.gd")
 
 
 func before_each() -> void:
@@ -623,6 +625,53 @@ func test_object_node_card_exposes_content_and_emits_atomic_param_commit() -> vo
 	edit.text = "barrel\ncrate\nwell"
 	apply_button.pressed.emit()
 	assert_eq(commits, [[graph.id, "objects", {"items": "barrel\ncrate\nwell"}]])
+
+
+func test_prompt_and_style_cards_show_real_content_and_prompt_emits_commit() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(800, 600)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+	var graph := GraphScript.new()
+	graph.id = "graph_prompt_style_cards"
+	graph.add_node(TextPromptNodeScript.new(), "prompt", {"text": "tiny windmill"}, Vector2(0, 0))
+	(
+		graph
+		. add_node(
+			StylePresetNodeScript.new(),
+			"style",
+			{
+				"preset_ref": "embedded",
+				"preset":
+				{
+					"name": "Farm DB32",
+					"base_size": 32,
+					"palette": {"ref": "db32"},
+				},
+			},
+			Vector2(300, 0)
+		)
+	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+	var commits := []
+	canvas.graph_node_params_commit_requested.connect(
+		func(graph_id: String, node_id: String, params: Dictionary) -> void:
+			commits.append([graph_id, node_id, params])
+	)
+	var prompt_card: Node = canvas._add_graph_node_card(
+		graph.id, "prompt", Vector2.ZERO, "prompt_item", false
+	)
+	var style_card: Node = canvas._add_graph_node_card(
+		graph.id, "style", Vector2(300, 0), "style_item", false
+	)
+
+	var prompt_edit: TextEdit = prompt_card.get_content_control("PromptEdit")
+	assert_eq(prompt_edit.text, "tiny windmill")
+	prompt_edit.text = "tiny watermill"
+	(prompt_card.get_content_control("ApplyButton") as Button).pressed.emit()
+	assert_eq(commits, [[graph.id, "prompt", {"text": "tiny watermill"}]])
+	assert_eq(style_card.get_content_control("StyleName").text, "Farm DB32")
+	assert_eq(style_card.get_content_control("StyleDetail").text, "32 px base · Palette: db32")
 
 
 func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> void:

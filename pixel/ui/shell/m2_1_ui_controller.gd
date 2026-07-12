@@ -662,7 +662,9 @@ func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
 
 func _localized_node_display_name(node: PFNode) -> String:
 	var key_by_type := {
+		"text_prompt": "NODE_TEXT_PROMPT",
 		"object_list": "NODE_OBJECT_LIST",
+		"style_preset": "NODE_STYLE_PRESET",
 		"image_input": "NODE_IMAGE_INPUT",
 		"size_spec": "NODE_SIZE_SPEC",
 		"ai_generate": "NODE_AI_GENERATE",

@@ -58,6 +58,7 @@ var _execution_detail := ""
 var _font: Font = null
 var _content_root: Control = null
 var _object_edit: TextEdit = null
+var _text_prompt_edit: TextEdit = null
 var _provider_option: OptionButton = null
 var _batch_size_spin: SpinBox = null
 var _seed_spin: SpinBox = null
@@ -338,14 +339,28 @@ func _summarize_params(params: Variant) -> String:
 	if not (params is Dictionary):
 		return ""
 	var source: Dictionary = params
-	if source.has("items"):
+	var result := ""
+	if source.has("text"):
+		var prompt := String(source["text"]).strip_edges()
+		result = Strings.text("CONTENT_PROMPT_EMPTY") if prompt.is_empty() else prompt.left(56)
+	elif source.has("items"):
 		var lines := String(source["items"]).split("\n", false)
-		return "%d objects" % lines.size()
-	if source.has("width") and source.has("height"):
-		return "%dx%d px" % [int(source["width"]), int(source["height"])]
-	if source.has("provider_id"):
-		return "%s seed %d" % [String(source["provider_id"]), int(source.get("seed", 0))]
-	return ""
+		result = Strings.text("CONTENT_OBJECT_COUNT_FORMAT") % lines.size()
+	elif source.has("preset"):
+		var preset_value: Variant = source.get("preset", {})
+		var preset: Dictionary = preset_value if preset_value is Dictionary else {}
+		result = String(preset.get("name", Strings.text("CONTENT_STYLE_DEFAULT")))
+	elif source.has("width") and source.has("height"):
+		result = (
+			Strings.text("CONTENT_SIZE_SUMMARY_FORMAT")
+			% [int(source["width"]), int(source["height"])]
+		)
+	elif source.has("provider_id"):
+		result = (
+			Strings.text("CONTENT_GENERATE_SUMMARY_FORMAT")
+			% [String(source["provider_id"]), int(source.get("seed", 0))]
+		)
+	return result
 
 
 func _card_size() -> Vector2:
@@ -360,7 +375,17 @@ func _card_size() -> Vector2:
 
 
 func _is_content_node() -> bool:
-	return _node_type in ["object_list", "ai_generate", "size_spec", "image_input"]
+	return (
+		_node_type
+		in [
+			"text_prompt",
+			"object_list",
+			"style_preset",
+			"ai_generate",
+			"size_spec",
+			"image_input",
+		]
+	)
 
 
 func _rebuild_content_controls() -> void:
@@ -369,6 +394,7 @@ func _rebuild_content_controls() -> void:
 		_content_root.free()
 		_content_root = null
 	_object_edit = null
+	_text_prompt_edit = null
 	_provider_option = null
 	_batch_size_spin = null
 	_seed_spin = null
@@ -387,6 +413,8 @@ func _rebuild_content_controls() -> void:
 	_content_root.add_theme_constant_override("separation", 8)
 	add_child(_content_root)
 	match _node_type:
+		"text_prompt":
+			_build_text_prompt_controls()
 		"object_list":
 			_build_object_list_controls()
 		"ai_generate":
@@ -395,6 +423,8 @@ func _rebuild_content_controls() -> void:
 			_build_size_controls()
 		"image_input":
 			_build_reference_controls()
+		"style_preset":
+			_build_style_controls()
 
 
 func _rebuild_header_controls() -> void:
@@ -437,6 +467,36 @@ func _build_object_list_controls() -> void:
 	apply_button.text = Strings.text("ACTION_APPLY")
 	apply_button.pressed.connect(_commit_object_items)
 	_content_root.add_child(apply_button)
+
+
+func _build_text_prompt_controls() -> void:
+	_text_prompt_edit = TextEdit.new()
+	_text_prompt_edit.name = "PromptEdit"
+	_text_prompt_edit.text = String(_params_snapshot.get("text", ""))
+	_text_prompt_edit.custom_minimum_size = OBJECT_EDITOR_MIN_SIZE
+	_text_prompt_edit.placeholder_text = Strings.text("CONTENT_PROMPT_PLACEHOLDER")
+	_text_prompt_edit.focus_exited.connect(_commit_text_prompt)
+	_content_root.add_child(_text_prompt_edit)
+	var apply_button := Button.new()
+	apply_button.name = "ApplyButton"
+	apply_button.text = Strings.text("ACTION_APPLY")
+	apply_button.pressed.connect(_commit_text_prompt)
+	_content_root.add_child(apply_button)
+
+
+func _build_style_controls() -> void:
+	var preset_value: Variant = _params_snapshot.get("preset", {})
+	var preset: Dictionary = preset_value if preset_value is Dictionary else {}
+	var name_label := Label.new()
+	name_label.name = "StyleName"
+	name_label.text = String(preset.get("name", Strings.text("CONTENT_STYLE_DEFAULT")))
+	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_content_root.add_child(name_label)
+	var summary_label := Label.new()
+	summary_label.name = "StyleDetail"
+	summary_label.text = _style_summary(preset)
+	summary_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_content_root.add_child(summary_label)
 
 
 func _build_generate_controls() -> void:
@@ -603,6 +663,15 @@ func _commit_object_items() -> void:
 	params_commit_requested.emit(graph_id, node_id, {"items": items})
 
 
+func _commit_text_prompt() -> void:
+	if _text_prompt_edit == null:
+		return
+	var text := _text_prompt_edit.text
+	if text == String(_params_snapshot.get("text", "")):
+		return
+	params_commit_requested.emit(graph_id, node_id, {"text": text})
+
+
 func _commit_generate_params() -> void:
 	if _provider_option == null or _batch_size_spin == null or _seed_spin == null:
 		return
@@ -648,9 +717,26 @@ func _project_style_summary() -> String:
 	return Strings.text("CONTENT_STYLE_SUMMARY_FORMAT") % " · ".join(detail_parts)
 
 
+func _style_summary(style: Dictionary) -> String:
+	var parts: Array[String] = []
+	var base_size := int(style.get("base_size", 0))
+	if base_size > 0:
+		parts.append(Strings.text("CONTENT_STYLE_BASE_SIZE_FORMAT") % base_size)
+	var palette_value: Variant = style.get("palette", {})
+	if palette_value is Dictionary:
+		var palette_ref := String(Dictionary(palette_value).get("ref", ""))
+		if not palette_ref.is_empty():
+			parts.append(Strings.text("CONTENT_STYLE_PALETTE_FORMAT") % palette_ref)
+	if parts.is_empty():
+		return Strings.text("CONTENT_STYLE_NO_DETAILS")
+	return " · ".join(parts)
+
+
 func _localized_display_name(node: PFNode) -> String:
 	var key_by_type := {
+		"text_prompt": "NODE_TEXT_PROMPT",
 		"object_list": "NODE_OBJECT_LIST",
+		"style_preset": "NODE_STYLE_PRESET",
 		"image_input": "NODE_IMAGE_INPUT",
 		"size_spec": "NODE_SIZE_SPEC",
 		"ai_generate": "NODE_AI_GENERATE",

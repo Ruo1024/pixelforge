@@ -136,6 +136,17 @@ func to_canvas_data() -> Dictionary:
 		result["review_layout"] = review_layout
 		result["locked"] = locked
 		result["frame_id"] = frame_id
+		for graph_param_key in [
+			"asset_ids",
+			"selected_asset_ids",
+			"review_states",
+			"review_filter",
+			"focus_asset_id",
+			"compare_asset_ids",
+			"compare_mode",
+			"label",
+		]:
+			result.erase(graph_param_key)
 		return result
 	result["id"] = item_id
 	result["type"] = "batch_card"
