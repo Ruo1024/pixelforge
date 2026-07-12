@@ -5,6 +5,7 @@ extends PFProvider
 ## contract: 02-contracts/PROVIDER-API.md；official source: Retro-Diffusion/api-examples.
 
 const HttpClientScript := preload("res://infra/http_client.gd")
+const TaskScript := preload("res://services/pf_task.gd")
 
 const PROVIDER_ID := "retrodiffusion"
 const API_VERSION := 1
@@ -17,6 +18,11 @@ const MAX_BATCH := 4
 const MAX_RETRIES := 3
 const RETRY_BACKOFF_SECONDS := 0.5
 const DOCUMENTED_RD_PRO_UNIT_COST := 0.25
+const MODEL_STYLES := {
+	"rd_plus": DEFAULT_STYLE_LOW_RES,
+	"rd_pro": DEFAULT_STYLE_STANDARD,
+	"rd_fast": DEFAULT_STYLE_LARGE,
+}
 
 var _request_host: Node = null
 var _http: Node = null
@@ -48,6 +54,21 @@ func get_capabilities() -> Dictionary:
 		"animation": false,
 		"cost_estimate": true,
 	}
+
+
+func get_model_descriptors() -> Array[Dictionary]:
+	return [
+		_model_descriptor("rd_plus", "RD Plus", true, 128),
+		_model_descriptor("rd_pro", "RD Pro", false, 256),
+		_model_descriptor("rd_fast", "RD Fast", false, 384),
+	]
+
+
+func validate_generation_request(request: Dictionary) -> Variant:
+	var normalized_request := request.duplicate(true)
+	if String(normalized_request.get("model_id", "")).strip_edges().is_empty():
+		normalized_request["model_id"] = _legacy_model_for_request(normalized_request)
+	return super.validate_generation_request(normalized_request)
 
 
 func get_config_schema() -> Array[Dictionary]:
@@ -120,6 +141,9 @@ func validate_credentials() -> Variant:
 
 
 func generate(request: Dictionary) -> Variant:
+	var request_error: Variant = validate_generation_request(request)
+	if request_error != null:
+		return _rejected_task(request_error)
 	if not _is_ready_for_request():
 		return null
 	var body := build_request_body(request)
@@ -169,9 +193,10 @@ func build_request_body(request: Dictionary) -> Dictionary:
 	var seed := int(request.get("seed", -1))
 	if seed >= 0:
 		body["seed"] = seed
-	if request.get("ref_image") is Image:
+	var reference_images := get_reference_images(request)
+	if not reference_images.is_empty():
 		body["input_image"] = Marshalls.raw_to_base64(
-			(request["ref_image"] as Image).save_png_to_buffer()
+			(reference_images[0] as Image).save_png_to_buffer()
 		)
 		body["strength"] = clampf(float(extra.get("strength", 0.8)), 0.0, 1.0)
 	return body
@@ -270,6 +295,11 @@ func _decode_validation_response(response: Dictionary) -> Dictionary:
 
 
 func _style_for_request(request: Dictionary) -> String:
+	var requested_model := String(request.get("model_id", "")).strip_edges()
+	if not requested_model.is_empty():
+		var resolved_model := resolve_model_id(requested_model)
+		if MODEL_STYLES.has(resolved_model):
+			return String(MODEL_STYLES[resolved_model])
 	var style: Dictionary = request.get("style", {})
 	var hints: Dictionary = style.get("provider_hints", {})
 	var retro_hint: Dictionary = hints.get("retrodiffusion", {})
@@ -282,6 +312,15 @@ func _style_for_request(request: Dictionary) -> String:
 	if largest_side <= 256:
 		return DEFAULT_STYLE_STANDARD
 	return DEFAULT_STYLE_LARGE
+
+
+func _legacy_model_for_request(request: Dictionary) -> String:
+	var largest_side := maxi(int(request.get("width", 32)), int(request.get("height", 32)))
+	if largest_side <= 128:
+		return "rd_plus"
+	if largest_side <= 256:
+		return "rd_pro"
+	return "rd_fast"
 
 
 func _headers() -> PackedStringArray:
@@ -303,3 +342,31 @@ func _error(code: String, message: String, detail: Dictionary = {}) -> Dictionar
 
 func _failure(code: String, message: String) -> Dictionary:
 	return {"ok": false, "error": _error(code, message)}
+
+
+func _model_descriptor(
+	model_id: String, display_name: String, is_default: bool, max_side: int
+) -> Dictionary:
+	return {
+		"provider_id": PROVIDER_ID,
+		"model_id": model_id,
+		"display_name": display_name,
+		"is_default": is_default,
+		"capabilities":
+		{
+			"txt2img": true,
+			"img2img": true,
+			"max_reference_images": 1,
+			"output_size_constraints": {"min_side": 16, "max_side": max_side},
+			"max_batch": MAX_BATCH,
+			"seed": true,
+			"transparent_bg": true,
+			"cost_estimate": model_id == "rd_pro",
+		}
+	}
+
+
+func _rejected_task(error: Dictionary) -> PFTask:
+	var task := TaskScript.new("retrodiffusion_generate", {"provider_id": PROVIDER_ID})
+	task.configure_external(func(task_ref: PFTask) -> void: task_ref.reject(error))
+	return task

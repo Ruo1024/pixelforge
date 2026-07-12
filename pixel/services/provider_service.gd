@@ -1,3 +1,4 @@
+# gdlint: disable=max-public-methods
 class_name PFProviderService
 extends Node
 
@@ -65,6 +66,9 @@ func register_provider(provider: PFProvider) -> bool:
 	var provider_id := provider.get_id().strip_edges()
 	if provider_id.is_empty() or _providers.has(provider_id):
 		return false
+	var descriptors := provider.get_model_descriptors()
+	if not descriptors.is_empty() and not _model_descriptors_are_valid(provider_id, descriptors):
+		return false
 	if provider.has_method("attach_request_host"):
 		provider.attach_request_host(self)
 	_providers[provider_id] = provider
@@ -93,6 +97,35 @@ func get_provider_ids() -> Array:
 	var ids := _providers.keys()
 	ids.sort()
 	return ids
+
+
+func get_model_descriptors(provider_id: String = "") -> Array[Dictionary]:
+	var descriptors: Array[Dictionary] = []
+	var provider_ids := [provider_id] if not provider_id.is_empty() else get_provider_ids()
+	for registered_id in provider_ids:
+		var provider := get_provider(String(registered_id))
+		if provider == null:
+			continue
+		for descriptor in provider.get_model_descriptors():
+			descriptors.append(descriptor.duplicate(true))
+	return descriptors
+
+
+func get_model_descriptor(provider_id: String, model_id: String = "") -> Dictionary:
+	var provider := get_provider(provider_id)
+	return provider.get_model_descriptor(model_id) if provider != null else {}
+
+
+func resolve_model_id(provider_id: String, model_id: String = "") -> String:
+	var provider := get_provider(provider_id)
+	return provider.resolve_model_id(model_id) if provider != null else ""
+
+
+func validate_generation_request(provider_id: String, request: Dictionary) -> Variant:
+	var provider := get_provider(provider_id)
+	if provider == null:
+		return _error("invalid_request", "Provider is not registered")
+	return provider.validate_generation_request(request)
 
 
 func get_selectable_provider_ids() -> Array:
@@ -230,7 +263,9 @@ func has_session_credentials(provider_id: String) -> bool:
 
 func generate(provider_id: String, request: Dictionary) -> Variant:
 	var provider := get_provider(provider_id)
-	return provider.generate(request) if provider != null else null
+	if provider == null:
+		return null
+	return provider.generate(request)
 
 
 func _configure_from_storage(provider_id: String) -> Variant:
@@ -273,6 +308,36 @@ func _set_validation_state(provider_id: String, state: String, message: String) 
 
 func _provider_settings_section(provider_id: String) -> String:
 	return "provider_%s" % provider_id
+
+
+func _model_descriptors_are_valid(provider_id: String, descriptors: Array[Dictionary]) -> bool:
+	var model_ids := {}
+	var default_count := 0
+	var required_capabilities := [
+		"txt2img",
+		"max_reference_images",
+		"max_batch",
+		"seed",
+		"transparent_bg",
+		"cost_estimate",
+	]
+	for descriptor in descriptors:
+		if String(descriptor.get("provider_id", "")) != provider_id:
+			return false
+		var model_id := String(descriptor.get("model_id", "")).strip_edges()
+		if model_id.is_empty() or model_ids.has(model_id):
+			return false
+		model_ids[model_id] = true
+		if String(descriptor.get("display_name", "")).strip_edges().is_empty():
+			return false
+		default_count += 1 if bool(descriptor.get("is_default", false)) else 0
+		var capabilities: Dictionary = descriptor.get("capabilities", {})
+		for key in required_capabilities:
+			if not capabilities.has(key):
+				return false
+		if not capabilities.has("output_sizes") and not capabilities.has("output_size_constraints"):
+			return false
+	return default_count == 1
 
 
 func _error(code: String, message: String) -> Dictionary:

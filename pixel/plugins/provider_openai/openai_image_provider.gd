@@ -5,6 +5,7 @@ extends PFProvider
 ## contract: 02-contracts/PROVIDER-API.md; credentials stay in memory and redacted headers.
 
 const HttpClientScript := preload("res://infra/http_client.gd")
+const TaskScript := preload("res://services/pf_task.gd")
 
 const PROVIDER_ID := "openai_image"
 const API_VERSION := 1
@@ -38,15 +39,37 @@ func get_api_version() -> int:
 func get_capabilities() -> Dictionary:
 	return {
 		"txt2img": true,
-		"img2img": false,
+		"img2img": true,
 		"inpaint": false,
-		"transparent_bg": true,
+		"transparent_bg": false,
 		"native_pixel": false,
 		"max_batch": MAX_BATCH,
 		"sizes": [[16, 16], [512, 512]],
 		"animation": false,
 		"cost_estimate": false,
 	}
+
+
+func get_model_descriptors() -> Array[Dictionary]:
+	return [
+		{
+			"provider_id": PROVIDER_ID,
+			"model_id": MODEL_ID,
+			"display_name": "GPT Image 2",
+			"is_default": true,
+			"capabilities":
+			{
+				"txt2img": true,
+				"img2img": true,
+				"max_reference_images": 4,
+				"output_sizes": ["1024x1024", "1536x1024", "1024x1536"],
+				"max_batch": MAX_BATCH,
+				"seed": false,
+				"transparent_bg": false,
+				"cost_estimate": false,
+			}
+		}
+	]
 
 
 func get_config_schema() -> Array[Dictionary]:
@@ -106,6 +129,9 @@ func validate_credentials() -> Variant:
 
 
 func generate(request: Dictionary) -> Variant:
+	var request_error: Variant = validate_generation_request(request)
+	if request_error != null:
+		return _rejected_task(request_error)
 	if not _is_ready_for_request():
 		return null
 	return (
@@ -145,17 +171,17 @@ func build_request_body(request: Dictionary) -> Dictionary:
 	var adapted_prompt := (
 		(
 			"%s. Pixel art game sprite designed for a %dx%d true-pixel target, flat colors, "
-			+ "crisp hard edges, no anti-aliasing, isolated on a transparent background."
+			+ "crisp hard edges and no anti-aliasing."
 		)
 		% [prompt, width, height]
 	)
 	return {
-		"model": MODEL_ID,
+		"model": resolve_model_id(String(request.get("model_id", ""))),
 		"prompt": adapted_prompt,
 		"n": clampi(int(request.get("batch", 1)), 1, MAX_BATCH),
 		"size": _output_size(width, height),
 		"quality": "low",
-		"background": "transparent",
+		"background": "opaque",
 		"output_format": "png",
 	}
 
@@ -300,3 +326,9 @@ func _error(code: String, message: String, detail: Dictionary = {}) -> Dictionar
 
 func _failure(code: String, message: String) -> Dictionary:
 	return {"ok": false, "error": _error(code, message)}
+
+
+func _rejected_task(error: Dictionary) -> PFTask:
+	var task := TaskScript.new("openai_image_generate", {"provider_id": PROVIDER_ID})
+	task.configure_external(func(task_ref: PFTask) -> void: task_ref.reject(error))
+	return task

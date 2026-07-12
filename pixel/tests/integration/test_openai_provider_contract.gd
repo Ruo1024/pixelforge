@@ -35,42 +35,14 @@ func after_each() -> void:
 	get_tree().root.get_node("ProviderService").clear_session("openai_image")
 
 
-func test_ui_rejects_reference_graph_when_provider_lacks_img2img() -> void:
+func test_ui_provider_catalog_declares_reference_support_without_network_request() -> void:
 	var main: Control = MainScript.new()
 	main.size = Vector2(1280, 800)
 	add_child_autofree(main)
 	await wait_process_frames(2)
-	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
-	controller.generate_mock_batch()
-	await wait_process_frames(2)
-	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
-	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
-	_node_data_for_id(graph_data["nodes"], "generate")["params"]["provider_id"] = "openai_image"
-	ProjectService.set_graph_data(graph_id, graph_data, true)
-	assert_null(ProviderService.configure_session("openai_image", {"api_key": "sk-local-only"}))
-	var canvas_items: Array = canvas.export_canvas_data()["items"]
-	canvas.select_ids([_item_id_for_node(canvas_items, "batch_1")])
-	controller.run_selected_mock_graph()
-	var expected := (
-		Strings.text("CONTENT_DETAIL_REFERENCE_UNSUPPORTED_FORMAT") % "OpenAI GPT Image 2"
-	)
-	assert_string_contains((main.get_node("Root/BottomBar").get_child(0) as Label).text, expected)
+	var registered: PFProvider = ProviderService.get_provider("openai_image")
+	assert_true(registered.get_model_descriptor()["capabilities"]["img2img"])
 	assert_true(TaskQueue.is_idle())
-
-
-func _node_data_for_id(nodes: Array, node_id: String) -> Dictionary:
-	for node_value in nodes:
-		if node_value is Dictionary and String(node_value.get("id", "")) == node_id:
-			return node_value
-	return {}
-
-
-func _item_id_for_node(items: Array, node_id: String) -> String:
-	for item_value in items:
-		if item_value is Dictionary and String(item_value.get("node_id", "")) == node_id:
-			return String(item_value.get("id", ""))
-	return ""
 
 
 func test_capabilities_and_persistent_schema_match_contract() -> void:
@@ -78,7 +50,8 @@ func test_capabilities_and_persistent_schema_match_contract() -> void:
 	assert_eq(_provider.get_api_version(), 1)
 	var capabilities := _provider.get_capabilities()
 	assert_true(capabilities["txt2img"])
-	assert_true(capabilities["transparent_bg"])
+	assert_false(capabilities["transparent_bg"])
+	assert_true(capabilities["img2img"])
 	assert_false(capabilities["native_pixel"])
 	assert_eq(capabilities["max_batch"], 4)
 	assert_false(capabilities["cost_estimate"])
@@ -101,7 +74,7 @@ func test_request_body_is_sanitized_and_adapts_target_size() -> void:
 	assert_eq(body["quality"], "low")
 	assert_eq(body["size"], "1024x1024")
 	assert_eq(body["n"], 4)
-	assert_eq(body["background"], "transparent")
+	assert_eq(body["background"], "opaque")
 	assert_eq(body["output_format"], "png")
 	assert_string_contains(body["prompt"], "wooden barrel")
 	assert_string_contains(body["prompt"], "32x32 true-pixel target")
