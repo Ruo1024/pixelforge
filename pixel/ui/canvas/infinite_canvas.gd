@@ -34,6 +34,7 @@ const CanvasItemFrameScript := preload("res://ui/canvas/canvas_item_frame.gd")
 const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
 const GraphEdgeInteraction := preload("res://ui/canvas/canvas_graph_edge_interaction.gd")
 const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
+const GraphClipboard := preload("res://core/graph/canvas_graph_clipboard.gd")
 const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
 const LODCoordinator := preload("res://ui/canvas/canvas_lod_coordinator.gd")
 const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
@@ -72,6 +73,7 @@ var _last_wheel_zoom_msec := -1000000
 var _graph_edge_drag := {}
 var _graph_edge_drag_world := Vector2.ZERO
 var _selected_graph_edge := {}
+var _graph_clipboard := {}
 
 
 func _ready() -> void:
@@ -146,14 +148,23 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		else:
 			delete_selected()
 		get_viewport().set_input_as_handled()
-	elif event.keycode == KEY_Z and event.ctrl_pressed:
+	elif event.keycode == KEY_Z and event.is_command_or_control_pressed():
 		if event.shift_pressed:
 			UndoService.redo()
 		else:
 			UndoService.undo()
 		get_viewport().set_input_as_handled()
-	elif event.keycode == KEY_V and (event.ctrl_pressed or event.meta_pressed):
-		image_paste_requested.emit(get_mouse_world_position())
+	elif event.keycode == KEY_C and event.is_command_or_control_pressed():
+		_copy_selected_graph_nodes()
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_V and event.is_command_or_control_pressed():
+		if _graph_clipboard.is_empty():
+			image_paste_requested.emit(get_mouse_world_position())
+		else:
+			_paste_graph_clipboard_at(get_mouse_world_position())
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_D and event.is_command_or_control_pressed():
+		_duplicate_selected_graph_nodes()
 		get_viewport().set_input_as_handled()
 
 
@@ -388,7 +399,7 @@ func delete_selected(record_undo: bool = true) -> void:
 			memory_cost += ImageMath.estimate_rgba8_bytes(snapshot["image"])
 
 	if record_undo:
-		UndoService.perform_action("Delete sprite", do_delete, undo_delete, memory_cost)
+		UndoService.perform_action("Delete canvas selection", do_delete, undo_delete, memory_cost)
 	else:
 		do_delete.call()
 
@@ -527,6 +538,84 @@ func get_item_count() -> int:
 
 func get_selected_ids() -> Array:
 	return _selection.get_selected_ids()
+
+
+func _copy_selected_graph_nodes() -> bool:
+	var selected_ids: Array = _selection.get_selected_ids()
+	var canvas_items: Array = export_canvas_data()["items"]
+	var graph_id := ""
+	for raw_item in canvas_items:
+		if not (raw_item is Dictionary):
+			continue
+		var item: Dictionary = raw_item
+		if selected_ids.has(String(item.get("id", ""))) and String(item.get("type", "")) == "node":
+			graph_id = String(item.get("graph_id", ""))
+			break
+	if graph_id.is_empty():
+		return false
+	var payload: Dictionary = GraphClipboard.capture(
+		ProjectService.get_graph_data(graph_id), canvas_items, selected_ids
+	)
+	if not bool(payload.get("ok", false)):
+		return false
+	_graph_clipboard = payload
+	graph_status.emit({"type": "selection_copied", "count": payload["items"].size()})
+	return true
+
+
+func _paste_graph_clipboard_at(target_position: Vector2) -> bool:
+	if _graph_clipboard.is_empty():
+		return false
+	var graph_id := String(_graph_clipboard.get("graph_id", ""))
+	var before: Dictionary = ProjectService.get_graph_data(graph_id)
+	if before.is_empty():
+		graph_status.emit({"type": "clipboard_failed", "reason": "source_graph_unavailable"})
+		return false
+	var instance: Dictionary = GraphClipboard.instantiate(_graph_clipboard, target_position.round())
+	if not bool(instance.get("ok", false)):
+		return false
+	var after := before.duplicate(true)
+	var after_nodes: Array = after.get("nodes", []).duplicate(true)
+	after_nodes.append_array(instance["nodes"])
+	after["nodes"] = after_nodes
+	var after_edges: Array = after.get("edges", []).duplicate(true)
+	after_edges.append_array(instance["edges"])
+	after["edges"] = after_edges
+	var node_types := {}
+	for raw_node in instance["nodes"]:
+		if raw_node is Dictionary:
+			node_types[String(raw_node.get("id", ""))] = String(raw_node.get("type", ""))
+	var pasted_items: Array = instance["items"]
+	for index in range(pasted_items.size()):
+		pasted_items[index]["z_index"] = _items_by_id.size() + index
+	var pasted_item_ids := []
+	for item in pasted_items:
+		pasted_item_ids.append(String(item.get("id", "")))
+	var do_paste := func() -> void:
+		ProjectService.set_graph_data(graph_id, after, true)
+		for item in pasted_items:
+			if node_types.get(String(item.get("node_id", "")), "") == "batch":
+				_add_batch_direct(item)
+			else:
+				_add_node_direct(item)
+		_select_only(pasted_item_ids)
+		_emit_canvas_changed()
+	var undo_paste := func() -> void:
+		for item_id in pasted_item_ids:
+			_remove_item_direct(item_id)
+		ProjectService.set_graph_data(graph_id, before, true)
+		_select_only([])
+		_emit_canvas_changed()
+	UndoService.perform_action("Paste graph selection", do_paste, undo_paste)
+	graph_status.emit({"type": "selection_pasted", "count": pasted_item_ids.size()})
+	return true
+
+
+func _duplicate_selected_graph_nodes() -> bool:
+	if not _copy_selected_graph_nodes():
+		return false
+	var anchor: Array = _graph_clipboard.get("anchor", [0, 0])
+	return _paste_graph_clipboard_at(Vector2(float(anchor[0]), float(anchor[1])) + Vector2(32, 32))
 
 
 func select_ids(ids: Array) -> void:
@@ -678,7 +767,7 @@ func move_selected_by(delta: Vector2, record_undo: bool = true) -> void:
 		_emit_canvas_changed()
 
 	if record_undo:
-		UndoService.perform_action("Move sprite", do_move, undo_move)
+		UndoService.perform_action("Move canvas selection", do_move, undo_move)
 	else:
 		do_move.call()
 
@@ -875,7 +964,7 @@ func _commit_drag_if_needed() -> void:
 		_select_only(ids)
 		_emit_canvas_changed()
 
-	UndoService.perform_action("Move sprite", do_move, undo_move, 0, false)
+	UndoService.perform_action("Move canvas selection", do_move, undo_move, 0, false)
 	_emit_canvas_changed()
 
 

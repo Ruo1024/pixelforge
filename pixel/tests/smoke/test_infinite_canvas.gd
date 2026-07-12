@@ -1,3 +1,4 @@
+# gdlint: disable=max-public-methods
 extends "res://addons/gut/test.gd"
 
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
@@ -265,6 +266,111 @@ func test_add_delete_move_are_undoable() -> void:
 	assert_eq(canvas.get_item_count(), 0)
 	assert_true(undo.undo())
 	assert_eq(canvas.get_item_count(), 1)
+
+
+func test_command_z_and_command_shift_z_drive_canvas_undo_on_macos_layout() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(256, 256)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+	canvas.add_sprite_item(_make_checker_image(8), "", Vector2.ZERO, "command_item", true)
+	var undo_event := InputEventKey.new()
+	undo_event.keycode = KEY_Z
+	undo_event.pressed = true
+	undo_event.meta_pressed = true
+	canvas._unhandled_key_input(undo_event)
+	assert_eq(canvas.get_item_count(), 0)
+	var redo_event := InputEventKey.new()
+	redo_event.keycode = KEY_Z
+	redo_event.pressed = true
+	redo_event.meta_pressed = true
+	redo_event.shift_pressed = true
+	canvas._unhandled_key_input(redo_event)
+	assert_eq(canvas.get_item_count(), 1)
+
+
+func test_copy_paste_graph_selection_remaps_ids_keeps_internal_edges_and_is_atomic() -> void:
+	ProjectService.new_project("Graph Clipboard UI")
+	(
+		ProjectService
+		. set_graph_data(
+			"graph_main",
+			{
+				"graph_version": 1,
+				"id": "graph_main",
+				"name": "Clipboard",
+				"nodes":
+				[
+					{
+						"id": "prompt",
+						"type": "text_prompt",
+						"position": [100, 120],
+						"params": {"text": "windmill"},
+					},
+					{
+						"id": "generate",
+						"type": "ai_generate",
+						"position": [380, 120],
+						"params": {"provider_id": "mock", "batch_size": 1, "seed": 1},
+					},
+					{
+						"id": "external",
+						"type": "size_spec",
+						"position": [380, 400],
+						"params": {"width": 32, "height": 32, "per_subject": 1},
+					},
+				],
+				"edges":
+				[
+					{"from": ["prompt", "text"], "to": ["generate", "text"]},
+					{"from": ["external", "spec"], "to": ["generate", "spec"]},
+				],
+			},
+			false
+		)
+	)
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(1024, 768)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+	canvas._add_graph_node_card("graph_main", "prompt", Vector2(100, 120), "prompt_item", false)
+	canvas._add_graph_node_card("graph_main", "generate", Vector2(380, 120), "generate_item", false)
+	canvas._add_graph_node_card("graph_main", "external", Vector2(380, 400), "external_item", false)
+	canvas.select_ids(["prompt_item", "generate_item"])
+
+	assert_true(canvas._copy_selected_graph_nodes())
+	assert_true(canvas._paste_graph_clipboard_at(Vector2(700, 200)))
+	var graph: Dictionary = ProjectService.get_graph_data("graph_main")
+	assert_eq(graph["nodes"].size(), 5)
+	assert_eq(graph["edges"].size(), 3)
+	assert_eq(canvas.get_item_count(), 5)
+	assert_eq(canvas.get_selected_ids().size(), 2)
+	var selected_positions := []
+	for item in canvas.export_canvas_data()["items"]:
+		if canvas.get_selected_ids().has(String(item.get("id", ""))):
+			selected_positions.append(item["position"])
+	assert_has(selected_positions, [700, 200])
+	assert_has(selected_positions, [980, 200])
+	assert_true(UndoService.undo())
+	assert_eq(ProjectService.get_graph_data("graph_main")["nodes"].size(), 3)
+	assert_eq(ProjectService.get_graph_data("graph_main")["edges"].size(), 2)
+	assert_eq(canvas.get_item_count(), 3)
+	assert_true(UndoService.redo())
+	assert_eq(ProjectService.get_graph_data("graph_main")["nodes"].size(), 5)
+	assert_eq(canvas.get_item_count(), 5)
+	canvas.select_ids(["prompt_item", "generate_item"])
+	var copy_event := InputEventKey.new()
+	copy_event.keycode = KEY_C
+	copy_event.pressed = true
+	copy_event.meta_pressed = true
+	canvas._unhandled_key_input(copy_event)
+	var paste_event := InputEventKey.new()
+	paste_event.keycode = KEY_V
+	paste_event.pressed = true
+	paste_event.meta_pressed = true
+	canvas._unhandled_key_input(paste_event)
+	assert_eq(ProjectService.get_graph_data("graph_main")["nodes"].size(), 7)
+	assert_eq(canvas.get_item_count(), 7)
 
 
 func test_dragging_imported_sprite_still_works_before_tool_activation() -> void:
