@@ -14,9 +14,11 @@ const IdUtil := preload("res://core/util/id_util.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const UIFont := preload("res://ui/widgets/ui_font.gd")
 const AssetRefFieldScript := preload("res://ui/widgets/asset_ref_field.gd")
+const ObjectListEditorScript := preload("res://ui/canvas/object_list_editor.gd")
 
 const SUMMARY_CARD_SIZE := Vector2(220, 116)
 const CONTENT_CARD_SIZE := Vector2(240, 238)
+const OBJECT_LIST_CARD_SIZE := Vector2(360, 430)
 const GENERATE_CARD_SIZE := Vector2(280, 390)
 const REFERENCE_CARD_SIZE := Vector2(260, 330)
 const REFERENCE_SET_CARD_SIZE := Vector2(320, 430)
@@ -60,7 +62,6 @@ var _execution_status_key := ""
 var _execution_detail := ""
 var _font: Font = null
 var _content_root: Control = null
-var _object_edit: TextEdit = null
 var _text_prompt_edit: TextEdit = null
 var _model_option: OptionButton = null
 var _model_capability_label: Label = null
@@ -358,6 +359,15 @@ func _summarize_params(params: Variant) -> String:
 	if source.has("text"):
 		var prompt := String(source["text"]).strip_edges()
 		result = Strings.text("CONTENT_PROMPT_EMPTY") if prompt.is_empty() else prompt.left(56)
+	elif source.has("rows"):
+		var enabled_count := 0
+		for row in source.get("rows", []):
+			if row is Dictionary and bool(row.get("enabled", true)):
+				enabled_count += 1
+		result = (
+			Strings.text("CONTENT_OBJECT_SELECTED_FORMAT")
+			% [enabled_count, source.get("rows", []).size()]
+		)
 	elif source.has("items"):
 		var lines := String(source["items"]).split("\n", false)
 		result = Strings.text("CONTENT_OBJECT_COUNT_FORMAT") % lines.size()
@@ -387,6 +397,8 @@ func _card_size() -> Vector2:
 	if collapsed or _is_overview() or not _is_content_node():
 		return SUMMARY_CARD_SIZE
 	match _node_type:
+		"object_list":
+			return OBJECT_LIST_CARD_SIZE
 		"ai_generate":
 			return GENERATE_CARD_SIZE
 		"image_input":
@@ -420,7 +432,6 @@ func _rebuild_content_controls() -> void:
 		remove_child(_content_root)
 		_content_root.free()
 		_content_root = null
-	_object_edit = null
 	_text_prompt_edit = null
 	_model_option = null
 	_model_capability_label = null
@@ -482,22 +493,14 @@ func _rebuild_header_controls() -> void:
 
 
 func _build_object_list_controls() -> void:
-	var count_label := Label.new()
-	count_label.name = "ItemCount"
-	count_label.text = Strings.text("CONTENT_OBJECT_COUNT_FORMAT") % _object_count()
-	_content_root.add_child(count_label)
-	_object_edit = TextEdit.new()
-	_object_edit.name = "ObjectEdit"
-	_object_edit.text = String(_params_snapshot.get("items", ""))
-	_object_edit.custom_minimum_size = OBJECT_EDITOR_MIN_SIZE
-	_object_edit.placeholder_text = Strings.text("CONTENT_OBJECT_PLACEHOLDER")
-	_object_edit.focus_exited.connect(_commit_object_items)
-	_content_root.add_child(_object_edit)
-	var apply_button := Button.new()
-	apply_button.name = "ApplyButton"
-	apply_button.text = Strings.text("ACTION_APPLY")
-	apply_button.pressed.connect(_commit_object_items)
-	_content_root.add_child(apply_button)
+	var editor := ObjectListEditorScript.new()
+	editor.name = "ObjectListEditor"
+	editor.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	editor.params_commit_requested.connect(
+		func(params: Dictionary) -> void: params_commit_requested.emit(graph_id, node_id, params)
+	)
+	editor.setup(_params_snapshot)
+	_content_root.add_child(editor)
 
 
 func _build_text_prompt_controls() -> void:
@@ -823,15 +826,6 @@ func _labeled_control(label_text: String, control: Control) -> VBoxContainer:
 	return box
 
 
-func _commit_object_items() -> void:
-	if _object_edit == null:
-		return
-	var items := _object_edit.text
-	if items == String(_params_snapshot.get("items", "")):
-		return
-	params_commit_requested.emit(graph_id, node_id, {"items": items})
-
-
 func _commit_text_prompt() -> void:
 	if _text_prompt_edit == null:
 		return
@@ -944,14 +938,6 @@ func _generation_input_summary() -> String:
 		var spec_params: Dictionary = spec_source.get("params", {})
 		target = "%d×%d px" % [int(spec_params.get("width", 0)), int(spec_params.get("height", 0))]
 	return Strings.text("CONTENT_REQUEST_SUMMARY_FORMAT") % [prompt, style, target]
-
-
-func _object_count() -> int:
-	var count := 0
-	for raw_line in String(_params_snapshot.get("items", "")).split("\n", false):
-		if not String(raw_line).strip_edges().is_empty():
-			count += 1
-	return count
 
 
 func _project_style_summary() -> String:

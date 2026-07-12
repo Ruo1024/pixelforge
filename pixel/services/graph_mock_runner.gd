@@ -175,6 +175,11 @@ func _propagate_outputs(
 		)
 		if from_port == "images" and outputs.has("metadata"):
 			target_inputs["__metadata"] = outputs["metadata"]
+		if from_port == "items" and outputs.has("__source_rows"):
+			var source_rows: Array = outputs["__source_rows"].duplicate(true)
+			for row in source_rows:
+				row["source_node_id"] = node_id
+			target_inputs["__source_rows"] = source_rows
 		if from_port in ["image", "images"]:
 			for key in [
 				"__reference_asset_id",
@@ -304,6 +309,8 @@ func _asset_meta(graph_id: String, meta: Dictionary) -> Dictionary:
 			"reference_content_sha256": meta.get("reference_content_sha256", null),
 			"reference_asset_ids": meta.get("reference_asset_ids", []),
 			"reference_content_sha256s": meta.get("reference_content_sha256s", []),
+			"source_node_id": meta.get("source_node_id", ""),
+			"source_row_id": meta.get("source_row_id", ""),
 			"generation_snapshot": meta.get("generation_snapshot", {}),
 			"created_at": IdUtil.utc_now_iso(),
 		},

@@ -85,7 +85,7 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 	var height := maxi(1, int(spec.get("height", DEFAULT_SIZE)))
 	var batch_size := maxi(1, int(params.get("batch_size", spec.get("per_subject", 1))))
 	var seed := int(params.get("seed", DEFAULT_SEED))
-	var subjects := _subjects_from_inputs(inputs)
+	var subjects := _subject_rows_from_inputs(inputs, batch_size)
 	var reference_hash := String(inputs.get("__reference_content_sha256", ""))
 	var reference_asset_id := String(inputs.get("__reference_asset_id", ""))
 	var reference_hashes := _string_array(inputs.get("__reference_content_sha256s", []))
@@ -99,10 +99,11 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 	var metadata := []
 
 	for subject in subjects:
-		for _index in range(batch_size):
+		var subject_text := String(subject.get("text", "sprite"))
+		for _index in range(int(subject.get("count", batch_size))):
 			var item_seed := seed + images.size()
 			images.append(
-				_make_mock_image(String(subject), width, height, item_seed, combined_reference_hash)
+				_make_mock_image(subject_text, width, height, item_seed, combined_reference_hash)
 			)
 			(
 				metadata
@@ -110,15 +111,31 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 					{
 						"provider": PROVIDER_MOCK,
 						"model": MODEL_ID,
-						"prompt": String(subject),
+						"prompt": subject_text,
 						"seed": item_seed,
-						"name": _asset_name(String(subject), item_seed),
+						"name": _asset_name(subject_text, item_seed),
 						"reference_asset_id":
 						reference_asset_id if not reference_asset_id.is_empty() else null,
 						"reference_content_sha256":
 						reference_hash if not reference_hash.is_empty() else null,
 						"reference_asset_ids": reference_asset_ids.duplicate(),
 						"reference_content_sha256s": reference_hashes.duplicate(),
+						"source_node_id": String(subject.get("source_node_id", "")),
+						"source_row_id": String(subject.get("id", "")),
+						"generation_snapshot":
+						{
+							"provider_id": PROVIDER_MOCK,
+							"model_id": MODEL_ID,
+							"prompt": subject_text,
+							"width": width,
+							"height": height,
+							"batch_size": int(subject.get("count", batch_size)),
+							"seed": item_seed,
+							"reference_asset_ids": reference_asset_ids.duplicate(),
+							"reference_content_sha256s": reference_hashes.duplicate(),
+							"source_row_id": String(subject.get("id", "")),
+							"source_node_id": String(subject.get("source_node_id", "")),
+						},
 					}
 				)
 			)
@@ -134,19 +151,35 @@ func _string_array(value: Variant) -> Array[String]:
 	return result
 
 
-func _subjects_from_inputs(inputs: Dictionary) -> Array:
-	var result := []
+func _subject_rows_from_inputs(inputs: Dictionary, default_count: int) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var structured: Variant = inputs.get("__source_rows", null)
+	if structured is Array:
+		for row in structured:
+			if row is Dictionary:
+				(
+					result
+					. append(
+						{
+							"id": String(row.get("id", "")),
+							"text": String(row.get("text", "")),
+							"count": maxi(1, int(row.get("count", 1))),
+							"source_node_id": String(row.get("source_node_id", "")),
+						}
+					)
+				)
+		return result
 	if inputs.has("items"):
 		for item in inputs["items"]:
 			var text := String(item).strip_edges()
 			if not text.is_empty():
-				result.append(text)
+				result.append({"text": text, "count": default_count})
 	if result.is_empty() and inputs.has("text"):
 		var prompt := String(inputs["text"]).strip_edges()
 		if not prompt.is_empty():
-			result.append(prompt)
+			result.append({"text": prompt, "count": default_count})
 	if result.is_empty():
-		result.append("sprite")
+		result.append({"text": "sprite", "count": default_count})
 	return result
 
 

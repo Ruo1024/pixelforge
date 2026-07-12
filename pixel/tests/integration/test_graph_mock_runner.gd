@@ -56,6 +56,37 @@ func test_mock_generate_chain_can_replace_existing_batch_assets() -> void:
 	assert_ne(second_ids, first_ids)
 
 
+func test_structured_object_rows_override_batch_size_and_persist_source_provenance() -> void:
+	var graph := _make_mock_graph()
+	(
+		graph
+		. set_node_params(
+			"objects",
+			{
+				"items": "tower\nbarrel\nignored",
+				"rows":
+				[
+					{"id": "row-tower", "text": "tower", "count": 2, "enabled": true},
+					{"id": "row-barrel", "text": "barrel", "count": 3, "enabled": true},
+					{"id": "row-off", "text": "ignored", "count": 9, "enabled": false},
+				],
+			},
+		)
+	)
+	graph.set_node_params("generate", {"provider_id": "mock", "batch_size": 7, "seed": 900})
+
+	var result: Dictionary = MockRunnerScript.new().run_to_batch(graph, AssetLibrary, "batch_1")
+
+	assert_true(result["ok"])
+	assert_eq(result["asset_ids"].size(), 5)
+	var source_rows: Array[String] = []
+	for asset_id in result["asset_ids"]:
+		var provenance: Dictionary = AssetLibrary.get_asset_meta(String(asset_id))["provenance"]
+		assert_eq(provenance["source_node_id"], "objects")
+		source_rows.append(String(provenance["source_row_id"]))
+	assert_eq(source_rows, ["row-tower", "row-tower", "row-barrel", "row-barrel", "row-barrel"])
+
+
 func test_mock_generate_chain_rejects_missing_required_spec_input() -> void:
 	var graph := _make_mock_graph()
 	var asset_library := get_tree().root.get_node("AssetLibrary")

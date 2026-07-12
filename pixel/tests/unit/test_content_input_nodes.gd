@@ -4,6 +4,7 @@ const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const StylePresetNodeScript := preload("res://core/graph/nodes/style_preset_node.gd")
 const TextPromptNodeScript := preload("res://core/graph/nodes/text_prompt_node.gd")
+const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 
 
 func test_text_prompt_preserves_multiline_content_and_validates_missing_text() -> void:
@@ -13,6 +14,33 @@ func test_text_prompt_preserves_multiline_content_and_validates_missing_text() -
 	assert_eq(node.execute({}, node.validate_params({"text": authored}), {})["text"], authored)
 	assert_eq(node.execute({}, node.validate_params({"text": null}), {})["text"], "")
 	assert_eq(node.get_output_ports(), [{"name": "text", "type": "text"}])
+
+
+func test_object_list_preserves_legacy_batch_semantics_and_rows_are_execution_truth() -> void:
+	var node := ObjectListNodeScript.new()
+	var legacy := node.validate_params({"items": "tower\nbarrel\n"})
+	assert_false(legacy.has("rows"))
+	var display_rows := node.rows_for_params(legacy)
+	assert_eq(display_rows.size(), 2)
+	assert_eq(display_rows[0]["text"], "tower")
+	assert_true(String(display_rows[0]["id"]).begins_with("legacy_"))
+	assert_eq(node.rows_for_params(legacy), display_rows)
+	var structured := (
+		node
+		. validate_params(
+			{
+				"items": "ignored legacy value",
+				"rows":
+				[
+					{"id": "row-a", "text": "tower", "count": 4, "enabled": true},
+					{"id": "row-b", "text": "barrel", "count": 2, "enabled": false},
+				],
+			}
+		)
+	)
+	assert_eq(Array(node.execute({}, structured, {})["items"]), ["tower"])
+	assert_eq(structured["rows"][0]["count"], 4)
+	assert_eq(structured["rows"][1]["id"], "row-b")
 
 
 func test_style_preset_outputs_detached_validated_embedded_data() -> void:

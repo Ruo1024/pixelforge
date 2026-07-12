@@ -621,10 +621,19 @@ func test_object_node_card_exposes_content_and_emits_atomic_param_commit() -> vo
 	assert_not_null(edit)
 	assert_not_null(apply_button)
 	assert_gt(card.get_canvas_bounds().size.y, 116.0)
-	assert_eq(card.get_content_control("ItemCount").text, Strings.CONTENT_OBJECT_COUNT_FORMAT % 2)
-	edit.text = "barrel\ncrate\nwell"
+	assert_eq(
+		card.get_content_control("ItemCount").text,
+		Strings.text("CONTENT_OBJECT_SELECTED_FORMAT") % [2, 2]
+	)
+	assert_eq(card.get_content_control("ObjectText0").text, "barrel")
+	edit.text = "well"
 	apply_button.pressed.emit()
-	assert_eq(commits, [[graph.id, "objects", {"items": "barrel\ncrate\nwell"}]])
+	assert_eq(commits.size(), 1)
+	assert_eq(commits[0][0], graph.id)
+	assert_eq(commits[0][1], "objects")
+	assert_eq(commits[0][2]["items"], "barrel\ncrate\nwell")
+	assert_eq(commits[0][2]["rows"].size(), 3)
+	assert_eq(commits[0][2]["rows"][2]["text"], "well")
 
 
 func test_prompt_and_style_cards_show_real_content_and_prompt_emits_commit() -> void:
