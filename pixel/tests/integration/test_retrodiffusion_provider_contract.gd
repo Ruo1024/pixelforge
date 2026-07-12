@@ -233,12 +233,18 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 			3.0
 		)
 	)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id).size(), 4)
+	var completed_graph: Dictionary = ProjectService.get_graph_data(graph_id)
+	var cloud_batch: Dictionary = _newest_batch_node_except(completed_graph["nodes"], ["batch_1"])
+	var cloud_batch_item_id := _item_id_for_node(
+		canvas.export_canvas_data()["items"], String(cloud_batch["id"])
+	)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id).size(), 10)
+	assert_eq(canvas._get_batch_asset_ids(cloud_batch_item_id).size(), 4)
 	assert_eq(
 		canvas._items_by_id[generate_item_id].get_content_control("ExecutionDetail").text,
 		Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % 4
 	)
-	var first_asset_id := String(canvas._get_batch_asset_ids(batch_item_id)[0])
+	var first_asset_id := String(canvas._get_batch_asset_ids(cloud_batch_item_id)[0])
 	var provenance: Dictionary = AssetLibrary.get_asset_meta(first_asset_id)["provenance"]
 	assert_eq(provenance["provider"], "retrodiffusion")
 	assert_eq(provenance["model"], "rd_plus")
@@ -325,6 +331,18 @@ func _node_data_for_id(nodes: Array, node_id: String) -> Dictionary:
 		if String(data.get("id", "")) == node_id:
 			return data
 	return {}
+
+
+func _newest_batch_node_except(nodes: Array, excluded_ids: Array) -> Dictionary:
+	var result := {}
+	for raw_node in nodes:
+		var node: Dictionary = raw_node
+		if (
+			String(node.get("type", "")) == "batch"
+			and not excluded_ids.has(String(node.get("id", "")))
+		):
+			result = node
+	return result
 
 
 func _item_id_for_node(items: Array, node_id: String) -> String:

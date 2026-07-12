@@ -5,6 +5,7 @@ extends Node2D
 ## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
 
 signal collapsed_change_requested(item_id: String, collapsed: bool)
+signal run_action_requested(graph_id: String, node_id: String, action_id: String)
 
 const IdUtil := preload("res://core/util/id_util.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
@@ -72,6 +73,7 @@ var label := ""
 var locked := false
 var collapsed := false
 var frame_id: Variant = null
+var run_state := {}
 
 var _thumbnail_textures := {}
 var _asset_hints := {}
@@ -79,6 +81,8 @@ var _font: Font = null
 var _lod_camera_zoom := 1.0
 var _has_graph_edge_error := false
 var _collapse_button: Button = null
+var _retry_button: Button = null
+var _remove_placeholder_button: Button = null
 var _raw_data := {}
 
 
@@ -92,6 +96,7 @@ func setup_from_data(data: Dictionary) -> void:
 	var graph_params: Dictionary = graph_node_data.get("params", {})
 	label = String(graph_params.get("label", data.get("label", "Batch")))
 	asset_ids = _string_array(graph_params.get("asset_ids", data.get("asset_ids", [])))
+	run_state = graph_params.get("run_state", {}).duplicate(true)
 	selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
 	review_states = _review_state_map(
 		graph_params.get("review_states", data.get("review_states", {})), asset_ids
@@ -121,6 +126,10 @@ func setup_from_data(data: Dictionary) -> void:
 	_rebuild_thumbnails()
 	_rebuild_header_controls()
 	queue_redraw()
+
+
+func _refresh_from_graph() -> void:
+	setup_from_data(to_canvas_data())
 
 
 func to_canvas_data() -> Dictionary:
@@ -431,12 +440,41 @@ func _draw() -> void:
 
 	if review_layout == LAYOUT_FOCUS:
 		_draw_focus_layout(visible_ids)
+	elif visible_ids.is_empty() and int(run_state.get("expected_count", 0)) > 0:
+		_draw_placeholders()
 	else:
 		var columns := _columns()
 		for index in range(visible_ids.size()):
 			_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
 	if has_graph_binding():
 		_draw_graph_ports()
+
+
+func _draw_placeholders() -> void:
+	var expected_count := int(run_state.get("expected_count", 0))
+	var columns := _columns()
+	for index in range(expected_count):
+		var rect := _thumb_rect(index, columns)
+		draw_rect(rect, THUMB_BACKGROUND, true)
+		draw_rect(rect, BORDER.darkened(0.3), false, 1.5)
+		draw_line(rect.position + Vector2(12, 12), rect.end - Vector2(12, 12), BORDER, 2.0)
+		draw_line(
+			Vector2(rect.end.x - 12, rect.position.y + 12),
+			Vector2(rect.position.x + 12, rect.end.y - 12),
+			BORDER,
+			2.0
+		)
+	var detail := String(run_state.get("detail", ""))
+	if not detail.is_empty() and _font != null:
+		draw_string(
+			_font,
+			Vector2(PADDING, _card_height() - 12),
+			detail,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			CARD_WIDTH - PADDING * 2,
+			13,
+			Color(0.86, 0.88, 0.88, 1.0)
+		)
 
 
 func _draw_focus_layout(visible_ids: Array[String]) -> void:
@@ -624,6 +662,8 @@ func _card_height() -> int:
 		return COLLAPSED_HEIGHT
 	var visible_count := get_visible_asset_ids().size()
 	if visible_count <= 0:
+		visible_count = int(run_state.get("expected_count", 0))
+	if visible_count <= 0:
 		return MIN_CARD_HEIGHT
 	if review_layout == LAYOUT_FOCUS:
 		return maxi(
@@ -658,20 +698,31 @@ func _border_color() -> Color:
 
 
 func _draw_graph_status_badge() -> void:
-	if not _has_graph_edge_error or _font == null:
+	if _font == null:
+		return
+	var run_status := String(run_state.get("status", ""))
+	if not _has_graph_edge_error and run_status.is_empty():
 		return
 	var badge_size := Vector2(78, 18)
-	var badge_rect := Rect2(Vector2(CARD_WIDTH - PADDING - 30 - badge_size.x, 11), badge_size)
+	var action_space := 164.0 if run_status in ["failed", "canceled"] else 30.0
+	var badge_rect := Rect2(
+		Vector2(CARD_WIDTH - PADDING - action_space - badge_size.x, 11), badge_size
+	)
+	var badge_color := EDGE_ERROR_BORDER if _has_graph_edge_error else BORDER
 	draw_rect(badge_rect, BADGE_BACKGROUND, true)
-	draw_rect(badge_rect, EDGE_ERROR_BORDER, false, 1.0)
+	draw_rect(badge_rect, badge_color, false, 1.0)
 	draw_string(
 		_font,
 		badge_rect.position + Vector2(5, 13),
-		Strings.GRAPH_NODE_BADGE_EDGE_ERROR,
+		(
+			Strings.GRAPH_NODE_BADGE_EDGE_ERROR
+			if _has_graph_edge_error
+			else Strings.text("CONTENT_STATUS_%s" % run_status.to_upper())
+		),
 		HORIZONTAL_ALIGNMENT_LEFT,
 		badge_rect.size.x - 10,
 		11,
-		EDGE_ERROR_BORDER
+		badge_color
 	)
 
 
@@ -691,6 +742,29 @@ func _rebuild_header_controls() -> void:
 	)
 	_collapse_button.position = Vector2(CARD_WIDTH - 28, 7)
 	_collapse_button.size = Vector2(24, 24)
+	var retryable := String(run_state.get("status", "")) in ["failed", "canceled"]
+	if _retry_button == null:
+		_retry_button = Button.new()
+		_retry_button.name = "RetryButton"
+		_retry_button.text = Strings.text("ACTION_RETRY_GENERATION")
+		_retry_button.pressed.connect(
+			func() -> void: run_action_requested.emit(graph_id, node_id, "retry")
+		)
+		add_child(_retry_button)
+	_retry_button.visible = retryable
+	_retry_button.position = Vector2(CARD_WIDTH - 160, 7)
+	_retry_button.size = Vector2(66, 26)
+	if _remove_placeholder_button == null:
+		_remove_placeholder_button = Button.new()
+		_remove_placeholder_button.name = "RemovePlaceholderButton"
+		_remove_placeholder_button.text = Strings.text("ACTION_REMOVE_PLACEHOLDER")
+		_remove_placeholder_button.pressed.connect(
+			func() -> void: run_action_requested.emit(graph_id, node_id, "remove")
+		)
+		add_child(_remove_placeholder_button)
+	_remove_placeholder_button.visible = retryable
+	_remove_placeholder_button.position = Vector2(CARD_WIDTH - 92, 7)
+	_remove_placeholder_button.size = Vector2(60, 26)
 
 
 func _graph_has_edge_error() -> bool:

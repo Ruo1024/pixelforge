@@ -15,6 +15,7 @@ signal graph_status(event: Dictionary)
 signal asset_edit_requested(asset_id: String, batch_id: String)
 signal graph_node_params_commit_requested(graph_id: String, node_id: String, params: Dictionary)
 signal graph_node_action_requested(graph_id: String, node_id: String, action_id: String)
+signal batch_run_action_requested(graph_id: String, node_id: String, action_id: String)
 signal image_paste_requested(world_position: Vector2)
 
 const ZOOM_LEVELS := [0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
@@ -333,6 +334,19 @@ func _refresh_graph_node_card(graph_id: String, node_id: String) -> bool:
 		queue_redraw()
 		selection_changed.emit(_selection.get_selected_ids())
 	return refreshed
+
+
+func _refresh_graph_batch_card(graph_id: String, node_id: String) -> bool:
+	for item in _items_by_id.values():
+		if (
+			item.get_script() == CanvasBatchCardScript
+			and item.graph_id == graph_id
+			and item.node_id == node_id
+		):
+			item._refresh_from_graph()
+			queue_redraw()
+			return true
+	return false
 
 
 func _set_graph_node_type_status(
@@ -1258,6 +1272,11 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 	var item: Node = CanvasBatchCardScript.new()
 	item.setup_from_data(item_data)
 	item.collapsed_change_requested.connect(_set_batch_collapsed)
+	item.run_action_requested.connect(
+		func(graph_id: String, node_id: String, action_id: String) -> void:
+			_select_only([item.item_id])
+			batch_run_action_requested.emit(graph_id, node_id, action_id)
+	)
 	item.set_lod_camera_zoom(camera_zoom)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item

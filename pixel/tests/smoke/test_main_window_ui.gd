@@ -268,10 +268,15 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 
 	graph_data = ProjectService.current_project.graphs[graph_id]
 	batch_node = _node_data_for_id(graph_data["nodes"], "batch_1")
-	var rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
+	var rerun_batch: Dictionary = _newest_batch_node_except(graph_data["nodes"], ["batch_1"])
+	var rerun_asset_ids: Array = rerun_batch["params"]["asset_ids"]
+	assert_eq(batch_node["params"]["asset_ids"], first_asset_ids)
 	assert_eq(rerun_asset_ids.size(), 10)
 	assert_ne(rerun_asset_ids, first_asset_ids)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id), rerun_asset_ids)
+	var rerun_batch_item_id := _item_id_for_node(
+		canvas.export_canvas_data()["items"], String(rerun_batch["id"])
+	)
+	assert_eq(canvas._get_batch_asset_ids(rerun_batch_item_id), rerun_asset_ids)
 	assert_eq(generate_card._status_badge, Strings.text("CONTENT_STATUS_COMPLETE"))
 	assert_eq(
 		generate_card.get_content_control("ExecutionDetail").text,
@@ -287,11 +292,13 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	await wait_process_frames(2)
 
 	graph_data = ProjectService.current_project.graphs[graph_id]
-	batch_node = _node_data_for_id(graph_data["nodes"], "batch_1")
-	var edge_rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
+	var edge_rerun_batch: Dictionary = _newest_batch_node_except(
+		graph_data["nodes"], ["batch_1", String(rerun_batch["id"])]
+	)
+	var edge_rerun_asset_ids: Array = edge_rerun_batch["params"]["asset_ids"]
 	assert_eq(edge_rerun_asset_ids.size(), 10)
 	assert_ne(edge_rerun_asset_ids, rerun_asset_ids)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), first_asset_ids)
 	var valid_graph_data := graph_data.duplicate(true)
 
 	canvas.select_ids([])
@@ -303,7 +310,7 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 		_status_label(main).text,
 		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % Strings.STATUS_GRAPH_RUN_MISSING_GRAPH
 	)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), first_asset_ids)
 
 	var graph_without_batch := valid_graph_data.duplicate(true)
 	var kept_nodes := []
@@ -320,14 +327,14 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 
 	assert_eq(
 		_status_label(main).text,
-		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % Strings.STATUS_GRAPH_RUN_NO_BATCH
+		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "Target node does not exist"
 	)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id), edge_rerun_asset_ids)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), first_asset_ids)
 
 	graph_data = valid_graph_data.duplicate(true)
 	_remove_graph_edge(graph_data, "size", "spec", "generate", "spec")
 	ProjectService.set_graph_data(graph_id, graph_data, true)
-	var stable_asset_ids := edge_rerun_asset_ids.duplicate()
+	var stable_asset_ids := first_asset_ids.duplicate()
 
 	canvas.select_ids([batch_item_id])
 	controller.run_selected_mock_graph()
@@ -412,7 +419,10 @@ func test_selected_graph_node_params_are_undoable_and_affect_rerun() -> void:
 
 	controller.run_selected_mock_graph()
 	await wait_process_frames(2)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id).size(), 4)
+	var updated_graph: Dictionary = ProjectService.get_graph_data(graph_id)
+	var new_batch: Dictionary = _newest_batch_node_except(updated_graph["nodes"], ["batch_1"])
+	assert_eq(new_batch["params"]["asset_ids"].size(), 4)
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id).size(), 10)
 	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_RUN_DONE % 4)
 
 
@@ -815,6 +825,18 @@ func _node_data_for_id(nodes: Array, node_id: String) -> Dictionary:
 		if String(data.get("id", "")) == node_id:
 			return data
 	return {}
+
+
+func _newest_batch_node_except(nodes: Array, excluded_ids: Array) -> Dictionary:
+	var result := {}
+	for raw_node in nodes:
+		var node: Dictionary = raw_node
+		if String(node.get("type", "")) != "batch":
+			continue
+		if excluded_ids.has(String(node.get("id", ""))):
+			continue
+		result = node
+	return result
 
 
 func _remove_graph_edge(

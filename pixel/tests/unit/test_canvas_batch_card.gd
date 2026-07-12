@@ -902,6 +902,49 @@ func test_ai_generate_inputs_share_single_canvas_anchor() -> void:
 	)
 
 
+func test_failed_batch_placeholder_keeps_expected_slots_and_routes_retry_remove() -> void:
+	var graph := GraphScript.new()
+	graph.id = "graph_batch_placeholder"
+	(
+		graph
+		. add_node(
+			BatchNodeScript.new(),
+			"batch",
+			{
+				"label": "Cloud result",
+				"asset_ids": [],
+				"run_state":
+				{
+					"status": "failed",
+					"expected_count": 5,
+					"detail": "Recorded provider failure",
+				},
+			},
+			Vector2.ZERO
+		)
+	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(720, 520)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+	var actions := []
+	canvas.batch_run_action_requested.connect(
+		func(graph_id: String, node_id: String, action_id: String) -> void:
+			actions.append([graph_id, node_id, action_id])
+	)
+	var card: Node = canvas._add_batch_card(
+		[], Vector2.ZERO, "Cloud result", "placeholder", false, graph.id, "batch"
+	)
+	assert_eq(card.run_state["expected_count"], 5)
+	assert_gt(card.get_canvas_bounds().size.y, float(card.MIN_CARD_HEIGHT))
+	assert_true(card._retry_button.visible)
+	assert_true(card._remove_placeholder_button.visible)
+	card._retry_button.pressed.emit()
+	card._remove_placeholder_button.pressed.emit()
+	assert_eq(actions, [[graph.id, "batch", "retry"], [graph.id, "batch", "remove"]])
+
+
 func _register_asset(color: Color, name: String) -> String:
 	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
 	image.fill(color)

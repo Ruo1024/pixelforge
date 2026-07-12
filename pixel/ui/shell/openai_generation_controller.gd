@@ -96,11 +96,16 @@ func _queue_graph(
 		var missing_target := Strings.text("CONTENT_DETAIL_INVALID_RESPONSE")
 		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % missing_target
 		return
-	var target_state := {"graph": graph, "generate_node_id": generate_node_id}
+	var target_state := {
+		"graph": graph,
+		"generate_node_id": generate_node_id,
+		"batch_node_id": batch_node_id,
+	}
 	var provider: PFProvider = ProviderService.get_provider(provider_id)
 	if provider == null:
 		var unavailable := Strings.text("CONTENT_DETAIL_PROVIDER_UNAVAILABLE")
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", unavailable)
+		_set_batch_run_state(target_state, "failed", unavailable)
 		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % unavailable
 		return
 	var display_name := provider.get_display_name()
@@ -113,11 +118,13 @@ func _queue_graph(
 				Strings.STATUS_PROVIDER_CREDENTIALS_REQUIRED_FORMAT % display_name
 			)
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", _status_label.text)
+		_set_batch_run_state(target_state, "failed", _status_label.text)
 		return
 	var request := _request_for_graph(graph, generate_node_id)
 	if request.has("__error"):
 		var reference_error := String(request["__error"])
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", reference_error)
+		_set_batch_run_state(target_state, "failed", reference_error)
 		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % reference_error
 		return
 	var validation_message := _cloud_request_validation_message(
@@ -125,6 +132,7 @@ func _queue_graph(
 	)
 	if not validation_message.is_empty():
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", validation_message)
+		_set_batch_run_state(target_state, "failed", validation_message)
 		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % validation_message
 		return
 	var estimate := CostService.estimate_request(provider_id, request)
@@ -142,6 +150,7 @@ func _queue_graph(
 		"run_id": run_id,
 		"estimate": estimate,
 	}
+	_set_batch_run_state(run_state, "waiting", "")
 	_refresh_cost_label(estimate)
 	if CostService.requires_confirmation(estimate):
 		_pending_budget_run = run_state
@@ -179,6 +188,7 @@ func _submit_provider_run(run_state: Dictionary) -> void:
 			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, unavailable]
 		)
 		_set_graph_status(run_state, "CONTENT_STATUS_FAILED", unavailable)
+		_set_batch_run_state(run_state, "failed", unavailable)
 		return
 	_pending_runs[task.id] = run_state
 	var estimate := float(run_state.get("estimate", -1.0))
@@ -186,6 +196,7 @@ func _submit_provider_run(run_state: Dictionary) -> void:
 		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % estimate if estimate >= 0.0 else ""
 	)
 	_set_graph_status(run_state, "CONTENT_STATUS_RUNNING", detail)
+	_set_batch_run_state(run_state, "running", detail)
 	task.progress_reported.connect(_on_progress)
 	task.finished.connect(_on_finished.bind(task.id))
 	task.failed.connect(_on_failed.bind(task.id))
@@ -258,6 +269,7 @@ func _on_finished(result: Variant, task_id: String) -> void:
 	if not bool(materialized.get("ok", false)):
 		var invalid_response := Strings.text("CONTENT_DETAIL_INVALID_RESPONSE")
 		_set_graph_status(state, "CONTENT_STATUS_FAILED", invalid_response)
+		_set_batch_run_state(state, "failed", invalid_response)
 		_status_label.text = (
 			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, invalid_response]
 		)
@@ -268,6 +280,7 @@ func _on_finished(result: Variant, task_id: String) -> void:
 		"CONTENT_STATUS_COMPLETE",
 		Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % asset_ids.size()
 	)
+	_set_batch_run_state(state, "complete", "", asset_ids.size())
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if not batch_card_id.is_empty():
 		_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
@@ -288,6 +301,7 @@ func _on_failed(error: Dictionary, task_id: String) -> void:
 	if message.is_empty():
 		message = Strings.text("CONTENT_DETAIL_UNKNOWN_ERROR")
 	_set_graph_status(state, "CONTENT_STATUS_FAILED", message)
+	_set_batch_run_state(state, "failed", message)
 	_status_label.text = (
 		Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
 		% [String(state.get("provider_name", "Provider")), message]
@@ -298,6 +312,7 @@ func _on_canceled(task_id: String) -> void:
 	var state: Dictionary = _pending_runs.get(task_id, {})
 	_pending_runs.erase(task_id)
 	_set_graph_status(state, "CONTENT_STATUS_CANCELED", Strings.text("CONTENT_DETAIL_CANCELED"))
+	_set_batch_run_state(state, "canceled", Strings.text("CONTENT_DETAIL_CANCELED"))
 	_status_label.text = (
 		Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT
 		% String(state.get("provider_name", "Provider"))
@@ -311,6 +326,32 @@ func _set_graph_status(state: Dictionary, status_key: String, detail: String = "
 		_canvas._set_graph_node_status(
 			graph.id, String(state.get("generate_node_id", "")), status_key, detail
 		)
+
+
+func _set_batch_run_state(
+	state: Dictionary, status: String, detail: String, completed_count: int = -1
+) -> void:
+	var graph: PFGraph = state.get("graph")
+	var batch_node_id := String(state.get("batch_node_id", ""))
+	if graph == null or batch_node_id.is_empty():
+		return
+	var params := graph.get_node_params(batch_node_id)
+	var request: Dictionary = state.get("request", {})
+	var previous_state: Dictionary = params.get("run_state", {})
+	var expected_count := (
+		completed_count
+		if completed_count >= 0
+		else maxi(1, int(request.get("batch", previous_state.get("expected_count", 1))))
+	)
+	params["run_state"] = {
+		"status": status,
+		"expected_count": expected_count,
+		"detail": detail,
+		"run_id": String(state.get("run_id", "")),
+	}
+	graph.set_node_params(batch_node_id, params)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+	_canvas._refresh_graph_batch_card(graph.id, batch_node_id)
 
 
 func _refresh_cost_label(estimate: float = -1.0) -> void:

@@ -523,6 +523,7 @@ func _connect_services() -> void:
 	_canvas.graph_status.connect(_on_canvas_graph_status)
 	_canvas.graph_node_params_commit_requested.connect(_m2_1_ui.apply_graph_node_params)
 	_canvas.graph_node_action_requested.connect(_on_graph_node_action_requested)
+	_canvas.batch_run_action_requested.connect(_m2_1_ui._handle_batch_run_action)
 	_cleanup_inspector.apply_requested.connect(_apply_cleanup_to_selection)
 	_cleanup_inspector.preview_requested.connect(_request_cleanup_preview)
 	_cleanup_inspector.cancel_requested.connect(_cancel_cleanup_task)
