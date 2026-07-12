@@ -22,7 +22,7 @@ func setup(dialog_parent: Node, bottom_bar: Control, status_label: Label) -> voi
 	_file_dialog = FileDialog.new()
 	_file_dialog.name = "ExportDialog"
 	DialogScalePolicy.configure_file_dialog(_file_dialog)
-	_file_dialog.title = Strings.DIALOG_EXPORT_PNG
+	_file_dialog.title = Strings.text("DIALOG_EXPORT_PNG")
 	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_file_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
 	_file_dialog.filters = PackedStringArray(["*.png ; PNG Image"])
@@ -32,29 +32,30 @@ func setup(dialog_parent: Node, bottom_bar: Control, status_label: Label) -> voi
 
 	_overwrite_dialog = ConfirmationDialog.new()
 	_overwrite_dialog.name = "ExportOverwriteDialog"
-	_overwrite_dialog.title = Strings.DIALOG_EXPORT_OVERWRITE_TITLE
-	_overwrite_dialog.get_ok_button().text = Strings.ACTION_OVERWRITE
+	_overwrite_dialog.title = Strings.text("DIALOG_EXPORT_OVERWRITE_TITLE")
+	_overwrite_dialog.get_ok_button().text = Strings.text("ACTION_OVERWRITE")
 	_overwrite_dialog.confirmed.connect(_perform_pending_export)
 	_overwrite_dialog.canceled.connect(cancel_overwrite)
 	dialog_parent.add_child(_overwrite_dialog)
 
 	_notice_dialog = AcceptDialog.new()
 	_notice_dialog.name = "ExportNoticeDialog"
-	_notice_dialog.title = Strings.DIALOG_EXPORT_RESULT_TITLE
+	_notice_dialog.title = Strings.text("DIALOG_EXPORT_RESULT_TITLE")
 	dialog_parent.add_child(_notice_dialog)
 
 	_open_folder_button = Button.new()
 	_open_folder_button.name = "OpenExportFolderButton"
-	_open_folder_button.text = Strings.ACTION_OPEN_EXPORT_FOLDER
+	_open_folder_button.text = Strings.text("ACTION_OPEN_EXPORT_FOLDER")
 	_open_folder_button.visible = false
 	_open_folder_button.pressed.connect(open_output_folder)
 	bottom_bar.add_child(_open_folder_button)
+	LocalizationService.language_changed.connect(_refresh_localized_text)
 
 
 func request_export(snapshots: Array, default_file: String) -> void:
 	_pending_snapshots = snapshots.duplicate()
 	if _pending_snapshots.is_empty():
-		_status_label.text = Strings.STATUS_EXPORT_EMPTY
+		_status_label.text = Strings.text("STATUS_EXPORT_EMPTY")
 		return
 	_file_dialog.current_file = default_file
 	_file_dialog.popup_centered_ratio(0.7)
@@ -68,7 +69,7 @@ func choose_path(path: String) -> void:
 	var conflicts := _existing_output_paths(_pending_path, _pending_snapshots.size())
 	if not conflicts.is_empty():
 		_overwrite_dialog.dialog_text = (
-			Strings.DIALOG_EXPORT_OVERWRITE_BODY_FORMAT % "\n".join(conflicts)
+			Strings.text("DIALOG_EXPORT_OVERWRITE_BODY_FORMAT") % "\n".join(conflicts)
 		)
 		_overwrite_dialog.popup_centered()
 		return
@@ -78,7 +79,7 @@ func choose_path(path: String) -> void:
 func cancel_overwrite() -> void:
 	_pending_path = ""
 	_overwrite_dialog.hide()
-	_status_label.text = Strings.STATUS_EXPORT_CANCELED
+	_status_label.text = Strings.text("STATUS_EXPORT_CANCELED")
 
 
 func open_output_folder() -> void:
@@ -146,7 +147,7 @@ func _show_success(result: Dictionary) -> void:
 	var display_paths := []
 	for path in created:
 		display_paths.append(_display_path(String(path)))
-	_status_label.text = Strings.STATUS_EXPORT_SUCCESS_FORMAT % ", ".join(display_paths)
+	_status_label.text = Strings.text("STATUS_EXPORT_SUCCESS_FORMAT") % ", ".join(display_paths)
 
 
 func _show_failure(result: Dictionary) -> void:
@@ -162,18 +163,26 @@ func _show_failure(result: Dictionary) -> void:
 
 
 static func format_failure_summary(expected: Array, created: Array, error: Error) -> String:
-	var created_text := Strings.EXPORT_NONE_CREATED
+	var created_text := Strings.text("EXPORT_NONE_CREATED")
 	if not created.is_empty():
-		created_text = Strings.EXPORT_CREATED_FORMAT % ", ".join(created)
+		created_text = Strings.text("EXPORT_CREATED_FORMAT") % ", ".join(created)
 	var missing := []
 	for path in expected:
 		if not created.has(path):
 			missing.append(String(path))
-	var missing_text := Strings.EXPORT_MISSING_FORMAT % ", ".join(missing)
+	var missing_text := Strings.text("EXPORT_MISSING_FORMAT") % ", ".join(missing)
 	return (
-		Strings.STATUS_EXPORT_FAILED_DETAIL_FORMAT
+		Strings.text("STATUS_EXPORT_FAILED_DETAIL_FORMAT")
 		% [error_string(error), created_text, missing_text]
 	)
+
+
+func _refresh_localized_text(_preference: String, _locale: String) -> void:
+	_file_dialog.title = Strings.text("DIALOG_EXPORT_PNG")
+	_overwrite_dialog.title = Strings.text("DIALOG_EXPORT_OVERWRITE_TITLE")
+	_overwrite_dialog.get_ok_button().text = Strings.text("ACTION_OVERWRITE")
+	_notice_dialog.title = Strings.text("DIALOG_EXPORT_RESULT_TITLE")
+	_open_folder_button.text = Strings.text("ACTION_OPEN_EXPORT_FOLDER")
 
 
 func _existing_output_paths(png_path: String, snapshot_count: int) -> Array:

@@ -39,7 +39,7 @@ func configure_for_node(
 	_node_id = node_id
 	_node = node
 	_base_params = params.duplicate(true)
-	title = Strings.DIALOG_GRAPH_NODE_PARAMS_TITLE % node.get_display_name()
+	title = (Strings.text("DIALOG_GRAPH_NODE_PARAMS_TITLE_FORMAT") % _localized_node_name(node))
 	_clear_fields()
 	for schema in node.get_param_schema():
 		_add_schema_field(schema, _base_params.get(schema.get("key", ""), schema.get("default")))
@@ -69,13 +69,14 @@ func _ensure_built() -> void:
 	if _built:
 		return
 	_built = true
-	ok_button_text = Strings.DIALOG_APPLY
-	cancel_button_text = Strings.DIALOG_CANCEL
+	ok_button_text = Strings.text("ACTION_APPLY")
+	cancel_button_text = Strings.text("ACTION_CANCEL")
 	min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
 	_root = VBoxContainer.new()
 	_root.add_theme_constant_override("separation", ROOT_SEPARATION)
 	add_child(_root)
 	confirmed.connect(_emit_params)
+	LocalizationService.language_changed.connect(_on_language_changed)
 
 
 func _emit_params() -> void:
@@ -194,20 +195,30 @@ func _set_control_value(control: Control, value: Variant) -> void:
 
 func _label_text(schema: Dictionary) -> String:
 	var label_key := String(schema.get("label_key", ""))
-	var labels := {
-		"GRAPH_PARAM_OBJECT_LIST": Strings.GRAPH_PARAM_OBJECT_LIST,
-		"GRAPH_PARAM_WIDTH": Strings.GRAPH_PARAM_WIDTH,
-		"GRAPH_PARAM_HEIGHT": Strings.GRAPH_PARAM_HEIGHT,
-		"GRAPH_PARAM_PER_SUBJECT": Strings.GRAPH_PARAM_PER_SUBJECT,
-		"GRAPH_PARAM_PROVIDER": Strings.GRAPH_PARAM_PROVIDER,
-		"GRAPH_PARAM_BATCH_SIZE": Strings.GRAPH_PARAM_BATCH_SIZE,
-		"GRAPH_PARAM_SEED": Strings.GRAPH_PARAM_SEED,
-		"GRAPH_PARAM_REFERENCE_ASSET": Strings.text("GRAPH_PARAM_REFERENCE_ASSET"),
-		"BATCH_DEFAULT_LABEL": Strings.BATCH_DEFAULT_LABEL,
+	var fallback := Strings.GRAPH_PARAM_UNKNOWN_FORMAT % String(schema.get("key", "")).capitalize()
+	return Strings.text(label_key, fallback) if not label_key.is_empty() else fallback
+
+
+func _localized_node_name(node: PFNode) -> String:
+	var keys := {
+		"object_list": "NODE_OBJECT_LIST",
+		"image_input": "NODE_IMAGE_INPUT",
+		"size_spec": "NODE_SIZE_SPEC",
+		"ai_generate": "NODE_AI_GENERATE",
+		"batch": "NODE_BATCH",
 	}
-	return String(
-		labels.get(
-			label_key,
-			Strings.GRAPH_PARAM_UNKNOWN_FORMAT % String(schema.get("key", "")).capitalize()
-		)
+	var key := String(keys.get(node.get_type(), ""))
+	return (
+		Strings.text(key, node.get_display_name())
+		if not key.is_empty()
+		else node.get_display_name()
 	)
+
+
+func _on_language_changed(_preference: String, _locale: String) -> void:
+	ok_button_text = Strings.text("ACTION_APPLY")
+	cancel_button_text = Strings.text("ACTION_CANCEL")
+	if _node == null:
+		return
+	var current_params := get_params()
+	configure_for_node(_graph_id, _node_id, _node, current_params)

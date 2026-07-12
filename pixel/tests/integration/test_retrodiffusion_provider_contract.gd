@@ -174,6 +174,8 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 
 func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	ProjectService.new_project("RetroDiffusion UI")
+	ProjectService._pending_recovery_autosaves.clear()
+	SettingsService.set_setting("onboarding", "v1_complete", true)
 	var main: Control = MainScript.new()
 	main.size = Vector2(1280, 800)
 	add_child_autofree(main)
@@ -181,6 +183,7 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 
 	var controller: Node = main.get_node("M21UiController")
 	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	main.get_node("RecoveryDialog").hide()
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
@@ -213,7 +216,7 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	canvas.select_ids([batch_item_id])
 	controller.run_selected_mock_graph()
 	var budget_dialog: ConfirmationDialog = controller._openai_flow.get_budget_dialog()
-	assert_true(budget_dialog.visible)
+	assert_true(await _wait_until(func() -> bool: return budget_dialog.visible, 1.0))
 	assert_string_contains(budget_dialog.dialog_text, "$1.00")
 	assert_eq(
 		canvas._items_by_id[generate_item_id]._status_badge, Strings.text("CONTENT_STATUS_WAITING")

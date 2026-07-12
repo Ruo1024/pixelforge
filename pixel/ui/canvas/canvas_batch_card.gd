@@ -4,6 +4,8 @@ extends Node2D
 ## M2.1 批次内容卡（无连线 MVP）。
 ## M3 过渡期同时支持旧 batch_card 和正式 graph batch 节点引用的渲染。
 
+signal collapsed_change_requested(item_id: String, collapsed: bool)
+
 const IdUtil := preload("res://core/util/id_util.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
@@ -53,6 +55,7 @@ const CHECKER_DARK := Color(0.1, 0.105, 0.11, 1.0)
 const INSPECT_GRID := Color(1.0, 1.0, 1.0, 0.16)
 const HINT_BACKGROUND := Color(0.02, 0.025, 0.03, 0.78)
 const BADGE_BACKGROUND := Color(0.12, 0.08, 0.06, 0.92)
+const COLLAPSED_HEIGHT := 100
 
 var item_id := ""
 var graph_id := ""
@@ -67,12 +70,14 @@ var compare_mode := COMPARE_CURRENT
 var review_layout := LAYOUT_CONTACT
 var label := ""
 var locked := false
+var collapsed := false
 
 var _thumbnail_textures := {}
 var _asset_hints := {}
 var _font: Font = null
 var _lod_camera_zoom := 1.0
 var _has_graph_edge_error := false
+var _collapse_button: Button = null
 
 
 func setup_from_data(data: Dictionary) -> void:
@@ -101,6 +106,7 @@ func setup_from_data(data: Dictionary) -> void:
 		String(graph_params.get("compare_mode", data.get("compare_mode", COMPARE_CURRENT)))
 	)
 	review_layout = _normalize_review_layout(String(data.get("review_layout", LAYOUT_CONTACT)))
+	collapsed = bool(data.get("collapsed", false))
 	_prune_selected_to_visible()
 	_prune_focus_to_visible()
 	locked = bool(data.get("locked", false))
@@ -109,6 +115,7 @@ func setup_from_data(data: Dictionary) -> void:
 	position = Vector2(float(raw_position[0]), float(raw_position[1])).round()
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_rebuild_thumbnails()
+	_rebuild_header_controls()
 	queue_redraw()
 
 
@@ -121,7 +128,7 @@ func to_canvas_data() -> Dictionary:
 			"node_id": node_id,
 			"position": [int(round(position.x)), int(round(position.y))],
 			"z_index": z_index,
-			"collapsed": false,
+			"collapsed": collapsed,
 			"review_layout": review_layout,
 			"locked": locked,
 		}
@@ -140,6 +147,7 @@ func to_canvas_data() -> Dictionary:
 		"position": [int(round(position.x)), int(round(position.y))],
 		"z_index": z_index,
 		"locked": locked,
+		"collapsed": collapsed,
 	}
 
 
@@ -161,6 +169,14 @@ func set_lod_camera_zoom(camera_zoom_value: float) -> void:
 
 func contains_world_point(world_position: Vector2) -> bool:
 	return get_canvas_bounds().has_point(world_position)
+
+
+func _set_collapsed(value: bool) -> void:
+	if collapsed == value:
+		return
+	collapsed = value
+	_rebuild_header_controls()
+	queue_redraw()
 
 
 func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
@@ -345,6 +361,8 @@ func toggle_asset_at_world(world_position: Vector2) -> bool:
 
 
 func asset_index_at_world(world_position: Vector2) -> int:
+	if collapsed:
+		return -1
 	var local := world_position - position
 	if local.y < HEADER_HEIGHT:
 		return -1
@@ -391,6 +409,10 @@ func _draw() -> void:
 			Color(0.9, 0.92, 0.92, 1.0)
 		)
 		_draw_graph_status_badge()
+	if collapsed:
+		if has_graph_binding():
+			_draw_graph_ports()
+		return
 
 	if review_layout == LAYOUT_FOCUS:
 		_draw_focus_layout(visible_ids)
@@ -583,6 +605,8 @@ func _filmstrip_rect(slot_index: int) -> Rect2:
 
 
 func _card_height() -> int:
+	if collapsed:
+		return COLLAPSED_HEIGHT
 	var visible_count := get_visible_asset_ids().size()
 	if visible_count <= 0:
 		return MIN_CARD_HEIGHT
@@ -622,7 +646,7 @@ func _draw_graph_status_badge() -> void:
 	if not _has_graph_edge_error or _font == null:
 		return
 	var badge_size := Vector2(78, 18)
-	var badge_rect := Rect2(Vector2(CARD_WIDTH - PADDING - badge_size.x, 11), badge_size)
+	var badge_rect := Rect2(Vector2(CARD_WIDTH - PADDING - 30 - badge_size.x, 11), badge_size)
 	draw_rect(badge_rect, BADGE_BACKGROUND, true)
 	draw_rect(badge_rect, EDGE_ERROR_BORDER, false, 1.0)
 	draw_string(
@@ -634,6 +658,24 @@ func _draw_graph_status_badge() -> void:
 		11,
 		EDGE_ERROR_BORDER
 	)
+
+
+func _rebuild_header_controls() -> void:
+	if _collapse_button == null:
+		_collapse_button = Button.new()
+		_collapse_button.name = "CollapseButton"
+		_collapse_button.focus_mode = Control.FOCUS_NONE
+		_collapse_button.mouse_filter = Control.MOUSE_FILTER_STOP
+		_collapse_button.pressed.connect(
+			func() -> void: collapsed_change_requested.emit(item_id, not collapsed)
+		)
+		add_child(_collapse_button)
+	_collapse_button.text = "+" if collapsed else "−"
+	_collapse_button.tooltip_text = Strings.text(
+		"ACTION_EXPAND_MODULE" if collapsed else "ACTION_COLLAPSE_MODULE"
+	)
+	_collapse_button.position = Vector2(CARD_WIDTH - 28, 7)
+	_collapse_button.size = Vector2(24, 24)
 
 
 func _graph_has_edge_error() -> bool:

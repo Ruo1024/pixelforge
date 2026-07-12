@@ -6,6 +6,7 @@ extends Node2D
 
 signal params_commit_requested(graph_id: String, node_id: String, params: Dictionary)
 signal action_requested(graph_id: String, node_id: String, action_id: String)
+signal collapsed_change_requested(item_id: String, collapsed: bool)
 
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
@@ -63,6 +64,7 @@ var _run_button: Button = null
 var _cancel_button: Button = null
 var _execution_detail_label: Label = null
 var _reference_field: Control = null
+var _collapse_button: Button = null
 var _params_snapshot := {}
 
 
@@ -80,6 +82,7 @@ func setup_from_data(data: Dictionary) -> void:
 		LocalizationService.language_changed.connect(_on_language_changed)
 	_resolve_graph_node()
 	_rebuild_content_controls()
+	_rebuild_header_controls()
 	queue_redraw()
 
 
@@ -111,6 +114,16 @@ func is_graph_node() -> bool:
 func refresh_from_graph() -> void:
 	_resolve_graph_node()
 	_rebuild_content_controls()
+	_rebuild_header_controls()
+	queue_redraw()
+
+
+func set_collapsed(value: bool) -> void:
+	if collapsed == value:
+		return
+	collapsed = value
+	_rebuild_content_controls()
+	_rebuild_header_controls()
 	queue_redraw()
 
 
@@ -299,7 +312,10 @@ func _draw_status_badge() -> void:
 	if _status_badge.is_empty() or _font == null:
 		return
 	var badge_size := Vector2(72, 18)
-	var badge_rect := Rect2(Vector2(_card_size().x - PADDING - badge_size.x, 8), badge_size)
+	var disclosure_space := 28.0 if _collapse_button != null else 0.0
+	var badge_rect := Rect2(
+		Vector2(_card_size().x - PADDING - disclosure_space - badge_size.x, 8), badge_size
+	)
 	draw_rect(badge_rect, BADGE_BACKGROUND, true)
 	draw_rect(badge_rect, _border_color(), false, 1.0)
 	draw_string(
@@ -345,7 +361,7 @@ func _is_content_node() -> bool:
 func _rebuild_content_controls() -> void:
 	if _content_root != null:
 		remove_child(_content_root)
-		_content_root.queue_free()
+		_content_root.free()
 		_content_root = null
 	_object_edit = null
 	_provider_option = null
@@ -374,6 +390,29 @@ func _rebuild_content_controls() -> void:
 			_build_size_controls()
 		"image_input":
 			_build_reference_controls()
+
+
+func _rebuild_header_controls() -> void:
+	if not _is_content_node() or _is_ghost:
+		if _collapse_button != null:
+			_collapse_button.visible = false
+		return
+	if _collapse_button == null:
+		_collapse_button = Button.new()
+		_collapse_button.name = "CollapseButton"
+		_collapse_button.focus_mode = Control.FOCUS_NONE
+		_collapse_button.mouse_filter = Control.MOUSE_FILTER_STOP
+		_collapse_button.pressed.connect(
+			func() -> void: collapsed_change_requested.emit(item_id, not collapsed)
+		)
+		add_child(_collapse_button)
+	_collapse_button.visible = true
+	_collapse_button.text = "+" if collapsed else "−"
+	_collapse_button.tooltip_text = Strings.text(
+		"ACTION_EXPAND_MODULE" if collapsed else "ACTION_COLLAPSE_MODULE"
+	)
+	_collapse_button.position = Vector2(_card_size().x - 28, 4)
+	_collapse_button.size = Vector2(24, 24)
 
 
 func _build_object_list_controls() -> void:
@@ -413,6 +452,12 @@ func _build_generate_controls() -> void:
 	_provider_option.item_selected.connect(func(_index: int) -> void: _commit_generate_params())
 	provider_row.add_child(_provider_option)
 	_content_root.add_child(provider_row)
+
+	var style_label := Label.new()
+	style_label.name = "StyleSummary"
+	style_label.text = _project_style_summary()
+	style_label.tooltip_text = Strings.text("CONTENT_STYLE_SOURCE_HINT")
+	_content_root.add_child(style_label)
 
 	var settings_row := HBoxContainer.new()
 	_batch_size_spin = _make_spin("BatchSize", 1, 16, int(_params_snapshot.get("batch_size", 1)))
@@ -578,6 +623,26 @@ func _object_count() -> int:
 	return count
 
 
+func _project_style_summary() -> String:
+	var style_value: Variant = ProjectService.current_project.manifest.get("style_preset", {})
+	if not (style_value is Dictionary) or Dictionary(style_value).is_empty():
+		return Strings.text("CONTENT_STYLE_DEFAULT")
+	var style: Dictionary = style_value
+	var base_size := int(style.get("base_size", 0))
+	var palette_value: Variant = style.get("palette", {})
+	var palette_ref := ""
+	if palette_value is Dictionary:
+		palette_ref = String(Dictionary(palette_value).get("ref", ""))
+	var detail_parts: Array[String] = []
+	if base_size > 0:
+		detail_parts.append("%d px" % base_size)
+	if not palette_ref.is_empty():
+		detail_parts.append(palette_ref)
+	if detail_parts.is_empty():
+		detail_parts.append(String(style.get("name", Strings.text("CONTENT_STYLE_PROJECT"))))
+	return Strings.text("CONTENT_STYLE_SUMMARY_FORMAT") % " · ".join(detail_parts)
+
+
 func _localized_display_name(node: PFNode) -> String:
 	var key_by_type := {
 		"object_list": "NODE_OBJECT_LIST",
@@ -596,6 +661,7 @@ func _localized_display_name(node: PFNode) -> String:
 func _on_language_changed(_preference: String, _locale: String) -> void:
 	_resolve_graph_node()
 	_rebuild_content_controls()
+	_rebuild_header_controls()
 	queue_redraw()
 
 

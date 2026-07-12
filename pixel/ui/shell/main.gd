@@ -367,7 +367,7 @@ func _build_ui() -> void:
 	root.add_child(bottom_bar)
 
 	_status_label = Label.new()
-	_status_label.text = Strings.STATUS_READY
+	_status_label.text = Strings.text("STATUS_READY")
 	_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_status_label.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
@@ -545,7 +545,7 @@ func _create_new_project() -> void:
 func _perform_new_project() -> void:
 	ProjectService.new_project("Untitled")
 	_canvas.clear_canvas()
-	_status_label.text = Strings.STATUS_READY
+	_status_label.text = Strings.text("STATUS_READY")
 	_update_window_title()
 
 
@@ -636,23 +636,23 @@ func _on_project_loaded(project: Variant) -> void:
 	_canvas.load_canvas_data(project.canvas)
 	_context_inspector.show_context({})
 	_sync_cleanup_inspector_with_project(project)
-	_status_label.text = Strings.STATUS_READY
+	_status_label.text = Strings.text("STATUS_READY")
 	_update_window_title()
 
 
 func _on_project_saved(_path: String) -> void:
-	_status_label.text = Strings.STATUS_SAVED
+	_status_label.text = Strings.text("STATUS_SAVED")
 	_update_window_title()
 
 
 func _on_dirty_changed(is_dirty: bool) -> void:
-	_status_label.text = Strings.STATUS_DIRTY if is_dirty else Strings.STATUS_READY
+	_status_label.text = Strings.text("STATUS_DIRTY") if is_dirty else Strings.text("STATUS_READY")
 	_update_window_title()
 
 
 func _on_custom_palettes_changed() -> void:
 	ProjectService.mark_dirty()
-	_status_label.text = Strings.STATUS_DIRTY
+	_status_label.text = Strings.text("STATUS_DIRTY")
 	_update_window_title()
 
 

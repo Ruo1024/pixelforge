@@ -2,6 +2,7 @@ extends "res://addons/gut/test.gd"
 
 const MainScript := preload("res://ui/shell/main.gd")
 const Strings := preload("res://ui/shell/strings.gd")
+const GraphScript := preload("res://core/graph/pf_graph.gd")
 
 
 func before_each() -> void:
@@ -73,7 +74,6 @@ func test_empty_reference_import_creates_real_node_and_undo_keeps_asset() -> voi
 	assert_eq(graph["nodes"][0]["type"], "image_input")
 	assert_eq(graph["nodes"][0]["params"]["asset_id"], asset_id)
 	assert_eq(canvas.get_item_count(), 1)
-
 	UndoService.undo()
 	assert_eq(ProjectService.current_project.graphs.size(), 0)
 	assert_eq(canvas.get_item_count(), 0)
@@ -81,6 +81,97 @@ func test_empty_reference_import_creates_real_node_and_undo_keeps_asset() -> voi
 	UndoService.redo()
 	assert_eq(ProjectService.current_project.graphs.size(), 1)
 	assert_eq(canvas.get_item_count(), 1)
+
+
+func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
+	var main := await _make_main()
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var hint: Control = canvas.get_node("EmptyCanvasImportHint")
+	var controller: Node = main.get_node("M21UiController")
+	(hint.get_node("EmptyContent/EmptyActions/AddInput") as Button).pressed.emit()
+	await wait_process_frames(2)
+
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var object_node_id := "objects"
+	assert_true(
+		controller.apply_graph_node_params(
+			graph_id, object_node_id, {"items": "barrel\ncrate\nlantern"}
+		)
+	)
+	var size_node_id: String = controller.add_graph_node_to_selected_graph("size_spec")
+	var reference_node_id: String = controller.add_graph_node_to_selected_graph("image_input")
+	var generate_node_id: String = controller.add_graph_node_to_selected_graph("ai_generate")
+	var batch_node_id: String = controller.add_graph_node_to_selected_graph("batch")
+	for node_id in [size_node_id, reference_node_id, generate_node_id, batch_node_id]:
+		assert_false(String(node_id).is_empty())
+
+	var reference := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	reference.fill(Color.DARK_ORANGE)
+	var reference_asset_id := AssetLibrary.register_image(
+		reference, "blank_reference", {"origin": "imported"}
+	)
+	assert_true(
+		controller.apply_graph_node_params(
+			graph_id, reference_node_id, {"asset_id": reference_asset_id}
+		)
+	)
+	assert_true(
+		controller.apply_graph_node_params(
+			graph_id, generate_node_id, {"provider_id": "mock", "batch_size": 3, "seed": 42}
+		)
+	)
+
+	var graph := GraphScript.from_json(ProjectService.get_graph_data(graph_id))
+	assert_true(graph.add_edge(object_node_id, "items", generate_node_id, "items")["ok"])
+	assert_true(graph.add_edge(size_node_id, "spec", generate_node_id, "spec")["ok"])
+	assert_true(graph.add_edge(reference_node_id, "image", generate_node_id, "image")["ok"])
+	assert_true(graph.add_edge(generate_node_id, "images", batch_node_id, "in")["ok"])
+	ProjectService.set_graph_data(graph_id, graph.to_json(), true)
+	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], batch_node_id)
+	canvas.select_ids([batch_item_id])
+	controller.run_selected_mock_graph()
+	await wait_process_frames(2)
+
+	var result_asset_ids: Array = canvas._get_batch_asset_ids(batch_item_id)
+	assert_eq(result_asset_ids.size(), 9)
+	var saved_graph: Dictionary = ProjectService.get_graph_data(graph_id)
+	assert_eq(_node_data(saved_graph, batch_node_id)["params"]["asset_ids"].size(), 9)
+	assert_eq(
+		(
+			AssetLibrary
+			. get_asset_meta(
+				String(_node_data(saved_graph, batch_node_id)["params"]["asset_ids"][0])
+			)["provenance"]["reference_asset_id"]
+		),
+		reference_asset_id
+	)
+	var generate_item_id: String = _item_id_for_node(
+		canvas.export_canvas_data()["items"], generate_node_id
+	)
+	assert_true(canvas._set_graph_node_collapsed(generate_item_id, true, false))
+	assert_true(canvas._set_batch_collapsed(batch_item_id, true, false))
+	assert_eq(
+		canvas._set_batch_review_state(batch_item_id, [result_asset_ids[0]], "keep", false), 1
+	)
+	var roundtrip_path := "user://tests/beta02_blank_chain_roundtrip.pxproj"
+	assert_eq(ProjectService.save_project(roundtrip_path), OK)
+	assert_eq(ProjectService.open_project(roundtrip_path), OK)
+	var loaded_graph: Dictionary = ProjectService.get_graph_data(graph_id)
+	assert_eq(_node_data(loaded_graph, batch_node_id)["params"]["asset_ids"], result_asset_ids)
+	assert_eq(
+		_node_data(loaded_graph, batch_node_id)["params"]["review_states"][result_asset_ids[0]],
+		"keep"
+	)
+	assert_eq(
+		(
+			AssetLibrary
+			. get_asset_meta(String(result_asset_ids[0]))["provenance"]["reference_asset_id"]
+		),
+		reference_asset_id
+	)
+	var loaded_canvas_items: Array = ProjectService.current_project.canvas["items"]
+	assert_true(_item_data_for_node(loaded_canvas_items, generate_node_id)["collapsed"])
+	assert_true(_item_data_for_node(loaded_canvas_items, batch_node_id)["collapsed"])
 
 
 func test_offline_example_is_one_undoable_reference_to_batch_workspace() -> void:
@@ -189,6 +280,17 @@ func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> vo
 		),
 		Strings.text("BATCH_ACTION_MARK_KEEP")
 	)
+	var graph_menu_texts := []
+	for index in range(controller._graph_add_menu.item_count):
+		graph_menu_texts.append(controller._graph_add_menu.get_item_text(index))
+	assert_has(graph_menu_texts, Strings.text("NODE_BATCH"))
+	assert_has(graph_menu_texts, Strings.text("NODE_AI_GENERATE"))
+	assert_false(graph_menu_texts.has("AI Generate"))
+	assert_eq(
+		main.get_node("M21UiController/ImportImagesDialog").title,
+		Strings.text("DIALOG_IMPORT_IMAGES")
+	)
+	assert_eq(main.get_node("ExportDialog").title, Strings.text("DIALOG_EXPORT_PNG"))
 	var settings_dialog: ConfirmationDialog = main.get_node(
 		"WorkspaceSettingsController/WorkspaceSettingsDialog"
 	)
@@ -219,6 +321,11 @@ func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> vo
 		cleanup.find_child("ResampleOptions", true, false).get_item_text(0),
 		Strings.text("CLEANUP_RESAMPLE_MODE")
 	)
+	controller._m2_actions.batch_cleanup("", [], {})
+	assert_eq(
+		(main.get_node("Root/BottomBar").get_child(0) as Label).text,
+		Strings.text("STATUS_CLEANUP_EMPTY")
+	)
 
 
 func _make_main() -> Control:
@@ -246,6 +353,22 @@ func _node_data(graph: Dictionary, node_id: String) -> Dictionary:
 
 func _node_type(graph: Dictionary, node_id: String) -> String:
 	return String(_node_data(graph, node_id).get("type", ""))
+
+
+func _item_id_for_node(items: Array, node_id: String) -> String:
+	for item_value in items:
+		var item: Dictionary = item_value
+		if String(item.get("node_id", "")) == node_id:
+			return String(item.get("id", ""))
+	return ""
+
+
+func _item_data_for_node(items: Array, node_id: String) -> Dictionary:
+	for item_value in items:
+		var item: Dictionary = item_value
+		if String(item.get("node_id", "")) == node_id:
+			return item
+	return {}
 
 
 func _has_edge(

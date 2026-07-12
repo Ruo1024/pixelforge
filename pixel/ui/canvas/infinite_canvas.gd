@@ -1,3 +1,4 @@
+# gdlint: disable=max-file-lines
 class_name PFInfiniteCanvas
 extends Control
 
@@ -895,6 +896,7 @@ func _add_sprite_direct(item_data: Dictionary, image: Image) -> Node:
 func _add_batch_direct(item_data: Dictionary) -> Node:
 	var item: Node = CanvasBatchCardScript.new()
 	item.setup_from_data(item_data)
+	item.collapsed_change_requested.connect(_set_batch_collapsed)
 	item.set_lod_camera_zoom(camera_zoom)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
@@ -903,6 +905,28 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 	_update_item_visibility()
 	queue_redraw()
 	return item
+
+
+func _set_batch_collapsed(item_id: String, value: bool, record_undo: bool = true) -> bool:
+	if not _items_by_id.has(item_id):
+		return false
+	var item: Node = _items_by_id[item_id]
+	if item.get_script() != CanvasBatchCardScript or item.collapsed == value:
+		return false
+	var before := bool(item.collapsed)
+	var apply := func(next_value: bool) -> void:
+		item._set_collapsed(next_value)
+		_update_item_visibility()
+		_emit_canvas_changed()
+	if record_undo:
+		UndoService.perform_action(
+			"Collapse result batch",
+			func() -> void: apply.call(value),
+			func() -> void: apply.call(before)
+		)
+	else:
+		apply.call(value)
+	return true
 
 
 func _add_node_direct(item_data: Dictionary) -> Node:
@@ -917,11 +941,34 @@ func _add_node_direct(item_data: Dictionary) -> Node:
 			_select_only([item.item_id])
 			graph_node_action_requested.emit(graph_id, node_id, action_id)
 	)
+	item.collapsed_change_requested.connect(_set_graph_node_collapsed)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
 	_update_item_visibility()
 	queue_redraw()
 	return item
+
+
+func _set_graph_node_collapsed(item_id: String, value: bool, record_undo: bool = true) -> bool:
+	if not _items_by_id.has(item_id):
+		return false
+	var item: Node = _items_by_id[item_id]
+	if item.get_script() != CanvasNodeCardScript or item.collapsed == value:
+		return false
+	var before := bool(item.collapsed)
+	var apply := func(next_value: bool) -> void:
+		item.set_collapsed(next_value)
+		_update_item_visibility()
+		_emit_canvas_changed()
+	if record_undo:
+		UndoService.perform_action(
+			"Collapse graph module",
+			func() -> void: apply.call(value),
+			func() -> void: apply.call(before)
+		)
+	else:
+		apply.call(value)
+	return true
 
 
 func _remove_item_direct(item_id: String) -> void:
@@ -955,6 +1002,7 @@ func _hit_at_world(world_position: Vector2) -> Dictionary:
 
 func _apply_positions(positions: Dictionary) -> void:
 	SelectionSnapshot.apply_positions(_items_by_id, positions)
+	GraphItemBridge.sync_graph_node_positions(_items_by_id, positions)
 	_sync_cleanup_grid_overlay()
 	queue_redraw()
 

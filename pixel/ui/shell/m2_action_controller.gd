@@ -44,12 +44,12 @@ func matte_selection_with_params(params: Dictionary) -> void:
 	)
 	task.finished.connect(
 		func(result: Variant) -> void:
-			_on_generated_asset_task_finished(result, Strings.STATUS_MATTING_DONE)
+			_on_generated_asset_task_finished(result, Strings.text("STATUS_MATTING_DONE"))
 	)
-	_connect_task_feedback(task, Strings.TASK_MATTING)
+	_connect_task_feedback(task, Strings.text("TASK_MATTING"))
 	_task_id = TaskQueue.submit(task)
 	_cleanup_inspector.set_cleanup_running(true)
-	_status_label.text = Strings.STATUS_MATTING_QUEUED
+	_status_label.text = Strings.text("STATUS_MATTING_QUEUED")
 
 
 func slice_selection() -> void:
@@ -64,12 +64,12 @@ func slice_selection_with_params(params: Dictionary) -> void:
 	var task := TaskScript.new("pixel_slicing", {"items": snapshots, "params": params}, _slice_work)
 	task.finished.connect(
 		func(result: Variant) -> void:
-			_on_generated_asset_task_finished(result, Strings.STATUS_SLICE_DONE)
+			_on_generated_asset_task_finished(result, Strings.text("STATUS_SLICE_DONE"))
 	)
-	_connect_task_feedback(task, Strings.TASK_SLICING)
+	_connect_task_feedback(task, Strings.text("TASK_SLICING"))
 	_task_id = TaskQueue.submit(task)
 	_cleanup_inspector.set_cleanup_running(true)
-	_status_label.text = Strings.STATUS_SLICE_QUEUED
+	_status_label.text = Strings.text("STATUS_SLICE_QUEUED")
 
 
 func outline_selection() -> void:
@@ -86,12 +86,12 @@ func outline_selection_with_params(params: Dictionary) -> void:
 	)
 	task.finished.connect(
 		func(result: Variant) -> void:
-			_on_generated_asset_task_finished(result, Strings.STATUS_OUTLINE_DONE)
+			_on_generated_asset_task_finished(result, Strings.text("STATUS_OUTLINE_DONE"))
 	)
-	_connect_task_feedback(task, Strings.TASK_OUTLINE)
+	_connect_task_feedback(task, Strings.text("TASK_OUTLINE"))
 	_task_id = TaskQueue.submit(task)
 	_cleanup_inspector.set_cleanup_running(true)
-	_status_label.text = Strings.STATUS_OUTLINE_QUEUED
+	_status_label.text = Strings.text("STATUS_OUTLINE_QUEUED")
 
 
 func batch_cleanup(card_id: String, asset_ids: Array, params: Dictionary) -> void:
@@ -101,8 +101,8 @@ func batch_cleanup(card_id: String, asset_ids: Array, params: Dictionary) -> voi
 		"batch_cleanup",
 		{"params": params},
 		_batch_cleanup_work,
-		Strings.STATUS_CLEANUP_QUEUED,
-		Strings.STATUS_CLEANUP_DONE
+		Strings.text("STATUS_CLEANUP_QUEUED"),
+		Strings.text("STATUS_CLEANUP_DONE")
 	)
 
 
@@ -113,8 +113,8 @@ func batch_matte(card_id: String, asset_ids: Array, params: Dictionary) -> void:
 		"batch_matting",
 		{"params": params},
 		_batch_matte_work,
-		Strings.STATUS_MATTING_QUEUED,
-		Strings.STATUS_MATTING_DONE
+		Strings.text("STATUS_MATTING_QUEUED"),
+		Strings.text("STATUS_MATTING_DONE")
 	)
 
 
@@ -125,8 +125,8 @@ func batch_outline(card_id: String, asset_ids: Array, params: Dictionary) -> voi
 		"batch_outline",
 		{"params": params},
 		_batch_outline_work,
-		Strings.STATUS_OUTLINE_QUEUED,
-		Strings.STATUS_OUTLINE_DONE
+		Strings.text("STATUS_OUTLINE_QUEUED"),
+		Strings.text("STATUS_OUTLINE_DONE")
 	)
 
 
@@ -140,7 +140,7 @@ func cancel_current_task() -> bool:
 func _selected_snapshots() -> Array:
 	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
 	if snapshots.is_empty():
-		_status_label.text = Strings.STATUS_CLEANUP_EMPTY
+		_status_label.text = Strings.text("STATUS_CLEANUP_EMPTY")
 	return snapshots
 
 
@@ -228,6 +228,7 @@ func _batch_cleanup_work(task_ref: Variant) -> Dictionary:
 			task_ref.report_progress(ratio, "batch_cleanup")
 	)
 	result["card_id"] = String(task_ref.payload["card_id"])
+	result["original_asset_ids"] = task_ref.payload.get("original_asset_ids", []).duplicate()
 	return result
 
 
@@ -244,6 +245,7 @@ func _batch_matte_work(task_ref: Variant) -> Dictionary:
 			task_ref.report_progress(ratio, "batch_matting")
 	)
 	result["card_id"] = String(task_ref.payload["card_id"])
+	result["original_asset_ids"] = task_ref.payload.get("original_asset_ids", []).duplicate()
 	return result
 
 
@@ -260,6 +262,7 @@ func _batch_outline_work(task_ref: Variant) -> Dictionary:
 			task_ref.report_progress(ratio, "batch_outline")
 	)
 	result["card_id"] = String(task_ref.payload["card_id"])
+	result["original_asset_ids"] = task_ref.payload.get("original_asset_ids", []).duplicate()
 	return result
 
 
@@ -268,10 +271,10 @@ func _on_generated_asset_task_finished(result: Variant, done_status: String) -> 
 	_cleanup_inspector.set_cleanup_running(false)
 	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
 	if not (result is Dictionary):
-		_status_label.text = Strings.STATUS_TASK_FAILED
+		_status_label.text = Strings.text("STATUS_TASK_FAILED")
 		return
 	if bool(result.get("canceled", false)):
-		_status_label.text = Strings.STATUS_TASK_CANCELED
+		_status_label.text = Strings.text("STATUS_TASK_CANCELED")
 		return
 
 	var first_warning := _first_warning(result.get("items", []))
@@ -313,19 +316,30 @@ func _start_batch_task(
 ) -> void:
 	var ids := _string_array(asset_ids)
 	if ids.is_empty():
-		_status_label.text = Strings.STATUS_CLEANUP_EMPTY
+		_status_label.text = Strings.text("STATUS_CLEANUP_EMPTY")
 		return
-	var task := TaskScript.new(
-		task_kind, {"card_id": card_id, "asset_ids": ids, "extra": extra}, work
+	var original_ids := _string_array(_canvas._get_batch_asset_ids(card_id, false))
+	var task := (
+		TaskScript
+		. new(
+			task_kind,
+			{
+				"card_id": card_id,
+				"asset_ids": ids,
+				"original_asset_ids": original_ids,
+				"extra": extra,
+			},
+			work
+		)
 	)
 	task.finished.connect(
 		func(result: Variant) -> void: _on_batch_task_finished(result, done_status)
 	)
-	var action_label := Strings.TASK_CLEANUP
+	var action_label := Strings.text("TASK_CLEANUP")
 	if task_kind.contains("matting"):
-		action_label = Strings.TASK_MATTING
+		action_label = Strings.text("TASK_MATTING")
 	elif task_kind.contains("outline"):
-		action_label = Strings.TASK_OUTLINE
+		action_label = Strings.text("TASK_OUTLINE")
 	_connect_task_feedback(task, action_label)
 	_task_id = TaskQueue.submit(task)
 	_cleanup_inspector.set_cleanup_running(true)
@@ -337,28 +351,36 @@ func _on_batch_task_finished(result: Variant, done_status: String) -> void:
 	_cleanup_inspector.set_cleanup_running(false)
 	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
 	if not (result is Dictionary):
-		_status_label.text = Strings.STATUS_TASK_FAILED
+		_status_label.text = Strings.text("STATUS_TASK_FAILED")
 		return
 	if bool(result.get("canceled", false)):
-		_status_label.text = Strings.STATUS_TASK_CANCELED
+		_status_label.text = Strings.text("STATUS_TASK_CANCELED")
 		return
 
 	var first_warning := _first_warning(result.get("items", []))
 	if not first_warning.is_empty():
 		ErrorHelper.show_matte_error(_dialog_parent, first_warning)
 
-	var new_asset_ids: Array[String] = []
-	var source_asset_ids: Array[String] = []
+	var replacement_by_parent := {}
 	for item_result in result.get("items", []):
 		var parent_asset_id := String(item_result.get("parent_asset", ""))
 		var asset_id := PixelOperations.register_result_asset(
 			AssetLibrary, parent_asset_id, item_result
 		)
-		new_asset_ids.append(asset_id)
-		source_asset_ids.append(parent_asset_id)
+		replacement_by_parent[parent_asset_id] = asset_id
+
+	var original_asset_ids := _string_array(result.get("original_asset_ids", []))
+	var merged_asset_ids: Array[String] = []
+	for original_asset_id in original_asset_ids:
+		merged_asset_ids.append(
+			String(replacement_by_parent.get(original_asset_id, original_asset_id))
+		)
+	if merged_asset_ids.is_empty():
+		for replacement in replacement_by_parent.values():
+			merged_asset_ids.append(String(replacement))
 
 	_canvas._replace_batch_asset_ids(
-		String(result.get("card_id", "")), new_asset_ids, true, source_asset_ids
+		String(result.get("card_id", "")), merged_asset_ids, true, original_asset_ids
 	)
 	_status_label.text = done_status
 
@@ -367,7 +389,8 @@ func _connect_task_feedback(task: Variant, action_label: String) -> void:
 	task.progress_reported.connect(
 		func(_task_id_value: String, ratio: float, _message: String) -> void:
 			_status_label.text = (
-				Strings.STATUS_TASK_RUNNING_FORMAT % [action_label, int(round(ratio * 100.0))]
+				Strings.text("STATUS_TASK_RUNNING_FORMAT")
+				% [action_label, int(round(ratio * 100.0))]
 			)
 	)
 	task.canceled.connect(_on_task_canceled)
@@ -378,14 +401,14 @@ func _on_task_canceled() -> void:
 	_task_id = ""
 	_cleanup_inspector.set_cleanup_running(false)
 	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
-	_status_label.text = Strings.STATUS_TASK_CANCELED
+	_status_label.text = Strings.text("STATUS_TASK_CANCELED")
 
 
 func _on_task_failed(_error: Dictionary) -> void:
 	_task_id = ""
 	_cleanup_inspector.set_cleanup_running(false)
 	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
-	_status_label.text = Strings.STATUS_TASK_FAILED
+	_status_label.text = Strings.text("STATUS_TASK_FAILED")
 
 
 func _matte_params(params: Dictionary) -> Dictionary:

@@ -1,3 +1,4 @@
+# gdlint: disable=max-public-methods
 extends "res://addons/gut/test.gd"
 
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
@@ -39,6 +40,28 @@ func test_canvas_batch_card_exports_asset_queue_and_can_split_subset() -> void:
 	assert_not_null(child)
 	assert_eq(child.asset_ids, [ids[0]])
 	assert_eq(canvas.get_item_count(), 2)
+
+
+func test_batch_card_header_collapse_is_persisted_and_undoable() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
+	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
+	var expanded_height: float = card.get_canvas_bounds().size.y
+	var collapse_button: Button = card.get_node("CollapseButton")
+	collapse_button.pressed.emit()
+
+	assert_true(card.collapsed)
+	assert_lt(card.get_canvas_bounds().size.y, expanded_height)
+	assert_true(canvas.export_canvas_data()["items"][0]["collapsed"])
+	assert_true(UndoService.undo())
+	assert_false(card.collapsed)
+	assert_eq(card.get_canvas_bounds().size.y, expanded_height)
+	assert_true(UndoService.redo())
+	assert_true(card.collapsed)
 
 
 func test_canvas_batch_card_marks_review_state_and_splits_kept_subset() -> void:
@@ -283,6 +306,41 @@ func test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement() 
 
 	assert_eq(reloaded_canvas.get_item_count(), 1)
 	assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), [green_id])
+
+
+func test_moving_graph_cards_updates_graph_positions_in_same_undo_action() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+
+	var ids := [_register_asset(Color.RED, "red")]
+	var graph := GraphScript.new()
+	graph.id = "graph_move_cards"
+	graph.add_node(ObjectListNodeScript.new(), "objects", {"items": "barrel"}, Vector2(10, 20))
+	graph.add_node(
+		BatchNodeScript.new(),
+		"batch_1",
+		{"label": "Candidates", "asset_ids": ids},
+		Vector2(300, 20)
+	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+	canvas._add_graph_node_card(graph.id, "objects", Vector2(10, 20), "objects_item", false)
+	canvas._add_batch_card(
+		ids, Vector2(300, 20), "Candidates", "batch_item", false, graph.id, "batch_1"
+	)
+	canvas.select_ids(["objects_item", "batch_item"])
+	canvas.move_selected_by(Vector2(15, 25), true)
+
+	var moved_graph: Dictionary = ProjectService.get_graph_data(graph.id)
+	assert_eq(_node_position(moved_graph, "objects"), [25, 45])
+	assert_eq(_node_position(moved_graph, "batch_1"), [315, 45])
+	assert_true(UndoService.undo())
+	var restored_graph: Dictionary = ProjectService.get_graph_data(graph.id)
+	assert_eq(_node_position(restored_graph, "objects"), [10, 20])
+	assert_eq(_node_position(restored_graph, "batch_1"), [300, 20])
+	assert_true(UndoService.redo())
+	assert_eq(_node_position(ProjectService.get_graph_data(graph.id), "objects"), [25, 45])
 
 
 func test_graph_batch_card_persists_review_state_in_graph_params() -> void:
@@ -568,6 +626,9 @@ func test_object_node_card_exposes_content_and_emits_atomic_param_commit() -> vo
 
 
 func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> void:
+	ProjectService.current_project.manifest["style_preset"] = {
+		"base_size": 32, "palette": {"ref": "db32"}
+	}
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(512, 512)
 	add_child_autofree(canvas)
@@ -594,6 +655,7 @@ func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> v
 	var cancel_button: Button = card.get_content_control("CancelButton")
 
 	assert_not_null(card.get_content_control("ProviderOption"))
+	assert_eq(card.get_content_control("StyleSummary").text, "Style: 32 px · db32")
 	assert_not_null(run_button)
 	assert_not_null(cancel_button)
 	assert_false(cancel_button.visible)
@@ -614,6 +676,18 @@ func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> v
 	assert_eq(card._status_badge, Strings.text("CONTENT_STATUS_CANCELED"))
 	assert_eq(card.get_content_control("ExecutionDetail").text, "Previous results preserved")
 	assert_false(card.to_canvas_data().has("execution_status"))
+
+	var collapse_button: Button = card.get_node("CollapseButton")
+	collapse_button.pressed.emit()
+	assert_true(card.collapsed)
+	assert_eq(card.get_canvas_bounds().size, Vector2(220, 116))
+	assert_null(card.get_content_control("RunButton"))
+	assert_true(UndoService.undo())
+	assert_false(card.collapsed)
+	assert_not_null(card.get_content_control("RunButton"))
+	assert_true(UndoService.redo())
+	assert_true(card.collapsed)
+	assert_true(card.to_canvas_data()["collapsed"])
 
 	var collapsed_card: Node = (
 		canvas
@@ -758,3 +832,11 @@ func _register_asset(color: Color, name: String) -> String:
 	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
 	image.fill(color)
 	return AssetLibrary.register_image(image, name, {"origin": "imported"})
+
+
+func _node_position(graph_data: Dictionary, node_id: String) -> Array:
+	for node_value in graph_data.get("nodes", []):
+		var node_data: Dictionary = node_value
+		if String(node_data.get("id", "")) == node_id:
+			return node_data.get("position", [])
+	return []

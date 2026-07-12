@@ -39,6 +39,7 @@ func setup(canvas: Control, status_label: Label, dialog_parent: Node) -> void:
 	_create_empty_hint()
 	_canvas.canvas_changed.connect(refresh_empty_hint)
 	ProjectService.project_loaded.connect(_on_project_loaded)
+	LocalizationService.language_changed.connect(_refresh_localized_text)
 
 
 func configure_file_menu(popup: PopupMenu, focus_menu_id: int, retry_menu_id: int) -> void:
@@ -81,7 +82,7 @@ func focus_last_import() -> void:
 		return
 	_focus_canvas_on_bounds(_bounds_for_items(items))
 	_canvas.select_ids(_last_import_item_ids)
-	_status_label.text = Strings.STATUS_IMPORT_FOCUSED
+	_status_label.text = Strings.text("STATUS_IMPORT_FOCUSED")
 
 
 func stable_import_anchor() -> Vector2:
@@ -97,7 +98,7 @@ func _create_dialogs(dialog_parent: Node) -> void:
 	_import_dialog = FileDialog.new()
 	_import_dialog.name = "ImportImagesDialog"
 	DialogScalePolicy.configure_file_dialog(_import_dialog)
-	_import_dialog.title = Strings.DIALOG_IMPORT_IMAGES
+	_import_dialog.title = Strings.text("DIALOG_IMPORT_IMAGES")
 	_import_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
 	_import_dialog.filters = PackedStringArray(["*.png ; PNG Image", "*.jpg,*.jpeg ; JPEG Image"])
@@ -117,8 +118,8 @@ func _create_dialogs(dialog_parent: Node) -> void:
 
 	_import_error_dialog = ConfirmationDialog.new()
 	_import_error_dialog.name = "ImportErrorDialog"
-	_import_error_dialog.title = Strings.DIALOG_IMPORT_FAILED_TITLE
-	_import_error_dialog.get_ok_button().text = Strings.ACTION_RETRY_IMPORT
+	_import_error_dialog.title = Strings.text("DIALOG_IMPORT_FAILED_TITLE")
+	_import_error_dialog.get_ok_button().text = Strings.text("ACTION_RETRY_IMPORT")
 	_import_error_dialog.confirmed.connect(retry_import)
 	dialog_parent.add_child(_import_error_dialog)
 
@@ -177,7 +178,7 @@ func _import_image_files(files: PackedStringArray, world_position: Vector2) -> D
 	_set_menu_enabled(_focus_menu_id, not _last_import_item_ids.is_empty())
 	if was_empty and not imported_items.is_empty():
 		_focus_canvas_on_bounds(_bounds_for_items(imported_items))
-	_status_label.text = Strings.STATUS_IMPORT_DONE_FORMAT % imported_asset_ids.size()
+	_status_label.text = Strings.text("STATUS_IMPORT_DONE_FORMAT") % imported_asset_ids.size()
 	refresh_empty_hint()
 	return {
 		"ok": true,
@@ -204,7 +205,7 @@ func _import_reference_file(path: String, target: Dictionary) -> Dictionary:
 	_retry_reference_target.clear()
 	_retry_import_files.clear()
 	reference_asset_imported.emit(target.duplicate(true), asset_id)
-	_status_label.text = Strings.STATUS_IMPORT_DONE_FORMAT % 1
+	_status_label.text = Strings.text("STATUS_IMPORT_DONE_FORMAT") % 1
 	return {"ok": true, "asset_id": asset_id, "target": target.duplicate(true)}
 
 
@@ -229,10 +230,21 @@ func _report_import_failure(files: PackedStringArray, failed_files: Array) -> Di
 	_set_menu_enabled(_retry_menu_id, true)
 	var displayed_failures: Array = failed_files if not failed_files.is_empty() else Array(files)
 	var failed_text := "\n".join(displayed_failures)
-	_status_label.text = Strings.STATUS_IMPORT_FAILED_FORMAT % failed_text.replace("\n", ", ")
-	_import_error_dialog.dialog_text = Strings.DIALOG_IMPORT_FAILED_BODY_FORMAT % failed_text
+	_status_label.text = (
+		Strings.text("STATUS_IMPORT_FAILED_FORMAT") % failed_text.replace("\n", ", ")
+	)
+	_import_error_dialog.dialog_text = (
+		Strings.text("DIALOG_IMPORT_FAILED_BODY_FORMAT") % failed_text
+	)
 	_import_error_dialog.popup_centered()
 	return {"ok": false, "failed_files": displayed_failures, "asset_ids": [], "item_ids": []}
+
+
+func _refresh_localized_text(_preference: String, _locale: String) -> void:
+	_import_dialog.title = Strings.text("DIALOG_IMPORT_IMAGES")
+	_reference_dialog.title = Strings.text("ACTION_IMPORT_REFERENCE")
+	_import_error_dialog.title = Strings.text("DIALOG_IMPORT_FAILED_TITLE")
+	_import_error_dialog.get_ok_button().text = Strings.text("ACTION_RETRY_IMPORT")
 
 
 func _last_import_items() -> Array:

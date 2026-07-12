@@ -77,6 +77,13 @@ func test_graph_node_params_dialog_builds_controls_from_node_schema() -> void:
 	assert_eq(dialog.get_params()["width"], 48)
 	assert_eq(dialog.get_params()["height"], 24)
 
+	var original_language: String = LocalizationService.current_preference
+	LocalizationService.set_language("zh_CN")
+	assert_eq(dialog.title, "编辑尺寸设置")
+	assert_eq(dialog._root.get_child(0).get_child(0).text, "宽度")
+	assert_eq(dialog.get_ok_button().text, Strings.text("ACTION_APPLY"))
+	LocalizationService.set_language(original_language)
+
 
 func test_graph_node_params_dialog_uses_asset_ref_control() -> void:
 	var image := Image.create(2, 2, false, Image.FORMAT_RGBA8)

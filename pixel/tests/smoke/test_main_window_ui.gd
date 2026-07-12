@@ -1,3 +1,4 @@
+# gdlint: disable=max-public-methods
 extends "res://addons/gut/test.gd"
 
 const MainScript := preload("res://ui/shell/main.gd")
@@ -416,6 +417,7 @@ func test_selected_graph_node_params_are_undoable_and_affect_rerun() -> void:
 
 
 func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
+	LocalizationService.set_language("en")
 	ProjectService.new_project("Graph Add UI")
 	var main: Control = MainScript.new()
 	main.size = Vector2(1280, 800)
@@ -427,7 +429,7 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 
-	assert_eq(controller._graph_add_menu.item_count, 5)
+	assert_eq(controller._graph_add_menu.item_count, 6)
 	assert_eq(
 		[
 			controller._graph_add_menu.get_item_text(0),
@@ -435,8 +437,16 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 			controller._graph_add_menu.get_item_text(2),
 			controller._graph_add_menu.get_item_text(3),
 			controller._graph_add_menu.get_item_text(4),
+			controller._graph_add_menu.get_item_text(5),
 		],
-		["AI Generate", "ComfyUI Workflow", "Reference Image", "Object List", "Size Spec"]
+		[
+			"AI Generate",
+			"Result Batch",
+			"ComfyUI Workflow",
+			"Reference Image",
+			"Object List",
+			"Size Spec",
+		]
 	)
 
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
@@ -449,7 +459,7 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	await wait_process_frames(1)
 
 	assert_true(controller._graph_quick_add_menu.visible)
-	assert_eq(controller._graph_quick_add_menu.item_count, 5)
+	assert_eq(controller._graph_quick_add_menu.item_count, 6)
 	assert_eq(
 		[
 			controller._graph_quick_add_menu.get_item_text(0),
@@ -457,8 +467,16 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 			controller._graph_quick_add_menu.get_item_text(2),
 			controller._graph_quick_add_menu.get_item_text(3),
 			controller._graph_quick_add_menu.get_item_text(4),
+			controller._graph_quick_add_menu.get_item_text(5),
 		],
-		["AI Generate", "ComfyUI Workflow", "Reference Image", "Object List", "Size Spec"]
+		[
+			"AI Generate",
+			"Result Batch",
+			"ComfyUI Workflow",
+			"Reference Image",
+			"Object List",
+			"Size Spec",
+		]
 	)
 
 	var existing_node_ids := {}
@@ -541,6 +559,27 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 		[int(object_position[0]) + 280, int(object_position[1])],
 	)
 
+	var batch_node_id: String = controller.add_graph_node_to_selected_graph(
+		"batch", Vector2(960, 480)
+	)
+	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], batch_node_id)
+	assert_false(batch_node_id.is_empty())
+	assert_false(batch_item_id.is_empty())
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), [])
+	assert_eq(
+		_node_data_for_id(ProjectService.current_project.graphs[graph_id]["nodes"], batch_node_id)["type"],
+		"batch"
+	)
+	assert_true(UndoService.undo())
+	assert_true(_item_id_for_node(canvas.export_canvas_data()["items"], batch_node_id).is_empty())
+	assert_false(
+		ProjectService.current_project.graphs[graph_id]["nodes"].any(
+			func(node: Dictionary) -> bool: return String(node.get("id", "")) == batch_node_id
+		)
+	)
+	assert_true(UndoService.redo())
+	assert_false(_item_id_for_node(canvas.export_canvas_data()["items"], batch_node_id).is_empty())
+
 
 func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
 	ProjectService.new_project("Batch Focus UI")
@@ -577,6 +616,63 @@ func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
 
 	assert_true(_send_key(controller, KEY_LEFT))
 	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
+
+
+func test_batch_processing_replaces_selected_asset_without_dropping_unselected_items() -> void:
+	ProjectService.new_project("Batch Subset Processing")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+	var batch_node: Dictionary = _node_data_for_id(graph_data["nodes"], "batch_1")
+	var before_ids: Array = batch_node["params"]["asset_ids"].duplicate()
+	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
+	var derived_image: Image = AssetLibrary.get_image(String(before_ids[0])).duplicate()
+	derived_image.set_pixel(0, 0, Color.MAGENTA)
+
+	(
+		controller
+		. _m2_actions
+		. _on_batch_task_finished(
+			{
+				"card_id": batch_item_id,
+				"original_asset_ids": before_ids,
+				"items":
+				[
+					{
+						"parent_asset": before_ids[0],
+						"image": derived_image,
+						"suffix": "outline",
+						"provenance_key": "outline",
+						"report": {"type": "outer"},
+					},
+				],
+			},
+			"done"
+		)
+	)
+
+	var after_ids: Array = canvas._get_batch_asset_ids(batch_item_id)
+	assert_eq(after_ids.size(), before_ids.size())
+	assert_ne(after_ids[0], before_ids[0])
+	assert_eq(after_ids.slice(1), before_ids.slice(1))
+	assert_eq(canvas._items_by_id[batch_item_id].compare_asset_ids, before_ids)
+	assert_eq(
+		AssetLibrary.get_asset_meta(String(after_ids[0]))["provenance"]["parent_asset"],
+		before_ids[0]
+	)
+	assert_true(UndoService.undo())
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), before_ids)
+	assert_true(UndoService.redo())
+	assert_eq(canvas._get_batch_asset_ids(batch_item_id), after_ids)
 
 
 func test_graph_status_events_update_status_bar() -> void:
