@@ -172,6 +172,72 @@ func test_targeted_request_uses_only_the_requested_generate_branch() -> void:
 	assert_false(JSON.stringify(snapshot).contains(SECRET_SENTINEL))
 
 
+func test_structured_rows_split_at_model_limit_and_retry_only_failed_rows() -> void:
+	var graph := GraphScript.new()
+	graph.id = "structured_cloud"
+	(
+		graph
+		. add_node(
+			ObjectListNodeScript.new(),
+			"rows",
+			{
+				"items": "legacy ignored",
+				"rows":
+				[
+					{"id": "row-a", "text": "tower", "count": 5, "enabled": true},
+					{"id": "row-b", "text": "barrel", "count": 2, "enabled": true},
+					{"id": "row-off", "text": "well", "count": 9, "enabled": false},
+				],
+			},
+			Vector2.ZERO
+		)
+	)
+	graph.add_node(
+		SizeSpecNodeScript.new(),
+		"size",
+		{"width": 32, "height": 32, "per_subject": 1},
+		Vector2.ZERO
+	)
+	(
+		graph
+		. add_node(
+			AiGenerateNodeScript.new(),
+			"generate",
+			{
+				"provider_id": "openai_image",
+				"model_id": "gpt-image-2",
+				"batch_size": 9,
+				"seed": 50,
+			},
+			Vector2.ZERO
+		)
+	)
+	graph.add_edge("rows", "items", "generate", "items")
+	graph.add_edge("size", "spec", "generate", "spec")
+	var controller := CloudControllerScript.new()
+	add_child_autofree(controller)
+
+	var all := controller._requests_for_graph(graph, "generate", "openai_image")
+	assert_true(all["ok"])
+	assert_eq(all["result_count"], 7)
+	assert_eq(
+		all["requests"].map(func(request: Dictionary) -> int: return request["batch"]), [4, 1, 2]
+	)
+	assert_eq(
+		all["requests"].map(func(request: Dictionary) -> String: return request["source_row_id"]),
+		["row-a", "row-a", "row-b"]
+	)
+	assert_true(
+		all["requests"].all(
+			func(request: Dictionary) -> bool: return request["source_node_id"] == "rows"
+		)
+	)
+	var retry := controller._requests_for_graph(graph, "generate", "openai_image", ["row-b"])
+	assert_eq(retry["requests"].size(), 1)
+	assert_eq(retry["requests"][0]["prompt"], "barrel")
+	assert_eq(retry["requests"][0]["batch"], 2)
+
+
 func test_error_mapping_and_single_retry_policy_are_stable() -> void:
 	assert_eq(_provider.map_error(HTTPRequest.RESULT_SUCCESS, 401)["code"], "auth_failed")
 	assert_eq(_provider.map_error(HTTPRequest.RESULT_SUCCESS, 429)["code"], "rate_limited")

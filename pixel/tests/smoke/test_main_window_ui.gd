@@ -9,6 +9,8 @@ const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+const WorkflowTemplateService := preload("res://services/workflow_template_service.gd")
+const BetaWorkspaceFixture := preload("res://tests/fixtures/generators/beta_workspace_fixture.gd")
 
 
 func test_main_window_uses_readable_minimum_sizes() -> void:
@@ -852,6 +854,72 @@ func test_candidate_continue_branch_is_one_undoable_canvas_action() -> void:
 	assert_true(UndoService.redo())
 	assert_eq(ProjectService.get_graph_data(graph.id)["nodes"].size(), 7)
 	assert_eq(canvas.export_canvas_data()["items"].size(), 7)
+
+
+func test_workflow_template_inserts_at_anchor_and_undoes_as_one_canvas_action() -> void:
+	var main: Control = MainScript.new()
+	main.size = Vector2(1440, 900)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+	ProjectService.new_project("Workflow insert")
+	await wait_process_frames(1)
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var result: Dictionary = controller._insert_workflow_template(
+		WorkflowTemplateService.builtin_templates()[0], Vector2(500, 300)
+	)
+
+	assert_true(result["ok"])
+	assert_eq(ProjectService.get_graph_data("graph_main")["nodes"].size(), 4)
+	assert_eq(canvas.export_canvas_data()["items"].size(), 5)
+	assert_eq(canvas.get_selected_ids().size(), 5)
+	assert_eq(
+		_item_data_for_id(canvas.export_canvas_data()["items"], result["frame_id"])["position"],
+		[500, 300]
+	)
+	assert_true(UndoService.undo())
+	await wait_process_frames(1)
+	assert_eq(ProjectService.get_graph_data("graph_main")["nodes"].size(), 0)
+	assert_eq(canvas.export_canvas_data()["items"], [])
+	assert_true(UndoService.redo())
+	await wait_process_frames(1)
+	assert_eq(ProjectService.get_graph_data("graph_main")["nodes"].size(), 4)
+	assert_eq(canvas.export_canvas_data()["items"].size(), 5)
+
+
+func test_selected_stage_runs_each_valid_target_without_unrelated_empty_inputs() -> void:
+	var main: Control = MainScript.new()
+	main.size = Vector2(1440, 900)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+	var fixture: Dictionary = BetaWorkspaceFixture.build()
+	var graph_data: Dictionary = fixture["graphs"][BetaWorkspaceFixture.GRAPH_ID]
+	graph_data["edges"] = graph_data["edges"].filter(
+		func(edge: Dictionary) -> bool: return String(edge["from"][0]).find("reference") < 0
+	)
+	fixture["canvas"]["items"] = fixture["canvas"]["items"].filter(
+		func(item: Dictionary) -> bool: return item.get("id", "") != "stage_b"
+	)
+	for item in fixture["canvas"]["items"]:
+		if item.get("type", "") == "node":
+			item["frame_id"] = "stage_a"
+	ProjectService.set_graphs_data(fixture["graphs"])
+	ProjectService.set_canvas_data(fixture["canvas"])
+	ProjectService.project_loaded.emit(ProjectService.current_project)
+	await wait_process_frames(1)
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	canvas.select_ids(["stage_a"])
+	controller.run_selected_mock_graph()
+
+	var completed: Dictionary = ProjectService.get_graph_data(BetaWorkspaceFixture.GRAPH_ID)
+	assert_eq(_node_data_for_id(completed["nodes"], "batch_a")["params"]["asset_ids"].size(), 4)
+	assert_eq(_node_data_for_id(completed["nodes"], "batch_b")["params"]["asset_ids"].size(), 4)
+	assert_true(
+		AssetLibrary.has_asset(
+			_node_data_for_id(completed["nodes"], "batch_a")["params"]["asset_ids"][0]
+		)
+	)
 
 
 func _node_ids_from_canvas_items(items: Array) -> Array:

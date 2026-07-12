@@ -7,6 +7,7 @@ signal resource_activated(resource: Dictionary)
 
 const Catalog := preload("res://services/project_resource_catalog.gd")
 const Strings := preload("res://ui/shell/strings.gd")
+const WorkflowTemplateService := preload("res://services/workflow_template_service.gd")
 
 const KIND_ASSET := "project_asset"
 const KIND_STYLE := "style_preset"
@@ -17,6 +18,10 @@ var _search: LineEdit = null
 var _category: OptionButton = null
 var _list: ResourceItemList = null
 var _empty_label: Label = null
+var _workflow_actions: HBoxContainer = null
+var _rename_dialog: ConfirmationDialog = null
+var _rename_edit: LineEdit = null
+var _delete_dialog: ConfirmationDialog = null
 
 
 class ResourceItemList:
@@ -65,7 +70,9 @@ func _ready() -> void:
 	_list.name = "ResourceList"
 	_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_list.item_activated.connect(_on_item_activated)
+	_list.item_selected.connect(func(_index: int) -> void: _sync_workflow_actions())
 	add_child(_list)
+	_build_workflow_actions()
 	_empty_label = Label.new()
 	_empty_label.name = "ResourceEmpty"
 	_empty_label.text = Strings.text("RESOURCE_EMPTY")
@@ -144,3 +151,84 @@ func _on_item_activated(index: int) -> void:
 	var resource: Variant = _list.get_item_metadata(index)
 	if resource is Dictionary:
 		resource_activated.emit(resource.duplicate(true))
+
+
+func _build_workflow_actions() -> void:
+	_workflow_actions = HBoxContainer.new()
+	_workflow_actions.name = "WorkflowActions"
+	for spec in [
+		["WorkflowRename", "ACTION_RENAME_WORKFLOW", _show_rename_workflow],
+		["WorkflowDelete", "ACTION_DELETE_WORKFLOW", _show_delete_workflow],
+	]:
+		var button := Button.new()
+		button.name = String(spec[0])
+		button.text = Strings.text(String(spec[1]))
+		button.pressed.connect(spec[2])
+		_workflow_actions.add_child(button)
+	add_child(_workflow_actions)
+	_rename_dialog = ConfirmationDialog.new()
+	_rename_dialog.name = "WorkflowRenameDialog"
+	_rename_dialog.title = Strings.text("DIALOG_RENAME_WORKFLOW")
+	_rename_edit = LineEdit.new()
+	_rename_edit.name = "WorkflowName"
+	_rename_dialog.add_child(_rename_edit)
+	_rename_dialog.confirmed.connect(_rename_selected_workflow)
+	add_child(_rename_dialog)
+	_delete_dialog = ConfirmationDialog.new()
+	_delete_dialog.name = "WorkflowDeleteDialog"
+	_delete_dialog.title = Strings.text("DIALOG_DELETE_WORKFLOW")
+	_delete_dialog.confirmed.connect(_delete_selected_workflow)
+	add_child(_delete_dialog)
+	_sync_workflow_actions()
+
+
+func _selected_user_workflow() -> Dictionary:
+	var selected := _list.get_selected_items()
+	if selected.is_empty():
+		return {}
+	var value: Variant = _list.get_item_metadata(selected[0])
+	if not (value is Dictionary) or String(value.get("source", "")) != "user":
+		return {}
+	return value
+
+
+func _sync_workflow_actions() -> void:
+	if _workflow_actions != null:
+		_workflow_actions.visible = not _selected_user_workflow().is_empty()
+
+
+func _show_rename_workflow() -> void:
+	var workflow := _selected_user_workflow()
+	if workflow.is_empty():
+		return
+	_rename_edit.text = String(workflow.get("name", ""))
+	_rename_dialog.popup_centered(Vector2i(420, 150))
+
+
+func _rename_selected_workflow() -> void:
+	var workflow := _selected_user_workflow()
+	if workflow.is_empty() or _rename_edit.text.strip_edges().is_empty():
+		return
+	var result := WorkflowTemplateService.rename_template(
+		String(workflow.get("id", "")), _rename_edit.text
+	)
+	if bool(result.get("ok", false)):
+		EventBus.workflow_templates_changed.emit()
+
+
+func _show_delete_workflow() -> void:
+	var workflow := _selected_user_workflow()
+	if workflow.is_empty():
+		return
+	_delete_dialog.dialog_text = (
+		Strings.text("DIALOG_DELETE_WORKFLOW_FORMAT") % String(workflow.get("name", ""))
+	)
+	_delete_dialog.popup_centered(Vector2i(420, 180))
+
+
+func _delete_selected_workflow() -> void:
+	var workflow := _selected_user_workflow()
+	if workflow.is_empty():
+		return
+	if WorkflowTemplateService.delete_template(String(workflow.get("id", ""))) == OK:
+		EventBus.workflow_templates_changed.emit()
