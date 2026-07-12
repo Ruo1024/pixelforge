@@ -26,6 +26,7 @@
 	"ACTION_OUTLINE": "描边",
 	"ACTION_FOCUS_SELECTED": "聚焦选中",
 	"ACTION_FOCUS_ALL": "显示全部",
+	"ACTION_TOGGLE_MINIMAP": "小地图",
 	"EMPTY_CANVAS_IMPORT_HINT": "从对象输入、参考图或离线示例开始。",
 	"INSPECTOR_TITLE": "检查器",
 	"INSPECTOR_NO_SELECTION": "未选择内容",

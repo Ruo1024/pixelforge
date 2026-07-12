@@ -33,6 +33,7 @@ const PORT_HIT_RADIUS := 10.0
 const OBJECT_EDITOR_MIN_SIZE := Vector2(0, 116)
 const SPIN_CONTROL_MIN_SIZE := Vector2(76, 30)
 const FLEXIBLE_WIDTH := 0
+const OVERVIEW_MAX_ZOOM := 0.1
 
 var item_id := ""
 var graph_id := ""
@@ -69,6 +70,7 @@ var _reference_field: Control = null
 var _collapse_button: Button = null
 var _params_snapshot := {}
 var _raw_data := {}
+var _lod_camera_zoom := 1.0
 
 
 func setup_from_data(data: Dictionary) -> void:
@@ -130,6 +132,15 @@ func set_collapsed(value: bool) -> void:
 	collapsed = value
 	_rebuild_content_controls()
 	_rebuild_header_controls()
+	queue_redraw()
+
+
+func set_lod_camera_zoom(value: float) -> void:
+	var was_overview := _is_overview()
+	_lod_camera_zoom = maxf(0.0, value)
+	if was_overview != _is_overview():
+		_rebuild_content_controls()
+		_rebuild_header_controls()
 	queue_redraw()
 
 
@@ -364,7 +375,7 @@ func _summarize_params(params: Variant) -> String:
 
 
 func _card_size() -> Vector2:
-	if collapsed or not _is_content_node():
+	if collapsed or _is_overview() or not _is_content_node():
 		return SUMMARY_CARD_SIZE
 	match _node_type:
 		"ai_generate":
@@ -388,6 +399,10 @@ func _is_content_node() -> bool:
 	)
 
 
+func _is_overview() -> bool:
+	return _lod_camera_zoom <= OVERVIEW_MAX_ZOOM
+
+
 func _rebuild_content_controls() -> void:
 	if _content_root != null:
 		remove_child(_content_root)
@@ -402,7 +417,7 @@ func _rebuild_content_controls() -> void:
 	_cancel_button = null
 	_execution_detail_label = null
 	_reference_field = null
-	if collapsed or not _is_content_node() or _is_ghost:
+	if collapsed or _is_overview() or not _is_content_node() or _is_ghost:
 		return
 
 	_content_root = VBoxContainer.new()
@@ -428,7 +443,7 @@ func _rebuild_content_controls() -> void:
 
 
 func _rebuild_header_controls() -> void:
-	if not _is_content_node() or _is_ghost:
+	if not _is_content_node() or _is_ghost or _is_overview():
 		if _collapse_button != null:
 			_collapse_button.visible = false
 		return

@@ -674,6 +674,28 @@ func test_prompt_and_style_cards_show_real_content_and_prompt_emits_commit() -> 
 	assert_eq(style_card.get_content_control("StyleDetail").text, "32 px base · Palette: db32")
 
 
+func test_content_card_uses_structural_summary_only_at_ten_percent_overview() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+	var graph := GraphScript.new()
+	graph.id = "graph_semantic_zoom"
+	graph.add_node(TextPromptNodeScript.new(), "prompt", {"text": "tiny windmill"}, Vector2.ZERO)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+	var card: Node = canvas._add_graph_node_card(
+		graph.id, "prompt", Vector2.ZERO, "prompt_item", false
+	)
+	assert_not_null(card.get_content_control("PromptEdit"))
+	assert_eq(card.get_canvas_bounds().size, Vector2(240, 238))
+
+	canvas.set_camera_zoom(0.1)
+	assert_null(card.get_content_control("PromptEdit"))
+	assert_eq(card.get_canvas_bounds().size, Vector2(220, 116))
+	canvas.set_camera_zoom(1.0)
+	assert_not_null(card.get_content_control("PromptEdit"))
+
+
 func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> void:
 	ProjectService.current_project.manifest["style_preset"] = {
 		"base_size": 32, "palette": {"ref": "db32"}

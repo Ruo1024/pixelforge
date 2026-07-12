@@ -16,6 +16,7 @@
 
 ## Unreleased
 
+- Beta 0.3 canvas navigation: add a toggleable live minimap with viewport click/drag navigation, 10% structural overview, visible zoom control, Focus Selected/Fit All, and Command/Ctrl+0 while keeping deferred ComfyUI out of the main menu.
 - Beta 0.3 graph organization: show valid/invalid connection feedback before release and add explicit same-graph stage frames whose membership, movement, deletion/ungrouping, persistence, and undo preserve nodes and edges.
 - Beta 0.3 atomic editing: add macOS/Windows copy, paste, duplicate, delete, and undo/redo for graph selections with new IDs, relative layout, internal-edge preservation, safe asset references, and transient-run-state removal.
 - Beta 0.3 canvas creation: unify fixed, Tab, context, and double-click creation around an active/default graph; import or paste images as atomic reference cards with partial-failure-safe grid placement; hide deferred ComfyUI from the primary add path.

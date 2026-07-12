@@ -27,6 +27,7 @@
 	"ACTION_OUTLINE": "Outline",
 	"ACTION_FOCUS_SELECTED": "Focus Selected",
 	"ACTION_FOCUS_ALL": "Focus All",
+	"ACTION_TOGGLE_MINIMAP": "Minimap",
 	"EMPTY_CANVAS_IMPORT_HINT": "Start with an input, a reference image, or the offline example.",
 	"INSPECTOR_TITLE": "Inspector",
 	"INSPECTOR_NO_SELECTION": "Nothing selected",

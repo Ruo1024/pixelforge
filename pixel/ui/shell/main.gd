@@ -13,6 +13,7 @@ const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
 const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
 const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
 const WorkspaceNavigationScript := preload("res://ui/shell/workspace_navigation.gd")
+const CanvasMinimapControllerScript := preload("res://ui/shell/canvas_minimap_controller.gd")
 const WorkspaceStartControllerScript := preload("res://ui/shell/workspace_start_controller.gd")
 const CanvasGraphStatusPresenter := preload("res://ui/shell/canvas_graph_status_presenter.gd")
 const WorkspaceSettingsControllerScript := preload(
@@ -65,6 +66,7 @@ var _preview_token := 0
 var _m2_actions: Variant = null
 var _m2_1_ui: Variant = null
 var _zoom_overlay: RefCounted = null
+var _minimap_controller: RefCounted = null
 var _workspace_start: Node = null
 var _lifecycle_guard: Node = null
 var _export_flow: Node = null
@@ -441,8 +443,10 @@ func _build_ui() -> void:
 	)
 	_zoom_overlay = ZoomOverlayControllerScript.new()
 	_zoom_overlay.setup(_canvas, ZOOM_CONTROL_MARGIN)
+	_minimap_controller = CanvasMinimapControllerScript.new()
+	_minimap_controller.setup(_canvas)
 	var workspace_navigation := WorkspaceNavigationScript.new()
-	workspace_navigation.setup(_canvas)
+	workspace_navigation.setup(_canvas, _minimap_controller.minimap)
 	_canvas.add_child(workspace_navigation)
 
 

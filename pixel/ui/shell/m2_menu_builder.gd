@@ -44,9 +44,6 @@ static func populate_file(
 	LocalizationService.add_popup_item(
 		popup, "MENU_PLUGIN_MANAGER", controller.FILE_MENU_PLUGIN_MANAGER
 	)
-	LocalizationService.add_popup_item(
-		popup, "MENU_COMFY_TEMPLATES", controller.FILE_MENU_COMFY_TEMPLATES
-	)
 	popup.add_separator()
 	LocalizationService.add_popup_item(popup, "ACTION_NEW", controller.FILE_MENU_NEW)
 	LocalizationService.add_popup_item(popup, "ACTION_OPEN", controller.FILE_MENU_OPEN)

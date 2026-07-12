@@ -5,7 +5,7 @@ extends PanelContainer
 
 const Strings := preload("res://ui/shell/strings.gd")
 
-const CONTROL_WIDTH := 258
+const CONTROL_WIDTH := 360
 const CONTROL_HEIGHT := 40
 const CONTROL_MARGIN := 12
 const CONTENT_GAP := 8
@@ -13,10 +13,12 @@ const OVERLAY_Z_INDEX := 4095
 
 var _canvas: Control = null
 var _buttons: Array[Button] = []
+var _minimap: Control = null
 
 
-func setup(canvas: Control) -> void:
+func setup(canvas: Control, minimap: Control = null) -> void:
 	_canvas = canvas
+	_minimap = minimap
 	name = "WorkspaceNavigation"
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	z_as_relative = false
@@ -35,6 +37,7 @@ func setup(canvas: Control) -> void:
 
 	_add_button(row, "FocusSelected", "ACTION_FOCUS_SELECTED", _focus_selected)
 	_add_button(row, "FocusAll", "ACTION_FOCUS_ALL", _focus_all)
+	_add_button(row, "ToggleMinimap", "ACTION_TOGGLE_MINIMAP", _toggle_minimap)
 	LocalizationService.language_changed.connect(_refresh_text)
 
 
@@ -67,26 +70,10 @@ func _focus_all() -> void:
 		_focus_item_ids(_canvas._items_by_id.keys())
 
 
+func _toggle_minimap() -> void:
+	if _minimap != null:
+		_minimap.visible = not _minimap.visible
+
+
 func _focus_item_ids(item_ids: Array) -> bool:
-	var bounds := Rect2()
-	var has_bounds := false
-	for raw_id in item_ids:
-		var item: Node = _canvas._items_by_id.get(String(raw_id), null)
-		if item == null or not item.has_method("get_canvas_bounds"):
-			continue
-		var item_bounds: Rect2 = item.get_canvas_bounds()
-		bounds = item_bounds if not has_bounds else bounds.merge(item_bounds)
-		has_bounds = true
-	if (
-		not has_bounds
-		or bounds.size.x <= 0.0
-		or bounds.size.y <= 0.0
-		or _canvas.size.is_zero_approx()
-	):
-		return false
-	var target_zoom := minf(
-		_canvas.size.x * 0.72 / bounds.size.x, _canvas.size.y * 0.72 / bounds.size.y
-	)
-	_canvas.set_camera_zoom(target_zoom, _canvas.size * 0.5)
-	_canvas.pan_by_pixels(_canvas.world_to_screen(bounds.get_center()) - _canvas.size * 0.5)
-	return true
+	return _canvas._focus_item_ids(item_ids)

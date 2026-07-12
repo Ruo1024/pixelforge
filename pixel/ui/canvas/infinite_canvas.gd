@@ -17,7 +17,7 @@ signal graph_node_params_commit_requested(graph_id: String, node_id: String, par
 signal graph_node_action_requested(graph_id: String, node_id: String, action_id: String)
 signal image_paste_requested(world_position: Vector2)
 
-const ZOOM_LEVELS := [0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
+const ZOOM_LEVELS := [0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
 const DEFAULT_ZOOM_INDEX := 4
 const WHEEL_ZOOM_MIN_INTERVAL_MSEC := 80
 const CULL_INTERVAL_SECONDS := 0.1
@@ -174,6 +174,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_ungroup_selected()
 		else:
 			_group_selected_nodes()
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_0 and event.is_command_or_control_pressed():
+		_focus_item_ids(_items_by_id.keys())
 		get_viewport().set_input_as_handled()
 
 
@@ -558,6 +561,47 @@ func get_item_count() -> int:
 
 func get_selected_ids() -> Array:
 	return _selection.get_selected_ids()
+
+
+func _focus_item_ids(item_ids: Array) -> bool:
+	var bounds := Rect2()
+	var has_bounds := false
+	for raw_id in item_ids:
+		var item: Node = _items_by_id.get(String(raw_id), null)
+		if item == null or not item.has_method("get_canvas_bounds"):
+			continue
+		var item_bounds: Rect2 = item.get_canvas_bounds()
+		bounds = item_bounds if not has_bounds else bounds.merge(item_bounds)
+		has_bounds = true
+	if not has_bounds or bounds.size.x <= 0.0 or bounds.size.y <= 0.0 or size.is_zero_approx():
+		return false
+	var target_zoom := minf(size.x * 0.72 / bounds.size.x, size.y * 0.72 / bounds.size.y)
+	set_camera_zoom(target_zoom, size * 0.5)
+	pan_by_pixels(world_to_screen(bounds.get_center()) - size * 0.5)
+	return true
+
+
+func _content_bounds() -> Rect2:
+	var bounds := Rect2()
+	var has_bounds := false
+	for item in _items_by_id.values():
+		if not item.has_method("get_canvas_bounds"):
+			continue
+		var item_bounds: Rect2 = item.get_canvas_bounds()
+		bounds = item_bounds if not has_bounds else bounds.merge(item_bounds)
+		has_bounds = true
+	return bounds if has_bounds else Rect2(Vector2.ZERO, Vector2.ONE)
+
+
+func _viewport_world_rect() -> Rect2:
+	var world_origin := screen_to_world(Vector2.ZERO)
+	return Rect2(world_origin, screen_to_world(size) - world_origin).abs()
+
+
+func _center_on_world(world_center: Vector2) -> void:
+	camera_center = world_center
+	_update_layer_transform()
+	_emit_canvas_changed()
 
 
 func _copy_selected_graph_nodes() -> bool:
@@ -1247,6 +1291,7 @@ func _add_node_direct(item_data: Dictionary) -> Node:
 			graph_node_action_requested.emit(graph_id, node_id, action_id)
 	)
 	item.collapsed_change_requested.connect(_set_graph_node_collapsed)
+	item.set_lod_camera_zoom(camera_zoom)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
 	_update_item_visibility()
@@ -1358,7 +1403,7 @@ func _update_layer_transform() -> void:
 		raw_position, viewport_scale_factor
 	)
 	item_layer.scale = Vector2.ONE * art_logical_scale
-	LODCoordinator.sync_batch_camera_zoom(_items_by_id, CanvasBatchCardScript, camera_zoom)
+	LODCoordinator.sync_camera_zoom(_items_by_id, camera_zoom)
 	_sync_cleanup_grid_overlay()
 	queue_redraw()
 

@@ -221,6 +221,7 @@ func test_navigation_buttons_focus_selected_and_all_canvas_content() -> void:
 	var main := await _make_main()
 	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
 	var navigation: Control = canvas.get_node("WorkspaceNavigation")
+	var minimap: Control = canvas.get_node("CanvasMinimap")
 	var image := Image.create(32, 32, false, Image.FORMAT_RGBA8)
 	image.fill(Color.WHITE)
 	var first_id: String = AssetLibrary.register_image(image, "first", {"origin": "imported"})
@@ -228,12 +229,24 @@ func test_navigation_buttons_focus_selected_and_all_canvas_content() -> void:
 	var first: Node = canvas.add_sprite_item(image, first_id, Vector2(-800, -300))
 	canvas.add_sprite_item(image, second_id, Vector2(900, 500))
 	await wait_process_frames(1)
+	assert_true(minimap.visible)
+	(navigation.get_node("NavigationRow/ToggleMinimap") as Button).pressed.emit()
+	assert_false(minimap.visible)
+	(navigation.get_node("NavigationRow/ToggleMinimap") as Button).pressed.emit()
+	assert_true(minimap.visible)
 
 	(navigation.get_node("NavigationRow/FocusAll") as Button).pressed.emit()
 	await wait_process_frames(1)
 	var all_center := Rect2(Vector2(-800, -300), Vector2(1732, 832)).get_center()
 	assert_almost_eq(canvas.world_to_screen(all_center).x, canvas.size.x * 0.5, 1.0)
 	assert_almost_eq(canvas.world_to_screen(all_center).y, canvas.size.y * 0.5, 1.0)
+	var minimap_target := Vector2(900, 500)
+	var map_position: Vector2 = minimap.world_to_map(
+		minimap_target, minimap._content_bounds, minimap.get_map_rect()
+	)
+	minimap._request_world_center(map_position)
+	assert_almost_eq(canvas.camera_center.x, minimap_target.x, 1.0)
+	assert_almost_eq(canvas.camera_center.y, minimap_target.y, 1.0)
 
 	canvas.select_ids([first.item_id])
 	(navigation.get_node("NavigationRow/FocusSelected") as Button).pressed.emit()
@@ -244,6 +257,14 @@ func test_navigation_buttons_focus_selected_and_all_canvas_content() -> void:
 	assert_almost_eq(
 		canvas.world_to_screen(first.get_canvas_bounds().get_center()).y, canvas.size.y * 0.5, 1.0
 	)
+	canvas.pan_by_pixels(Vector2(500, 300))
+	var fit_event := InputEventKey.new()
+	fit_event.keycode = KEY_0
+	fit_event.pressed = true
+	fit_event.meta_pressed = true
+	canvas._unhandled_key_input(fit_event)
+	assert_almost_eq(canvas.world_to_screen(all_center).x, canvas.size.x * 0.5, 1.0)
+	assert_almost_eq(canvas.world_to_screen(all_center).y, canvas.size.y * 0.5, 1.0)
 
 
 func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> void:
