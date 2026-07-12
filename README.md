@@ -2,7 +2,7 @@
 
 PixelForge 是一个基于 Godot 4.6 的 AI 像素美术工具项目。当前仓库包含两部分：
 
-- `pixel/`：可运行的 Godot 工程，目前完成 M0 工程骨架、无限画布底座、基础服务、项目保存/打开、撤销与任务队列。
+- `pixel/`：可运行的 Godot 工程；Beta 0.2 已达到工程候选，具备无限画布、内容卡、项目保存、撤销、任务队列、双语和批次加工底座。
 - `pixelforge-plan/`：面向后续 agent 协作的阶段计划、架构、接口契约、质量策略和里程碑拆分。
 
 本仓库不包含本地垃圾桶、Godot 学习网页和临时压缩包。
@@ -24,38 +24,35 @@ cd pixel
 python -m pip install gdtoolkit
 ```
 
-## 用 Agent 测试每个阶段
+## 当前 Agent 开发入口
 
-把下面这段作为通用开场发给任意 coding agent，然后按阶段替换里程碑文件即可：
+当前路线不是旧 M0–M8 的逐阶段测试。执行 agent 应先读总路线，再由一个 Goal 连续完成 Beta 0.3–0.5：
 
 ```text
-你正在维护 PixelForge。先阅读 README.md、pixel/README.md、pixelforge-plan/README.md、pixelforge-plan/01-architecture/ARCHITECTURE.md、pixelforge-plan/05-quality/QUALITY.md。
+你正在维护 PixelForge。先阅读 AGENTS.md、pixelforge-plan/README.md、pixelforge-plan/03-milestones/CURRENT-STATE.md、pixelforge-plan/03-milestones/BETA-0.3-0.5-ROADMAP.md，以及正在执行的 Beta 计划。
 
-当前目标：执行 pixelforge-plan/03-milestones/M0-foundation.md 中的验收检查，或继续推进指定里程碑。
+当前目标：按总路线连续完成 Beta 0.3、0.4、0.5，不在单卡或版本出口停下请求用户。
 
 约束：
-- Godot 工程在 pixel/。
-- 优先保持现有目录结构和 GDScript 风格。
-- 不提交 .godot/、export_presets.cfg、本地构建产物、垃圾桶或学习指导网页。
-- 修改后至少运行 ./scripts/lint.sh 和 ./scripts/run_tests.sh；如果涉及导出，运行 ./scripts/check_export_templates.sh。
-- 完成后更新相关阶段文档、pixel/CHANGELOG.md 或交付说明。
+- 开发期间完全不使用 Computer Use，只运行自动化测试和脚本截图。
+- Beta 0.3/0.4 不构建候选、不写正式阶段报告；Beta 0.5 后一次性收口。
+- 三版完成后由项目所有者统一人工验收；此前不合并 main、不 push。
+- 账号、权限、协作、版本历史永久排除；本地模型/ComfyUI 无限期延后。
 ```
 
-常用阶段入口：
+当前入口：
 
-- M0 基础骨架：`pixelforge-plan/03-milestones/M0-foundation.md`
-- M1 AI 图清洗管线：`pixelforge-plan/03-milestones/M1-cleanup-pipeline.md`
-- M2 抠图与切分：`pixelforge-plan/03-milestones/M2-matting-slicing.md`
-- M3 节点图：`pixelforge-plan/03-milestones/M3-node-graph.md`
-- M4 AI Provider：`pixelforge-plan/03-milestones/M4-ai-providers.md`
-- M5 地图编辑器：`pixelforge-plan/03-milestones/M5-map-composer.md`
-- M6 像素编辑器：`pixelforge-plan/03-milestones/M6-pixel-editor.md`
-- M7 插件与 ComfyUI：`pixelforge-plan/03-milestones/M7-plugins-comfyui.md`
-- M8 体素远期研究：`pixelforge-plan/03-milestones/M8-voxel-future.md`
+- 总路线：`pixelforge-plan/03-milestones/BETA-0.3-0.5-ROADMAP.md`
+- 90% 受控矩阵：`pixelforge-plan/03-milestones/BETA-0.3-0.5-PARITY-MATRIX.md`
+- Beta 0.3：`pixelforge-plan/03-milestones/BETA-0.3-PLAN.md`
+- Beta 0.4：`pixelforge-plan/03-milestones/BETA-0.4-PLAN.md`
+- Beta 0.5：`pixelforge-plan/03-milestones/BETA-0.5-PLAN.md`
 
-## 手动检查
+旧 M0–M8 文档只保留为历史工程证据，不再作为当前开工入口。
 
-暂不启用 GitHub Actions。需要验证时在本地或 agent 环境中手动运行：
+## 自动化检查与最终人工
+
+暂不启用 GitHub Actions。开发期间由脚本运行：
 
 ```bash
 cd pixel
@@ -63,6 +60,8 @@ cd pixel
 ./scripts/run_tests.sh
 ./scripts/check_export_templates.sh
 ```
+
+Beta 0.3–0.5 全部工程完成后，再由项目所有者使用唯一候选统一人工验收真实云端、完整工作流、中文和多显示器。
 
 ## 致谢与算法参考
 

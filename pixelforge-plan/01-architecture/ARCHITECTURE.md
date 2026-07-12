@@ -12,7 +12,7 @@
 | 测试框架 | GUT 9.x | Godot 社区事实标准，支持 headless CI |
 | 节点图 UI | 画布原生自绘（canvas-native） | 统一画布决策（2026-06-16）：节点与参考卡/批次同坐标互连；GraphEdit 仅作交互手感参考，不复用其 GraphNode 容器 |
 | 项目文件 | ZIP 容器 + JSON 清单 + PNG 资产 | 人类可检查、git 友好、向前兼容（见 PROJECT-FORMAT.md） |
-| AI 接入 | Provider 抽象层 | 云 API / ComfyUI / 本地模型统一接口，先云后本地（见 PROVIDER-API.md） |
+| AI 接入 | Provider 抽象层 | 接口可容纳不同实现；Beta 0.3–0.5 只发展云端图片模型，本地模型/ComfyUI 无限期延后（见 PROVIDER-API.md） |
 | 插件机制 | 运行时加载 PCK/GDScript | EditorPlugin 在导出后不可用，PCK 动态加载是唯一正路（见 PLUGIN-API.md） |
 
 ## 2. 顶层架构：四层洋葱
@@ -160,8 +160,8 @@ class_name PFTask
 
 - core 层：纯单元测试，目标行覆盖 ≥80%。算法用 `tests/fixtures/` 合成样本（程序生成已知答案的伪像素图）做黄金测试。
 - services 层：集成测试（项目保存→重开→比对；任务队列并发与取消）。
-- ui 层：组件状态与数据映射尽量自动化；真实窗口 agent 冒烟集中在一个可使用的整体切片完成后，不要求每个小模块单独冒烟。
-- 卡内运行定向测试，集成边界运行全量回归；自动化红灯禁止进入下一阶段。项目所有者人工测试默认集中到 Beta 候选。
+- ui 层：组件状态、数据映射与几何尽量自动化；Beta 0.3–0.5 只使用 UI 场景测试和脚本截图，不使用 Computer Use 做开发期完整测试。
+- 卡内运行定向测试，Beta 集成边界运行全量回归；自动化红灯禁止进入下一阶段。项目所有者人工测试集中到 Beta 0.5 后的唯一候选。
 
 ## 7. 性能预算与逃生舱
 

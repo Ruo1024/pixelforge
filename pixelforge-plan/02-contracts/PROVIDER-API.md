@@ -2,6 +2,7 @@
 
 > api_version = 1。所有 AI 能力（云 API、ComfyUI、未来本地模型）都实现本接口。
 > 主程序自带的 provider 也按插件形态实现（自食狗粮，保证接口真实可用）。
+> 当前产品范围只发展云端图片模型；ComfyUI 与本地模型是历史扩展能力，不进入 Beta 0.3–0.5，也不作为当前后备路线。
 
 ## 1. 接口定义
 
@@ -81,9 +82,9 @@ func cancel(task_id: String) -> void
 | `mock` | 内置 | 程序生成占位图；开发/测试/无网演示用，永久保留 |
 | `retrodiffusion` | 内置插件 | 像素专用模型；REST API；原生真像素+透明背景+tileset/动画风格；按张计费便宜（<$0.01/张）|
 | `openai_image` | 内置插件 | 通用兜底；gpt-image-1 支持透明背景 PNG；用户基数大、key 易获取 |
-| `comfyui` | 桥接插件（M7）| 本地免费、可白嫖全部 SD/FLUX 生态；REST /prompt + WebSocket 进度 |
+| `comfyui` | 历史桥接插件 | 底层代码保留；Beta 0.3–0.5 及当前产品路线无限期延后，不显示、不扩展 |
 
-注：PixelLab（角色8方向/骨架动画）列为 M7 后候选，其能力（动画）超出 v1 范围。
+当前原型只发展云端图片模型。`mock` 永久用于自动化；`retrodiffusion` / `openai_image` 优先承接 Beta 0.4。新增云端适配器只在现有两条路径无法完成核心参考图旅程时允许选择一个最小实现。PixelLab 与其他动画能力超出当前范围。
 
 ## 6. 错误码约定
 
