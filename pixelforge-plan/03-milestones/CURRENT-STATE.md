@@ -31,7 +31,7 @@
 
 ## 下一步顺序
 
-1. 项目所有者批准或否决 `image_input.params.asset_id` 最小契约修订；批准后补参考图内容模块、引用完整性与保存重开。
+1. 项目所有者批准、修改或否决 [`image_input.params.asset_id` 最小契约修订提案](reports/IMAGE_INPUT_CONTRACT_PROPOSAL.md)；批准后补参考图内容模块、引用完整性与保存重开。
 2. 在真实外接显示器执行内屏 → 外屏 → 内屏矩阵，补候选包的 English/简中视觉证据。
 3. 项目所有者使用 `reports/manual-test-beta0.2.md` 统一验收并给出 `go / 修复后复验 / 整体不合并`。
 4. 只有明确 `go` 后才可合并 `main` 和 push。
