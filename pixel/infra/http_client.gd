@@ -168,11 +168,8 @@ func _attempt_request(task_id: String) -> void:
 	var attempt := int(state["attempt"])
 	request_attempted.emit(task_id, attempt, Time.get_ticks_msec())
 	_log_request_if_enabled(state)
-	var request_error := request.request(
-		String(state["url"]),
-		state["headers"],
-		int(state["method"]),
-		state["body"].get_string_from_utf8()
+	var request_error := request.request_raw(
+		String(state["url"]), state["headers"], int(state["method"]), state["body"]
 	)
 	if request_error != OK:
 		_dispose_request(state)

@@ -2,6 +2,8 @@
 """Deterministic local server for the M4 HTTP contract tests."""
 
 import json
+import hashlib
+import re
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,6 +14,7 @@ class Handler(BaseHTTPRequestHandler):
     retry_count = 0
     comfy_prompt = {}
     comfy_interrupts = 0
+    openai_edit = {}
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
         if self.path == "/openai-model":
@@ -20,6 +23,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"system": {"os": "fixture"}, "devices": []})
         elif self.path == "/last-comfy-prompt":
             self._json(200, Handler.comfy_prompt)
+        elif self.path == "/last-openai-edit":
+            self._json(200, Handler.openai_edit)
         elif self.path.startswith("/history/"):
             prompt_id = self.path.rsplit("/", 1)[-1]
             if prompt_id == "comfy-slow":
@@ -43,6 +48,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
         content_length = int(self.headers.get("Content-Length", "0"))
         request_body = {}
+        raw_body = b""
         if content_length:
             raw_body = self.rfile.read(content_length)
             try:
@@ -82,12 +88,32 @@ class Handler(BaseHTTPRequestHandler):
             image_count = max(1, min(4, int(request_body.get("n", 1))))
             self._json(200, {
                 "created": 1783770000,
-                "background": "transparent",
+                "background": request_body.get("background", "opaque"),
                 "output_format": "png",
                 "quality": "low",
                 "size": request_body.get("size", "1024x1024"),
                 "data": [{"b64_json": pixel}] * image_count,
                 "usage": {"total_tokens": 42},
+            })
+        elif self.path == "/openai-image-edit":
+            fields, reference_hashes = self._multipart_fields(raw_body)
+            Handler.openai_edit = {
+                "fields": fields,
+                "reference_sha256s": reference_hashes,
+            }
+            pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            image_count = max(1, min(4, int(fields.get("n", "1"))))
+            self._json(200, {
+                "created": 1783770000,
+                "background": fields.get("background", "opaque"),
+                "output_format": fields.get("output_format", "png"),
+                "quality": fields.get("quality", "low"),
+                "size": fields.get("size", "1024x1024"),
+                "data": [{"b64_json": pixel}] * image_count,
+                "usage": {
+                    "total_tokens": 84,
+                    "fixture_reference_sha256s": reference_hashes,
+                },
             })
         elif self.path == "/auth":
             self._json(401, {"error": "bad credentials"})
@@ -125,6 +151,30 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(payload)
         except BrokenPipeError:
             pass
+
+    def _multipart_fields(self, body: bytes) -> tuple[dict[str, str], list[str]]:
+        content_type = self.headers.get("Content-Type", "")
+        boundary_match = re.search(r"boundary=([^;]+)", content_type)
+        if not boundary_match:
+            return {}, []
+        boundary = ("--" + boundary_match.group(1)).encode("ascii")
+        fields: dict[str, str] = {}
+        reference_hashes: list[str] = []
+        for part in body.split(boundary):
+            part = part.strip(b"\r\n-")
+            if not part or b"\r\n\r\n" not in part:
+                continue
+            header_bytes, value = part.split(b"\r\n\r\n", 1)
+            value = value.removesuffix(b"\r\n")
+            headers = header_bytes.decode("latin-1")
+            name_match = re.search(r'name="([^"]+)"', headers)
+            if not name_match:
+                continue
+            if name_match.group(1) == "image[]":
+                reference_hashes.append(hashlib.sha256(value).hexdigest())
+            else:
+                fields[name_match.group(1)] = value.decode("utf-8")
+        return fields, reference_hashes
 
 
 def main() -> None:

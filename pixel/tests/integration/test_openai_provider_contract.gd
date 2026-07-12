@@ -255,9 +255,66 @@ func test_generate_uses_shared_http_worker_decode_and_official_response_metadata
 
 	assert_eq(outcome["status"], "finished")
 	assert_eq(outcome["value"]["images"].size(), 2)
-	assert_eq(outcome["value"]["provider_meta"]["background"], "transparent")
+	assert_eq(outcome["value"]["provider_meta"]["background"], "opaque")
 	assert_eq(outcome["value"]["provider_meta"]["output_format"], "png")
 	assert_false(JSON.stringify(task.payload).contains(SECRET_SENTINEL))
+
+
+func test_two_references_use_ordered_official_multipart_edit_fields() -> void:
+	assert_null(
+		(
+			_provider
+			. configure(
+				{
+					"api_key": SECRET_SENTINEL,
+					"edit_url": OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-image-edit",
+					"validation_url": OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-model",
+				}
+			)
+		)
+	)
+	var red := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	red.fill(Color.RED)
+	var blue := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	blue.fill(Color.BLUE)
+	var request := {
+		"mode": "img2img",
+		"model_id": "gpt-image-2",
+		"prompt": "combine references",
+		"width": 32,
+		"height": 32,
+		"batch": 2,
+		"ref_images": [blue, red],
+	}
+	var multipart := _provider.build_edit_request(request)
+	assert_gt(
+		multipart.size(),
+		blue.save_png_to_buffer().size() + red.save_png_to_buffer().size(),
+		"Multipart framing must include both ordered reference images and form fields."
+	)
+	assert_false(multipart.get_string_from_ascii().contains(SECRET_SENTINEL))
+
+	var task: PFTask = _provider.generate(request)
+	var outcome := {"status": "pending", "value": null}
+	task.finished.connect(
+		func(result: Variant) -> void:
+			outcome["status"] = "finished"
+			outcome["value"] = result
+	)
+	task.failed.connect(
+		func(error: Dictionary) -> void:
+			outcome["status"] = "failed"
+			outcome["value"] = error
+	)
+	_queue.submit(task)
+	assert_true(await _wait_until(func() -> bool: return outcome["status"] != "pending"))
+	assert_eq(outcome["status"], "finished")
+	assert_eq(outcome["value"]["images"].size(), 2)
+	assert_eq(
+		outcome["value"]["provider_meta"]["usage"]["fixture_reference_sha256s"],
+		[_sha256(blue.save_png_to_buffer()), _sha256(red.save_png_to_buffer())]
+	)
+	assert_eq(outcome["value"]["provider_meta"]["background"], "opaque")
 
 
 func _load_fixture() -> Dictionary:
@@ -266,6 +323,13 @@ func _load_fixture() -> Dictionary:
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	assert_true(parsed is Dictionary)
 	return parsed
+
+
+func _sha256(bytes: PackedByteArray) -> String:
+	var context := HashingContext.new()
+	context.start(HashingContext.HASH_SHA256)
+	context.update(bytes)
+	return context.finish().hex_encode()
 
 
 func _wait_until(check: Callable, timeout_seconds: float = 2.0) -> bool:

@@ -11,7 +11,9 @@ const PROVIDER_ID := "openai_image"
 const API_VERSION := 1
 const MODEL_ID := "gpt-image-2"
 const GENERATION_URL := "https://api.openai.com/v1/images/generations"
+const EDIT_URL := "https://api.openai.com/v1/images/edits"
 const VALIDATION_URL := "https://api.openai.com/v1/models/gpt-image-2"
+const MULTIPART_BOUNDARY := "----PixelForgeImageBoundary7MA4YWxkTrZu0gW"
 const REQUEST_TIMEOUT_SECONDS := 180.0
 const MAX_NETWORK_RETRIES := 1
 const RETRY_DELAY_SECONDS := 0.25
@@ -21,6 +23,7 @@ var _request_host: Node = null
 var _http: Node = null
 var _api_key := ""
 var _generation_url := GENERATION_URL
+var _edit_url := EDIT_URL
 var _validation_url := VALIDATION_URL
 
 
@@ -90,9 +93,12 @@ func configure(config: Dictionary) -> Variant:
 		return _error("auth_failed", "Enter an OpenAI API key")
 	_api_key = candidate
 	_generation_url = String(config.get("generation_url", GENERATION_URL)).strip_edges()
+	_edit_url = String(config.get("edit_url", EDIT_URL)).strip_edges()
 	_validation_url = String(config.get("validation_url", VALIDATION_URL)).strip_edges()
 	if _generation_url.is_empty():
 		_generation_url = GENERATION_URL
+	if _edit_url.is_empty():
+		_edit_url = EDIT_URL
 	if _validation_url.is_empty():
 		_validation_url = VALIDATION_URL
 	return null
@@ -134,6 +140,26 @@ func generate(request: Dictionary) -> Variant:
 		return _rejected_task(request_error)
 	if not _is_ready_for_request():
 		return null
+	var references := get_reference_images(request)
+	if not references.is_empty():
+		var multipart := build_edit_request(request)
+		return (
+			_http
+			. request_raw(
+				HTTPClient.METHOD_POST,
+				_edit_url,
+				_headers("multipart/form-data; boundary=%s" % MULTIPART_BOUNDARY),
+				multipart,
+				{
+					"timeout": REQUEST_TIMEOUT_SECONDS,
+					"retries": MAX_NETWORK_RETRIES,
+					"backoff": RETRY_DELAY_SECONDS,
+					"transform": _decode_raw_generation_response.bind(request),
+					"worker_transform": true,
+					"error_mapper": map_error,
+				}
+			)
+		)
 	return (
 		_http
 		. request_json(
@@ -186,6 +212,31 @@ func build_request_body(request: Dictionary) -> Dictionary:
 	}
 
 
+func build_edit_request(request: Dictionary) -> PackedByteArray:
+	var body := PackedByteArray()
+	var fields := build_request_body(request)
+	for key in ["model", "prompt", "n", "size", "quality", "background", "output_format"]:
+		_append_multipart_text(body, str(key), str(fields[key]))
+	var references := get_reference_images(request)
+	for index in range(references.size()):
+		var image: Image = references[index]
+		_append_utf8(
+			body,
+			(
+				(
+					"--%s\r\n"
+					+ 'Content-Disposition: form-data; name="image[]"; filename="reference-%02d.png"\r\n'
+					+ "Content-Type: image/png\r\n\r\n"
+				)
+				% [MULTIPART_BOUNDARY, index + 1]
+			)
+		)
+		body.append_array(image.save_png_to_buffer())
+		_append_utf8(body, "\r\n")
+	_append_utf8(body, "--%s--\r\n" % MULTIPART_BOUNDARY)
+	return body
+
+
 func decode_success_payload(payload: Dictionary, request: Dictionary) -> Dictionary:
 	var images := []
 	var revised_prompts := []
@@ -232,7 +283,7 @@ func decode_success_payload(payload: Dictionary, request: Dictionary) -> Diction
 				)
 			),
 			"quality": String(payload.get("quality", "low")),
-			"background": String(payload.get("background", "transparent")),
+			"background": String(payload.get("background", "opaque")),
 			"output_format": String(payload.get("output_format", "png")),
 		},
 	}
@@ -293,6 +344,16 @@ func _decode_generation_response(response: Dictionary, request: Dictionary) -> D
 	return decode_success_payload(payload, request)
 
 
+func _decode_raw_generation_response(response: Dictionary, request: Dictionary) -> Dictionary:
+	var body: Variant = response.get("body", PackedByteArray())
+	if not (body is PackedByteArray):
+		return _failure("provider_internal", "OpenAI returned an invalid response")
+	var payload: Variant = JSON.parse_string(body.get_string_from_utf8())
+	if not (payload is Dictionary):
+		return _failure("provider_internal", "OpenAI returned invalid JSON")
+	return decode_success_payload(payload, request)
+
+
 func _decode_validation_response(_response: Dictionary) -> Dictionary:
 	return {"ok": true, "provider_id": PROVIDER_ID}
 
@@ -305,10 +366,24 @@ func _output_size(width: int, height: int) -> String:
 	return "1024x1024"
 
 
-func _headers() -> PackedStringArray:
+func _headers(content_type: String = "application/json") -> PackedStringArray:
 	return PackedStringArray(
-		["Authorization: Bearer %s" % _api_key, "Content-Type: application/json"]
+		["Authorization: Bearer %s" % _api_key, "Content-Type: %s" % content_type]
 	)
+
+
+func _append_multipart_text(body: PackedByteArray, field_name: String, value: String) -> void:
+	_append_utf8(
+		body,
+		(
+			("--%s\r\n" + 'Content-Disposition: form-data; name="%s"\r\n\r\n' + "%s\r\n")
+			% [MULTIPART_BOUNDARY, field_name, value]
+		)
+	)
+
+
+func _append_utf8(body: PackedByteArray, text: String) -> void:
+	body.append_array(text.to_utf8_buffer())
 
 
 func _is_ready_for_request() -> bool:
