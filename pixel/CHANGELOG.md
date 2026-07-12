@@ -16,6 +16,7 @@
 
 ## Unreleased
 
+- Beta 0.3 workspace foundation: define explicit stage-frame persistence, single-source membership, safe legacy defaults, and structured invalid-reference warnings.
 - Beta 0.2 localization foundation: add system-aware English/Simplified Chinese selection, persistent language preferences, stable catalogs, a reusable selector, and catalog consistency gates.
 - Beta 0.2 workspace slice: add content-bearing canvas modules, a three-path empty state, contextual inspection/navigation, live localized workspace chrome, and an OFL-licensed Simplified Chinese UI font.
 - Beta 0.2 workflow closure: add a formal result-batch node entry, reference-image-to-mock round trip, persisted module collapse, graph/card position synchronization, subset-safe batch processing, authoritative style summaries, and complete English/Simplified Chinese journey feedback.

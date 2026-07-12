@@ -39,6 +39,7 @@ var graph_id := ""
 var node_id := ""
 var locked := false
 var collapsed := false
+var frame_id: Variant = null
 
 var _node_type := ""
 var _display_name := "Missing Node"
@@ -66,14 +67,17 @@ var _execution_detail_label: Label = null
 var _reference_field: Control = null
 var _collapse_button: Button = null
 var _params_snapshot := {}
+var _raw_data := {}
 
 
 func setup_from_data(data: Dictionary) -> void:
+	_raw_data = data.duplicate(true)
 	item_id = String(data.get("id", IdUtil.uuid_v4()))
 	graph_id = String(data.get("graph_id", ""))
 	node_id = String(data.get("node_id", ""))
 	locked = bool(data.get("locked", false))
 	collapsed = bool(data.get("collapsed", false))
+	frame_id = data.get("frame_id", null)
 	z_index = int(data.get("z_index", 0))
 	var raw_position: Variant = data.get("position", [0, 0])
 	position = Vector2(float(raw_position[0]), float(raw_position[1])).round()
@@ -87,16 +91,17 @@ func setup_from_data(data: Dictionary) -> void:
 
 
 func to_canvas_data() -> Dictionary:
-	return {
-		"id": item_id,
-		"type": "node",
-		"graph_id": graph_id,
-		"node_id": node_id,
-		"position": [int(round(position.x)), int(round(position.y))],
-		"z_index": z_index,
-		"collapsed": collapsed,
-		"locked": locked,
-	}
+	var result := _raw_data.duplicate(true)
+	result["id"] = item_id
+	result["type"] = "node"
+	result["graph_id"] = graph_id
+	result["node_id"] = node_id
+	result["position"] = [int(round(position.x)), int(round(position.y))]
+	result["z_index"] = z_index
+	result["collapsed"] = collapsed
+	result["locked"] = locked
+	result["frame_id"] = frame_id
+	return result
 
 
 func get_canvas_bounds() -> Rect2:

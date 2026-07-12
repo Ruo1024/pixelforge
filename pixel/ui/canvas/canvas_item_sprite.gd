@@ -13,9 +13,11 @@ var scale_factor := 1
 var locked := false
 var frame_id: Variant = null
 var source_image: Image = null
+var _raw_data := {}
 
 
 func setup_from_image(item_data: Dictionary, image: Image) -> void:
+	_raw_data = item_data.duplicate(true)
 	item_id = String(item_data.get("id", IdUtil.uuid_v4()))
 	asset_id = String(item_data.get("asset_id", ""))
 	scale_factor = maxi(1, int(item_data.get("scale_factor", 1)))
@@ -46,16 +48,16 @@ func contains_world_point(world_position: Vector2) -> bool:
 
 
 func to_canvas_data() -> Dictionary:
-	return {
-		"id": item_id,
-		"type": "sprite",
-		"asset_id": asset_id,
-		"position": [int(round(position.x)), int(round(position.y))],
-		"scale_factor": scale_factor,
-		"z_index": z_index,
-		"locked": locked,
-		"frame_id": frame_id,
-	}
+	var result := _raw_data.duplicate(true)
+	result["id"] = item_id
+	result["type"] = "sprite"
+	result["asset_id"] = asset_id
+	result["position"] = [int(round(position.x)), int(round(position.y))]
+	result["scale_factor"] = scale_factor
+	result["z_index"] = z_index
+	result["locked"] = locked
+	result["frame_id"] = frame_id
+	return result
 
 
 func duplicate_image() -> Image:

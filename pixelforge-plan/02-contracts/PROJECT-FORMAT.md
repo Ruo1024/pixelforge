@@ -129,7 +129,18 @@ my_project.pxproj (ZIP)
       "position": [256, -32],
       "z_index": 0,
       "review_layout": "contact",    // 仅 batch 节点使用：contact | focus
-      "collapsed": false           // LOD/折叠态（仅显示，不影响逻辑）
+      "collapsed": false,          // LOD/折叠态（仅显示，不影响逻辑）
+      "frame_id": null             // 所属显式阶段组；缺省表示未分组
+    },
+    {
+      "id": "frame_uuid",
+      "type": "frame",
+      "graph_id": "graph_main",   // frame 只容纳同一 graph 的节点
+      "title": "Reference pass",
+      "color": "4f6f8fff",        // 8 位 RGBA hex
+      "position": [64, -96],
+      "size": [1180, 520],         // 正整数世界尺寸
+      "z_index": -1
     }
   ]
 }
@@ -138,6 +149,10 @@ my_project.pxproj (ZIP)
 规则：
 - 画布元素 position 强制整数（像素网格对齐，体验原则1）。
 - `node` 元素是画布上一切图节点（style/prompt/generate/batch/process…）的统一引用形态：只存"画在哪、第几层、是否折叠"，以及 batch 这类画布驻留节点的审阅视图状态；节点的类型/参数/连线全在 `graphs/`。连线在画布上从 graphs 渲染，不写进本文件。
+- `frame` 是显式阶段组。最小字段为 `id / type / graph_id / title / color / position / size / z_index`；不保存 `member_ids`。成员归属的唯一真相是 `node` 画布项的 `frame_id`。
+- 一个 frame 只能容纳同一 `graph_id` 的节点。成组或移入组遇到跨 graph 节点时必须拒绝并返回结构化原因；空间重叠或拖过边界不会自动改变成员。
+- `frame_id` 只由“成组 / 移入组 / 移出组 / 解组”显式动作修改。旧项目缺少该字段时按 `null` 读取；引用不存在或 graph 不匹配时按未分组显示，产生 `frame_reference_not_found` 或 `frame_graph_mismatch` 结构化警告，同时原始 `frame_id` 必须在保存重开中保留。
+- frame 不嵌套、不折叠、不锁定、不自动布局。删除 frame 等同解组：保留节点和内部连线，并清除有效成员的 `frame_id`。
 - `batch` 是 `type:"node"` 的一种（其 graphs 节点 `type=batch`），渲染为容器卡（队列网格 + 边框菜单）；物化的 `asset_id` 队列存在 graphs 节点 params 中。这就是「一等节点 + 画布卡」双身份的落地方式（见 GRAPH-SCHEMA §5a）。
 - **M2.1 临时例外**：M3 前尚无正式 graph 持久化，alpha 清洗台先允许 `type:"batch_card"` 直接在 canvas.json 中保存 `asset_ids` 队列、卡片位置和卡内勾选状态。它不含端口、不含连线、不写 graphs；M3 实施正式 batch 节点时，应把该形态迁入 `type:"node"` + `graphs/{graph_id}.json` 的 `type=batch` params。
 - `graph_anchor` 标记为 **legacy**：统一画布后整张图直接长在画布上，锚点退化；保留仅为读取早期数据，不再新写。
@@ -185,6 +200,7 @@ board/animation 引用的素材必须拒绝或先由用户解除引用。
 - **坏素材降级**：单个素材 PNG 缺失或解码失败不得阻止项目打开。保留元数据；存在但损坏的 PNG 字节原样保留，缺失 PNG 不伪造空白图。项目可在保留失效引用的情况下另存修复副本。
 - **结构化警告**：ProjectService 在打开后和每次保存校验后刷新 `get_validation_warnings() -> Array[Dictionary]`。条目至少为 `{code, path, asset_id, strength}`；code 区分 `asset_reference_not_found|asset_bitmap_missing|asset_decode_failed`，strength 为 `live|history`。服务层不返回最终展示文案。
 - **node 引用**：canvas 的 `node` 元素引用不到 graph/node 时标幽灵节点并保留原文。
+- **frame 引用**：canvas 的 `node.frame_id` 引用不到同 graph frame 时以未分组方式渲染，保留原文，并通过 `get_validation_warnings()` 返回结构化警告。frame 自身不得保存成员数组。
 
 ### 5a. 素材引用强度与完整性
 

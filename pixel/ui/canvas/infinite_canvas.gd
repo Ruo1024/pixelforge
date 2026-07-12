@@ -29,6 +29,7 @@ const EDGE_COLOR := Color(0.42, 0.58, 0.62, 0.9)
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
+const CanvasItemFrameScript := preload("res://ui/canvas/canvas_item_frame.gd")
 const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
 const GraphEdgeInteraction := preload("res://ui/canvas/canvas_graph_edge_interaction.gd")
 const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
@@ -426,6 +427,8 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 			_add_batch_direct(item_data)
 		elif item_type == "node":
 			_add_node_direct(item_data)
+		elif item_type == "frame":
+			_add_frame_direct(item_data)
 
 	_suppress_change_signal = false
 	_update_layer_transform()
@@ -445,6 +448,8 @@ func export_canvas_data() -> Dictionary:
 		elif node.get_script() == CanvasBatchCardScript:
 			items.append(node.to_canvas_data())
 		elif node.get_script() == CanvasNodeCardScript:
+			items.append(node.to_canvas_data())
+		elif node.get_script() == CanvasItemFrameScript:
 			items.append(node.to_canvas_data())
 
 	return {
@@ -942,6 +947,16 @@ func _add_node_direct(item_data: Dictionary) -> Node:
 			graph_node_action_requested.emit(graph_id, node_id, action_id)
 	)
 	item.collapsed_change_requested.connect(_set_graph_node_collapsed)
+	item_layer.add_child(item)
+	_items_by_id[item.item_id] = item
+	_update_item_visibility()
+	queue_redraw()
+	return item
+
+
+func _add_frame_direct(item_data: Dictionary) -> Node:
+	var item: Node = CanvasItemFrameScript.new()
+	item.setup_from_data(item_data)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
 	_update_item_visibility()

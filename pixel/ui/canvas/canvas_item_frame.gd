@@ -1,8 +1,58 @@
 class_name PFCanvasItemFrame
 extends Node2D
 
-## M0 只实现 sprite 元素；frame 在 M3/M5 扩展。
-## 保留脚本是为了让目录和未来项目格式中的 frame_id 有稳定落点。
-## 当前脚本不承担运行时行为；后续加入地图构图或节点锚点时再扩展字段和绘制逻辑。
+## 显式阶段组的持久化与背景渲染。
+## contract: PROJECT-FORMAT §4；成员只由 node.frame_id 表达，frame 不保存成员数组。
 
-var frame_id := ""
+const DEFAULT_SIZE := Vector2(320, 240)
+const DEFAULT_COLOR := Color(0.31, 0.44, 0.56, 1.0)
+
+var item_id := ""
+var graph_id := ""
+var title := ""
+var frame_size := DEFAULT_SIZE
+var frame_color := DEFAULT_COLOR
+var locked := true
+var _raw_data := {}
+
+
+func setup_from_data(data: Dictionary) -> void:
+	_raw_data = data.duplicate(true)
+	item_id = String(data.get("id", ""))
+	graph_id = String(data.get("graph_id", ""))
+	title = String(data.get("title", ""))
+	frame_color = Color.from_string(String(data.get("color", "4f6f8fff")), DEFAULT_COLOR)
+	var raw_position: Variant = data.get("position", [0, 0])
+	position = Vector2(float(raw_position[0]), float(raw_position[1])).round()
+	var raw_size: Variant = data.get("size", [DEFAULT_SIZE.x, DEFAULT_SIZE.y])
+	frame_size = Vector2(maxf(1.0, float(raw_size[0])), maxf(1.0, float(raw_size[1]))).round()
+	z_index = int(data.get("z_index", -1))
+	queue_redraw()
+
+
+func to_canvas_data() -> Dictionary:
+	var result := _raw_data.duplicate(true)
+	result["id"] = item_id
+	result["type"] = "frame"
+	result["graph_id"] = graph_id
+	result["title"] = title
+	result["color"] = frame_color.to_html()
+	result["position"] = [int(round(position.x)), int(round(position.y))]
+	result["size"] = [int(round(frame_size.x)), int(round(frame_size.y))]
+	result["z_index"] = z_index
+	result.erase("member_ids")
+	return result
+
+
+func get_canvas_bounds() -> Rect2:
+	return Rect2(position, frame_size)
+
+
+func contains_world_point(world_position: Vector2) -> bool:
+	return get_canvas_bounds().has_point(world_position)
+
+
+func _draw() -> void:
+	var local_rect := Rect2(Vector2.ZERO, frame_size)
+	draw_rect(local_rect, Color(frame_color, 0.12), true)
+	draw_rect(local_rect, Color(frame_color, 0.82), false, 2.0)

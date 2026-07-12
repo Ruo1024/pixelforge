@@ -286,6 +286,43 @@ func _save_to_path(path: String) -> Error:
 func _refresh_validation_warnings() -> void:
 	var scan: Dictionary = AssetReferenceScanner.scan(current_project, AssetLibrary)
 	_validation_warnings = Array(scan.get("warnings", [])).duplicate(true)
+	_validation_warnings.append_array(_scan_canvas_structure_warnings())
+
+
+func _scan_canvas_structure_warnings() -> Array[Dictionary]:
+	var warnings: Array[Dictionary] = []
+	var frames := {}
+	for raw_item in current_project.canvas.get("items", []):
+		if not (raw_item is Dictionary):
+			continue
+		var item: Dictionary = raw_item
+		if String(item.get("type", "")) == "frame":
+			frames[String(item.get("id", ""))] = item
+
+	for raw_item in current_project.canvas.get("items", []):
+		if not (raw_item is Dictionary):
+			continue
+		var item: Dictionary = raw_item
+		if String(item.get("type", "")) != "node":
+			continue
+		var frame_id := String(item.get("frame_id", ""))
+		if frame_id.is_empty():
+			continue
+		var warning := {
+			"path": "canvas.items[%s].frame_id" % String(item.get("id", "")),
+			"frame_id": frame_id,
+			"node_id": String(item.get("node_id", "")),
+			"strength": "live",
+		}
+		if not frames.has(frame_id):
+			warning["code"] = "frame_reference_not_found"
+			warnings.append(warning)
+			continue
+		var frame: Dictionary = frames[frame_id]
+		if String(frame.get("graph_id", "")) != String(item.get("graph_id", "")):
+			warning["code"] = "frame_graph_mismatch"
+			warnings.append(warning)
+	return warnings
 
 
 func _update_manifest_before_save() -> void:
@@ -356,6 +393,17 @@ func _normalize_loaded_project(manifest: Dictionary, canvas: Dictionary) -> void
 			item_data["node_id"] = String(item_data.get("node_id", ""))
 			item_data["graph_id"] = String(item_data.get("graph_id", ""))
 			item_data["collapsed"] = bool(item_data.get("collapsed", false))
+			if item_data.has("frame_id") and item_data["frame_id"] != null:
+				item_data["frame_id"] = String(item_data["frame_id"])
+		elif String(item_data.get("type", "")) == "frame":
+			item_data["graph_id"] = String(item_data.get("graph_id", ""))
+			item_data["title"] = String(item_data.get("title", ""))
+			item_data["color"] = String(item_data.get("color", "4f6f8fff"))
+			var raw_size: Variant = item_data.get("size", [320, 240])
+			item_data["size"] = [
+				maxi(1, int(round(float(raw_size[0])))),
+				maxi(1, int(round(float(raw_size[1])))),
+			]
 		normalized_items.append(item_data)
 	canvas["items"] = normalized_items
 

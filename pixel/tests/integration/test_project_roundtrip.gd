@@ -119,6 +119,170 @@ func test_project_graphs_survive_zip_roundtrip() -> void:
 	assert_eq(project_service.current_project.canvas["items"][0]["node_id"], "batch_1")
 
 
+func test_stage_frames_and_membership_survive_roundtrip_with_unknown_fields() -> void:
+	var project_service := get_tree().root.get_node("ProjectService")
+	var graph_data := {
+		"graph_version": 1,
+		"id": "graph_main",
+		"name": "Two branches",
+		"nodes":
+		[
+			{"id": "prompt_a", "type": "object_list", "position": [0, 0], "params": {}},
+			{"id": "batch_a", "type": "batch", "position": [320, 0], "params": {}},
+		],
+		"edges": [],
+	}
+	var canvas_data := {
+		"camera": {"center": [80, 40], "zoom": 0.5},
+		"items":
+		[
+			{
+				"id": "frame_inputs",
+				"type": "frame",
+				"graph_id": "graph_main",
+				"title": "Inputs",
+				"color": "486f8fff",
+				"position": [-32, -48],
+				"size": [640, 360],
+				"z_index": -1,
+				"future_frame_field": {"keep": true},
+			},
+			{
+				"id": "prompt_item",
+				"type": "node",
+				"graph_id": "graph_main",
+				"node_id": "prompt_a",
+				"position": [0, 0],
+				"z_index": 1,
+				"collapsed": false,
+				"frame_id": "frame_inputs",
+				"future_node_field": "preserve-me",
+			},
+			{
+				"id": "batch_item",
+				"type": "node",
+				"graph_id": "graph_main",
+				"node_id": "batch_a",
+				"position": [320, 0],
+				"z_index": 2,
+				"collapsed": false,
+				"frame_id": "frame_inputs",
+				"future_batch_field": "preserve-batch",
+			},
+		],
+	}
+	project_service.set_graph_data("graph_main", graph_data)
+	project_service.set_canvas_data(canvas_data)
+	var path := "user://tests/frame_roundtrip_beta_0_3.pxproj"
+
+	assert_eq(project_service.save_project(path), OK)
+	assert_eq(project_service.open_project(path), OK)
+
+	var items: Array = project_service.current_project.canvas["items"]
+	assert_eq(items[0]["title"], "Inputs")
+	assert_eq(items[0]["size"], [640, 360])
+	assert_eq(items[0]["future_frame_field"], {"keep": true})
+	assert_eq(items[1]["frame_id"], "frame_inputs")
+	assert_eq(items[1]["future_node_field"], "preserve-me")
+	assert_eq(items[2]["frame_id"], "frame_inputs")
+	assert_eq(items[2]["future_batch_field"], "preserve-batch")
+	assert_true(project_service.get_validation_warnings().is_empty())
+
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(960, 640)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+	canvas.load_canvas_data(project_service.current_project.canvas)
+	var runtime_items: Array = canvas.export_canvas_data()["items"]
+	assert_eq(_item_by_id(runtime_items, "frame_inputs")["future_frame_field"], {"keep": true})
+	assert_eq(_item_by_id(runtime_items, "prompt_item")["future_node_field"], "preserve-me")
+	assert_eq(_item_by_id(runtime_items, "batch_item")["future_batch_field"], "preserve-batch")
+	assert_eq(_item_by_id(runtime_items, "batch_item")["frame_id"], "frame_inputs")
+
+
+func test_old_canvas_defaults_to_ungrouped_and_invalid_frame_ids_warn_without_rewrite() -> void:
+	var project_service := get_tree().root.get_node("ProjectService")
+	(
+		project_service
+		. set_graphs_data(
+			{
+				"graph_main":
+				{
+					"graph_version": 1,
+					"id": "graph_main",
+					"nodes":
+					[
+						{"id": "old", "type": "object_list", "position": [0, 0], "params": {}},
+						{"id": "missing", "type": "object_list", "position": [1, 0], "params": {}},
+						{"id": "wrong", "type": "object_list", "position": [2, 0], "params": {}},
+					],
+					"edges": [],
+				}
+			}
+		)
+	)
+	(
+		project_service
+		. set_canvas_data(
+			{
+				"camera": {"center": [0, 0], "zoom": 1.0},
+				"items":
+				[
+					{
+						"id": "other_graph_frame",
+						"type": "frame",
+						"graph_id": "graph_other",
+						"title": "Other",
+						"color": "335577ff",
+						"position": [0, 0],
+						"size": [200, 100],
+						"z_index": -1,
+					},
+					{
+						"id": "old_item",
+						"type": "node",
+						"graph_id": "graph_main",
+						"node_id": "old",
+						"position": [0, 0],
+						"z_index": 0,
+					},
+					{
+						"id": "missing_item",
+						"type": "node",
+						"graph_id": "graph_main",
+						"node_id": "missing",
+						"position": [1, 0],
+						"z_index": 1,
+						"frame_id": "does_not_exist",
+					},
+					{
+						"id": "wrong_item",
+						"type": "node",
+						"graph_id": "graph_main",
+						"node_id": "wrong",
+						"position": [2, 0],
+						"z_index": 2,
+						"frame_id": "other_graph_frame",
+					},
+				],
+			}
+		)
+	)
+	var path := "user://tests/frame_compat_beta_0_3.pxproj"
+	assert_eq(project_service.save_project(path), OK)
+	assert_eq(project_service.open_project(path), OK)
+
+	var items: Array = project_service.current_project.canvas["items"]
+	assert_false(Dictionary(items[1]).has("frame_id"))
+	assert_eq(items[2]["frame_id"], "does_not_exist")
+	assert_eq(items[3]["frame_id"], "other_graph_frame")
+	var warning_codes := []
+	for warning in project_service.get_validation_warnings():
+		warning_codes.append(String(warning.get("code", "")))
+	assert_has(warning_codes, "frame_reference_not_found")
+	assert_has(warning_codes, "frame_graph_mismatch")
+
+
 func test_simplified_chinese_project_path_name_and_prompt_roundtrip() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	project_service.new_project("像素农场")
@@ -426,3 +590,10 @@ func _make_item(item_id: String, asset_id: String, position: Vector2, z_index: i
 
 func _int_pair(value: Array) -> Array:
 	return [int(value[0]), int(value[1])]
+
+
+func _item_by_id(items: Array, item_id: String) -> Dictionary:
+	for item in items:
+		if item is Dictionary and String(item.get("id", "")) == item_id:
+			return item
+	return {}

@@ -17,6 +17,7 @@ var nodes := {}
 var edges: Array[Dictionary] = []
 
 var _node_order := []
+var _raw_graph_fields := {}
 
 
 static func from_json(data: Dictionary, registry: Variant = null) -> PFGraph:
@@ -28,6 +29,9 @@ static func from_json(data: Dictionary, registry: Variant = null) -> PFGraph:
 	graph.graph_version = int(data.get("graph_version", GRAPH_VERSION))
 	graph.id = String(data.get("id", "graph_main"))
 	graph.name = String(data.get("name", "Main Graph"))
+	graph._raw_graph_fields = data.duplicate(true)
+	for known_key in ["graph_version", "id", "name", "nodes", "edges"]:
+		graph._raw_graph_fields.erase(known_key)
 
 	for raw_node in data.get("nodes", []):
 		if raw_node is Dictionary:
@@ -53,6 +57,7 @@ func add_node(
 		"node": node,
 		"params": node.validate_params(params),
 		"position": _position_to_array(position),
+		"raw_fields": {},
 	}
 	_node_order.append(resolved_id)
 	return resolved_id
@@ -190,13 +195,13 @@ func to_json() -> Dictionary:
 	for node_id in _node_order:
 		if nodes.has(node_id):
 			node_json.append(_node_to_json(String(node_id)))
-	return {
-		"graph_version": graph_version,
-		"id": id,
-		"name": name,
-		"nodes": node_json,
-		"edges": edges.duplicate(true),
-	}
+	var result := _raw_graph_fields.duplicate(true)
+	result["graph_version"] = graph_version
+	result["id"] = id
+	result["name"] = name
+	result["nodes"] = node_json
+	result["edges"] = edges.duplicate(true)
+	return result
 
 
 func _load_node(raw_node: Dictionary, registry: Variant) -> void:
@@ -206,10 +211,14 @@ func _load_node(raw_node: Dictionary, registry: Variant) -> void:
 		node = PFNode.create_ghost(type_name, raw_node)
 
 	var node_id := String(raw_node.get("id", IdUtil.uuid_v4()))
+	var raw_fields := raw_node.duplicate(true)
+	for known_key in ["id", "type", "position", "params"]:
+		raw_fields.erase(known_key)
 	nodes[node_id] = {
 		"node": node,
 		"params": node.validate_params(raw_node.get("params", {})),
 		"position": _normalize_position(raw_node.get("position", [0, 0])),
+		"raw_fields": raw_fields,
 	}
 	_node_order.append(node_id)
 
@@ -224,19 +233,19 @@ func _node_to_json(node_id: String) -> Dictionary:
 		ghost_json["position"] = entry["position"]
 		ghost_json["params"] = entry["params"]
 		return ghost_json
-	return {
-		"id": node_id,
-		"type": node.get_type(),
-		"position": entry["position"],
-		"params": entry["params"],
-	}
+	var result: Dictionary = Dictionary(entry.get("raw_fields", {})).duplicate(true)
+	result["id"] = node_id
+	result["type"] = node.get_type()
+	result["position"] = entry["position"]
+	result["params"] = entry["params"]
+	return result
 
 
 func _normalize_edge(edge: Dictionary) -> Dictionary:
-	return {
-		"from": _normalize_edge_endpoint(edge.get("from", [])),
-		"to": _normalize_edge_endpoint(edge.get("to", [])),
-	}
+	var normalized := edge.duplicate(true)
+	normalized["from"] = _normalize_edge_endpoint(edge.get("from", []))
+	normalized["to"] = _normalize_edge_endpoint(edge.get("to", []))
+	return normalized
 
 
 func _normalize_edge_endpoint(value: Variant) -> Array:

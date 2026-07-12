@@ -71,6 +71,7 @@ var review_layout := LAYOUT_CONTACT
 var label := ""
 var locked := false
 var collapsed := false
+var frame_id: Variant = null
 
 var _thumbnail_textures := {}
 var _asset_hints := {}
@@ -78,9 +79,11 @@ var _font: Font = null
 var _lod_camera_zoom := 1.0
 var _has_graph_edge_error := false
 var _collapse_button: Button = null
+var _raw_data := {}
 
 
 func setup_from_data(data: Dictionary) -> void:
+	_raw_data = data.duplicate(true)
 	item_id = String(data.get("id", IdUtil.uuid_v4()))
 	graph_id = String(data.get("graph_id", ""))
 	node_id = String(data.get("node_id", ""))
@@ -107,6 +110,7 @@ func setup_from_data(data: Dictionary) -> void:
 	)
 	review_layout = _normalize_review_layout(String(data.get("review_layout", LAYOUT_CONTACT)))
 	collapsed = bool(data.get("collapsed", false))
+	frame_id = data.get("frame_id", null)
 	_prune_selected_to_visible()
 	_prune_focus_to_visible()
 	locked = bool(data.get("locked", false))
@@ -120,35 +124,35 @@ func setup_from_data(data: Dictionary) -> void:
 
 
 func to_canvas_data() -> Dictionary:
+	var result := _raw_data.duplicate(true)
 	if has_graph_binding():
-		return {
-			"id": item_id,
-			"type": "node",
-			"graph_id": graph_id,
-			"node_id": node_id,
-			"position": [int(round(position.x)), int(round(position.y))],
-			"z_index": z_index,
-			"collapsed": collapsed,
-			"review_layout": review_layout,
-			"locked": locked,
-		}
-	return {
-		"id": item_id,
-		"type": "batch_card",
-		"asset_ids": asset_ids.duplicate(),
-		"selected_asset_ids": selected_asset_ids.duplicate(),
-		"review_states": review_states.duplicate(true),
-		"review_filter": review_filter,
-		"focus_asset_id": focus_asset_id,
-		"compare_asset_ids": compare_asset_ids.duplicate(),
-		"compare_mode": compare_mode,
-		"review_layout": review_layout,
-		"label": label,
-		"position": [int(round(position.x)), int(round(position.y))],
-		"z_index": z_index,
-		"locked": locked,
-		"collapsed": collapsed,
-	}
+		result["id"] = item_id
+		result["type"] = "node"
+		result["graph_id"] = graph_id
+		result["node_id"] = node_id
+		result["position"] = [int(round(position.x)), int(round(position.y))]
+		result["z_index"] = z_index
+		result["collapsed"] = collapsed
+		result["review_layout"] = review_layout
+		result["locked"] = locked
+		result["frame_id"] = frame_id
+		return result
+	result["id"] = item_id
+	result["type"] = "batch_card"
+	result["asset_ids"] = asset_ids.duplicate()
+	result["selected_asset_ids"] = selected_asset_ids.duplicate()
+	result["review_states"] = review_states.duplicate(true)
+	result["review_filter"] = review_filter
+	result["focus_asset_id"] = focus_asset_id
+	result["compare_asset_ids"] = compare_asset_ids.duplicate()
+	result["compare_mode"] = compare_mode
+	result["review_layout"] = review_layout
+	result["label"] = label
+	result["position"] = [int(round(position.x)), int(round(position.y))]
+	result["z_index"] = z_index
+	result["locked"] = locked
+	result["collapsed"] = collapsed
+	return result
 
 
 func has_graph_binding() -> bool:

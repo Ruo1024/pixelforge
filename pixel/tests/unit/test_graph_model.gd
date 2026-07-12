@@ -228,3 +228,42 @@ func test_unknown_node_becomes_ghost_and_keeps_raw_fields() -> void:
 	assert_true(graph.get_node("plugin_1").is_ghost())
 	assert_eq(graph.to_json()["nodes"][0]["plugin_payload"], {"kept": true})
 	assert_eq(graph.to_json(), source_graph)
+
+
+func test_known_graph_node_and_edge_unknown_fields_survive_roundtrip() -> void:
+	var source_graph := {
+		"graph_version": 1,
+		"id": "future_graph",
+		"name": "Forward Compatible",
+		"future_graph_field": {"mode": "keep"},
+		"nodes":
+		[
+			{
+				"id": "objects",
+				"type": "object_list",
+				"position": [0, 0],
+				"params": {"items": "barrel"},
+				"future_node_field": [1, 2, 3],
+			},
+			{
+				"id": "generate",
+				"type": "ai_generate",
+				"position": [200, 0],
+				"params": {},
+			},
+		],
+		"edges":
+		[
+			{
+				"from": ["objects", "items"],
+				"to": ["generate", "items"],
+				"future_edge_field": {"label": "keep"},
+			}
+		],
+	}
+
+	var graph: PFGraph = GraphScript.from_json(source_graph, NodeRegistryScript.new())
+	var saved: Dictionary = graph.to_json()
+	assert_eq(saved["future_graph_field"], {"mode": "keep"})
+	assert_eq(saved["nodes"][0]["future_node_field"], [1, 2, 3])
+	assert_eq(saved["edges"][0]["future_edge_field"], {"label": "keep"})
