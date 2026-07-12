@@ -411,6 +411,7 @@ func _generation_snapshot(
 		"style": Dictionary(request.get("style", {})).duplicate(true),
 		"width": int(request.get("width", 0)),
 		"height": int(request.get("height", 0)),
+		"batch_size": int(request.get("batch", 1)),
 		"seed": seed,
 		"reference_asset_ids": Array(request.get("reference_asset_ids", [])).duplicate(),
 		"reference_content_sha256s":

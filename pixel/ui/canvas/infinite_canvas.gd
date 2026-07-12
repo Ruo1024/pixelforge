@@ -16,6 +16,7 @@ signal asset_edit_requested(asset_id: String, batch_id: String)
 signal graph_node_params_commit_requested(graph_id: String, node_id: String, params: Dictionary)
 signal graph_node_action_requested(graph_id: String, node_id: String, action_id: String)
 signal batch_run_action_requested(graph_id: String, node_id: String, action_id: String)
+signal project_resource_dropped(resource: Dictionary, world_position: Vector2)
 signal image_paste_requested(world_position: Vector2)
 
 const ZOOM_LEVELS := [0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
@@ -497,6 +498,16 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 	_suppress_change_signal = false
 	_update_layer_transform()
 	_update_item_visibility()
+
+
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	return data is Dictionary and String(data.get("kind", "")) in ["project_asset", "style_preset"]
+
+
+func _drop_data(at_position: Vector2, data: Variant) -> void:
+	if not _can_drop_data(at_position, data):
+		return
+	project_resource_dropped.emit(Dictionary(data).duplicate(true), screen_to_world(at_position))
 	_emit_zoom_changed()
 	queue_redraw()
 

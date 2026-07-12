@@ -6,15 +6,7 @@ extends ConfirmationDialog
 signal setup_completed(open_provider_settings: bool, create_sample: bool)
 
 const Strings := preload("res://ui/shell/strings.gd")
-
-const PRESETS := [
-	["16-bit / DB32", "res://assets/presets/preset_16bit_db32.json"],
-	["Game Boy", "res://assets/presets/preset_gb.json"],
-	["NES", "res://assets/presets/preset_nes.json"],
-	["Hi-bit", "res://assets/presets/preset_hibit.json"],
-	["1-bit", "res://assets/presets/preset_1bit.json"],
-	["HD-2D Prop", "res://assets/presets/preset_hd2d_prop.json"],
-]
+const ResourceCatalog := preload("res://services/project_resource_catalog.gd")
 
 var _preset: OptionButton = null
 var _provider_setup: CheckButton = null
@@ -49,9 +41,9 @@ func _build_ui() -> void:
 	root.add_child(preset_label)
 	_preset = OptionButton.new()
 	_preset.name = "Preset"
-	for spec in PRESETS:
-		_preset.add_item(String(spec[0]))
-		_preset.set_item_metadata(_preset.item_count - 1, spec[1])
+	for style in ResourceCatalog.search_styles():
+		_preset.add_item(String(style["name"]))
+		_preset.set_item_metadata(_preset.item_count - 1, style["path"])
 	root.add_child(_preset)
 	_provider_setup = CheckButton.new()
 	_provider_setup.name = "ProviderSetup"

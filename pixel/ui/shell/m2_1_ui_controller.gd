@@ -32,6 +32,8 @@ const OfflineExampleControllerScript := preload("res://ui/shell/offline_example_
 const GraphMockRunnerScript := preload("res://services/graph_mock_runner.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+const ResultBranchBuilder := preload("res://services/result_branch_builder.gd")
+const StylePresetNodeScript := preload("res://core/graph/nodes/style_preset_node.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Log := preload("res://core/util/log_util.gd")
 
@@ -332,6 +334,182 @@ func _handle_batch_run_action(graph_id: String, node_id: String, action_id: Stri
 			_run_graph_node(graph_id, node_id)
 		"remove":
 			_canvas.delete_selected()
+
+
+func _handle_candidate_action(action_id: String, context: Dictionary) -> void:
+	var snapshot: Dictionary = context.get("snapshot", {})
+	match action_id:
+		"copy_prompt":
+			DisplayServer.clipboard_set(String(snapshot.get("prompt", "")))
+			_status_label.text = Strings.text("STATUS_CANDIDATE_PROMPT_COPIED")
+		"copy_settings":
+			DisplayServer.clipboard_set(JSON.stringify(snapshot, "  "))
+			_status_label.text = Strings.text("STATUS_CANDIDATE_SETTINGS_COPIED")
+		"rerun":
+			_run_graph_node(
+				String(context.get("graph_id", "")),
+				String(snapshot.get("source_generate_node_id", ""))
+			)
+		"as_reference", "continue_branch":
+			_apply_result_branch(action_id, context)
+
+
+func _handle_project_resource_drop(resource: Dictionary, world_position: Vector2) -> void:
+	match String(resource.get("kind", "")):
+		"project_asset":
+			if not bool(resource.get("available", false)):
+				_status_label.text = Strings.text("STATUS_RESOURCE_UNAVAILABLE")
+				return
+			add_graph_node_to_selected_graph(
+				"image_input", world_position, {"asset_id": String(resource.get("asset_id", ""))}
+			)
+		"style_preset":
+			_drop_style_resource(resource.get("preset", {}), world_position)
+
+
+func _drop_style_resource(preset_value: Variant, world_position: Vector2) -> void:
+	if not (preset_value is Dictionary):
+		_status_label.text = Strings.text("STATUS_RESOURCE_UNAVAILABLE")
+		return
+	var binding := _selected_graph_binding()
+	var before_graphs := ProjectService.get_graphs_data()
+	var graph_id := _resolve_target_graph_id(binding, before_graphs)
+	var before: Dictionary = before_graphs.get(graph_id, {})
+	var graph := GraphScript.from_json(before) if not before.is_empty() else GraphScript.new()
+	graph.id = graph_id
+	var node_id := "style_%s" % IdUtil.uuid_v4().left(8)
+	graph.add_node(
+		StylePresetNodeScript.new(),
+		node_id,
+		{"preset_ref": "embedded", "preset": Dictionary(preset_value).duplicate(true)},
+		world_position
+	)
+	var target_generate_id := _target_generate_node_id(graph, String(binding.get("node_id", "")))
+	if not target_generate_id.is_empty():
+		var kept_edges: Array[Dictionary] = []
+		for edge in graph.edges:
+			var to_data: Array = edge.get("to", ["", ""])
+			if String(to_data[0]) == target_generate_id and String(to_data[1]) == "style":
+				continue
+			kept_edges.append(edge)
+		graph.edges = kept_edges
+		graph.add_edge(node_id, "style", target_generate_id, "style")
+	var after := graph.to_json()
+	var item_id := IdUtil.uuid_v4()
+	var do_add := func() -> void:
+		ProjectService.set_graph_data(graph_id, after, true)
+		_canvas._add_graph_node_card(graph_id, node_id, world_position, item_id, false)
+		_canvas.select_ids([item_id])
+	var undo_add := func() -> void:
+		_canvas._remove_item_direct(item_id)
+		if before.is_empty():
+			var graphs := ProjectService.get_graphs_data()
+			graphs.erase(graph_id)
+			ProjectService.set_graphs_data(graphs, true)
+		else:
+			ProjectService.set_graph_data(graph_id, before, true)
+		_canvas._emit_canvas_changed()
+	UndoService.perform_action("Add style resource", do_add, undo_add)
+	_status_label.text = Strings.text("STATUS_STYLE_RESOURCE_ADDED")
+
+
+func _apply_result_branch(action_id: String, context: Dictionary) -> void:
+	var graph_id := String(context.get("graph_id", ""))
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	var asset_ids: Array = context.get("asset_ids", [])
+	if graph_data.is_empty() or asset_ids.is_empty():
+		_status_label.text = Strings.text("STATUS_CANDIDATE_BRANCH_FAILED")
+		return
+	var graph := GraphScript.from_json(graph_data)
+	var anchor := _result_branch_anchor(String(context.get("batch_node_id", "")))
+	var result := ResultBranchBuilder.build(
+		graph, action_id, asset_ids, context.get("snapshot", {}), anchor
+	)
+	if not bool(result.get("ok", false)):
+		_status_label.text = Strings.text("STATUS_CANDIDATE_BRANCH_FAILED")
+		return
+	var after := graph.to_json()
+	var item_specs := _result_branch_item_specs(
+		after, result.get("created_node_ids", []), String(result.get("focus_node_id", ""))
+	)
+	var apply_snapshot := func(snapshot: Dictionary, add_items: bool) -> void:
+		ProjectService.set_graph_data(graph_id, snapshot, true)
+		if add_items:
+			_add_result_branch_items(graph_id, item_specs)
+		else:
+			for spec in item_specs:
+				_canvas._remove_item_direct(String(spec["item_id"]))
+		_canvas._emit_canvas_changed()
+	UndoService.perform_action(
+		"Create result branch",
+		func() -> void: apply_snapshot.call(after, true),
+		func() -> void: apply_snapshot.call(graph_data, false)
+	)
+	_status_label.text = Strings.text(
+		(
+			"STATUS_CANDIDATE_REFERENCE_CREATED"
+			if action_id == "as_reference"
+			else "STATUS_CANDIDATE_BRANCH_CREATED"
+		)
+	)
+
+
+func _result_branch_anchor(batch_node_id: String) -> Vector2:
+	for raw_item in _canvas.export_canvas_data().get("items", []):
+		var item: Dictionary = raw_item
+		if String(item.get("node_id", "")) == batch_node_id:
+			var raw_position: Array = item.get("position", [0, 0])
+			return Vector2(float(raw_position[0]), float(raw_position[1])) + Vector2(680, 0)
+	return _canvas.get_mouse_world_position()
+
+
+func _result_branch_item_specs(
+	graph_data: Dictionary, node_ids: Array, focus_node_id: String
+) -> Array:
+	var specs := []
+	for raw_node in graph_data.get("nodes", []):
+		var node: Dictionary = raw_node
+		var node_id := String(node.get("id", ""))
+		if not node_ids.has(node_id):
+			continue
+		(
+			specs
+			. append(
+				{
+					"item_id": IdUtil.uuid_v4(),
+					"node_id": node_id,
+					"type": String(node.get("type", "")),
+					"position": node.get("position", [0, 0]),
+					"focus": node_id == focus_node_id,
+				}
+			)
+		)
+	return specs
+
+
+func _add_result_branch_items(graph_id: String, specs: Array) -> void:
+	var focus_item_id := ""
+	for spec in specs:
+		var raw_position: Array = spec.get("position", [0, 0])
+		var position := Vector2(float(raw_position[0]), float(raw_position[1]))
+		if String(spec.get("type", "")) == "batch":
+			_canvas._add_batch_card(
+				[],
+				position,
+				Strings.text("BATCH_DEFAULT_LABEL"),
+				String(spec["item_id"]),
+				false,
+				graph_id,
+				String(spec["node_id"])
+			)
+		else:
+			_canvas._add_graph_node_card(
+				graph_id, String(spec["node_id"]), position, String(spec["item_id"]), false
+			)
+		if bool(spec.get("focus", false)):
+			focus_item_id = String(spec["item_id"])
+	if not focus_item_id.is_empty():
+		_canvas.select_ids([focus_item_id])
 
 
 func run_selected_mock_graph() -> void:
