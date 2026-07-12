@@ -3,6 +3,8 @@ extends PanelContainer
 
 ## 工作区右栏宿主：图节点显示核心摘要，素材与批次继续使用既有清洗检查器。
 
+signal candidate_action_requested(action_id: String, context: Dictionary)
+
 const CleanupInspectorScript := preload("res://ui/inspector/cleanup_inspector.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
@@ -11,6 +13,29 @@ const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
 
 const PANEL_WIDTH := 420
 const CONTENT_GAP := 8
+const GENERATION_SNAPSHOT_KEYS: Array[String] = [
+	"provider_id",
+	"model_id",
+	"prompt",
+	"negative_prompt",
+	"style",
+	"width",
+	"height",
+	"seed",
+	"reference_asset_ids",
+	"reference_content_sha256s",
+	"source_generate_node_id",
+	"source_row_id",
+	"run_id",
+	"cost",
+	"created_at",
+]
+const CANDIDATE_ACTIONS: Array[String] = [
+	"copy_prompt", "copy_settings", "rerun", "as_reference", "continue_branch"
+]
+const SNAPSHOT_FORBIDDEN_KEY_PARTS: Array[String] = [
+	"api_key", "authorization", "credential", "header", "password", "response", "secret", "token"
+]
 
 var cleanup_inspector: Control = null
 
@@ -18,6 +43,11 @@ var _title_label: Label = null
 var _kind_label: Label = null
 var _summary_label: Label = null
 var _graph_summary: VBoxContainer = null
+var _candidate_panel: VBoxContainer = null
+var _candidate_summary: Label = null
+var _candidate_rows := {}
+var _candidate_action_buttons := {}
+var _candidate_context := {}
 var _canvas: Control = null
 
 
@@ -48,6 +78,8 @@ func _ready() -> void:
 	_summary_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_graph_summary.add_child(_summary_label)
 
+	_build_candidate_panel(root)
+
 	cleanup_inspector = CleanupInspectorScript.new()
 	cleanup_inspector.name = "CleanupInspector"
 	cleanup_inspector.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -63,7 +95,8 @@ func show_context(context: Dictionary) -> void:
 	var kind := String(context.get("kind", "none"))
 	var is_graph_node := kind == "node"
 	_graph_summary.visible = is_graph_node or kind == "none"
-	cleanup_inspector.visible = kind in ["sprite", "batch", "multiple"]
+	cleanup_inspector.visible = kind in ["sprite", "batch", "multiple", "candidate"]
+	_candidate_panel.visible = kind == "candidate"
 
 	_title_label.text = String(context.get("title", Strings.text("INSPECTOR_TITLE")))
 	_kind_label.text = String(context.get("type", Strings.text("INSPECTOR_NO_SELECTION")))
@@ -71,7 +104,7 @@ func show_context(context: Dictionary) -> void:
 
 
 func show_canvas_selection(canvas: Control) -> void:
-	_canvas = canvas
+	_set_canvas(canvas)
 	var selected_ids: Array = canvas.get_selected_ids()
 	if selected_ids.is_empty():
 		show_context({})
@@ -98,14 +131,7 @@ func show_canvas_selection(canvas: Control) -> void:
 			}
 		)
 	elif item.get_script() == CanvasBatchCardScript:
-		show_context(
-			{
-				"kind": "batch",
-				"title": item.label,
-				"type": Strings.text("BATCH_DEFAULT_LABEL"),
-				"summary": Strings.text("INSPECTOR_BATCH_SUMMARY_FORMAT") % item.asset_ids.size(),
-			}
-		)
+		_show_batch_context(item)
 	elif item.get_script() == CanvasItemSpriteScript:
 		show_context(_sprite_context(item))
 	else:
@@ -132,6 +158,208 @@ func _sprite_context(item: Node) -> Dictionary:
 
 func get_cleanup_inspector() -> Control:
 	return cleanup_inspector
+
+
+func _build_candidate_panel(root: VBoxContainer) -> void:
+	_candidate_panel = VBoxContainer.new()
+	_candidate_panel.name = "CandidatePanel"
+	_candidate_panel.add_theme_constant_override("separation", CONTENT_GAP)
+	root.add_child(_candidate_panel)
+
+	_candidate_summary = Label.new()
+	_candidate_summary.name = "CandidateSummary"
+	_candidate_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_candidate_panel.add_child(_candidate_summary)
+
+	for field_id in [
+		"prompt", "model", "seed", "size", "references", "cost", "created_at", "source"
+	]:
+		_add_candidate_row(field_id)
+
+	var actions := HFlowContainer.new()
+	actions.name = "CandidateActions"
+	actions.add_theme_constant_override("h_separation", CONTENT_GAP)
+	actions.add_theme_constant_override("v_separation", CONTENT_GAP)
+	_candidate_panel.add_child(actions)
+	for action_id in CANDIDATE_ACTIONS:
+		var button := Button.new()
+		button.name = _action_button_name(action_id)
+		button.pressed.connect(_on_candidate_action_pressed.bind(action_id))
+		actions.add_child(button)
+		_candidate_action_buttons[action_id] = button
+
+
+func _add_candidate_row(field_id: String) -> void:
+	var row := VBoxContainer.new()
+	row.name = "%sRow" % field_id.to_pascal_case()
+	row.add_theme_constant_override("separation", 2)
+	_candidate_panel.add_child(row)
+	var label := Label.new()
+	label.name = "FieldLabel"
+	row.add_child(label)
+	var value := Label.new()
+	value.name = "FieldValue"
+	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	value.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	row.add_child(value)
+	_candidate_rows[field_id] = {"row": row, "label": label, "value": value}
+
+
+func _show_batch_context(item: Node) -> void:
+	var selected_asset_ids: Array[String] = item.get_selected_asset_ids()
+	if selected_asset_ids.is_empty():
+		show_context(
+			{
+				"kind": "batch",
+				"title": item.label,
+				"type": Strings.text("BATCH_DEFAULT_LABEL"),
+				"summary": Strings.text("INSPECTOR_BATCH_SUMMARY_FORMAT") % item.asset_ids.size(),
+			}
+		)
+		return
+	show_context({"kind": "candidate", "title": item.label})
+	_candidate_context = {
+		"snapshot": _snapshot_for_asset(selected_asset_ids[0]),
+		"asset_ids": selected_asset_ids.duplicate(),
+		"graph_id": String(item.graph_id),
+		"batch_node_id": String(item.node_id),
+	}
+	if selected_asset_ids.size() > 1:
+		_show_multiple_candidates(selected_asset_ids.size())
+		return
+	var snapshot: Dictionary = _candidate_context["snapshot"]
+	_show_single_candidate(snapshot)
+
+
+func _show_single_candidate(snapshot: Dictionary) -> void:
+	_candidate_summary.text = (
+		Strings.text("INSPECTOR_CANDIDATE_DETAILS")
+		if not snapshot.is_empty()
+		else Strings.text("INSPECTOR_CANDIDATE_DETAILS_UNAVAILABLE")
+	)
+	_set_candidate_row("prompt", snapshot.get("prompt", ""))
+	_set_candidate_row("model", snapshot.get("model_id", ""))
+	_set_candidate_row("seed", snapshot.get("seed", null))
+	var width := int(snapshot.get("width", 0))
+	var height := int(snapshot.get("height", 0))
+	_set_candidate_row("size", "%d×%d" % [width, height] if width > 0 and height > 0 else "")
+	var references: Array = snapshot.get("reference_asset_ids", [])
+	_set_candidate_row(
+		"references",
+		(
+			(
+				Strings.text("INSPECTOR_CANDIDATE_REFERENCES_FORMAT")
+				% [references.size(), ", ".join(references)]
+			)
+			if not references.is_empty()
+			else ""
+		),
+	)
+	var cost: Variant = snapshot.get("cost", null)
+	_set_candidate_row(
+		"cost",
+		(
+			Strings.text("INSPECTOR_CANDIDATE_COST_FORMAT") % float(cost)
+			if cost is int or cost is float
+			else ""
+		),
+	)
+	_set_candidate_row("created_at", snapshot.get("created_at", ""))
+	_set_candidate_row("source", snapshot.get("source_generate_node_id", ""))
+	_set_action_visibility(false)
+	_candidate_action_buttons["copy_prompt"].disabled = (
+		String(snapshot.get("prompt", "")).is_empty()
+	)
+	_candidate_action_buttons["copy_settings"].disabled = snapshot.is_empty()
+	_candidate_action_buttons["rerun"].disabled = snapshot.is_empty()
+	_candidate_action_buttons["as_reference"].disabled = false
+	_candidate_action_buttons["continue_branch"].disabled = snapshot.is_empty()
+
+
+func _show_multiple_candidates(count: int) -> void:
+	_candidate_summary.text = Strings.text("INSPECTOR_CANDIDATE_MULTIPLE_FORMAT") % count
+	for field_id in _candidate_rows:
+		_candidate_rows[field_id]["row"].visible = false
+	_set_action_visibility(true)
+
+
+func _set_candidate_row(field_id: String, raw_value: Variant) -> void:
+	var entry: Dictionary = _candidate_rows[field_id]
+	var value := str(raw_value) if raw_value != null else ""
+	var visible := not value.is_empty()
+	entry["row"].visible = visible
+	entry["label"].text = Strings.text("INSPECTOR_CANDIDATE_%s" % field_id.to_upper())
+	entry["value"].text = value if visible else ""
+
+
+func _set_action_visibility(multiple: bool) -> void:
+	for action_id in CANDIDATE_ACTIONS:
+		var button: Button = _candidate_action_buttons[action_id]
+		button.text = Strings.text("INSPECTOR_CANDIDATE_ACTION_%s" % action_id.to_upper())
+		button.visible = not multiple or action_id in ["as_reference", "continue_branch"]
+		button.disabled = false
+
+
+func _set_canvas(canvas: Control) -> void:
+	if _canvas == canvas:
+		return
+	if _canvas != null and _canvas.canvas_changed.is_connected(_on_canvas_changed):
+		_canvas.canvas_changed.disconnect(_on_canvas_changed)
+	_canvas = canvas
+	if _canvas != null and not _canvas.canvas_changed.is_connected(_on_canvas_changed):
+		_canvas.canvas_changed.connect(_on_canvas_changed)
+
+
+func _on_canvas_changed() -> void:
+	if _canvas != null:
+		show_canvas_selection(_canvas)
+
+
+func _on_candidate_action_pressed(action_id: String) -> void:
+	candidate_action_requested.emit(action_id, _candidate_context.duplicate(true))
+
+
+func _safe_generation_snapshot(value: Variant) -> Dictionary:
+	if not value is Dictionary:
+		return {}
+	var source: Dictionary = value
+	var safe := {}
+	for key in GENERATION_SNAPSHOT_KEYS:
+		if source.has(key):
+			safe[key] = _sanitize_snapshot_value(source[key])
+	return safe.duplicate(true)
+
+
+func _snapshot_for_asset(asset_id: String) -> Dictionary:
+	var meta: Dictionary = AssetLibrary.get_asset_meta(asset_id)
+	var provenance: Dictionary = meta.get("provenance", {})
+	return _safe_generation_snapshot(provenance.get("generation_snapshot", {}))
+
+
+func _sanitize_snapshot_value(value: Variant) -> Variant:
+	if value is Dictionary:
+		var sanitized := {}
+		for raw_key in value:
+			var key := String(raw_key)
+			var normalized := key.to_lower()
+			var forbidden := false
+			for forbidden_part in SNAPSHOT_FORBIDDEN_KEY_PARTS:
+				if normalized.contains(forbidden_part):
+					forbidden = true
+					break
+			if not forbidden:
+				sanitized[key] = _sanitize_snapshot_value(value[raw_key])
+		return sanitized
+	if value is Array:
+		var sanitized_array := []
+		for item in value:
+			sanitized_array.append(_sanitize_snapshot_value(item))
+		return sanitized_array
+	return value
+
+
+func _action_button_name(action_id: String) -> String:
+	return "%sButton" % action_id.to_pascal_case()
 
 
 func _on_language_changed(_preference: String, _locale: String) -> void:
