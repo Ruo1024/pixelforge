@@ -402,7 +402,8 @@ func _build_ui() -> void:
 		_canvas,
 		_status_label,
 		_m2_1_ui.get_node("ImportFlowController"),
-		_m2_1_ui.generate_mock_batch
+		_m2_1_ui.generate_mock_batch,
+		_m2_1_ui.add_graph_node_to_selected_graph
 	)
 	_m2_1_ui.export_snapshots_requested.connect(_export_flow.request_export)
 	_m2_1_ui.add_file_menu(global_actions)

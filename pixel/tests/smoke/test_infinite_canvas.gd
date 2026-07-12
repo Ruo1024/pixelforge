@@ -218,6 +218,24 @@ func test_wheel_zoom_is_rate_limited() -> void:
 	assert_eq(canvas.zoom_index, first_zoom_index)
 
 
+func test_double_click_blank_canvas_requests_shared_quick_add_at_click_position() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(320, 240)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+	var requested_positions := []
+	canvas.graph_quick_add_requested.connect(
+		func(position: Vector2i) -> void: requested_positions.append(position)
+	)
+	var event := _mouse_button(MOUSE_BUTTON_LEFT, true, Vector2(84, 126))
+	event.double_click = true
+
+	canvas._gui_input(event)
+
+	assert_eq(requested_positions.size(), 1)
+	assert_eq(requested_positions[0], Vector2i(canvas.get_screen_position()) + Vector2i(84, 126))
+
+
 func test_add_delete_move_are_undoable() -> void:
 	var undo := get_tree().root.get_node("UndoService")
 	var canvas: Control = CanvasScript.new()

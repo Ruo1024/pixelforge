@@ -37,12 +37,14 @@ func test_empty_canvas_hint_and_dialog_import_are_stable_and_atomic() -> void:
 	var failed: Dictionary = import_flow.import_files_from_dialog(
 		PackedStringArray([VALID_IMAGE_PATH, INVALID_IMAGE_PATH])
 	)
-	assert_false(bool(failed["ok"]))
-	assert_eq(AssetLibrary.get_all_meta().size(), asset_count_before)
+	assert_true(bool(failed["ok"]))
+	assert_eq(failed["failed_files"], [INVALID_IMAGE_PATH])
+	assert_eq(AssetLibrary.get_all_meta().size(), asset_count_before + 1)
+	assert_eq(canvas.get_item_count(), 1)
+	assert_eq(canvas.export_canvas_data()["items"][0]["type"], "node")
+	assert_true(UndoService.undo())
 	assert_eq(canvas.get_item_count(), 0)
-	assert_string_contains(
-		main.get_node("M21UiController/ImportErrorDialog").dialog_text, INVALID_IMAGE_PATH
-	)
+	assert_true(ProjectService.current_project.graphs.is_empty())
 
 	var expected_anchor: Vector2 = import_flow.stable_import_anchor()
 	var imported: Dictionary = import_flow.import_files_from_dialog(
@@ -76,6 +78,31 @@ func test_existing_workspace_import_stays_in_view_without_forced_focus() -> void
 	assert_string_contains(_status_label(main).text, "Focus Last Import")
 	import_flow.focus_last_import()
 	assert_eq(_status_label(main).text, "Focused the last import")
+
+
+func test_multi_image_import_creates_reference_grid_as_one_undo_action() -> void:
+	var main := await _make_main()
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var import_flow: Node = main.get_node("M21UiController/ImportFlowController")
+	var anchor: Vector2 = import_flow.stable_import_anchor()
+	var result: Dictionary = import_flow.import_files_from_dialog(
+		PackedStringArray([VALID_IMAGE_PATH, VALID_IMAGE_PATH, VALID_IMAGE_PATH, VALID_IMAGE_PATH])
+	)
+
+	assert_true(result["ok"])
+	assert_eq(canvas.get_item_count(), 4)
+	var positions := []
+	for item in canvas.export_canvas_data()["items"]:
+		positions.append(Vector2(item["position"][0], item["position"][1]))
+	assert_has(positions, anchor)
+	assert_has(positions, anchor + Vector2(300, 0))
+	assert_has(positions, anchor + Vector2(600, 0))
+	assert_has(positions, anchor + Vector2(0, 370))
+	assert_true(UndoService.undo())
+	assert_eq(canvas.get_item_count(), 0)
+	assert_true(ProjectService.current_project.graphs.is_empty())
+	assert_true(UndoService.redo())
+	assert_eq(canvas.get_item_count(), 4)
 
 
 func test_1254_preview_reaches_running_and_done_instead_of_stale_queued() -> void:

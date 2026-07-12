@@ -305,7 +305,8 @@ func _scan_canvas_structure_warnings() -> Array[Dictionary]:
 		var item: Dictionary = raw_item
 		if String(item.get("type", "")) != "node":
 			continue
-		var frame_id := String(item.get("frame_id", ""))
+		var raw_frame_id: Variant = item.get("frame_id", null)
+		var frame_id := "" if raw_frame_id == null else String(raw_frame_id)
 		if frame_id.is_empty():
 			continue
 		var warning := {

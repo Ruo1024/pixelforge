@@ -92,7 +92,7 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 	await wait_process_frames(2)
 
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
-	var object_node_id := "objects"
+	var object_node_id := String(ProjectService.current_project.graphs[graph_id]["nodes"][0]["id"])
 	assert_true(
 		controller.apply_graph_node_params(
 			graph_id, object_node_id, {"items": "barrel\ncrate\nlantern"}

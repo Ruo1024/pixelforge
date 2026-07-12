@@ -98,6 +98,7 @@ var _graph_add_parent_menu: PopupMenu = null
 var _graph_add_parent_index := -1
 var _graph_add_types := {}
 var _graph_quick_add_world_position := Vector2.ZERO
+var _active_graph_id := ""
 var _batch_menu: PopupMenu = null
 var _batch_menu_card_id := ""
 var _import_flow: Node = null
@@ -133,7 +134,7 @@ func setup(
 	_import_flow = ImportFlowControllerScript.new()
 	_import_flow.name = "ImportFlowController"
 	add_child(_import_flow)
-	_import_flow.setup(_canvas, _status_label, self)
+	_import_flow.setup(_canvas, _status_label, self, _add_reference_assets_to_graph)
 	_import_flow.reference_asset_imported.connect(_on_reference_asset_imported)
 	_offline_example_flow = OfflineExampleControllerScript.new()
 	_offline_example_flow.name = "OfflineExampleController"
@@ -171,6 +172,8 @@ func setup(
 	_canvas.batch_context_requested.connect(_show_batch_menu)
 	_canvas.graph_quick_add_requested.connect(show_graph_quick_add_menu)
 	_canvas.asset_edit_requested.connect(_open_pixel_editor)
+	_canvas.image_paste_requested.connect(_import_flow.import_clipboard_image)
+	ProjectService.project_loaded.connect(func(_project: Variant) -> void: _active_graph_id = "")
 	if not LocalizationService.language_changed.is_connected(_on_language_changed):
 		LocalizationService.language_changed.connect(_on_language_changed)
 
@@ -443,38 +446,39 @@ func apply_graph_node_params(graph_id: String, node_id: String, params: Dictiona
 
 
 func add_graph_node_to_selected_graph(
-	type_name: String, requested_world_position: Variant = null
+	type_name: String, requested_world_position: Variant = null, initial_params: Dictionary = {}
 ) -> String:
 	var binding := _selected_graph_binding()
-	var graph_id := String(binding.get("graph_id", ""))
-	if graph_id.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_ADD_NEEDS_SELECTION
-		return ""
+	var before_graphs: Dictionary = ProjectService.get_graphs_data()
+	var graph_id := _resolve_target_graph_id(binding, before_graphs)
 	var registry := NodeRegistryScript.new()
 	var node: PFNode = registry.create(type_name)
 	if node == null:
 		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
 		return ""
-	var graph_data := ProjectService.get_graph_data(graph_id)
+	var graph_data: Dictionary = before_graphs.get(graph_id, {})
+	var graph: PFGraph
 	if graph_data.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
-		return ""
-	var graph := GraphScript.from_json(graph_data)
+		graph = GraphScript.new()
+		graph.id = graph_id
+		graph.name = "Main Graph"
+	else:
+		graph = GraphScript.from_json(graph_data)
 	var world_position := _graph_node_add_position(binding)
 	if requested_world_position is Vector2:
 		var requested_position: Vector2 = requested_world_position
 		world_position = requested_position.round()
 	var node_id := "%s_%s" % [type_name, IdUtil.uuid_v4().left(8)]
 	var item_id := IdUtil.uuid_v4()
-	if graph.add_node(node, node_id, {}, world_position).is_empty():
+	if graph.add_node(node, node_id, initial_params, world_position).is_empty():
 		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
 		return ""
 
-	var before := graph_data.duplicate(true)
-	var after := graph.to_json()
+	var after_graphs := before_graphs.duplicate(true)
+	after_graphs[graph_id] = graph.to_json()
 	var is_batch := node.get_type() == "batch"
 	var do_add := func() -> void:
-		ProjectService.set_graph_data(graph_id, after, true)
+		ProjectService.set_graphs_data(after_graphs, true)
 		if is_batch:
 			_canvas._add_batch_card(
 				[],
@@ -490,10 +494,11 @@ func add_graph_node_to_selected_graph(
 		_canvas.select_ids([item_id])
 	var undo_add := func() -> void:
 		_canvas._remove_item_direct(item_id)
-		ProjectService.set_graph_data(graph_id, before, true)
+		ProjectService.set_graphs_data(before_graphs, true)
 		_canvas.select_ids([])
 		_canvas._emit_canvas_changed()
 	UndoService.perform_action("Add graph node", do_add, undo_add)
+	_active_graph_id = graph_id
 	_status_label.text = (
 		Strings.text("STATUS_GRAPH_ADD_DONE_FORMAT", Strings.STATUS_GRAPH_ADD_DONE)
 		% _localized_node_display_name(node)
@@ -501,10 +506,57 @@ func add_graph_node_to_selected_graph(
 	return node_id
 
 
+func _add_reference_assets_to_graph(asset_ids: Array, world_positions: Array) -> Dictionary:
+	if asset_ids.is_empty() or asset_ids.size() != world_positions.size():
+		return {"ok": false, "node_ids": [], "item_ids": []}
+	var binding := _selected_graph_binding()
+	var before_graphs: Dictionary = ProjectService.get_graphs_data()
+	var graph_id := _resolve_target_graph_id(binding, before_graphs)
+	var graph_data: Dictionary = before_graphs.get(graph_id, {})
+	var graph: PFGraph
+	if graph_data.is_empty():
+		graph = GraphScript.new()
+		graph.id = graph_id
+		graph.name = "Main Graph"
+	else:
+		graph = GraphScript.from_json(graph_data)
+	var registry := NodeRegistryScript.new()
+	var node_ids: Array[String] = []
+	var item_ids: Array[String] = []
+	for index in range(asset_ids.size()):
+		var node: PFNode = registry.create("image_input")
+		var node_id := "image_input_%s" % IdUtil.uuid_v4().left(8)
+		var item_id := IdUtil.uuid_v4()
+		var position: Vector2 = world_positions[index]
+		if (
+			graph
+			. add_node(node, node_id, {"asset_id": String(asset_ids[index])}, position)
+			. is_empty()
+		):
+			return {"ok": false, "node_ids": [], "item_ids": []}
+		node_ids.append(node_id)
+		item_ids.append(item_id)
+	var after_graphs := before_graphs.duplicate(true)
+	after_graphs[graph_id] = graph.to_json()
+	var do_add := func() -> void:
+		ProjectService.set_graphs_data(after_graphs, true)
+		for index in range(node_ids.size()):
+			_canvas._add_graph_node_card(
+				graph_id, node_ids[index], world_positions[index], item_ids[index], false
+			)
+		_canvas.select_ids(item_ids)
+	var undo_add := func() -> void:
+		for item_id in item_ids:
+			_canvas._remove_item_direct(item_id)
+		ProjectService.set_graphs_data(before_graphs, true)
+		_canvas.select_ids([])
+		_canvas._emit_canvas_changed()
+	UndoService.perform_action("Import reference images", do_add, undo_add)
+	_active_graph_id = graph_id
+	return {"ok": true, "graph_id": graph_id, "node_ids": node_ids, "item_ids": item_ids}
+
+
 func show_graph_quick_add_menu(screen_position: Vector2i) -> bool:
-	if _selected_graph_binding().is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_ADD_NEEDS_SELECTION
-		return false
 	if _graph_quick_add_menu == null:
 		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
 		return false
@@ -588,6 +640,8 @@ func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
 	var registry := NodeRegistryScript.new()
 	var menu_id := GRAPH_ADD_MENU_ID_START
 	for type_name in registry.get_registered_types():
+		if String(type_name).begins_with("comfyui."):
+			continue
 		var node: PFNode = registry.create(String(type_name))
 		if node == null:
 			continue
@@ -1101,6 +1155,22 @@ func _selected_graph_binding() -> Dictionary:
 	if not edge_graph_id.is_empty():
 		return {"item_id": "", "graph_id": edge_graph_id, "node_id": ""}
 	return {}
+
+
+func _resolve_target_graph_id(binding: Dictionary, graphs: Dictionary) -> String:
+	var selected_graph_id := String(binding.get("graph_id", ""))
+	if not selected_graph_id.is_empty() and graphs.has(selected_graph_id):
+		_active_graph_id = selected_graph_id
+		return selected_graph_id
+	if not _active_graph_id.is_empty() and graphs.has(_active_graph_id):
+		return _active_graph_id
+	var graph_ids: Array = graphs.keys()
+	graph_ids.sort()
+	if not graph_ids.is_empty():
+		_active_graph_id = String(graph_ids[0])
+		return _active_graph_id
+	_active_graph_id = "graph_main"
+	return _active_graph_id
 
 
 func _graph_batch_card_id(graph_id: String, batch_node_id: String) -> String:

@@ -13,7 +13,8 @@ const EmptyImportHintScript := preload("res://ui/shell/empty_canvas_import_hint.
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const Log := preload("res://core/util/log_util.gd")
 
-const ITEM_GAP := 8
+const REFERENCE_GRID_COLUMNS := 3
+const REFERENCE_GRID_CELL := Vector2(300, 370)
 const LARGE_IMAGE_PIXELS := 1024 * 1024
 
 var _canvas: Control = null
@@ -30,11 +31,15 @@ var _last_import_item_ids: Array[String] = []
 var _file_menu_popup: PopupMenu = null
 var _focus_menu_id := -1
 var _retry_menu_id := -1
+var _create_reference_assets: Callable
 
 
-func setup(canvas: Control, status_label: Label, dialog_parent: Node) -> void:
+func setup(
+	canvas: Control, status_label: Label, dialog_parent: Node, create_reference_assets: Callable
+) -> void:
 	_canvas = canvas
 	_status_label = status_label
+	_create_reference_assets = create_reference_assets
 	_create_dialogs(dialog_parent)
 	_create_empty_hint()
 	_canvas.canvas_changed.connect(refresh_empty_hint)
@@ -65,6 +70,35 @@ func import_files_at_mouse(files: PackedStringArray) -> Dictionary:
 
 func import_files_from_dialog(files: PackedStringArray) -> Dictionary:
 	return _import_image_files(files, stable_import_anchor())
+
+
+func import_clipboard_image(world_position: Vector2) -> Dictionary:
+	var image := DisplayServer.clipboard_get_image()
+	if image == null or image.is_empty():
+		return _report_import_failure(
+			PackedStringArray(), [Strings.text("ERROR_CLIPBOARD_IMAGE_EMPTY")]
+		)
+	return import_image(image, Strings.text("CLIPBOARD_IMAGE_NAME"), world_position)
+
+
+func import_image(image: Image, asset_name: String, world_position: Vector2) -> Dictionary:
+	if image == null or image.is_empty():
+		return {"ok": false, "failed_files": [], "asset_ids": [], "item_ids": []}
+	var asset_id := AssetLibrary.register_image(image, asset_name, {"origin": "imported"})
+	var creation: Dictionary = _create_reference_assets.call([asset_id], [world_position.round()])
+	if not bool(creation.get("ok", false)):
+		return {"ok": false, "failed_files": [], "asset_ids": [asset_id], "item_ids": []}
+	_last_import_item_ids = Array(creation.get("item_ids", [])).duplicate()
+	_status_label.text = Strings.text("STATUS_IMPORT_DONE_FORMAT") % 1
+	refresh_empty_hint()
+	return {
+		"ok": true,
+		"failed_files": [],
+		"asset_ids": [asset_id],
+		"item_ids": _last_import_item_ids.duplicate(),
+		"auto_focused": false,
+		"anchor": world_position.round(),
+	}
 
 
 func retry_import() -> void:
@@ -138,14 +172,12 @@ func _import_image_files(files: PackedStringArray, world_position: Vector2) -> D
 	var preflight := _decode_all(files)
 	var failed_files: Array = preflight["failed_files"]
 	var decoded: Array = preflight["decoded"]
-	if not failed_files.is_empty() or decoded.is_empty():
+	if decoded.is_empty():
 		return _report_import_failure(files, failed_files)
 
 	var was_empty: bool = _canvas.get_item_count() == 0
 	var imported_asset_ids: Array[String] = []
-	var imported_items := []
-	var make_batch := decoded.size() > 1
-	var drop_position := world_position
+	var positions := []
 	for decoded_item in decoded:
 		var file_path := String(decoded_item["path"])
 		var image: Image = decoded_item["image"]
@@ -157,32 +189,37 @@ func _import_image_files(files: PackedStringArray, world_position: Vector2) -> D
 		var asset_name := file_path.get_file().get_basename()
 		var asset_id := AssetLibrary.register_image(image, asset_name, {"origin": "imported"})
 		imported_asset_ids.append(asset_id)
-		if not make_batch:
-			var sprite: Node = _canvas.add_sprite_item(image, asset_id, drop_position)
-			if sprite != null:
-				imported_items.append(sprite)
-		drop_position += Vector2(image.get_width() + ITEM_GAP, 0)
-
-	if make_batch:
-		var card: Node = _canvas._add_batch_card(
-			imported_asset_ids, world_position, Strings.BATCH_DEFAULT_LABEL
+		var position_index := positions.size()
+		positions.append(
+			(
+				world_position
+				+ Vector2(
+					(position_index % REFERENCE_GRID_COLUMNS) * REFERENCE_GRID_CELL.x,
+					(position_index / REFERENCE_GRID_COLUMNS) * REFERENCE_GRID_CELL.y
+				)
+			)
 		)
-		if card != null:
-			imported_items.append(card)
-
-	_last_import_item_ids.clear()
-	for item in imported_items:
-		_last_import_item_ids.append(String(item.item_id))
-	_retry_import_files.clear()
-	_set_menu_enabled(_retry_menu_id, false)
+	var creation: Dictionary = _create_reference_assets.call(imported_asset_ids, positions)
+	if not bool(creation.get("ok", false)):
+		return _report_import_failure(files, Array(files))
+	_last_import_item_ids = Array(creation.get("item_ids", [])).duplicate()
+	_retry_import_files = PackedStringArray(failed_files)
+	_set_menu_enabled(_retry_menu_id, not failed_files.is_empty())
 	_set_menu_enabled(_focus_menu_id, not _last_import_item_ids.is_empty())
+	var imported_items := _last_import_items()
 	if was_empty and not imported_items.is_empty():
 		_focus_canvas_on_bounds(_bounds_for_items(imported_items))
-	_status_label.text = Strings.text("STATUS_IMPORT_DONE_FORMAT") % imported_asset_ids.size()
+	if failed_files.is_empty():
+		_status_label.text = Strings.text("STATUS_IMPORT_DONE_FORMAT") % imported_asset_ids.size()
+	else:
+		_status_label.text = (
+			Strings.text("STATUS_IMPORT_PARTIAL_FORMAT")
+			% [imported_asset_ids.size(), failed_files.size()]
+		)
 	refresh_empty_hint()
 	return {
 		"ok": true,
-		"failed_files": [],
+		"failed_files": failed_files,
 		"asset_ids": imported_asset_ids,
 		"item_ids": _last_import_item_ids.duplicate(),
 		"auto_focused": was_empty,

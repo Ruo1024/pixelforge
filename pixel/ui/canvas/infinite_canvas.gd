@@ -15,6 +15,7 @@ signal graph_status(event: Dictionary)
 signal asset_edit_requested(asset_id: String, batch_id: String)
 signal graph_node_params_commit_requested(graph_id: String, node_id: String, params: Dictionary)
 signal graph_node_action_requested(graph_id: String, node_id: String, action_id: String)
+signal image_paste_requested(world_position: Vector2)
 
 const ZOOM_LEVELS := [0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0]
 const DEFAULT_ZOOM_INDEX := 4
@@ -150,6 +151,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			UndoService.redo()
 		else:
 			UndoService.undo()
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_V and (event.ctrl_pressed or event.meta_pressed):
+		image_paste_requested.emit(get_mouse_world_position())
 		get_viewport().set_input_as_handled()
 
 
@@ -696,8 +700,11 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		grab_focus()
 		if Input.is_key_pressed(KEY_SPACE):
 			_is_panning = event.pressed
-		elif event.pressed and event.double_click and _emit_asset_edit_request(event.position):
-			pass
+		elif event.pressed and event.double_click:
+			if not _emit_asset_edit_request(event.position):
+				graph_quick_add_requested.emit(
+					Vector2i(get_screen_position()) + Vector2i(event.position)
+				)
 		elif event.pressed:
 			_begin_left_interaction(event.position, event.shift_pressed)
 		else:

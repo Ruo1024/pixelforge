@@ -429,25 +429,12 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 
-	assert_eq(controller._graph_add_menu.item_count, 6)
-	assert_eq(
-		[
-			controller._graph_add_menu.get_item_text(0),
-			controller._graph_add_menu.get_item_text(1),
-			controller._graph_add_menu.get_item_text(2),
-			controller._graph_add_menu.get_item_text(3),
-			controller._graph_add_menu.get_item_text(4),
-			controller._graph_add_menu.get_item_text(5),
-		],
-		[
-			"AI Generate",
-			"Result Batch",
-			"ComfyUI Workflow",
-			"Reference Image",
-			"Object List",
-			"Size Spec",
-		]
-	)
+	var add_menu_texts := _menu_texts(controller._graph_add_menu)
+	for expected_text in [
+		"AI Generate", "Result Batch", "Reference Image", "Object List", "Size Spec"
+	]:
+		assert_has(add_menu_texts, expected_text)
+	assert_false(add_menu_texts.has("ComfyUI Workflow"))
 
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
 	var object_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "objects")
@@ -459,25 +446,7 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	await wait_process_frames(1)
 
 	assert_true(controller._graph_quick_add_menu.visible)
-	assert_eq(controller._graph_quick_add_menu.item_count, 6)
-	assert_eq(
-		[
-			controller._graph_quick_add_menu.get_item_text(0),
-			controller._graph_quick_add_menu.get_item_text(1),
-			controller._graph_quick_add_menu.get_item_text(2),
-			controller._graph_quick_add_menu.get_item_text(3),
-			controller._graph_quick_add_menu.get_item_text(4),
-			controller._graph_quick_add_menu.get_item_text(5),
-		],
-		[
-			"AI Generate",
-			"Result Batch",
-			"ComfyUI Workflow",
-			"Reference Image",
-			"Object List",
-			"Size Spec",
-		]
-	)
+	assert_eq(_menu_texts(controller._graph_quick_add_menu), add_menu_texts)
 
 	var existing_node_ids := {}
 	for node_data in ProjectService.current_project.graphs[graph_id]["nodes"]:
@@ -537,6 +506,7 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 		)
 	)
 	controller._graph_quick_add_menu.hide()
+	await wait_process_frames(1)
 	canvas.select_ids([])
 	tab_event = InputEventKey.new()
 	tab_event.keycode = KEY_TAB
@@ -544,8 +514,8 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	canvas._gui_input(tab_event)
 	await wait_process_frames(1)
 
-	assert_false(controller._graph_quick_add_menu.visible)
-	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_ADD_NEEDS_SELECTION)
+	assert_true(controller._graph_quick_add_menu.visible)
+	controller._graph_quick_add_menu.hide()
 
 	canvas.select_ids([object_item_id])
 	var object_item_data := _item_data_for_id(canvas.export_canvas_data()["items"], object_item_id)
@@ -579,6 +549,44 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	)
 	assert_true(UndoService.redo())
 	assert_false(_item_id_for_node(canvas.export_canvas_data()["items"], batch_node_id).is_empty())
+
+
+func test_quick_add_on_empty_canvas_creates_default_graph_at_requested_position_atomically(
+) -> void:
+	ProjectService.new_project("Empty Quick Add")
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var requested_world := Vector2(-240, 180)
+	var requested_screen := Vector2i(
+		canvas.get_screen_position() + canvas.world_to_screen(requested_world)
+	)
+
+	assert_true(controller.show_graph_quick_add_menu(requested_screen))
+	var object_menu_id := -1
+	for menu_id in controller._graph_add_types:
+		if String(controller._graph_add_types[menu_id]) == "object_list":
+			object_menu_id = int(menu_id)
+			break
+	assert_gte(object_menu_id, 0)
+	controller._graph_quick_add_menu.id_pressed.emit(object_menu_id)
+	controller._graph_quick_add_menu.hide()
+
+	assert_true(ProjectService.current_project.graphs.has("graph_main"))
+	var nodes: Array = ProjectService.current_project.graphs["graph_main"]["nodes"]
+	assert_eq(nodes.size(), 1)
+	assert_eq(nodes[0]["type"], "object_list")
+	assert_eq(nodes[0]["position"], [-240, 180])
+	assert_eq(canvas.get_item_count(), 1)
+	assert_true(UndoService.undo())
+	assert_true(ProjectService.current_project.graphs.is_empty())
+	assert_eq(canvas.get_item_count(), 0)
+	assert_true(UndoService.redo())
+	assert_true(ProjectService.current_project.graphs.has("graph_main"))
+	assert_eq(canvas.get_item_count(), 1)
 
 
 func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
@@ -835,6 +843,13 @@ func _node_item(
 
 func _status_label(main: Control) -> Label:
 	return main.get_node("Root/BottomBar").get_child(0)
+
+
+func _menu_texts(menu: PopupMenu) -> Array[String]:
+	var result: Array[String] = []
+	for index in range(menu.item_count):
+		result.append(menu.get_item_text(index))
+	return result
 
 
 func _send_key(controller: Node, keycode: Key) -> bool:
