@@ -135,6 +135,38 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 	)
 
 
+func test_hidden_graph_edges_are_not_drawn_or_selectable_and_graph_truth_is_unchanged() -> void:
+	var canvas: Control = _canvas()
+	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
+	_set_graph(
+		"graph_hit",
+		[_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")],
+		[edge]
+	)
+	var objects: Node = canvas._add_node_direct(
+		_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
+	)
+	var generate: Node = canvas._add_node_direct(
+		_node_item("generate_item", "graph_hit", "generate", Vector2(600, 100))
+	)
+	var midpoint: Vector2 = (
+		(
+			objects.get_graph_port_anchor("items", false)
+			+ generate.get_graph_port_anchor("items", true)
+		)
+		* 0.5
+	)
+
+	canvas._begin_left_interaction(canvas.world_to_screen(midpoint), false)
+	assert_false(canvas._selected_graph_edge.is_empty())
+	assert_false(canvas._toggle_graph_edges())
+	canvas._begin_left_interaction(canvas.world_to_screen(midpoint), false)
+
+	assert_true(canvas._selected_graph_edge.is_empty())
+	assert_eq(ProjectService.get_graph_data("graph_hit")["edges"], [edge])
+	assert_true(canvas._toggle_graph_edges())
+
+
 func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> void:
 	var canvas: Control = _canvas()
 	var status_messages := []

@@ -65,6 +65,26 @@ func add_recent_project(path: String) -> void:
 	set_setting("project", "recent_projects", recent)
 
 
+func remove_recent_project(path: String) -> void:
+	var recent := get_recent_projects()
+	if not recent.has(path):
+		return
+	recent.erase(path)
+	set_setting("project", "recent_projects", recent)
+
+
+func remove_missing_recent_projects() -> int:
+	var recent := get_recent_projects()
+	var kept := []
+	for path in recent:
+		if FileAccess.file_exists(String(path)):
+			kept.append(path)
+	var removed := recent.size() - kept.size()
+	if removed > 0:
+		set_setting("project", "recent_projects", kept)
+	return removed
+
+
 func _ensure_defaults() -> void:
 	var changed := false
 	changed = _set_default("ui", "language", "auto") or changed

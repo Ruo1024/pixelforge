@@ -18,7 +18,7 @@ const ObjectListEditorScript := preload("res://ui/canvas/object_list_editor.gd")
 
 const SUMMARY_CARD_SIZE := Vector2(220, 116)
 const CONTENT_CARD_SIZE := Vector2(240, 238)
-const OBJECT_LIST_CARD_SIZE := Vector2(360, 430)
+const OBJECT_LIST_CARD_SIZE := Vector2(240, 430)
 const GENERATE_CARD_SIZE := Vector2(280, 390)
 const REFERENCE_CARD_SIZE := Vector2(260, 330)
 const REFERENCE_SET_CARD_SIZE := Vector2(320, 430)

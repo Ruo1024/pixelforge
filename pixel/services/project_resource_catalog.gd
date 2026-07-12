@@ -11,6 +11,7 @@ const STYLE_PATHS := [
 	"res://assets/presets/preset_1bit.json",
 	"res://assets/presets/preset_hd2d_prop.json",
 ]
+const WorkflowTemplateService := preload("res://services/workflow_template_service.gd")
 
 
 static func search_assets(query: String = "", origin: String = "") -> Array[Dictionary]:
@@ -78,6 +79,33 @@ static func search_styles(query: String = "", resolution_tier: String = "") -> A
 					"resolution_tier": tier,
 					"path": path,
 					"preset": preset.duplicate(true),
+				}
+			)
+		)
+	return result
+
+
+static func search_workflows(query: String = "", source: String = "") -> Array[Dictionary]:
+	var listed := WorkflowTemplateService.list_templates(query)
+	var result: Array[Dictionary] = []
+	for template in listed["templates"]:
+		var template_source := "builtin" if bool(template.get("builtin", false)) else "user"
+		if not source.is_empty() and source != template_source:
+			continue
+		var requirements: Dictionary = template.get("requirements", {})
+		(
+			result
+			. append(
+				{
+					"id": String(template.get("id", "")),
+					"name": String(template.get("name", "")),
+					"description": String(template.get("description", "")),
+					"source": template_source,
+					"node_count": template.get("nodes", []).size(),
+					"model_ids": requirements.get("model_ids", []),
+					"reference_slots": int(requirements.get("reference_slots", 0)),
+					"available": true,
+					"template": template.duplicate(true),
 				}
 			)
 		)

@@ -5,6 +5,7 @@ extends Node
 ## M2.1 UI 接线控制器。
 
 signal export_snapshots_requested(snapshots: Array, default_file: String)
+signal recent_project_requested(path: String)
 
 const Strings := preload("res://ui/shell/strings.gd")
 const ToolManagerScript := preload("res://ui/tools/tool_manager.gd")
@@ -33,6 +34,8 @@ const GraphMockRunnerScript := preload("res://services/graph_mock_runner.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ResultBranchBuilder := preload("res://services/result_branch_builder.gd")
+const WorkflowTemplateService := preload("res://services/workflow_template_service.gd")
+const FrameRunPlanner := preload("res://services/frame_run_planner.gd")
 const StylePresetNodeScript := preload("res://core/graph/nodes/style_preset_node.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Log := preload("res://core/util/log_util.gd")
@@ -80,6 +83,7 @@ const BATCH_MENU_LAYOUT_CONTACT := 18
 const BATCH_MENU_LAYOUT_FOCUS := 19
 const BATCH_MENU_EDIT := 20
 const SELECTION_TOOLS_VISIBLE := false
+const RECENT_MENU_REMOVE_MISSING := 999
 
 var _canvas: Control = null
 var _cleanup_inspector: Control = null
@@ -114,6 +118,8 @@ var _plugin_manager: ConfirmationDialog = null
 var _comfy_templates: ConfirmationDialog = null
 var _v1_onboarding: ConfirmationDialog = null
 var _pixel_editor_flow: RefCounted = null
+var _recent_projects_menu: PopupMenu = null
+var _recent_project_paths := {}
 
 
 func setup(
@@ -188,9 +194,51 @@ func add_file_menu(parent: Control) -> void:
 	file_menu_button.add_theme_font_size_override("font_size", TOOLBAR_FONT_SIZE)
 	var popup := file_menu_button.get_popup()
 	MenuBuilder.populate_file(file_menu_button, popup, self, _add_graph_node_submenu)
+	_add_recent_projects_submenu(popup)
 	popup.id_pressed.connect(_on_file_menu_pressed)
 	_import_flow.configure_file_menu(popup, FILE_MENU_FOCUS_LAST_IMPORT, FILE_MENU_RETRY_IMPORT)
 	parent.add_child(file_menu_button)
+
+
+func _add_recent_projects_submenu(parent_menu: PopupMenu) -> void:
+	_recent_projects_menu = PopupMenu.new()
+	_recent_projects_menu.name = "RecentProjectsMenu"
+	_recent_projects_menu.about_to_popup.connect(_refresh_recent_projects_menu)
+	_recent_projects_menu.id_pressed.connect(_on_recent_project_pressed)
+	parent_menu.add_child(_recent_projects_menu)
+	parent_menu.add_submenu_item(Strings.text("MENU_RECENT_PROJECTS"), _recent_projects_menu.name)
+	_refresh_recent_projects_menu()
+
+
+func _refresh_recent_projects_menu() -> void:
+	_recent_projects_menu.clear()
+	_recent_project_paths.clear()
+	var recent: Array = SettingsService.get_recent_projects()
+	for index in range(recent.size()):
+		var path := String(recent[index])
+		var label := path.get_file().get_basename()
+		if not FileAccess.file_exists(path):
+			label = Strings.text("RECENT_PROJECT_MISSING_FORMAT") % label
+		_recent_projects_menu.add_item(label, index)
+		_recent_projects_menu.set_item_disabled(index, not FileAccess.file_exists(path))
+		_recent_project_paths[index] = path
+	if recent.is_empty():
+		_recent_projects_menu.add_item(Strings.text("RECENT_PROJECT_EMPTY"), 0)
+		_recent_projects_menu.set_item_disabled(0, true)
+	else:
+		_recent_projects_menu.add_separator()
+		_recent_projects_menu.add_item(
+			Strings.text("ACTION_REMOVE_MISSING_RECENT"), RECENT_MENU_REMOVE_MISSING
+		)
+
+
+func _on_recent_project_pressed(id: int) -> void:
+	if id == RECENT_MENU_REMOVE_MISSING:
+		var removed := SettingsService.remove_missing_recent_projects()
+		_status_label.text = Strings.text("STATUS_RECENT_REMOVED_FORMAT") % removed
+		_refresh_recent_projects_menu()
+	elif _recent_project_paths.has(id):
+		recent_project_requested.emit(String(_recent_project_paths[id]))
 
 
 func add_tool_buttons(parent: Control) -> void:
@@ -365,6 +413,88 @@ func _handle_project_resource_drop(resource: Dictionary, world_position: Vector2
 			)
 		"style_preset":
 			_drop_style_resource(resource.get("preset", {}), world_position)
+		"workflow_template":
+			_insert_workflow_template(resource.get("template", {}), world_position)
+
+
+func _save_selected_frame_as_workflow() -> Dictionary:
+	var selected_ids: Array = _canvas.get_selected_ids()
+	var frame := {}
+	for raw_item in _canvas.export_canvas_data().get("items", []):
+		if (
+			raw_item is Dictionary
+			and selected_ids.has(String(raw_item.get("id", "")))
+			and String(raw_item.get("type", "")) == "frame"
+		):
+			frame = raw_item
+			break
+	if frame.is_empty():
+		_status_label.text = Strings.text("STATUS_WORKFLOW_NEEDS_FRAME")
+		return {"ok": false, "code": "frame_not_selected"}
+	var graph_id := String(frame.get("graph_id", ""))
+	var result := WorkflowTemplateService.build_from_frame(
+		String(frame.get("title", Strings.text("FRAME_DEFAULT_TITLE"))),
+		ProjectService.get_graph_data(graph_id),
+		_canvas.export_canvas_data(),
+		String(frame.get("id", ""))
+	)
+	if not bool(result.get("ok", false)):
+		_status_label.text = (
+			Strings.text("STATUS_WORKFLOW_SAVE_FAILED_FORMAT") % String(result.get("code", ""))
+		)
+		return result
+	var saved := WorkflowTemplateService.save_template(result["template"])
+	if bool(saved.get("ok", false)):
+		EventBus.workflow_templates_changed.emit()
+		_status_label.text = (
+			Strings.text("STATUS_WORKFLOW_SAVED_FORMAT")
+			% [result["template"]["name"], int(result.get("external_edge_count", 0))]
+		)
+	else:
+		_status_label.text = (
+			Strings.text("STATUS_WORKFLOW_SAVE_FAILED_FORMAT") % saved.get("error", -1)
+		)
+	return saved
+
+
+func _insert_workflow_template(template_value: Variant, world_position: Vector2) -> Dictionary:
+	if not (template_value is Dictionary):
+		_status_label.text = Strings.text("STATUS_RESOURCE_UNAVAILABLE")
+		return {"ok": false, "code": "template_unavailable"}
+	var graphs := ProjectService.get_graphs_data()
+	var graph_id := _resolve_target_graph_id(_selected_graph_binding(), graphs)
+	var before_graph: Dictionary = graphs.get(graph_id, {})
+	if before_graph.is_empty():
+		var graph := GraphScript.new()
+		graph.id = graph_id
+		before_graph = graph.to_json()
+	var before_canvas: Dictionary = _canvas.export_canvas_data()
+	var instance := WorkflowTemplateService.instantiate(
+		template_value, before_graph, before_canvas, world_position
+	)
+	if not bool(instance.get("ok", false)):
+		_status_label.text = (
+			Strings.text("STATUS_WORKFLOW_INSERT_FAILED_FORMAT") % String(instance.get("code", ""))
+		)
+		return instance
+	var after_graph: Dictionary = instance["graph"]
+	var after_canvas: Dictionary = instance["canvas"]
+	var item_ids: Array = instance["item_ids"]
+	var apply := func(graph_data: Dictionary, canvas_data: Dictionary, selection: Array) -> void:
+		ProjectService.set_graph_data(graph_id, graph_data, true)
+		ProjectService.set_canvas_data(canvas_data, true)
+		_canvas.load_canvas_data(canvas_data)
+		_canvas.select_ids(selection)
+	UndoService.perform_action(
+		"Insert workflow template",
+		func() -> void: apply.call(after_graph, after_canvas, item_ids),
+		func() -> void: apply.call(before_graph, before_canvas, [])
+	)
+	_status_label.text = (
+		Strings.text("STATUS_WORKFLOW_INSERTED_FORMAT")
+		% [String(template_value.get("name", "")), item_ids.size() - 1]
+	)
+	return instance
 
 
 func _drop_style_resource(preset_value: Variant, world_position: Vector2) -> void:
@@ -513,6 +643,10 @@ func _add_result_branch_items(graph_id: String, specs: Array) -> void:
 
 
 func run_selected_mock_graph() -> void:
+	var selected_frame_id := _selected_frame_id()
+	if not selected_frame_id.is_empty():
+		_run_selected_frame(selected_frame_id)
+		return
 	var binding := _selected_graph_binding()
 	if binding.is_empty():
 		_status_label.text = Strings.text("STATUS_GRAPH_RUN_NEEDS_SELECTION")
@@ -532,6 +666,51 @@ func run_selected_mock_graph() -> void:
 		_status_label.text = _graph_run_failure_status(ghost_error)
 		return
 	_run_bound_graph(graph, String(binding.get("node_id", "")))
+
+
+func _run_selected_frame(frame_id: String) -> void:
+	var canvas_data: Dictionary = _canvas.export_canvas_data()
+	var frame := {}
+	for item in canvas_data.get("items", []):
+		if String(item.get("id", "")) == frame_id:
+			frame = item
+			break
+	var graph_id := String(frame.get("graph_id", ""))
+	var plan := FrameRunPlanner.plan(ProjectService.get_graph_data(graph_id), canvas_data, frame_id)
+	if not bool(plan.get("ok", false)):
+		_status_label.text = Strings.text("STATUS_FRAME_RUN_UNAVAILABLE")
+		return
+	for node_id in plan["included_node_ids"]:
+		_canvas._set_graph_node_status(
+			graph_id,
+			String(node_id),
+			"CONTENT_STATUS_WAITING",
+			Strings.text("CONTENT_SCOPE_PLANNED")
+		)
+	_status_label.text = (
+		Strings.text("STATUS_FRAME_RUN_PLAN_FORMAT")
+		% [plan["target_generate_ids"].size(), plan["request_count"], plan["result_count"]]
+	)
+	_cost_label.text = (
+		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % float(plan["known_cost"])
+		if float(plan["known_cost"]) >= 0.0
+		else Strings.text("CONTENT_COST_UNKNOWN")
+	)
+	for target_id in plan["target_generate_ids"]:
+		_run_graph_node(graph_id, String(target_id))
+
+
+func _selected_frame_id() -> String:
+	var selected_ids: Array = _canvas.get_selected_ids()
+	for item in _canvas.export_canvas_data().get("items", []):
+		if selected_ids.has(String(item.get("id", ""))) and String(item.get("type", "")) == "frame":
+			return String(item.get("id", ""))
+	return ""
+
+
+func _toggle_canvas_edges() -> void:
+	var visible: bool = bool(_canvas._toggle_graph_edges())
+	_status_label.text = Strings.text("STATUS_EDGES_VISIBLE" if visible else "STATUS_EDGES_HIDDEN")
 
 
 func _run_graph_node(graph_id: String, node_id: String) -> void:

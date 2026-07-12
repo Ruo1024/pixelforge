@@ -10,6 +10,7 @@ const Strings := preload("res://ui/shell/strings.gd")
 
 const KIND_ASSET := "project_asset"
 const KIND_STYLE := "style_preset"
+const KIND_WORKFLOW := "workflow_template"
 
 var _kind_option: OptionButton = null
 var _search: LineEdit = null
@@ -46,6 +47,8 @@ func _ready() -> void:
 	_kind_option.set_item_metadata(0, KIND_ASSET)
 	_kind_option.add_item(Strings.text("RESOURCE_KIND_STYLES"))
 	_kind_option.set_item_metadata(1, KIND_STYLE)
+	_kind_option.add_item(Strings.text("RESOURCE_KIND_WORKFLOWS"))
+	_kind_option.set_item_metadata(2, KIND_WORKFLOW)
 	_kind_option.item_selected.connect(_on_kind_selected)
 	filters.add_child(_kind_option)
 	_category = OptionButton.new()
@@ -68,6 +71,7 @@ func _ready() -> void:
 	_empty_label.text = Strings.text("RESOURCE_EMPTY")
 	add_child(_empty_label)
 	ProjectService.project_loaded.connect(func(_project: Variant) -> void: _refresh())
+	EventBus.workflow_templates_changed.connect(_refresh)
 	_refresh_categories()
 	_refresh()
 
@@ -85,12 +89,20 @@ func _refresh_categories() -> void:
 	_category.set_item_metadata(0, "")
 	var kind := String(_kind_option.get_item_metadata(_kind_option.selected))
 	var categories := (
-		["8bit", "16bit", "hibit", "hd2d", "1bit", "gb"]
-		if kind == KIND_STYLE
-		else ["imported", "generated"]
+		["builtin", "user"]
+		if kind == KIND_WORKFLOW
+		else (
+			["8bit", "16bit", "hibit", "hd2d", "1bit", "gb"]
+			if kind == KIND_STYLE
+			else ["imported", "generated"]
+		)
 	)
 	for category in categories:
-		var key_prefix := "RESOURCE_TIER_" if kind == KIND_STYLE else "RESOURCE_ORIGIN_"
+		var key_prefix := (
+			"RESOURCE_SOURCE_"
+			if kind == KIND_WORKFLOW
+			else ("RESOURCE_TIER_" if kind == KIND_STYLE else "RESOURCE_ORIGIN_")
+		)
 		_category.add_item(Strings.text("%s%s" % [key_prefix, category.to_upper()]))
 		_category.set_item_metadata(_category.item_count - 1, category)
 
@@ -107,7 +119,9 @@ func _refresh() -> void:
 	var kind := String(_kind_option.get_item_metadata(_kind_option.selected))
 	var category := String(_category.get_item_metadata(_category.selected))
 	var resources: Array[Dictionary]
-	if kind == KIND_STYLE:
+	if kind == KIND_WORKFLOW:
+		resources = Catalog.search_workflows(_search.text, category)
+	elif kind == KIND_STYLE:
 		resources = Catalog.search_styles(_search.text, category)
 	else:
 		resources = Catalog.search_assets(_search.text, category)

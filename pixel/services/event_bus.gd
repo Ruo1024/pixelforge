@@ -14,6 +14,7 @@ signal recovery_available(autosaves: Array)
 signal asset_added(asset_id: String)
 signal asset_removed(asset_id: String)
 signal canvas_changed
+signal workflow_templates_changed
 signal task_started(task_id: String, kind: String)
 signal task_progressed(task_id: String, ratio: float, message: String)
 signal task_finished(task_id: String, result: Variant)

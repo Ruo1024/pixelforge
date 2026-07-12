@@ -398,6 +398,7 @@ func _build_ui() -> void:
 		_show_open_dialog,
 		_save_current_project
 	)
+	_m2_1_ui.recent_project_requested.connect(_open_project_path)
 	_workspace_start = WorkspaceStartControllerScript.new()
 	_workspace_start.name = "WorkspaceStartController"
 	add_child(_workspace_start)
@@ -411,6 +412,15 @@ func _build_ui() -> void:
 	_m2_1_ui.export_snapshots_requested.connect(_export_flow.request_export)
 	_m2_1_ui.add_file_menu(global_actions)
 	_m2_1_ui.add_tool_buttons(canvas_actions)
+	_add_toolbar_button(canvas_actions, "ACTION_RUN_SELECTION", _m2_1_ui.run_selected_mock_graph)
+	_add_toolbar_button(
+		canvas_actions, "ACTION_SAVE_WORKFLOW", _m2_1_ui._save_selected_frame_as_workflow
+	)
+	_add_toolbar_button(canvas_actions, "ACTION_GROUP", _canvas._group_selected_nodes)
+	_add_toolbar_button(
+		canvas_actions, "ACTION_DELETE", _canvas.delete_selected, COMPACT_BUTTON_WIDTH
+	)
+	_add_toolbar_button(canvas_actions, "ACTION_TOGGLE_EDGES", _m2_1_ui._toggle_canvas_edges)
 	_add_toolbar_button(
 		canvas_actions,
 		"ACTION_ADD_INPUT",

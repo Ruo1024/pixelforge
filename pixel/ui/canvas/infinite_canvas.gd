@@ -79,6 +79,7 @@ var _graph_edge_drag_world := Vector2.ZERO
 var _selected_graph_edge := {}
 var _graph_clipboard := {}
 var _graph_edge_preview_signature := ""
+var _graph_edges_visible := true
 
 
 func _ready() -> void:
@@ -189,17 +190,22 @@ func _draw() -> void:
 		>= GRID_MIN_ZOOM
 	):
 		PixelGridRenderer.draw(self, Color(1.0, 1.0, 1.0, 0.08))
-	GraphEdgeInteraction.draw_edges(
-		self,
-		GraphEdgeRenderer,
-		_items_by_id,
-		CanvasBatchCardScript,
-		CanvasNodeCardScript,
-		EDGE_COLOR,
-		_selected_graph_edge,
-		_graph_edge_drag,
-		_graph_edge_drag_world
-	)
+	if _graph_edges_visible:
+		GraphEdgeInteraction.draw_edges(
+			self,
+			GraphEdgeRenderer,
+			_items_by_id,
+			CanvasBatchCardScript,
+			CanvasNodeCardScript,
+			EDGE_COLOR,
+			_selected_graph_edge,
+			_graph_edge_drag,
+			_graph_edge_drag_world
+		)
+	elif not _graph_edge_drag.is_empty():
+		GraphEdgeInteraction.draw_preview(
+			self, GraphEdgeRenderer, _graph_edge_drag, _graph_edge_drag_world
+		)
 
 	SelectionSnapshot.draw_overlay(self, _items_by_id, _selection, SELECTION_COLOR, BOX_COLOR)
 
@@ -501,7 +507,10 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 
 
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	return data is Dictionary and String(data.get("kind", "")) in ["project_asset", "style_preset"]
+	return (
+		data is Dictionary
+		and String(data.get("kind", "")) in ["project_asset", "style_preset", "workflow_template"]
+	)
 
 
 func _drop_data(at_position: Vector2, data: Variant) -> void:
@@ -598,6 +607,22 @@ func get_item_count() -> int:
 
 func get_selected_ids() -> Array:
 	return _selection.get_selected_ids()
+
+
+func _set_graph_edges_visible(value: bool) -> void:
+	_graph_edges_visible = value
+	if not value:
+		_selected_graph_edge = {}
+	queue_redraw()
+
+
+func _toggle_graph_edges() -> bool:
+	_set_graph_edges_visible(not _graph_edges_visible)
+	return _graph_edges_visible
+
+
+func _are_graph_edges_visible() -> bool:
+	return _graph_edges_visible
 
 
 func _focus_item_ids(item_ids: Array) -> bool:
@@ -1152,6 +1177,12 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 						drag_positions[member_id] = _items_by_id[member_id].position
 			_selection.start_drag(world_position, drag_positions)
 	else:
+		if not _graph_edges_visible:
+			if not additive:
+				_clear_selection()
+			_selection.start_box(screen_position, additive)
+			queue_redraw()
+			return
 		var edge_hit := GraphEdgeRenderer.hit_edge_at_screen(
 			self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, screen_position
 		)
