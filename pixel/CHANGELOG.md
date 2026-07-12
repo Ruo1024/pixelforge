@@ -17,6 +17,7 @@
 ## Unreleased
 
 - Beta 0.3 canvas creation: unify fixed, Tab, context, and double-click creation around an active/default graph; import or paste images as atomic reference cards with partial-failure-safe grid placement; hide deferred ComfyUI from the primary add path.
+- Beta 0.3 content inputs: add executable, registered `text_prompt` and embedded `style_preset` graph nodes with validated project round trips.
 - Beta 0.3 workspace foundation: define explicit stage-frame persistence, single-source membership, safe legacy defaults, and structured invalid-reference warnings.
 - Beta 0.2 localization foundation: add system-aware English/Simplified Chinese selection, persistent language preferences, stable catalogs, a reusable selector, and catalog consistency gates.
 - Beta 0.2 workspace slice: add content-bearing canvas modules, a three-path empty state, contextual inspection/navigation, live localized workspace chrome, and an OFL-licensed Simplified Chinese UI font.

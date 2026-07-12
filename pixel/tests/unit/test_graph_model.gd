@@ -40,7 +40,16 @@ func test_node_registry_registers_batch_and_rejects_duplicate_type() -> void:
 	assert_false(registry.register("batch", BatchNodeScript))
 	assert_eq(
 		registry.get_registered_types(),
-		["ai_generate", "batch", "comfyui.run_workflow", "image_input", "object_list", "size_spec"]
+		[
+			"ai_generate",
+			"batch",
+			"comfyui.run_workflow",
+			"image_input",
+			"object_list",
+			"size_spec",
+			"style_preset",
+			"text_prompt",
+		]
 	)
 
 
