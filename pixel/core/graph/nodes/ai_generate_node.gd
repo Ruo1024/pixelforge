@@ -29,7 +29,7 @@ func get_input_ports() -> Array[Dictionary]:
 		{"name": "text", "type": "text", "required": false},
 		{"name": "items", "type": "text_list", "required": false},
 		{"name": "spec", "type": "spec", "required": true},
-		{"name": "image", "type": "image", "required": false},
+		{"name": "image", "type": "image_list", "required": false},
 	]
 
 
@@ -44,6 +44,12 @@ func get_param_schema() -> Array[Dictionary]:
 			"label_key": "GRAPH_PARAM_PROVIDER",
 			"kind": KIND_PROVIDER,
 			"default": PROVIDER_MOCK,
+		},
+		{
+			"key": "model_id",
+			"label_key": "GRAPH_PARAM_MODEL",
+			"kind": KIND_TEXT,
+			"default": "",
 		},
 		{
 			"key": "batch_size",
@@ -82,6 +88,13 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 	var subjects := _subjects_from_inputs(inputs)
 	var reference_hash := String(inputs.get("__reference_content_sha256", ""))
 	var reference_asset_id := String(inputs.get("__reference_asset_id", ""))
+	var reference_hashes := _string_array(inputs.get("__reference_content_sha256s", []))
+	var reference_asset_ids := _string_array(inputs.get("__reference_asset_ids", []))
+	if reference_hashes.is_empty() and not reference_hash.is_empty():
+		reference_hashes.append(reference_hash)
+	if reference_asset_ids.is_empty() and not reference_asset_id.is_empty():
+		reference_asset_ids.append(reference_asset_id)
+	var combined_reference_hash := ":".join(reference_hashes)
 	var images := []
 	var metadata := []
 
@@ -89,7 +102,7 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 		for _index in range(batch_size):
 			var item_seed := seed + images.size()
 			images.append(
-				_make_mock_image(String(subject), width, height, item_seed, reference_hash)
+				_make_mock_image(String(subject), width, height, item_seed, combined_reference_hash)
 			)
 			(
 				metadata
@@ -104,11 +117,21 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 						reference_asset_id if not reference_asset_id.is_empty() else null,
 						"reference_content_sha256":
 						reference_hash if not reference_hash.is_empty() else null,
+						"reference_asset_ids": reference_asset_ids.duplicate(),
+						"reference_content_sha256s": reference_hashes.duplicate(),
 					}
 				)
 			)
 
 	return {"images": images, "metadata": metadata}
+
+
+func _string_array(value: Variant) -> Array[String]:
+	var result: Array[String] = []
+	if value is Array or value is PackedStringArray:
+		for item in value:
+			result.append(String(item))
+	return result
 
 
 func _subjects_from_inputs(inputs: Dictionary) -> Array:

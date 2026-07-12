@@ -6,6 +6,11 @@ const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const GraphRunnerScript := preload("res://services/graph_mock_runner.gd")
 const MainScript := preload("res://ui/shell/main.gd")
 const Strings := preload("res://ui/shell/strings.gd")
+const CloudControllerScript := preload("res://ui/shell/openai_generation_controller.gd")
+const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
+const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
 
 const FIXTURE_PATH := "res://tests/fixtures/providers/openai_image_success.json"
 const SECRET_SENTINEL := "sk-pf-m4-v1-contract-secret"
@@ -121,6 +126,77 @@ func test_recorded_success_fixture_decodes_to_rgba_result() -> void:
 	assert_eq(result["cost"], -1.0)
 	assert_eq(result["provider_meta"]["model"], "gpt-image-2")
 	assert_eq(result["provider_meta"]["target_size"], [32, 24])
+
+
+func test_targeted_request_uses_only_the_requested_generate_branch() -> void:
+	var first_image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	first_image.fill(Color.RED)
+	var second_image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	second_image.fill(Color.BLUE)
+	var first_id := AssetLibrary.register_image(first_image, "first")
+	var second_id := AssetLibrary.register_image(second_image, "second")
+	var graph := GraphScript.new()
+	graph.id = "two_cloud_branches"
+	for suffix in ["a", "b"]:
+		var reference_id := first_id if suffix == "a" else second_id
+		graph.add_node(
+			ObjectListNodeScript.new(),
+			"prompt_%s" % suffix,
+			{"items": "subject_%s" % suffix},
+			Vector2.ZERO
+		)
+		graph.add_node(
+			SizeSpecNodeScript.new(),
+			"size_%s" % suffix,
+			{"width": 32 if suffix == "a" else 48, "height": 32, "per_subject": 1},
+			Vector2.ZERO
+		)
+		graph.add_node(
+			ImageInputNodeScript.new(),
+			"reference_%s" % suffix,
+			{"asset_id": reference_id},
+			Vector2.ZERO
+		)
+		(
+			graph
+			. add_node(
+				AiGenerateNodeScript.new(),
+				"generate_%s" % suffix,
+				{
+					"provider_id": "openai_image",
+					"model_id": "gpt-image-2",
+					"batch_size": 1,
+					"seed": 10,
+				},
+				Vector2.ZERO
+			)
+		)
+		graph.add_node(BatchNodeScript.new(), "batch_%s" % suffix, {}, Vector2.ZERO)
+		graph.add_edge("prompt_%s" % suffix, "items", "generate_%s" % suffix, "items")
+		graph.add_edge("size_%s" % suffix, "spec", "generate_%s" % suffix, "spec")
+		graph.add_edge("reference_%s" % suffix, "image", "generate_%s" % suffix, "image")
+		graph.add_edge("generate_%s" % suffix, "images", "batch_%s" % suffix, "in")
+
+	var controller := CloudControllerScript.new()
+	add_child_autofree(controller)
+	var first := controller._request_for_graph(graph, "generate_a")
+	var second := controller._request_for_graph(graph, "generate_b")
+	assert_eq(first["prompt"], "subject_a")
+	assert_eq(second["prompt"], "subject_b")
+	assert_eq(first["reference_asset_ids"], [first_id])
+	assert_eq(second["reference_asset_ids"], [second_id])
+	assert_eq(first["width"], 32)
+	assert_eq(second["width"], 48)
+	assert_eq(first["source_generate_node_id"], "generate_a")
+	first["run_id"] = "run-a"
+	first["api_key"] = SECRET_SENTINEL
+	var snapshot: Dictionary = controller._generation_snapshot(
+		first, "openai_image", "gpt-image-2", null, -1.0
+	)
+	assert_eq(snapshot["run_id"], "run-a")
+	assert_eq(snapshot["source_generate_node_id"], "generate_a")
+	assert_eq(snapshot["reference_asset_ids"], [first_id])
+	assert_false(JSON.stringify(snapshot).contains(SECRET_SENTINEL))
 
 
 func test_error_mapping_and_single_retry_policy_are_stable() -> void:

@@ -203,6 +203,7 @@
 	"GRAPH_PARAM_HEIGHT": "Height",
 	"GRAPH_PARAM_PER_SUBJECT": "Per Subject",
 	"GRAPH_PARAM_PROVIDER": "Provider",
+	"GRAPH_PARAM_MODEL": "Model",
 	"GRAPH_PARAM_BATCH_SIZE": "Batch Size",
 	"GRAPH_PARAM_SEED": "Seed",
 	"BATCH_DEFAULT_LABEL": "Batch",

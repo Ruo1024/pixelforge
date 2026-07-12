@@ -175,8 +175,13 @@ func _propagate_outputs(
 		)
 		if from_port == "images" and outputs.has("metadata"):
 			target_inputs["__metadata"] = outputs["metadata"]
-		if from_port == "image":
-			for key in ["__reference_asset_id", "__reference_content_sha256"]:
+		if from_port in ["image", "images"]:
+			for key in [
+				"__reference_asset_id",
+				"__reference_content_sha256",
+				"__reference_asset_ids",
+				"__reference_content_sha256s",
+			]:
 				if outputs.has(key):
 					target_inputs[key] = outputs[key]
 		inputs_by_node[to_node_id] = target_inputs

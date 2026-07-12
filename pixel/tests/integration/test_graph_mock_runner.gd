@@ -7,6 +7,7 @@ const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.g
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
+const ReferenceSetNodeScript := preload("res://core/graph/nodes/reference_set_node.gd")
 const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
 const FileIOScript := preload("res://infra/file_io.gd")
 
@@ -132,6 +133,33 @@ func test_reference_image_changes_mock_output_and_persists_provenance() -> void:
 	)
 	assert_eq(provenance["reference_asset_id"], red_id)
 	assert_eq(provenance["reference_content_sha256"], GraphContextScript.image_content_sha256(red))
+
+
+func test_ordered_reference_set_reaches_mock_and_persists_plural_provenance() -> void:
+	var red := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	red.fill(Color.RED)
+	var blue := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	blue.fill(Color.BLUE)
+	var red_id := AssetLibrary.register_image(red, "red")
+	var blue_id := AssetLibrary.register_image(blue, "blue")
+	var graph := _make_mock_graph()
+	graph.add_node(
+		ReferenceSetNodeScript.new(), "references", {"asset_ids": [blue_id, red_id]}, Vector2.ZERO
+	)
+	assert_true(bool(graph.add_edge("references", "images", "generate", "image")["ok"]))
+	var result: Dictionary = MockRunnerScript.new().run_to_batch(graph, AssetLibrary, "batch_1")
+	assert_true(result["ok"])
+	var provenance: Dictionary = (
+		AssetLibrary.get_asset_meta(String(result["asset_ids"][0]))["provenance"]
+	)
+	assert_eq(provenance["reference_asset_ids"], [blue_id, red_id])
+	assert_eq(
+		provenance["reference_content_sha256s"],
+		[
+			GraphContextScript.image_content_sha256(blue),
+			GraphContextScript.image_content_sha256(red),
+		]
+	)
 
 
 func test_unconnected_empty_reference_does_not_block_target_batch() -> void:
