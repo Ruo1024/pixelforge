@@ -20,6 +20,7 @@ const CONTENT_CARD_SIZE := Vector2(240, 238)
 const GENERATE_CARD_SIZE := Vector2(280, 390)
 const REFERENCE_CARD_SIZE := Vector2(260, 330)
 const REFERENCE_SET_CARD_SIZE := Vector2(320, 430)
+const REFERENCE_SET_PREVIEW_SIZE := Vector2(52, 52)
 const HEADER_HEIGHT := 32
 const PADDING := 12
 const BACKGROUND := Color(0.13, 0.145, 0.155, 0.98)
@@ -728,7 +729,7 @@ func _reference_set_row(asset_ids: Array, index: int) -> Control:
 	row.name = "ReferenceSetRow%d" % index
 	var preview := TextureRect.new()
 	preview.name = "ReferenceSetPreview%d" % index
-	preview.custom_minimum_size = Vector2(52, 52)
+	preview.custom_minimum_size = REFERENCE_SET_PREVIEW_SIZE
 	preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	var detail := Label.new()
