@@ -470,7 +470,14 @@ func add_graph_node_to_selected_graph(
 		world_position = requested_position.round()
 	var node_id := "%s_%s" % [type_name, IdUtil.uuid_v4().left(8)]
 	var item_id := IdUtil.uuid_v4()
-	if graph.add_node(node, node_id, initial_params, world_position).is_empty():
+	var resolved_params := initial_params.duplicate(true)
+	if type_name == "style_preset" and resolved_params.is_empty():
+		var project_style: Variant = ProjectService.current_project.manifest.get("style_preset", {})
+		resolved_params = {
+			"preset_ref": "embedded",
+			"preset": project_style.duplicate(true) if project_style is Dictionary else {},
+		}
+	if graph.add_node(node, node_id, resolved_params, world_position).is_empty():
 		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
 		return ""
 
