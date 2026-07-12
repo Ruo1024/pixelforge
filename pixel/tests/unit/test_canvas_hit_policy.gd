@@ -4,6 +4,7 @@ const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
+const CanvasItemFrameScript := preload("res://ui/canvas/canvas_item_frame.gd")
 const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 
@@ -118,8 +119,9 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 	)
 	canvas._handle_mouse_motion(_mouse_motion_event(canvas.world_to_screen(hot_zone_world)))
 
-	assert_eq(canvas._graph_edge_drag_world, hot_zone_world)
-	assert_gt(canvas._graph_edge_drag_world.distance_to(target_anchor), 100.0)
+	assert_eq(canvas._graph_edge_drag_world, target_anchor)
+	assert_eq(status_events[0]["type"], "connect_preview")
+	assert_eq(status_events[0]["state"], "valid")
 
 	canvas._finish_left_interaction(canvas.world_to_screen(hot_zone_world))
 
@@ -127,13 +129,17 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 	assert_eq(
 		graph_data.get("edges", []), [{"from": ["objects", "items"], "to": ["generate", "items"]}]
 	)
-	assert_eq(String(status_events[0]["type"]), "connect_succeeded")
-	assert_eq(status_events[0]["edge"], {"from": ["objects", "items"], "to": ["generate", "items"]})
+	assert_eq(String(status_events[-1]["type"]), "connect_succeeded")
+	assert_eq(
+		status_events[-1]["edge"], {"from": ["objects", "items"], "to": ["generate", "items"]}
+	)
 
 
 func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> void:
 	var canvas: Control = _canvas()
 	var status_messages := []
+	var status_events := []
+	canvas.graph_status.connect(func(event: Dictionary) -> void: status_events.append(event))
 	canvas.graph_connect_failed.connect(
 		func(reason: String) -> void:
 			status_messages.append(Strings.STATUS_GRAPH_CONNECT_FAILED % reason)
@@ -150,6 +156,12 @@ func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> vo
 	canvas._begin_left_interaction(
 		canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
 	)
+	canvas._handle_mouse_motion(
+		_mouse_motion_event(canvas.world_to_screen(batch.get_graph_port_anchor("in", true)))
+	)
+	assert_eq(status_events[0]["type"], "connect_preview")
+	assert_eq(status_events[0]["state"], "invalid")
+	assert_eq(status_events[0]["reason"], "Cannot connect text_list to image_list")
 	canvas._finish_left_interaction(canvas.world_to_screen(batch.get_graph_port_anchor("in", true)))
 
 	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
@@ -223,6 +235,65 @@ func test_canvas_deleting_graph_node_removes_incident_edges_and_undo_restores() 
 	assert_true(canvas._items_by_id.has("objects_item"))
 
 
+func test_stage_frame_groups_moves_and_deletes_as_explicit_membership_with_undo() -> void:
+	var canvas: Control = _canvas()
+	_set_graph(
+		"graph_stage",
+		[_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")]
+	)
+	canvas._add_node_direct(_node_item("objects_item", "graph_stage", "objects", Vector2(100, 100)))
+	canvas._add_node_direct(
+		_node_item("generate_item", "graph_stage", "generate", Vector2(420, 120))
+	)
+	canvas.select_ids(["objects_item", "generate_item"])
+
+	assert_true(canvas._group_selected_nodes())
+	assert_eq(canvas.get_item_count(), 3)
+	var frame_id := String(canvas.get_selected_ids()[0])
+	var grouped_items: Array = canvas.export_canvas_data()["items"]
+	assert_eq(_item_by_id(grouped_items, "objects_item")["frame_id"], frame_id)
+	assert_eq(_item_by_id(grouped_items, "generate_item")["frame_id"], frame_id)
+	assert_false(_item_by_id(grouped_items, frame_id).has("member_ids"))
+	var frame_position := Vector2(
+		_item_by_id(grouped_items, frame_id)["position"][0],
+		_item_by_id(grouped_items, frame_id)["position"][1]
+	)
+	assert_eq(_hit(canvas, frame_position + Vector2(8, 8))["item_id"], frame_id)
+
+	canvas.move_selected_by(Vector2(40, 24), true)
+	var moved_items: Array = canvas.export_canvas_data()["items"]
+	assert_eq(_item_by_id(moved_items, "objects_item")["position"], [140, 124])
+	assert_eq(_item_by_id(moved_items, "generate_item")["position"], [460, 144])
+	assert_eq(_node_position(ProjectService.get_graph_data("graph_stage"), "objects"), [140, 124])
+	assert_true(UndoService.undo())
+	assert_eq(
+		_item_by_id(canvas.export_canvas_data()["items"], "objects_item")["position"], [100, 100]
+	)
+
+	canvas.select_ids([frame_id])
+	canvas.delete_selected(true)
+	assert_eq(canvas.get_item_count(), 2)
+	assert_null(_item_by_id(canvas.export_canvas_data()["items"], "objects_item")["frame_id"])
+	assert_eq(ProjectService.get_graph_data("graph_stage")["nodes"].size(), 2)
+	assert_true(UndoService.undo())
+	assert_eq(canvas.get_item_count(), 3)
+	assert_eq(
+		_item_by_id(canvas.export_canvas_data()["items"], "objects_item")["frame_id"], frame_id
+	)
+
+
+func test_stage_frame_rejects_cross_graph_grouping() -> void:
+	var canvas: Control = _canvas()
+	_set_graph("graph_a", [_graph_node("a", "object_list")])
+	_set_graph("graph_b", [_graph_node("b", "object_list")])
+	canvas._add_node_direct(_node_item("a_item", "graph_a", "a", Vector2.ZERO))
+	canvas._add_node_direct(_node_item("b_item", "graph_b", "b", Vector2(300, 0)))
+	canvas.select_ids(["a_item", "b_item"])
+
+	assert_false(canvas._group_selected_nodes())
+	assert_eq(canvas.get_item_count(), 2)
+
+
 func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]
@@ -285,7 +356,8 @@ func _hit(canvas: Control, world_position: Vector2) -> Dictionary:
 		world_position,
 		CanvasBatchCardScript,
 		CanvasItemSpriteScript,
-		CanvasNodeCardScript
+		CanvasNodeCardScript,
+		CanvasItemFrameScript
 	)
 
 
@@ -334,6 +406,20 @@ func _graph_node_ids(graph_data: Dictionary) -> Array:
 			var node_data: Dictionary = raw_node
 			result.append(String(node_data.get("id", "")))
 	return result
+
+
+func _item_by_id(items: Array, item_id: String) -> Dictionary:
+	for item in items:
+		if item is Dictionary and String(item.get("id", "")) == item_id:
+			return item
+	return {}
+
+
+func _node_position(graph_data: Dictionary, node_id: String) -> Array:
+	for node in graph_data.get("nodes", []):
+		if node is Dictionary and String(node.get("id", "")) == node_id:
+			return node.get("position", [])
+	return []
 
 
 func _image(color: Color) -> Image:

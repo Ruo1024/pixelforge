@@ -23,6 +23,7 @@ const WHEEL_ZOOM_MIN_INTERVAL_MSEC := 80
 const CULL_INTERVAL_SECONDS := 0.1
 const CULL_PADDING_PIXELS := 128.0
 const GRID_MIN_ZOOM := 4.0
+const FRAME_PADDING := 40.0
 const SELECTION_COLOR := Color(0.1, 0.85, 0.65, 1.0)
 const BOX_COLOR := Color(1.0, 0.85, 0.25, 0.35)
 const BACKGROUND_COLOR := Color(0.105, 0.11, 0.12, 1.0)
@@ -49,6 +50,7 @@ const ToolTarget := preload("res://ui/canvas/canvas_tool_target.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const Log := preload("res://core/util/log_util.gd")
+const Strings := preload("res://ui/shell/strings.gd")
 
 var camera_center := Vector2.ZERO
 var zoom_index := DEFAULT_ZOOM_INDEX
@@ -74,6 +76,7 @@ var _graph_edge_drag := {}
 var _graph_edge_drag_world := Vector2.ZERO
 var _selected_graph_edge := {}
 var _graph_clipboard := {}
+var _graph_edge_preview_signature := ""
 
 
 func _ready() -> void:
@@ -165,6 +168,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_D and event.is_command_or_control_pressed():
 		_duplicate_selected_graph_nodes()
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_G and event.is_command_or_control_pressed():
+		if event.shift_pressed:
+			_ungroup_selected()
+		else:
+			_group_selected_nodes()
 		get_viewport().set_input_as_handled()
 
 
@@ -351,6 +360,8 @@ func delete_selected(record_undo: bool = true) -> void:
 		var snapshot := {"data": item.to_canvas_data()}
 		if item.get_script() == CanvasItemSpriteScript:
 			snapshot["image"] = item.duplicate_image()
+		elif item.get_script() == CanvasItemFrameScript:
+			snapshot["member_ids"] = _frame_member_item_ids(item.item_id)
 		snapshots.append(snapshot)
 
 	if snapshots.is_empty():
@@ -362,6 +373,8 @@ func delete_selected(record_undo: bool = true) -> void:
 	var do_delete := func() -> void:
 		GraphItemBridge.apply_graph_deletion_snapshots(graph_snapshots, "after")
 		for snapshot in snapshots:
+			if String(snapshot["data"].get("type", "")) == "frame":
+				_set_frame_membership(snapshot.get("member_ids", []), null)
 			_remove_item_direct(String(snapshot["data"]["id"]))
 		_clear_selection()
 		_emit_canvas_changed()
@@ -390,6 +403,13 @@ func delete_selected(record_undo: bool = true) -> void:
 				_add_batch_direct(data)
 			elif String(data.get("type", "")) == "node":
 				_add_node_direct(data)
+			elif String(data.get("type", "")) == "frame":
+				_add_frame_direct(data)
+		for snapshot in snapshots:
+			if String(snapshot["data"].get("type", "")) == "frame":
+				_set_frame_membership(
+					snapshot.get("member_ids", []), String(snapshot["data"].get("id", ""))
+				)
 		_select_only(SelectionSnapshot.ids_from_snapshots(snapshots))
 		_emit_canvas_changed()
 
@@ -618,6 +638,132 @@ func _duplicate_selected_graph_nodes() -> bool:
 	return _paste_graph_clipboard_at(Vector2(float(anchor[0]), float(anchor[1])) + Vector2(32, 32))
 
 
+func _group_selected_nodes() -> bool:
+	var member_ids := []
+	var graph_id := ""
+	var bounds := Rect2()
+	var has_bounds := false
+	for item_id in _selection.get_selected_ids():
+		if not _items_by_id.has(item_id):
+			continue
+		var item: Node = _items_by_id[item_id]
+		if item.get_script() not in [CanvasNodeCardScript, CanvasBatchCardScript]:
+			continue
+		var item_graph_id := String(item.graph_id)
+		if graph_id.is_empty():
+			graph_id = item_graph_id
+		elif graph_id != item_graph_id:
+			graph_status.emit({"type": "group_failed", "reason": "cross_graph"})
+			return false
+		member_ids.append(item_id)
+		bounds = (
+			item.get_canvas_bounds() if not has_bounds else bounds.merge(item.get_canvas_bounds())
+		)
+		has_bounds = true
+	if member_ids.size() < 2 or graph_id.is_empty():
+		graph_status.emit({"type": "group_failed", "reason": "needs_multiple_nodes"})
+		return false
+	var frame_id := IdUtil.uuid_v4()
+	var previous_membership := {}
+	for item_id in member_ids:
+		previous_membership[item_id] = _items_by_id[item_id].frame_id
+	var frame_rect := bounds.grow(FRAME_PADDING)
+	var frame_data := {
+		"id": frame_id,
+		"type": "frame",
+		"graph_id": graph_id,
+		"title": Strings.text("FRAME_DEFAULT_TITLE"),
+		"color": "4f6f8fff",
+		"position": [int(round(frame_rect.position.x)), int(round(frame_rect.position.y))],
+		"size": [int(round(frame_rect.size.x)), int(round(frame_rect.size.y))],
+		"z_index": -1,
+	}
+	var do_group := func() -> void:
+		_add_frame_direct(frame_data)
+		_set_frame_membership(member_ids, frame_id)
+		_select_only([frame_id])
+		_emit_canvas_changed()
+	var undo_group := func() -> void:
+		for item_id in previous_membership:
+			_set_item_frame_id(item_id, previous_membership[item_id])
+		_remove_item_direct(frame_id)
+		_select_only(member_ids)
+		_emit_canvas_changed()
+	UndoService.perform_action("Group canvas nodes", do_group, undo_group)
+	graph_status.emit({"type": "nodes_grouped", "frame_id": frame_id, "count": member_ids.size()})
+	return true
+
+
+func _ungroup_selected() -> bool:
+	var frame_ids := []
+	for item_id in _selection.get_selected_ids():
+		if not _items_by_id.has(item_id):
+			continue
+		var item: Node = _items_by_id[item_id]
+		if item.get_script() == CanvasItemFrameScript:
+			frame_ids.append(item.item_id)
+		elif item.get_script() in [CanvasNodeCardScript, CanvasBatchCardScript]:
+			var frame_id := "" if item.frame_id == null else String(item.frame_id)
+			if not frame_id.is_empty() and not frame_ids.has(frame_id):
+				frame_ids.append(frame_id)
+	if frame_ids.is_empty():
+		return false
+	var frame_snapshots := []
+	for frame_id in frame_ids:
+		if _items_by_id.has(frame_id):
+			(
+				frame_snapshots
+				. append(
+					{
+						"data": _items_by_id[frame_id].to_canvas_data(),
+						"member_ids": _frame_member_item_ids(frame_id),
+					}
+				)
+			)
+	var do_ungroup := func() -> void:
+		for snapshot in frame_snapshots:
+			_set_frame_membership(snapshot["member_ids"], null)
+			_remove_item_direct(String(snapshot["data"]["id"]))
+		_select_only([])
+		_emit_canvas_changed()
+	var undo_ungroup := func() -> void:
+		var restored_ids := []
+		for snapshot in frame_snapshots:
+			_add_frame_direct(snapshot["data"])
+			var frame_id := String(snapshot["data"]["id"])
+			_set_frame_membership(snapshot["member_ids"], frame_id)
+			restored_ids.append(frame_id)
+		_select_only(restored_ids)
+		_emit_canvas_changed()
+	UndoService.perform_action("Ungroup canvas nodes", do_ungroup, undo_ungroup)
+	graph_status.emit({"type": "nodes_ungrouped", "count": frame_snapshots.size()})
+	return true
+
+
+func _frame_member_item_ids(frame_id: String) -> Array:
+	var result := []
+	for item_id in _items_by_id:
+		var item: Node = _items_by_id[item_id]
+		if item.get_script() not in [CanvasNodeCardScript, CanvasBatchCardScript]:
+			continue
+		if item.frame_id != null and String(item.frame_id) == frame_id:
+			result.append(item_id)
+	return result
+
+
+func _set_frame_membership(member_ids: Array, frame_id: Variant) -> void:
+	for item_id in member_ids:
+		_set_item_frame_id(String(item_id), frame_id)
+
+
+func _set_item_frame_id(item_id: String, frame_id: Variant) -> void:
+	if not _items_by_id.has(item_id):
+		return
+	var item: Node = _items_by_id[item_id]
+	if item.get_script() in [CanvasNodeCardScript, CanvasBatchCardScript]:
+		item.frame_id = frame_id
+
+
 func select_ids(ids: Array) -> void:
 	_select_only(ids)
 
@@ -746,7 +892,7 @@ func move_selected_by(delta: Vector2, record_undo: bool = true) -> void:
 	if _selection.is_empty():
 		return
 
-	var before := SelectionSnapshot.selected_positions(_items_by_id, _selection)
+	var before := _expanded_selected_positions()
 	var after := {}
 	var snapped_delta := delta.round()
 	for item_id in before.keys():
@@ -844,7 +990,39 @@ func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if not _graph_edge_drag.is_empty():
-		_graph_edge_drag_world = GraphEdgeInteraction.update_drag_world(self, event.position)
+		var preview: Dictionary = GraphEdgeInteraction.connection_preview(
+			self,
+			_items_by_id,
+			CanvasBatchCardScript,
+			CanvasNodeCardScript,
+			_graph_edge_drag,
+			event.position
+		)
+		_graph_edge_drag["preview_state"] = String(preview.get("state", "none"))
+		_graph_edge_drag_world = preview.get(
+			"anchor", GraphEdgeInteraction.update_drag_world(self, event.position)
+		)
+		var signature := (
+			"%s:%s:%s"
+			% [
+				String(preview.get("state", "none")),
+				String(preview.get("item_id", "")),
+				String(preview.get("reason", "")),
+			]
+		)
+		if signature != _graph_edge_preview_signature:
+			_graph_edge_preview_signature = signature
+			(
+				graph_status
+				. emit(
+					{
+						"type": "connect_preview",
+						"state": String(preview.get("state", "none")),
+						"reason": String(preview.get("reason", "")),
+						"item_id": String(preview.get("item_id", "")),
+					}
+				)
+			)
 		queue_redraw()
 		accept_event()
 	elif _is_panning:
@@ -886,9 +1064,12 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 			_select_only([hit_item.item_id])
 
 		if _selection.has(hit_item.item_id):
-			_selection.start_drag(
-				world_position, SelectionSnapshot.selected_positions(_items_by_id, _selection)
-			)
+			var drag_positions := SelectionSnapshot.selected_positions(_items_by_id, _selection)
+			if hit_item.get_script() == CanvasItemFrameScript:
+				for member_id in _frame_member_item_ids(hit_item.item_id):
+					if _items_by_id.has(member_id):
+						drag_positions[member_id] = _items_by_id[member_id].position
+			_selection.start_drag(world_position, drag_positions)
 	else:
 		var edge_hit := GraphEdgeRenderer.hit_edge_at_screen(
 			self, _items_by_id, CanvasBatchCardScript, CanvasNodeCardScript, screen_position
@@ -909,6 +1090,7 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
 	if not _graph_edge_drag.is_empty():
 		var start := _graph_edge_drag.duplicate(true)
 		_graph_edge_drag = {}
+		_graph_edge_preview_signature = ""
 		var result := GraphEdgeInteraction.connect_at_screen(
 			self,
 			_items_by_id,
@@ -936,7 +1118,7 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
 
 func _drag_selected_to(world_position: Vector2) -> void:
 	var delta: Vector2 = (world_position - _selection.drag_start_world).round()
-	for item_id in _selection.get_selected_ids():
+	for item_id in _selection.drag_start_positions.keys():
 		if _items_by_id.has(item_id) and _selection.drag_start_positions.has(item_id):
 			var item: Node = _items_by_id[item_id]
 			if not item.locked:
@@ -946,7 +1128,7 @@ func _drag_selected_to(world_position: Vector2) -> void:
 
 
 func _commit_drag_if_needed() -> void:
-	var after_positions := SelectionSnapshot.selected_positions(_items_by_id, _selection)
+	var after_positions := _positions_for_ids(_selection.drag_start_positions.keys())
 	if SelectionSnapshot.positions_equal(_selection.drag_start_positions, after_positions):
 		return
 
@@ -966,6 +1148,28 @@ func _commit_drag_if_needed() -> void:
 
 	UndoService.perform_action("Move canvas selection", do_move, undo_move, 0, false)
 	_emit_canvas_changed()
+
+
+func _positions_for_ids(item_ids: Array) -> Dictionary:
+	var positions := {}
+	for item_id in item_ids:
+		if _items_by_id.has(item_id):
+			positions[item_id] = _items_by_id[item_id].position
+	return positions
+
+
+func _expanded_selected_positions() -> Dictionary:
+	var positions := SelectionSnapshot.selected_positions(_items_by_id, _selection)
+	for selected_id in _selection.get_selected_ids():
+		if not _items_by_id.has(selected_id):
+			continue
+		var item: Node = _items_by_id[selected_id]
+		if item.get_script() != CanvasItemFrameScript:
+			continue
+		for member_id in _frame_member_item_ids(item.item_id):
+			if _items_by_id.has(member_id):
+				positions[member_id] = _items_by_id[member_id].position
+	return positions
 
 
 func _finish_box_selection() -> void:
@@ -1107,7 +1311,8 @@ func _hit_at_world(world_position: Vector2) -> Dictionary:
 		world_position,
 		CanvasBatchCardScript,
 		CanvasItemSpriteScript,
-		CanvasNodeCardScript
+		CanvasNodeCardScript,
+		CanvasItemFrameScript
 	)
 
 

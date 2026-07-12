@@ -93,6 +93,45 @@ static func update_drag_world(canvas: Control, screen_position: Vector2) -> Vect
 	return canvas.screen_to_world(screen_position)
 
 
+static func connection_preview(
+	canvas: Control,
+	items_by_id: Dictionary,
+	batch_script: Script,
+	node_script: Script,
+	start: Dictionary,
+	screen_position: Vector2
+) -> Dictionary:
+	var valid_target := _target_at_screen(
+		canvas, items_by_id, batch_script, node_script, start, screen_position, true
+	)
+	if not valid_target.is_empty():
+		return {
+			"state": "valid",
+			"reason": "",
+			"anchor": valid_target.get("anchor", canvas.screen_to_world(screen_position)),
+			"item_id": String(valid_target.get("item_id", "")),
+			"port_name": String(valid_target.get("port_name", "")),
+		}
+	var target := _target_at_screen(
+		canvas, items_by_id, batch_script, node_script, start, screen_position, false
+	)
+	if target.is_empty():
+		return {"state": "none", "reason": ""}
+	var graph_data := ProjectService.get_graph_data(String(start.get("graph_id", "")))
+	if graph_data.is_empty():
+		return {"state": "invalid", "reason": "Graph is unavailable"}
+	var graph: PFGraph = GraphScript.from_json(graph_data)
+	var target_item: Node = target.get("item", null)
+	var connection := _resolve_connection(graph, start, target, target_item)
+	return {
+		"state": "valid" if bool(connection.get("ok", false)) else "invalid",
+		"reason": String(connection.get("reason", "")),
+		"anchor": target.get("anchor", canvas.screen_to_world(screen_position)),
+		"item_id": String(target.get("item_id", "")),
+		"port_name": String(target.get("port_name", "")),
+	}
+
+
 static func snap_target(
 	canvas: Control,
 	items_by_id: Dictionary,
@@ -203,7 +242,13 @@ static func draw_preview(
 	for index in range(17):
 		var t := float(index) / 16.0
 		points.append(edge_renderer._cubic_bezier(start, control_a, control_b, end, t))
-	canvas.draw_polyline(points, Color(0.72, 0.9, 0.95, 0.72), 2.0, true)
+	var preview_state := String(drag_state.get("preview_state", "none"))
+	var preview_color := Color(0.72, 0.9, 0.95, 0.72)
+	if preview_state == "valid":
+		preview_color = Color(0.24, 0.9, 0.55, 0.9)
+	elif preview_state == "invalid":
+		preview_color = Color(0.95, 0.36, 0.3, 0.9)
+	canvas.draw_polyline(points, preview_color, 2.0, true)
 
 
 static func draw_edges(

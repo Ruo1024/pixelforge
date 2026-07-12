@@ -16,6 +16,7 @@
 
 ## Unreleased
 
+- Beta 0.3 graph organization: show valid/invalid connection feedback before release and add explicit same-graph stage frames whose membership, movement, deletion/ungrouping, persistence, and undo preserve nodes and edges.
 - Beta 0.3 atomic editing: add macOS/Windows copy, paste, duplicate, delete, and undo/redo for graph selections with new IDs, relative layout, internal-edge preservation, safe asset references, and transient-run-state removal.
 - Beta 0.3 canvas creation: unify fixed, Tab, context, and double-click creation around an active/default graph; import or paste images as atomic reference cards with partial-failure-safe grid placement; hide deferred ComfyUI from the primary add path.
 - Beta 0.3 content inputs: add executable, registered `text_prompt` and embedded `style_preset` graph nodes with validated project round trips.

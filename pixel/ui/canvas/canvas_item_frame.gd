@@ -6,13 +6,14 @@ extends Node2D
 
 const DEFAULT_SIZE := Vector2(320, 240)
 const DEFAULT_COLOR := Color(0.31, 0.44, 0.56, 1.0)
+const UIFont := preload("res://ui/widgets/ui_font.gd")
 
 var item_id := ""
 var graph_id := ""
 var title := ""
 var frame_size := DEFAULT_SIZE
 var frame_color := DEFAULT_COLOR
-var locked := true
+var locked := false
 var _raw_data := {}
 
 
@@ -56,3 +57,14 @@ func _draw() -> void:
 	var local_rect := Rect2(Vector2.ZERO, frame_size)
 	draw_rect(local_rect, Color(frame_color, 0.12), true)
 	draw_rect(local_rect, Color(frame_color, 0.82), false, 2.0)
+	var font: Font = UIFont.get_font()
+	if font != null and not title.is_empty():
+		draw_string(
+			font,
+			Vector2(12, 24),
+			title,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			maxf(0.0, frame_size.x - 24.0),
+			16,
+			Color(frame_color, 1.0)
+		)

@@ -14,12 +14,16 @@ static func hit_at_world(
 	world_position: Vector2,
 	batch_card_script: Script,
 	sprite_script: Script,
-	node_card_script: Script
+	node_card_script: Script,
+	frame_script: Script = null
 ) -> Dictionary:
 	var children := item_layer.get_children()
+	var frame_hit: Dictionary = {}
 	for index in range(children.size() - 1, -1, -1):
 		var item := children[index]
-		if not _is_canvas_item(item, batch_card_script, sprite_script, node_card_script):
+		if not _is_canvas_item(
+			item, batch_card_script, sprite_script, node_card_script, frame_script
+		):
 			continue
 		if not item.visible:
 			continue
@@ -28,21 +32,37 @@ static func hit_at_world(
 			return _graph_port_hit(item, port_hit)
 		if not item.contains_world_point(world_position):
 			continue
+		if frame_script != null and item.get_script() == frame_script:
+			frame_hit = _hit(KIND_ITEM, item, -1)
+			continue
 		if item.get_script() == batch_card_script:
 			var asset_index: int = item.asset_index_at_world(world_position)
 			if asset_index >= 0:
 				return _hit(KIND_BATCH_THUMBNAIL, item, asset_index)
 		return _hit(KIND_ITEM, item, -1)
-	return {"kind": KIND_EMPTY, "item": null, "item_id": "", "asset_index": -1}
+	return (
+		frame_hit
+		if not frame_hit.is_empty()
+		else {"kind": KIND_EMPTY, "item": null, "item_id": "", "asset_index": -1}
+	)
 
 
 static func _is_canvas_item(
-	item: Variant, batch_card_script: Script, sprite_script: Script, node_card_script: Script
+	item: Variant,
+	batch_card_script: Script,
+	sprite_script: Script,
+	node_card_script: Script,
+	frame_script: Script
 ) -> bool:
 	if not (item is Node):
 		return false
 	var script: Script = item.get_script()
-	return script == batch_card_script or script == sprite_script or script == node_card_script
+	return (
+		script == batch_card_script
+		or script == sprite_script
+		or script == node_card_script
+		or (frame_script != null and script == frame_script)
+	)
 
 
 static func _graph_port_at_world(item: Node, world_position: Vector2) -> Dictionary:

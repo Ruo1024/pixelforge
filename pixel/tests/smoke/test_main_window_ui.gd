@@ -691,6 +691,15 @@ func test_graph_status_events_update_status_bar() -> void:
 
 	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
 	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
+	canvas.graph_status.emit({"type": "connect_preview", "state": "valid"})
+	assert_eq(_status_label(main).text, Strings.text("STATUS_GRAPH_CONNECT_PREVIEW_VALID"))
+	canvas.graph_status.emit(
+		{"type": "connect_preview", "state": "invalid", "reason": "Wrong port"}
+	)
+	assert_eq(
+		_status_label(main).text,
+		Strings.text("STATUS_GRAPH_CONNECT_PREVIEW_INVALID_FORMAT") % "Wrong port"
+	)
 
 	canvas.graph_status.emit({"type": "edge_selected", "edge": edge})
 	assert_eq(
@@ -709,6 +718,8 @@ func test_graph_status_events_update_status_bar() -> void:
 		_status_label(main).text,
 		Strings.STATUS_GRAPH_CONNECT_DONE % ["objects", "items", "generate", "items"]
 	)
+	canvas.graph_status.emit({"type": "nodes_grouped", "count": 2})
+	assert_eq(_status_label(main).text, Strings.text("STATUS_FRAME_GROUPED_FORMAT") % 2)
 
 
 func test_run_selected_graph_reports_ghost_node_type() -> void:

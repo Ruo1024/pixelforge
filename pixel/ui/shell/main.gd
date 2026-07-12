@@ -14,6 +14,7 @@ const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
 const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
 const WorkspaceNavigationScript := preload("res://ui/shell/workspace_navigation.gd")
 const WorkspaceStartControllerScript := preload("res://ui/shell/workspace_start_controller.gd")
+const CanvasGraphStatusPresenter := preload("res://ui/shell/canvas_graph_status_presenter.gd")
 const WorkspaceSettingsControllerScript := preload(
 	"res://ui/shell/workspace_settings_controller.gd"
 )
@@ -698,46 +699,9 @@ func _on_graph_node_action_requested(graph_id: String, node_id: String, action_i
 
 
 func _on_canvas_graph_status(event: Dictionary) -> void:
-	var event_type := String(event.get("type", ""))
-	match event_type:
-		"connect_succeeded":
-			_status_label.text = (
-				Strings.STATUS_GRAPH_CONNECT_DONE % _graph_edge_status_parts(event.get("edge", {}))
-			)
-		"edge_selected":
-			_status_label.text = (
-				Strings.STATUS_GRAPH_EDGE_SELECTED % _graph_edge_status_parts(event.get("edge", {}))
-			)
-		"edge_deleted":
-			_status_label.text = (
-				Strings.STATUS_GRAPH_EDGE_DELETED % _graph_edge_status_parts(event.get("edge", {}))
-			)
-		"nodes_deleted":
-			_status_label.text = (
-				Strings.STATUS_GRAPH_NODES_DELETED
-				% [int(event.get("nodes", 0)), int(event.get("edges", 0))]
-			)
-
-
-func _graph_edge_status_parts(edge: Variant) -> Array:
-	if not (edge is Dictionary):
-		return ["", "", "", ""]
-	var edge_data: Dictionary = edge
-	var from_data := _graph_edge_endpoint(edge_data.get("from", []))
-	var to_data := _graph_edge_endpoint(edge_data.get("to", []))
-	return [String(from_data[0]), String(from_data[1]), String(to_data[0]), String(to_data[1])]
-
-
-func _graph_edge_endpoint(value: Variant) -> Array:
-	var endpoint := ["", ""]
-	if not (value is Array):
-		return endpoint
-	var source: Array = value
-	if source.size() >= 1:
-		endpoint[0] = String(source[0])
-	if source.size() >= 2:
-		endpoint[1] = String(source[1])
-	return endpoint
+	var status_text := CanvasGraphStatusPresenter.text(event)
+	if not status_text.is_empty():
+		_status_label.text = status_text
 
 
 func _apply_cleanup_to_selection(params: Dictionary) -> void:
