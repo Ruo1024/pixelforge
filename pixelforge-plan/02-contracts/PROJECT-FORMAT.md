@@ -77,6 +77,15 @@ my_project.pxproj (ZIP)
     "graph_id": "graph_main",      // 由哪张图产出（可空；菜单处理路径下为空，见 GRAPH-SCHEMA §4.7）
     "reference_asset_id": null,    // 执行时使用的参考素材 id（history 引用）
     "reference_content_sha256": null, // 规范化 RGBA8 像素及尺寸的 SHA-256
+    "reference_asset_ids": [],     // 新生成写有序复数 history 引用
+    "reference_content_sha256s": [],
+    "generation_snapshot": {       // 生成当时的安全、不可变设置摘要
+      "provider_id": "retrodiffusion", "model_id": "rd_plus",
+      "prompt": "...", "negative_prompt": "", "style": {},
+      "width": 32, "height": 32, "seed": 123,
+      "reference_asset_ids": [], "reference_content_sha256s": [],
+      "source_generate_node_id": "generate", "run_id": "run_uuid"
+    },
     "created_at": "...",
     "cleanup": {                   // 可选；M1 清洗产物写入，旧项目可缺省
       "source_asset": "parent-id",
@@ -211,10 +220,13 @@ board/animation 引用的素材必须拒绝或先由用户解除引用。
 | `canvas.items[type=sprite].asset_id` | live | 阻止删除 |
 | 过渡 `batch_card` 的 `asset_ids[]`、`selected_asset_ids[]`、`focus_asset_id`、`compare_asset_ids[]`、`review_states` 键 | live | 阻止删除 |
 | `graphs/*` 的 `image_input.params.asset_id` | live | 阻止删除 |
+| `graphs/*` 的 `reference_set.params.asset_ids[]` | live | 阻止删除 |
 | `graphs/*` 的 `batch.params.asset_ids[]`、`focus_asset_id`、`compare_asset_ids[]`、`review_states` 键 | live | 阻止删除 |
 | boards tile/free item 的明确 `asset_id` | live | 阻止删除 |
 | animations `frames[]` | live | 阻止删除 |
-| provenance `parent_asset`、`cleanup.source_asset`、`reference_asset_id` | history | 只警告，不阻止删除 |
+| provenance `parent_asset`、`cleanup.source_asset`、`reference_asset_id`、`reference_asset_ids[]` | history | 只警告，不阻止删除 |
+
+`generation_snapshot.reference_asset_ids[]` 与 provenance 顶层复数字段表达同一批实际输入，扫描器只从 provenance 顶层计一次 history 引用；快照用于详情/复制设置，不作为第二套引用真相。旧单数字段继续保留和扫描，新生成同时写复数字段但不要求回填旧字段。
 
 - 保存扫描 live 与 history 引用；失效引用原文保留并产生结构化警告，成功写出的可恢复项目不因此变成保存错误。
 - 素材只要仍有 live 引用或运行时占用，显式删除返回 `ERR_BUSY`；只有 history 引用时允许删除，历史 id 与内容哈希继续保留并在后续校验中警告。

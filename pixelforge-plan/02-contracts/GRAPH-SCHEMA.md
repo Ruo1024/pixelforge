@@ -121,7 +121,8 @@ func get_asset_image(asset_id: String) -> Image
 | `object_list` | input | – | text_list | 多行物体描述 |
 | `size_spec` | input | – | spec | 目标尺寸/比例/每物体数量 |
 | `image_input` | input | – | image | 从画布/文件/素材库取图 |
-| `ai_generate` | generate | style, text/text_list, spec, image(可选参考) | image_list | 调 Provider 生成（M4 接通，M3 用 mock）|
+| `reference_set` | input | – | image_list | 有序项目素材引用；参数权威为 `asset_ids` |
+| `ai_generate` | generate | style, text/text_list, spec, image_list(可选参考) | image_list | 调 Provider 生成；单张 `image` 连接自动包装 |
 | `batch` | container | image_list | image_list / asset_list | **批次内容节点**：装一批图、持久驻留画布、整批菜单处理、可拆小批次（is_canvas_resident=true，见 §5a）|
 | `pixel_cleanup` | process | image_list, style(可选) | image_list | 功能1 管线节点化（预设工具节点）|
 | `matting` | process | image_list | image_list | 功能2 抠图节点化（预设工具节点）|
@@ -154,6 +155,14 @@ func get_asset_image(asset_id: String) -> Image
 - **生成适配**：`ai_generate.image` 保持可选。连接时离线 mock 与真实 Provider 都从图输入接收 Image，UI 不得旁路上传。mock 必须把规范化参考图内容哈希确定性纳入输出或元数据；Provider 不支持参考图时由 `ai_generate`/capability 层报错。
 - **结果溯源**：成功使用参考图的生成结果 provenance 写入执行时的 `reference_asset_id` 和 `reference_content_sha256`。哈希基于规范化 RGBA8 像素及尺寸；未连接时字段可缺省。该 asset id 是 PROJECT-FORMAT §5 的 history 引用。
 - **未知字段**：已知节点仍往返保留未知参数；执行只读取 `asset_id`。旧 `path`/`file_path` 等字段不猜测、不自动导入或迁移。
+
+## 5c. 有序参考集（reference_set）与生成模型
+
+- `reference_set.params.asset_ids: Array[String]` 是有序引用的唯一真相，输出 `images:image_list`；名称、来源、健康状态与缩略图只从 AssetLibrary 读取。
+- 执行按顺序解析全部素材。空项、缺失元数据或不可解码位图返回归属本节点的结构化错误，保留原始 ID 和顺序；不得自动丢弃坏项或超出模型上限的尾部。
+- `ai_generate` 的参考端口名保持 `image` 以兼容旧边，但类型扩为 `image_list`；既有 `image → image_list` 规则保证单图节点无需迁移。执行上下文向 Provider 传 `ref_images`，并携带同顺序的内部 `reference_asset_ids / reference_content_sha256s`。
+- `ai_generate.params.model_id: String` 默认 `""`。空值由 `provider_id` 对应 Provider 解析默认模型；新 UI 选择具体模型后写明 `model_id`。能力校验只读 Provider 模型描述符。
+- 旧 `ref_image`、`reference_asset_id`、`reference_content_sha256` 继续兼容读取为复数数组的第一项；新执行只写复数字段，未知旧字段原文照常往返。
 
 ## 6. 版本与迁移
 

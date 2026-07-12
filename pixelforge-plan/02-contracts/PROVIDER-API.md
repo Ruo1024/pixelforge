@@ -24,6 +24,17 @@ func get_capabilities() -> Dictionary
 #     "animation": false,
 #     "cost_estimate": true            # 是否能预估费用
 #   }
+func get_model_descriptors() -> Array[Dictionary]
+#   [{
+#     "provider_id": "openai_image", "model_id": "gpt-image-2",
+#     "display_name": "GPT Image 2", "is_default": true,
+#     "capabilities": {
+#       "txt2img": true, "max_reference_images": 4,
+#       "output_sizes": ["1024x1024", "1536x1024", "1024x1536"],
+#       "max_batch": 4, "seed": false, "transparent_bg": false,
+#       "cost_estimate": false
+#     }
+#   }]
 func get_config_schema() -> Array[Dictionary]   # 设置页自动渲染（api_key、endpoint 等）
 
 # —— 生命周期 ——
@@ -42,13 +53,15 @@ func cancel(task_id: String) -> void
 # PFGenRequest（Dictionary 包装，键如下）
 {
   "mode": "txt2img",              # txt2img | img2img | inpaint
+  "model_id": "",                 # 顶层具体模型；空值由所属 Provider 解析默认模型
   "prompt": "a wooden barrel",    # 已由调用方拼好（见 §4 提示词组装责任）
   "negative_prompt": "",
   "style": { ... },               # StylePreset 序列化对象；provider 自行决定如何映射
   "width": 64, "height": 64,      # 目标素材的真像素尺寸
   "batch": 4,
   "seed": -1,                     # -1 随机
-  "ref_image": null,              # Image（img2img/inpaint 用）
+  "ref_images": [],               # 有序 Array[Image]（参考图/编辑用）
+  "ref_image": null,              # 旧单图兼容输入；仅在 ref_images 为空时作为第一项读取
   "mask": null,                   # Image（inpaint 用）
   "extra": {}                     # provider 专有参数（UI 从 config_schema 渲染）
 }
@@ -62,6 +75,20 @@ func cancel(task_id: String) -> void
   "provider_meta": {}             # 原始响应摘要（写入素材 provenance）
 }
 ```
+
+### 2.1 模型目录与前置校验
+
+- `get_model_descriptors()` 是 UI、运行协调器和测试读取模型能力的唯一真相；不得在组件中维护第二份模型表。
+- 每个描述符必须包含 `provider_id / model_id / display_name / is_default / capabilities`，同一 Provider 恰有一个默认模型。
+- `capabilities` 至少包含 `txt2img / max_reference_images / output_sizes`（或明确的尺寸约束）`/ max_batch / seed / transparent_bg / cost_estimate`。
+- Provider 收到空 `model_id` 时解析本 Provider 的默认模型；未知模型、超批量、非法尺寸、参考图超限或不支持透明背景必须在提交网络请求前返回 `invalid_request`，不得截断或静默替换。
+- `ref_images` 的顺序有语义。兼容读取旧 `ref_image` 时只包装为第一项；新请求统一写 `ref_images`。
+
+### 2.2 安全生成快照与目标
+
+每个实际结果写入清理后的 `generation_snapshot`：`provider_id / model_id / prompt / negative_prompt / style / width / height / seed / reference_asset_ids / reference_content_sha256s / source_generate_node_id`，以及可选 `source_row_id / run_id / cost`。不得包含凭据、绝对路径、请求头或完整外部响应。
+
+运行协调器调用边界固定为 `graph_id + generate_node_id`，可带 `batch_node_id`。run 状态与结果必须按 `run_id` 和目标节点记录，不得扫描当前选择或第一个同类型节点决定落点。
 
 ## 3. 注册与凭据
 
@@ -81,10 +108,12 @@ func cancel(task_id: String) -> void
 |---|---|---|
 | `mock` | 内置 | 程序生成占位图；开发/测试/无网演示用，永久保留 |
 | `retrodiffusion` | 内置插件 | 像素专用模型；REST API；原生真像素+透明背景+tileset/动画风格；按张计费便宜（<$0.01/张）|
-| `openai_image` | 内置插件 | 通用兜底；gpt-image-1 支持透明背景 PNG；用户基数大、key 易获取 |
+| `openai_image` | 内置插件 | 通用兜底；`gpt-image-2` 支持文字生成和有序多参考编辑输入；用户基数大、key 易获取 |
 | `comfyui` | 历史桥接插件 | 底层代码保留；Beta 0.3–0.5 及当前产品路线无限期延后，不显示、不扩展 |
 
 当前原型只发展云端图片模型。`mock` 永久用于自动化；`retrodiffusion` / `openai_image` 优先承接 Beta 0.4。新增云端适配器只在现有两条路径无法完成核心参考图旅程时允许选择一个最小实现。PixelLab 与其他动画能力超出当前范围。
+
+OpenAI 能力核对日期为 2026-07-13，来源为官方 [GPT Image 2 模型页](https://developers.openai.com/api/docs/models/gpt-image-2) 与 [Image generation 指南](https://developers.openai.com/api/docs/guides/image-generation)：Image API 的 generations/edits 分离；edits 接受一张或多张有序 `image[]`；`gpt-image-2` 的参考输入固定高保真；当前不支持透明背景。PixelForge 暴露的批量、参考图数量与常用尺寸可以比平台极限更保守，但必须是适配器真实支持并经过录制请求测试的上限。
 
 ## 6. 错误码约定
 
