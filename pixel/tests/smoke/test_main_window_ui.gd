@@ -7,6 +7,8 @@ const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd"
 const ViewportFillPolicy := preload("res://ui/shell/viewport_fill_policy.gd")
 const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
 const Strings := preload("res://ui/shell/strings.gd")
+const GraphScript := preload("res://core/graph/pf_graph.gd")
+const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 
 
 func test_main_window_uses_readable_minimum_sizes() -> void:
@@ -794,6 +796,62 @@ func test_run_selected_graph_reports_ghost_node_type() -> void:
 			% (Strings.STATUS_GRAPH_RUN_MISSING_NODE_TYPE % "missing.plugin_node")
 		)
 	)
+
+
+func test_candidate_continue_branch_is_one_undoable_canvas_action() -> void:
+	LocalizationService.set_language("en")
+	ProjectService.new_project("Candidate branch")
+	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	image.fill(Color.CORNFLOWER_BLUE)
+	var asset_id := AssetLibrary.register_image(image, "candidate", {"origin": "generated"})
+	var graph := GraphScript.new()
+	graph.id = "graph_candidate_branch"
+	graph.add_node(
+		BatchNodeScript.new(),
+		"source_batch",
+		{"label": "Source", "asset_ids": [asset_id]},
+		Vector2.ZERO
+	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	canvas._add_batch_card(
+		[asset_id], Vector2.ZERO, "Source", "source_item", false, graph.id, "source_batch"
+	)
+	(
+		controller
+		. _handle_candidate_action(
+			"continue_branch",
+			{
+				"graph_id": graph.id,
+				"batch_node_id": "source_batch",
+				"asset_ids": [asset_id],
+				"snapshot":
+				{
+					"provider_id": "mock",
+					"model_id": "pixel_mock_v1",
+					"prompt": "small tower",
+					"width": 32,
+					"height": 32,
+					"batch_size": 2,
+					"seed": 8,
+				},
+			}
+		)
+	)
+	assert_eq(ProjectService.get_graph_data(graph.id)["nodes"].size(), 7)
+	assert_eq(ProjectService.get_graph_data(graph.id)["edges"].size(), 5)
+	assert_eq(canvas.export_canvas_data()["items"].size(), 7)
+	assert_true(UndoService.undo())
+	assert_eq(ProjectService.get_graph_data(graph.id)["nodes"].size(), 1)
+	assert_eq(canvas.export_canvas_data()["items"].size(), 1)
+	assert_true(UndoService.redo())
+	assert_eq(ProjectService.get_graph_data(graph.id)["nodes"].size(), 7)
+	assert_eq(canvas.export_canvas_data()["items"].size(), 7)
 
 
 func _node_ids_from_canvas_items(items: Array) -> Array:

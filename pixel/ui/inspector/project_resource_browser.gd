@@ -23,7 +23,10 @@ class ResourceItemList:
 
 	func _get_drag_data(at_position: Vector2) -> Variant:
 		var index := get_item_at_position(at_position, true)
-		if index < 0:
+		return drag_payload_for_index(index)
+
+	func drag_payload_for_index(index: int) -> Variant:
+		if index < 0 or index >= item_count:
 			return null
 		var data: Variant = get_item_metadata(index)
 		return data.duplicate(true) if data is Dictionary else null

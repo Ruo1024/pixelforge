@@ -39,13 +39,15 @@ func test_resource_browser_filters_both_sources_and_exposes_canvas_drag_payload(
 		image, "Searchable tower", {"origin": "imported", "tags": ["building"]}
 	)
 	var browser: Control = BrowserScript.new()
+	browser.size = Vector2(420, 600)
 	add_child_autofree(browser)
-	await wait_process_frames(1)
+	await wait_process_frames(2)
 	browser._search.text = "tower"
 	browser._refresh()
 	assert_eq(browser.get_visible_resources().size(), 1)
 	assert_eq(browser.get_visible_resources()[0]["asset_id"], asset_id)
-	var drag_payload: Dictionary = browser._list._get_drag_data(Vector2(4, 4))
+	var drag_payload: Variant = browser._list.drag_payload_for_index(0)
+	assert_true(drag_payload is Dictionary)
 	assert_eq(drag_payload["kind"], "project_asset")
 	assert_eq(drag_payload["asset_id"], asset_id)
 	browser._kind_option.select(1)

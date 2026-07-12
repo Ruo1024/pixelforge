@@ -4,12 +4,14 @@ extends PanelContainer
 ## 工作区右栏宿主：图节点显示核心摘要，素材与批次继续使用既有清洗检查器。
 
 signal candidate_action_requested(action_id: String, context: Dictionary)
+signal project_resource_activated(resource: Dictionary)
 
 const CleanupInspectorScript := preload("res://ui/inspector/cleanup_inspector.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
+const ProjectResourceBrowserScript := preload("res://ui/inspector/project_resource_browser.gd")
 
 const PANEL_WIDTH := 420
 const CONTENT_GAP := 8
@@ -21,6 +23,7 @@ const GENERATION_SNAPSHOT_KEYS: Array[String] = [
 	"style",
 	"width",
 	"height",
+	"batch_size",
 	"seed",
 	"reference_asset_ids",
 	"reference_content_sha256s",
@@ -38,6 +41,7 @@ const SNAPSHOT_FORBIDDEN_KEY_PARTS: Array[String] = [
 ]
 
 var cleanup_inspector: Control = null
+var project_resource_browser: Control = null
 
 var _title_label: Label = null
 var _kind_label: Label = null
@@ -79,6 +83,11 @@ func _ready() -> void:
 	_graph_summary.add_child(_summary_label)
 
 	_build_candidate_panel(root)
+	project_resource_browser = ProjectResourceBrowserScript.new()
+	project_resource_browser.resource_activated.connect(
+		func(resource: Dictionary) -> void: project_resource_activated.emit(resource)
+	)
+	root.add_child(project_resource_browser)
 
 	cleanup_inspector = CleanupInspectorScript.new()
 	cleanup_inspector.name = "CleanupInspector"
