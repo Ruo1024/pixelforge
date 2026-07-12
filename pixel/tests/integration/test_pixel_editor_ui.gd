@@ -72,3 +72,10 @@ func test_palette_remap_32_square_and_selection_move_stay_interactive() -> void:
 	)
 	editor._canvas._move_selection(editor.document.get_frame(0, 0), Vector2i(6, 6))
 	assert_eq(editor._canvas.selection_rect.position, Vector2i(6, 6))
+
+
+func test_animation_preview_starts_hidden_until_requested() -> void:
+	var editor := PFPixelEditor.new()
+	add_child_autofree(editor)
+	await wait_process_frames(1)
+	assert_false(editor._preview_window.visible)

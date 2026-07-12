@@ -298,6 +298,7 @@ func _build_ui() -> void:
 	_preview_window = Window.new()
 	_preview_window.title = Strings.EDITOR_PREVIEW_TITLE
 	_preview_window.size = Vector2i(320, 320)
+	_preview_window.visible = false
 	var preview_root := VBoxContainer.new()
 	preview_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var preview_scale := OptionButton.new()
