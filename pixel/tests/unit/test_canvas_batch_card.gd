@@ -726,6 +726,9 @@ func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> v
 	var cancel_button: Button = card.get_content_control("CancelButton")
 
 	assert_not_null(card.get_content_control("ProviderOption"))
+	assert_eq(card.get_content_control("ProviderOption").get_item_text(0), "PixelForge Mock")
+	assert_true(card.get_content_control("ModelCapabilities").text.contains("up to 16 images"))
+	assert_eq(card.get_content_control("CostEstimate").text, "Estimated cost: $0.00")
 	assert_eq(card.get_content_control("StyleSummary").text, "Style: 32 px · db32")
 	assert_not_null(run_button)
 	assert_not_null(cancel_button)
@@ -738,7 +741,7 @@ func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> v
 	assert_true(cancel_button.visible)
 	assert_eq(card._status_badge, Strings.text("CONTENT_STATUS_RUNNING"))
 	assert_eq(card.get_content_control("ExecutionDetail").text, "42% · rendering")
-	assert_eq(card.get_canvas_bounds().size, Vector2(240, 282))
+	assert_eq(card.get_canvas_bounds().size, Vector2(280, 390))
 	cancel_button.pressed.emit()
 	assert_eq(actions, [[graph.id, "generate", "run"], [graph.id, "generate", "cancel"]])
 	card.set_execution_status("CONTENT_STATUS_CANCELED", "Previous results preserved")

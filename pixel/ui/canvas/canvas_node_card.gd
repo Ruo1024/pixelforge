@@ -17,7 +17,7 @@ const AssetRefFieldScript := preload("res://ui/widgets/asset_ref_field.gd")
 
 const SUMMARY_CARD_SIZE := Vector2(220, 116)
 const CONTENT_CARD_SIZE := Vector2(240, 238)
-const GENERATE_CARD_SIZE := Vector2(240, 282)
+const GENERATE_CARD_SIZE := Vector2(280, 390)
 const REFERENCE_CARD_SIZE := Vector2(260, 330)
 const HEADER_HEIGHT := 32
 const PADDING := 12
@@ -60,7 +60,9 @@ var _font: Font = null
 var _content_root: Control = null
 var _object_edit: TextEdit = null
 var _text_prompt_edit: TextEdit = null
-var _provider_option: OptionButton = null
+var _model_option: OptionButton = null
+var _model_capability_label: Label = null
+var _cost_estimate_label: Label = null
 var _batch_size_spin: SpinBox = null
 var _seed_spin: SpinBox = null
 var _run_button: Button = null
@@ -367,9 +369,12 @@ func _summarize_params(params: Variant) -> String:
 			% [int(source["width"]), int(source["height"])]
 		)
 	elif source.has("provider_id"):
+		var model_label := String(source.get("model_id", ""))
+		if model_label.is_empty():
+			model_label = String(source["provider_id"])
 		result = (
-			Strings.text("CONTENT_GENERATE_SUMMARY_FORMAT")
-			% [String(source["provider_id"]), int(source.get("seed", 0))]
+			Strings.text("CONTENT_GENERATE_MODEL_SUMMARY_FORMAT")
+			% [model_label, int(source.get("batch_size", 1))]
 		)
 	return result
 
@@ -410,7 +415,9 @@ func _rebuild_content_controls() -> void:
 		_content_root = null
 	_object_edit = null
 	_text_prompt_edit = null
-	_provider_option = null
+	_model_option = null
+	_model_capability_label = null
+	_cost_estimate_label = null
 	_batch_size_spin = null
 	_seed_spin = null
 	_run_button = null
@@ -515,23 +522,46 @@ func _build_style_controls() -> void:
 
 
 func _build_generate_controls() -> void:
-	var provider_row := HBoxContainer.new()
-	var provider_label := Label.new()
-	provider_label.text = Strings.text("GRAPH_PARAM_PROVIDER")
-	provider_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	provider_row.add_child(provider_label)
-	_provider_option = OptionButton.new()
-	_provider_option.name = "ProviderOption"
-	var providers: Array = ProviderService.get_selectable_provider_ids()
-	if not providers.has("mock"):
-		providers.push_front("mock")
-	for provider_id in providers:
-		_provider_option.add_item(String(provider_id))
-	var provider_index := providers.find(String(_params_snapshot.get("provider_id", "mock")))
-	_provider_option.select(maxi(0, provider_index))
-	_provider_option.item_selected.connect(func(_index: int) -> void: _commit_generate_params())
-	provider_row.add_child(_provider_option)
-	_content_root.add_child(provider_row)
+	var model_row := HBoxContainer.new()
+	var model_label := Label.new()
+	model_label.text = Strings.text("GRAPH_PARAM_MODEL")
+	model_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	model_row.add_child(model_label)
+	_model_option = OptionButton.new()
+	_model_option.name = "ProviderOption"
+	_model_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var descriptors := ProviderService.get_selectable_model_descriptors()
+	var current_provider := String(_params_snapshot.get("provider_id", "mock"))
+	var current_model := String(_params_snapshot.get("model_id", ""))
+	var selected_index := 0
+	for descriptor in descriptors:
+		var index := _model_option.item_count
+		_model_option.add_item(String(descriptor.get("display_name", "")))
+		_model_option.set_item_metadata(index, descriptor.duplicate(true))
+		var descriptor_provider := String(descriptor.get("provider_id", ""))
+		var descriptor_model := String(descriptor.get("model_id", ""))
+		if (
+			descriptor_provider == current_provider
+			and (
+				current_model == descriptor_model
+				or (current_model.is_empty() and bool(descriptor.get("is_default", false)))
+			)
+		):
+			selected_index = index
+	_model_option.select(selected_index)
+	_model_option.item_selected.connect(_on_model_selected)
+	model_row.add_child(_model_option)
+	_content_root.add_child(model_row)
+
+	_model_capability_label = Label.new()
+	_model_capability_label.name = "ModelCapabilities"
+	_model_capability_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_content_root.add_child(_model_capability_label)
+	var input_summary := Label.new()
+	input_summary.name = "RequestSummary"
+	input_summary.text = _generation_input_summary()
+	input_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_content_root.add_child(input_summary)
 
 	var style_label := Label.new()
 	style_label.name = "StyleSummary"
@@ -542,11 +572,17 @@ func _build_generate_controls() -> void:
 	var settings_row := HBoxContainer.new()
 	_batch_size_spin = _make_spin("BatchSize", 1, 16, int(_params_snapshot.get("batch_size", 1)))
 	_seed_spin = _make_spin("Seed", 0, 2147483647, int(_params_snapshot.get("seed", 1)))
+	_batch_size_spin.value_changed.connect(func(_value: float) -> void: _sync_model_controls())
 	settings_row.add_child(
 		_labeled_control(Strings.text("GRAPH_PARAM_BATCH_SIZE"), _batch_size_spin)
 	)
 	settings_row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_SEED"), _seed_spin))
 	_content_root.add_child(settings_row)
+
+	_cost_estimate_label = Label.new()
+	_cost_estimate_label.name = "CostEstimate"
+	_content_root.add_child(_cost_estimate_label)
+	_sync_model_controls()
 
 	var action_row := HBoxContainer.new()
 	_run_button = Button.new()
@@ -688,20 +724,108 @@ func _commit_text_prompt() -> void:
 
 
 func _commit_generate_params() -> void:
-	if _provider_option == null or _batch_size_spin == null or _seed_spin == null:
+	if _model_option == null or _batch_size_spin == null or _seed_spin == null:
 		return
+	var descriptor: Dictionary = _model_option.get_item_metadata(_model_option.selected)
 	(
 		params_commit_requested
 		. emit(
 			graph_id,
 			node_id,
 			{
-				"provider_id": _provider_option.get_item_text(_provider_option.selected),
+				"provider_id": String(descriptor.get("provider_id", "mock")),
+				"model_id": String(descriptor.get("model_id", "")),
 				"batch_size": int(_batch_size_spin.value),
 				"seed": int(_seed_spin.value),
 			}
 		)
 	)
+
+
+func _on_model_selected(_index: int) -> void:
+	_sync_model_controls()
+	_commit_generate_params()
+
+
+func _sync_model_controls() -> void:
+	if _model_option == null or _model_option.item_count == 0:
+		return
+	var descriptor: Dictionary = _model_option.get_item_metadata(_model_option.selected)
+	var capabilities: Dictionary = descriptor.get("capabilities", {})
+	var max_batch := maxi(1, int(capabilities.get("max_batch", 1)))
+	_batch_size_spin.max_value = max_batch
+	_batch_size_spin.value = mini(int(_batch_size_spin.value), max_batch)
+	_seed_spin.visible = bool(capabilities.get("seed", false))
+	var references := int(capabilities.get("max_reference_images", 0))
+	var output_summary := _model_output_summary(capabilities)
+	_model_capability_label.text = (
+		Strings.text("CONTENT_MODEL_CAPABILITIES_FORMAT")
+		% [String(descriptor.get("provider_id", "")), output_summary, max_batch, references]
+	)
+	var provider_id := String(descriptor.get("provider_id", ""))
+	var estimate := (
+		0.0
+		if provider_id == "mock"
+		else (
+			CostService
+			. estimate_request(
+				provider_id,
+				{
+					"model_id": String(descriptor.get("model_id", "")),
+					"batch": int(_batch_size_spin.value),
+				}
+			)
+		)
+	)
+	_cost_estimate_label.text = (
+		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % estimate
+		if estimate >= 0.0
+		else Strings.text("CONTENT_COST_UNKNOWN")
+	)
+
+
+func _model_output_summary(capabilities: Dictionary) -> String:
+	var sizes: Array = capabilities.get("output_sizes", [])
+	if not sizes.is_empty():
+		return " / ".join(sizes)
+	var constraints: Dictionary = capabilities.get("output_size_constraints", {})
+	return (
+		Strings.text("CONTENT_MODEL_TARGET_RANGE_FORMAT")
+		% [int(constraints.get("min_side", 1)), int(constraints.get("max_side", 1))]
+	)
+
+
+func _generation_input_summary() -> String:
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	var sources := {}
+	for raw_edge in graph_data.get("edges", []):
+		if not (raw_edge is Dictionary):
+			continue
+		var edge: Dictionary = raw_edge
+		var to_data: Array = edge.get("to", ["", ""])
+		var from_data: Array = edge.get("from", ["", ""])
+		if String(to_data[0]) == node_id:
+			sources[String(to_data[1])] = String(from_data[0])
+	var node_by_id := {}
+	for raw_node in graph_data.get("nodes", []):
+		if raw_node is Dictionary:
+			node_by_id[String(raw_node.get("id", ""))] = raw_node
+	var prompt := Strings.text("CONTENT_PROMPT_EMPTY")
+	for input_port in ["text", "items"]:
+		var source: Dictionary = node_by_id.get(String(sources.get(input_port, "")), {})
+		if not source.is_empty():
+			prompt = _summarize_params(source.get("params", {}))
+			break
+	var style := Strings.text("CONTENT_STYLE_PROJECT")
+	var style_source: Dictionary = node_by_id.get(String(sources.get("style", "")), {})
+	if not style_source.is_empty():
+		style = _summarize_params(style_source.get("params", {}))
+	var target := Strings.text("CONTENT_TARGET_SIZE_UNKNOWN")
+	var spec_source: Dictionary = node_by_id.get(String(sources.get("spec", "")), {})
+	if not spec_source.is_empty():
+		var spec_params: Dictionary = spec_source.get("params", {})
+		target = "%d×%d px" % [int(spec_params.get("width", 0)), int(spec_params.get("height", 0))]
+	return Strings.text("CONTENT_REQUEST_SUMMARY_FORMAT") % [prompt, style, target]
 
 
 func _object_count() -> int:

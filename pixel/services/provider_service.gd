@@ -18,6 +18,23 @@ const BUILTIN_PROVIDER_PLUGINS := [
 ]
 const API_VERSION := 1
 const DEFAULT_PROVIDER := "mock"
+const MOCK_MODEL_DESCRIPTOR := {
+	"provider_id": "mock",
+	"model_id": "pixel_mock_v1",
+	"display_name": "PixelForge Mock",
+	"is_default": true,
+	"capabilities":
+	{
+		"txt2img": true,
+		"img2img": true,
+		"max_reference_images": 16,
+		"output_size_constraints": {"min_side": 1, "max_side": 512},
+		"max_batch": 16,
+		"seed": true,
+		"transparent_bg": false,
+		"cost_estimate": true,
+	},
+}
 
 var load_builtin_plugins := true
 var _providers := {}
@@ -111,12 +128,35 @@ func get_model_descriptors(provider_id: String = "") -> Array[Dictionary]:
 	return descriptors
 
 
+func get_selectable_model_descriptors() -> Array[Dictionary]:
+	var descriptors: Array[Dictionary] = [MOCK_MODEL_DESCRIPTOR.duplicate(true)]
+	for provider_id in get_provider_ids():
+		if get_validation_state(String(provider_id)) != "verified":
+			continue
+		descriptors.append_array(get_model_descriptors(String(provider_id)))
+	return descriptors
+
+
 func get_model_descriptor(provider_id: String, model_id: String = "") -> Dictionary:
+	if provider_id == DEFAULT_PROVIDER:
+		var requested := model_id.strip_edges()
+		return (
+			MOCK_MODEL_DESCRIPTOR.duplicate(true)
+			if requested.is_empty() or requested == MOCK_MODEL_DESCRIPTOR["model_id"]
+			else {}
+		)
 	var provider := get_provider(provider_id)
 	return provider.get_model_descriptor(model_id) if provider != null else {}
 
 
 func resolve_model_id(provider_id: String, model_id: String = "") -> String:
+	if provider_id == DEFAULT_PROVIDER:
+		var requested := model_id.strip_edges()
+		return (
+			String(MOCK_MODEL_DESCRIPTOR["model_id"])
+			if requested.is_empty() or requested == MOCK_MODEL_DESCRIPTOR["model_id"]
+			else ""
+		)
 	var provider := get_provider(provider_id)
 	return provider.resolve_model_id(model_id) if provider != null else ""
 

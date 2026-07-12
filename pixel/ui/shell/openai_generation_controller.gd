@@ -120,15 +120,12 @@ func _queue_graph(
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", reference_error)
 		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % reference_error
 		return
-	if (
-		not _request_reference_images(request).is_empty()
-		and not bool(provider.get_capabilities().get("img2img", false))
-	):
-		var unsupported := (
-			Strings.text("CONTENT_DETAIL_REFERENCE_UNSUPPORTED_FORMAT") % display_name
-		)
-		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", unsupported)
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % unsupported
+	var validation_message := _cloud_request_validation_message(
+		provider_id, provider, request, display_name
+	)
+	if not validation_message.is_empty():
+		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", validation_message)
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % validation_message
 		return
 	var estimate := CostService.estimate_request(provider_id, request)
 	var run_id := IdUtil.uuid_v4()
@@ -157,6 +154,18 @@ func _queue_graph(
 		_budget_dialog.popup_centered()
 		return
 	_submit_provider_run(run_state)
+
+
+func _cloud_request_validation_message(
+	provider_id: String, provider: PFProvider, request: Dictionary, display_name: String
+) -> String:
+	if (
+		not _request_reference_images(request).is_empty()
+		and not bool(provider.get_capabilities().get("img2img", false))
+	):
+		return Strings.text("CONTENT_DETAIL_REFERENCE_UNSUPPORTED_FORMAT") % display_name
+	var error: Variant = ProviderService.validate_generation_request(provider_id, request)
+	return String(error.get("message", "")) if error is Dictionary else ""
 
 
 func _submit_provider_run(run_state: Dictionary) -> void:

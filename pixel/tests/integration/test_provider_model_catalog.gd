@@ -21,7 +21,13 @@ func before_each() -> void:
 func test_service_aggregates_catalog_and_resolves_provider_defaults() -> void:
 	var catalog := _service.get_model_descriptors()
 	assert_eq(catalog.size(), 4)
+	assert_eq(_service.get_selectable_model_descriptors().size(), 1)
+	assert_eq(_service.get_selectable_model_descriptors()[0]["model_id"], "pixel_mock_v1")
+	_service._set_validation_state("openai_image", "verified", "")
+	assert_eq(_service.get_selectable_model_descriptors().size(), 2)
 	assert_eq(_service.get_model_descriptors("openai_image").size(), 1)
+	assert_eq(_service.resolve_model_id("mock"), "pixel_mock_v1")
+	assert_eq(_service.get_model_descriptor("mock")["provider_id"], "mock")
 	assert_eq(_service.resolve_model_id("openai_image"), "gpt-image-2")
 	assert_eq(_service.resolve_model_id("retrodiffusion"), "rd_plus")
 	assert_eq(_service.resolve_model_id("retrodiffusion", "rd_pro"), "rd_pro")
