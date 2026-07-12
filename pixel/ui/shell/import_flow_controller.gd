@@ -5,6 +5,7 @@ extends Node
 
 signal add_input_requested
 signal open_example_requested
+signal reference_asset_imported(target: Dictionary, asset_id: String)
 
 const Strings := preload("res://ui/shell/strings.gd")
 const FileIOScript := preload("res://infra/file_io.gd")
@@ -18,9 +19,13 @@ const LARGE_IMAGE_PIXELS := 1024 * 1024
 var _canvas: Control = null
 var _status_label: Label = null
 var _import_dialog: FileDialog = null
+var _reference_dialog: FileDialog = null
 var _empty_import_hint: Control = null
 var _import_error_dialog: ConfirmationDialog = null
 var _retry_import_files := PackedStringArray()
+var _reference_target := {}
+var _retry_reference_path := ""
+var _retry_reference_target := {}
 var _last_import_item_ids: Array[String] = []
 var _file_menu_popup: PopupMenu = null
 var _focus_menu_id := -1
@@ -48,6 +53,11 @@ func show_import_dialog() -> void:
 	_import_dialog.popup_centered_ratio(0.7)
 
 
+func show_reference_import_dialog(target: Dictionary = {}) -> void:
+	_reference_target = target.duplicate(true)
+	_reference_dialog.popup_centered_ratio(0.7)
+
+
 func import_files_at_mouse(files: PackedStringArray) -> Dictionary:
 	return _import_image_files(files, _canvas.get_mouse_world_position())
 
@@ -57,6 +67,9 @@ func import_files_from_dialog(files: PackedStringArray) -> Dictionary:
 
 
 func retry_import() -> void:
+	if not _retry_reference_path.is_empty():
+		_import_reference_file(_retry_reference_path, _retry_reference_target)
+		return
 	if _retry_import_files.is_empty():
 		return
 	_import_image_files(_retry_import_files, stable_import_anchor())
@@ -90,6 +103,17 @@ func _create_dialogs(dialog_parent: Node) -> void:
 	_import_dialog.filters = PackedStringArray(["*.png ; PNG Image", "*.jpg,*.jpeg ; JPEG Image"])
 	_import_dialog.files_selected.connect(import_files_from_dialog)
 	dialog_parent.add_child(_import_dialog)
+	_reference_dialog = FileDialog.new()
+	_reference_dialog.name = "ImportReferenceDialog"
+	DialogScalePolicy.configure_file_dialog(_reference_dialog)
+	_reference_dialog.title = Strings.text("ACTION_IMPORT_REFERENCE")
+	_reference_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_reference_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_reference_dialog.filters = _import_dialog.filters
+	_reference_dialog.file_selected.connect(
+		func(path: String) -> void: _import_reference_file(path, _reference_target)
+	)
+	dialog_parent.add_child(_reference_dialog)
 
 	_import_error_dialog = ConfirmationDialog.new()
 	_import_error_dialog.name = "ImportErrorDialog"
@@ -108,6 +132,8 @@ func _create_empty_hint() -> void:
 
 
 func _import_image_files(files: PackedStringArray, world_position: Vector2) -> Dictionary:
+	_retry_reference_path = ""
+	_retry_reference_target.clear()
 	var preflight := _decode_all(files)
 	var failed_files: Array = preflight["failed_files"]
 	var decoded: Array = preflight["decoded"]
@@ -161,6 +187,25 @@ func _import_image_files(files: PackedStringArray, world_position: Vector2) -> D
 		"auto_focused": was_empty,
 		"anchor": world_position,
 	}
+
+
+func _import_reference_file(path: String, target: Dictionary) -> Dictionary:
+	var preflight := _decode_all(PackedStringArray([path]))
+	if not Array(preflight["failed_files"]).is_empty() or Array(preflight["decoded"]).is_empty():
+		_retry_reference_path = path
+		_retry_reference_target = target.duplicate(true)
+		return _report_import_failure(PackedStringArray([path]), Array(preflight["failed_files"]))
+	var decoded: Dictionary = Array(preflight["decoded"])[0]
+	var image: Image = decoded["image"]
+	var asset_id := AssetLibrary.register_image(
+		image, path.get_file().get_basename(), {"origin": "imported"}
+	)
+	_retry_reference_path = ""
+	_retry_reference_target.clear()
+	_retry_import_files.clear()
+	reference_asset_imported.emit(target.duplicate(true), asset_id)
+	_status_label.text = Strings.STATUS_IMPORT_DONE_FORMAT % 1
+	return {"ok": true, "asset_id": asset_id, "target": target.duplicate(true)}
 
 
 func _decode_all(files: PackedStringArray) -> Dictionary:

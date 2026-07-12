@@ -1,7 +1,6 @@
 class_name PFInfiniteCanvas
 extends Control
 
-## 无限画布核心交互。
 ## 职责：平移、缩放、sprite 元素增删选移、框选、网格和视口剔除；保存格式直接导出 canvas.json 结构。
 
 signal canvas_changed
@@ -56,6 +55,7 @@ var tool_manager: Variant = null
 
 var _viewport_scale_factor_override := 0.0
 var _items_by_id := {}
+var _unrendered_items: Array[Dictionary] = []
 var _selection: Variant = CanvasSelectionScript.new()
 var _cleanup_grid_overlay: Control = null
 var _cleanup_grid_active := false
@@ -392,6 +392,7 @@ func clear_canvas() -> void:
 	for item in _items_by_id.values():
 		item.queue_free()
 	_items_by_id.clear()
+	_unrendered_items.clear()
 	clear_cleanup_preview()
 	hide_cleanup_grid_overlay()
 	_selection.clear(false)
@@ -414,9 +415,8 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 			var asset_id := String(item_data.get("asset_id", ""))
 			var image := AssetLibrary.get_image(asset_id)
 			if image == null:
-				Log.warn(
-					"Canvas item skipped because asset image is missing", {"asset_id": asset_id}
-				)
+				Log.warn("Canvas sprite uses an unavailable asset", {"asset_id": asset_id})
+				_unrendered_items.append(Dictionary(item_data).duplicate(true))
 				continue
 			_add_sprite_direct(item_data, image)
 		elif item_type == "batch_card":
@@ -434,7 +434,7 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 
 
 func export_canvas_data() -> Dictionary:
-	var items := []
+	var items := _unrendered_items.duplicate(true)
 	var nodes := item_layer.get_children()
 	nodes.sort_custom(func(a: Node, b: Node) -> bool: return a.z_index < b.z_index)
 

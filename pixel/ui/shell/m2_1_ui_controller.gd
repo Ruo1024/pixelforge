@@ -27,10 +27,7 @@ const PixelEditorFlowControllerScript := preload("res://ui/shell/pixel_editor_fl
 const Pipeline := preload("res://core/pixel/pipeline.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
-const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
-const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
-const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
-const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+const OfflineExampleControllerScript := preload("res://ui/shell/offline_example_controller.gd")
 const GraphMockRunnerScript := preload("res://services/graph_mock_runner.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
@@ -79,9 +76,6 @@ const BATCH_MENU_LAYOUT_CONTACT := 18
 const BATCH_MENU_LAYOUT_FOCUS := 19
 const BATCH_MENU_EDIT := 20
 const SELECTION_TOOLS_VISIBLE := false
-const EDITABLE_GRAPH_NODE_TYPES := [
-	"object_list", "size_spec", "ai_generate", "comfyui.run_workflow"
-]
 
 var _canvas: Control = null
 var _cleanup_inspector: Control = null
@@ -105,6 +99,7 @@ var _batch_menu: PopupMenu = null
 var _batch_menu_card_id := ""
 var _import_flow: Node = null
 var _openai_flow: Node = null
+var _offline_example_flow: Node = null
 var _provider_settings_dialog: ConfirmationDialog = null
 var _board_editor: ConfirmationDialog = null
 var _pixel_editor: ConfirmationDialog = null
@@ -136,6 +131,11 @@ func setup(
 	_import_flow.name = "ImportFlowController"
 	add_child(_import_flow)
 	_import_flow.setup(_canvas, _status_label, self)
+	_import_flow.reference_asset_imported.connect(_on_reference_asset_imported)
+	_offline_example_flow = OfflineExampleControllerScript.new()
+	_offline_example_flow.name = "OfflineExampleController"
+	add_child(_offline_example_flow)
+	_offline_example_flow.setup(_canvas, _status_label)
 	_openai_flow = OpenAIGenerationControllerScript.new()
 	_openai_flow.name = "OpenAIGenerationController"
 	add_child(_openai_flow)
@@ -282,23 +282,7 @@ func batch_selected_sprites() -> void:
 
 
 func generate_mock_batch() -> void:
-	var graph := _make_mock_generate_graph()
-	var runner := GraphMockRunnerScript.new()
-	var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, "batch_1")
-	if not bool(result.get("ok", false)):
-		var error: Dictionary = result.get("error", {})
-		Log.warn("Mock graph generation failed", error)
-		_status_label.text = Strings.text("STATUS_MOCK_GENERATE_FAILED")
-		return
-
-	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
-	var asset_ids: Array = result["asset_ids"]
-	var items := _add_generate_graph_canvas_items(
-		graph, asset_ids, _canvas.get_mouse_world_position(), Strings.text("BATCH_DEFAULT_LABEL")
-	)
-	if not items.is_empty():
-		_focus_canvas_on_bounds(_bounds_for_items(items))
-	_status_label.text = Strings.text("STATUS_MOCK_GENERATE_DONE_FORMAT") % asset_ids.size()
+	_offline_example_flow.open()
 
 
 func configure_openai_session() -> void:
@@ -311,6 +295,22 @@ func generate_openai_batch() -> void:
 
 func cancel_graph_run(graph_id: String) -> bool:
 	return _openai_flow.cancel_graph(graph_id)
+
+
+func _import_reference_for_node(graph_id: String, node_id: String) -> void:
+	_import_flow.show_reference_import_dialog(
+		{"mode": "node", "graph_id": graph_id, "node_id": node_id}
+	)
+
+
+func handle_graph_node_action(graph_id: String, node_id: String, action_id: String) -> void:
+	match action_id:
+		"run":
+			run_selected_mock_graph()
+		"cancel":
+			cancel_graph_run(graph_id)
+		"import_reference":
+			_import_reference_for_node(graph_id, node_id)
 
 
 func run_selected_mock_graph() -> void:
@@ -355,11 +355,18 @@ func _run_mock_graph(graph: PFGraph, batch_node_id: String, batch_card_id: Strin
 	var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, batch_node_id, true)
 	if not bool(result.get("ok", false)):
 		var error: Dictionary = result.get("error", {})
+		var message := _graph_error_message(error)
 		Log.warn("Selected mock graph run failed", error)
-		_canvas._set_graph_node_type_status(
-			graph.id, "ai_generate", "CONTENT_STATUS_FAILED", String(error.get("message", ""))
+		var error_type := (
+			"image_input"
+			if (
+				String(error.get("code", ""))
+				in ["missing_asset_reference", "asset_not_found", "asset_decode_failed"]
+			)
+			else "ai_generate"
 		)
-		_status_label.text = _graph_run_failure_status(error)
+		_canvas._set_graph_node_type_status(graph.id, error_type, "CONTENT_STATUS_FAILED", message)
+		_status_label.text = _graph_run_failure_status({"message": message})
 		return
 
 	var asset_ids: Array = result["asset_ids"]
@@ -391,12 +398,7 @@ func edit_selected_graph_node() -> void:
 	var graph_data := ProjectService.get_graph_data(graph_id)
 	var graph := GraphScript.from_json(graph_data)
 	var node: PFNode = graph.get_node(node_id)
-	if (
-		node == null
-		or node.is_ghost()
-		or not EDITABLE_GRAPH_NODE_TYPES.has(node.get_type())
-		or node.get_param_schema().is_empty()
-	):
+	if node == null or node.is_ghost() or node.get_param_schema().is_empty():
 		_status_label.text = Strings.STATUS_GRAPH_EDIT_NOT_AVAILABLE
 		return
 	_graph_node_params_dialog.configure_for_node(
@@ -539,7 +541,21 @@ func _create_graph_node_params_dialog() -> void:
 	_graph_node_params_dialog = GraphNodeParamsDialogScript.new()
 	_graph_node_params_dialog.name = "GraphNodeParamsDialog"
 	_graph_node_params_dialog.params_confirmed.connect(apply_graph_node_params)
+	_graph_node_params_dialog.asset_import_requested.connect(
+		func(graph_id: String, node_id: String, _param_key: String) -> void:
+			_import_reference_for_node(graph_id, node_id)
+	)
 	add_child(_graph_node_params_dialog)
+
+
+func _on_reference_asset_imported(target: Dictionary, asset_id: String) -> void:
+	if String(target.get("mode", "")) != "node":
+		return
+	apply_graph_node_params(
+		String(target.get("graph_id", "")),
+		String(target.get("node_id", "")),
+		{"asset_id": asset_id}
+	)
 
 
 func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
@@ -922,6 +938,17 @@ func _graph_run_failure_status(error: Dictionary) -> String:
 	return Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL_FORMAT") % message
 
 
+func _graph_error_message(error: Dictionary) -> String:
+	match String(error.get("code", "")):
+		"missing_asset_reference":
+			return Strings.text("ERROR_REFERENCE_REQUIRED")
+		"asset_not_found":
+			return Strings.text("ERROR_REFERENCE_NOT_FOUND")
+		"asset_decode_failed":
+			return Strings.text("ERROR_REFERENCE_DECODE_FAILED")
+	return String(error.get("message", ""))
+
+
 func _graph_node_add_position(binding: Dictionary) -> Vector2:
 	var item_id := String(binding.get("item_id", ""))
 	for item in _canvas.export_canvas_data()["items"]:
@@ -974,70 +1001,6 @@ func _route_provider_graph_run(
 func _project_style_preset() -> Dictionary:
 	var style_data: Variant = ProjectService.current_project.manifest.get("style_preset", {})
 	return style_data if style_data is Dictionary else {}
-
-
-func _make_mock_generate_graph() -> PFGraph:
-	var graph := GraphScript.new()
-	graph.id = "graph_mock_%s" % IdUtil.uuid_v4().left(8)
-	graph.name = "Mock Generate Batch"
-	graph.add_node(
-		ObjectListNodeScript.new(),
-		"objects",
-		{"items": "barrel\nfence\nscarecrow\ncrate\nwell"},
-		Vector2(0, 0)
-	)
-	graph.add_node(
-		SizeSpecNodeScript.new(),
-		"size",
-		{"width": 32, "height": 32, "per_subject": 1},
-		Vector2(0, 150)
-	)
-	graph.add_node(
-		AiGenerateNodeScript.new(),
-		"generate",
-		{"provider_id": "mock", "batch_size": 2, "seed": 1000},
-		Vector2(280, 75)
-	)
-	graph.add_node(
-		BatchNodeScript.new(),
-		"batch_1",
-		{"label": Strings.text("BATCH_DEFAULT_LABEL")},
-		Vector2(560, 29)
-	)
-	graph.add_edge("objects", "items", "generate", "items")
-	graph.add_edge("size", "spec", "generate", "spec")
-	graph.add_edge("generate", "images", "batch_1", "in")
-	return graph
-
-
-func _add_generate_graph_canvas_items(
-	graph: PFGraph, asset_ids: Array, anchor: Vector2, batch_label: String
-) -> Array:
-	var items := []
-	for node_id in ["objects", "size", "generate"]:
-		var node_item: Node = _canvas._add_graph_node_card(
-			graph.id, node_id, anchor + _graph_node_position(graph, node_id), "", false
-		)
-		if node_item != null:
-			items.append(node_item)
-	var batch_card: Node = _canvas._add_batch_card(
-		asset_ids,
-		anchor + _graph_node_position(graph, "batch_1"),
-		batch_label,
-		"",
-		false,
-		graph.id,
-		"batch_1"
-	)
-	if batch_card != null:
-		items.append(batch_card)
-	return items
-
-
-func _graph_node_position(graph: PFGraph, node_id: String) -> Vector2:
-	var node_data: Dictionary = graph.nodes.get(node_id, {})
-	var raw_position: Variant = node_data.get("position", [0, 0])
-	return Vector2(float(raw_position[0]), float(raw_position[1])).round()
 
 
 func _first_batch_node_id(graph: PFGraph) -> String:

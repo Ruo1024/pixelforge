@@ -5,8 +5,10 @@ extends ConfirmationDialog
 ## contract: 02-contracts/GRAPH-SCHEMA.md §3；控件只由 get_param_schema() 生成。
 
 signal params_confirmed(graph_id: String, node_id: String, params: Dictionary)
+signal asset_import_requested(graph_id: String, node_id: String, param_key: String)
 
 const Strings := preload("res://ui/shell/strings.gd")
+const AssetRefFieldScript := preload("res://ui/widgets/asset_ref_field.gd")
 
 const DIALOG_WIDTH := 480
 const DIALOG_HEIGHT := 420
@@ -135,6 +137,14 @@ func _make_control(schema: Dictionary, value: Variant) -> Control:
 			options.select(maxi(0, selected))
 			options.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 			return options
+		PFNode.KIND_ASSET_REF:
+			var field := AssetRefFieldScript.new()
+			field.set_value(String(value))
+			field.import_requested.connect(
+				func() -> void:
+					asset_import_requested.emit(_graph_id, _node_id, String(schema["key"]))
+			)
+			return field
 		_:
 			var edit := LineEdit.new()
 			edit.text = String(value)
@@ -143,17 +153,20 @@ func _make_control(schema: Dictionary, value: Variant) -> Control:
 
 
 func _control_value(control: Control) -> Variant:
+	var value: Variant = null
 	if control is SpinBox:
-		return float(control.value) if control.step < 1.0 else int(control.value)
-	if control is CheckBox:
-		return control.button_pressed
-	if control is TextEdit:
-		return control.text
-	if control is OptionButton:
-		return control.get_item_text(control.selected)
-	if control is LineEdit:
-		return control.text
-	return null
+		value = float(control.value) if control.step < 1.0 else int(control.value)
+	elif control is CheckBox:
+		value = control.button_pressed
+	elif control is TextEdit:
+		value = control.text
+	elif control is OptionButton:
+		value = control.get_item_text(control.selected)
+	elif control is LineEdit:
+		value = control.text
+	elif control is PFAssetRefField:
+		value = control.get_value()
+	return value
 
 
 func _set_control_value(control: Control, value: Variant) -> void:
@@ -175,6 +188,8 @@ func _set_control_value(control: Control, value: Variant) -> void:
 		control.select(index)
 	elif control is LineEdit:
 		control.text = String(value)
+	elif control is PFAssetRefField:
+		control.set_value(String(value))
 
 
 func _label_text(schema: Dictionary) -> String:
@@ -187,6 +202,7 @@ func _label_text(schema: Dictionary) -> String:
 		"GRAPH_PARAM_PROVIDER": Strings.GRAPH_PARAM_PROVIDER,
 		"GRAPH_PARAM_BATCH_SIZE": Strings.GRAPH_PARAM_BATCH_SIZE,
 		"GRAPH_PARAM_SEED": Strings.GRAPH_PARAM_SEED,
+		"GRAPH_PARAM_REFERENCE_ASSET": Strings.text("GRAPH_PARAM_REFERENCE_ASSET"),
 		"BATCH_DEFAULT_LABEL": Strings.BATCH_DEFAULT_LABEL,
 	}
 	return String(

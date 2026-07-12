@@ -12,10 +12,12 @@ const GraphScript := preload("res://core/graph/pf_graph.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const UIFont := preload("res://ui/widgets/ui_font.gd")
+const AssetRefFieldScript := preload("res://ui/widgets/asset_ref_field.gd")
 
 const SUMMARY_CARD_SIZE := Vector2(220, 116)
 const CONTENT_CARD_SIZE := Vector2(240, 238)
 const GENERATE_CARD_SIZE := Vector2(240, 282)
+const REFERENCE_CARD_SIZE := Vector2(260, 330)
 const HEADER_HEIGHT := 32
 const PADDING := 12
 const BACKGROUND := Color(0.13, 0.145, 0.155, 0.98)
@@ -29,6 +31,7 @@ const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
 const PORT_HIT_RADIUS := 10.0
 const OBJECT_EDITOR_MIN_SIZE := Vector2(0, 116)
 const SPIN_CONTROL_MIN_SIZE := Vector2(76, 30)
+const FLEXIBLE_WIDTH := 0
 
 var item_id := ""
 var graph_id := ""
@@ -59,6 +62,7 @@ var _seed_spin: SpinBox = null
 var _run_button: Button = null
 var _cancel_button: Button = null
 var _execution_detail_label: Label = null
+var _reference_field: Control = null
 var _params_snapshot := {}
 
 
@@ -326,11 +330,16 @@ func _summarize_params(params: Variant) -> String:
 func _card_size() -> Vector2:
 	if collapsed or not _is_content_node():
 		return SUMMARY_CARD_SIZE
-	return GENERATE_CARD_SIZE if _node_type == "ai_generate" else CONTENT_CARD_SIZE
+	match _node_type:
+		"ai_generate":
+			return GENERATE_CARD_SIZE
+		"image_input":
+			return REFERENCE_CARD_SIZE
+	return CONTENT_CARD_SIZE
 
 
 func _is_content_node() -> bool:
-	return _node_type == "object_list" or _node_type == "ai_generate" or _node_type == "size_spec"
+	return _node_type in ["object_list", "ai_generate", "size_spec", "image_input"]
 
 
 func _rebuild_content_controls() -> void:
@@ -345,6 +354,7 @@ func _rebuild_content_controls() -> void:
 	_run_button = null
 	_cancel_button = null
 	_execution_detail_label = null
+	_reference_field = null
 	if collapsed or not _is_content_node() or _is_ghost:
 		return
 
@@ -362,6 +372,8 @@ func _rebuild_content_controls() -> void:
 			_build_generate_controls()
 		"size_spec":
 			_build_size_controls()
+		"image_input":
+			_build_reference_controls()
 
 
 func _build_object_list_controls() -> void:
@@ -466,6 +478,52 @@ func _build_size_controls() -> void:
 	_content_root.add_child(apply_button)
 
 
+func _build_reference_controls() -> void:
+	var asset_id := String(_params_snapshot.get("asset_id", ""))
+	var preview := TextureRect.new()
+	preview.name = "ReferencePreview"
+	preview.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, 92)
+	preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	var detail := Label.new()
+	detail.name = "ReferenceDetail"
+	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if asset_id.is_empty():
+		detail.text = Strings.text("CONTENT_REFERENCE_NONE")
+	elif not AssetLibrary.has_asset(asset_id):
+		detail.text = Strings.text("CONTENT_REFERENCE_MISSING_FORMAT") % asset_id.left(8)
+	else:
+		var meta: Dictionary = AssetLibrary.get_asset_meta(asset_id)
+		var image: Image = AssetLibrary.get_image(asset_id)
+		if image == null:
+			detail.text = Strings.text("CONTENT_REFERENCE_DECODE_FAILED_FORMAT") % asset_id.left(8)
+		else:
+			preview.texture = ImageTexture.create_from_image(image)
+			detail.text = (
+				"%s · %s"
+				% [
+					String(meta.get("name", asset_id.left(8))),
+					(
+						Strings.text("CONTENT_REFERENCE_ORIGIN_FORMAT")
+						% String(meta.get("origin", "imported"))
+					),
+				]
+			)
+	_content_root.add_child(preview)
+	_content_root.add_child(detail)
+	_reference_field = AssetRefFieldScript.new()
+	_reference_field.name = "ReferenceField"
+	_reference_field.set_value(asset_id)
+	_reference_field.value_changed.connect(
+		func(value: String) -> void:
+			params_commit_requested.emit(graph_id, node_id, {"asset_id": value})
+	)
+	_reference_field.import_requested.connect(
+		func() -> void: action_requested.emit(graph_id, node_id, "import_reference")
+	)
+	_content_root.add_child(_reference_field)
+
+
 func _make_spin(control_name: String, minimum: int, maximum: int, value: int) -> SpinBox:
 	var spin := SpinBox.new()
 	spin.name = control_name
@@ -523,6 +581,7 @@ func _object_count() -> int:
 func _localized_display_name(node: PFNode) -> String:
 	var key_by_type := {
 		"object_list": "NODE_OBJECT_LIST",
+		"image_input": "NODE_IMAGE_INPUT",
 		"size_spec": "NODE_SIZE_SPEC",
 		"ai_generate": "NODE_AI_GENERATE",
 	}

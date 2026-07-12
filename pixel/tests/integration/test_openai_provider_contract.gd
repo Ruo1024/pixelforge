@@ -4,6 +4,8 @@ const ProviderScript := preload("res://plugins/provider_openai/openai_image_prov
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const GraphRunnerScript := preload("res://services/graph_mock_runner.gd")
+const MainScript := preload("res://ui/shell/main.gd")
+const Strings := preload("res://ui/shell/strings.gd")
 
 const FIXTURE_PATH := "res://tests/fixtures/providers/openai_image_success.json"
 const SECRET_SENTINEL := "sk-pf-m4-v1-contract-secret"
@@ -26,6 +28,44 @@ func before_each() -> void:
 func after_each() -> void:
 	_provider.clear_session_config()
 	get_tree().root.get_node("ProviderService").clear_session("openai_image")
+
+
+func test_ui_rejects_reference_graph_when_provider_lacks_img2img() -> void:
+	var main: Control = MainScript.new()
+	main.size = Vector2(1280, 800)
+	add_child_autofree(main)
+	await wait_process_frames(2)
+	var controller: Node = main.get_node("M21UiController")
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
+	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
+	_node_data_for_id(graph_data["nodes"], "generate")["params"]["provider_id"] = "openai_image"
+	ProjectService.set_graph_data(graph_id, graph_data, true)
+	assert_null(ProviderService.configure_session("openai_image", {"api_key": "sk-local-only"}))
+	var canvas_items: Array = canvas.export_canvas_data()["items"]
+	canvas.select_ids([_item_id_for_node(canvas_items, "batch_1")])
+	controller.run_selected_mock_graph()
+	var expected := (
+		Strings.text("CONTENT_DETAIL_REFERENCE_UNSUPPORTED_FORMAT") % "OpenAI GPT Image 2"
+	)
+	assert_string_contains((main.get_node("Root/BottomBar").get_child(0) as Label).text, expected)
+	assert_true(TaskQueue.is_idle())
+
+
+func _node_data_for_id(nodes: Array, node_id: String) -> Dictionary:
+	for node_value in nodes:
+		if node_value is Dictionary and String(node_value.get("id", "")) == node_id:
+			return node_value
+	return {}
+
+
+func _item_id_for_node(items: Array, node_id: String) -> String:
+	for item_value in items:
+		if item_value is Dictionary and String(item_value.get("node_id", "")) == node_id:
+			return String(item_value.get("id", ""))
+	return ""
 
 
 func test_capabilities_and_persistent_schema_match_contract() -> void:

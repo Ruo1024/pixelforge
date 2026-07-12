@@ -239,6 +239,11 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	var provenance: Dictionary = AssetLibrary.get_asset_meta(first_asset_id)["provenance"]
 	assert_eq(provenance["provider"], "retrodiffusion")
 	assert_eq(provenance["model"], "rd_plus")
+	var reference_id := String(
+		_node_data_for_id(graph_data["nodes"], "reference")["params"]["asset_id"]
+	)
+	assert_eq(provenance["reference_asset_id"], reference_id)
+	assert_eq(String(provenance["reference_content_sha256"]).length(), 64)
 
 
 func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_results() -> void:

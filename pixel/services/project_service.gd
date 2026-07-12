@@ -18,6 +18,7 @@ const FileIOScript := preload("res://infra/file_io.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const AppInfo := preload("res://core/util/app_info.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
+const AssetReferenceScanner := preload("res://services/asset_reference_scanner.gd")
 const Log := preload("res://core/util/log_util.gd")
 const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
 const MIGRATIONS: Array = []
@@ -26,6 +27,7 @@ var current_project: Variant = ProjectModel.new()
 
 var _autosave_timer: Timer = null
 var _pending_recovery_autosaves: Array = []
+var _validation_warnings: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -40,6 +42,7 @@ func new_project(name: String = "Untitled") -> void:
 	PaletteRegistry.clear_custom_palettes()
 	UndoService.clear()
 	current_project.reset(name)
+	_refresh_validation_warnings()
 	project_loaded.emit(current_project)
 	EventBus.project_created.emit(current_project.get_id())
 	_emit_dirty(false)
@@ -90,10 +93,6 @@ func mark_dirty() -> void:
 	_emit_dirty(true)
 
 
-func get_canvas_data() -> Dictionary:
-	return current_project.canvas.duplicate(true)
-
-
 func get_graphs_data() -> Dictionary:
 	return current_project.graphs.duplicate(true)
 
@@ -111,6 +110,25 @@ func get_document_data(kind: String, document_id: String = "") -> Dictionary:
 		if document_id.is_empty()
 		else Dictionary(collection.get(document_id, {})).duplicate(true)
 	)
+
+
+func get_validation_warnings() -> Array[Dictionary]:
+	return _validation_warnings.duplicate(true)
+
+
+func get_asset_reference_locations(asset_id: String) -> Array[Dictionary]:
+	var scan: Dictionary = AssetReferenceScanner.scan(current_project, AssetLibrary)
+	var result: Array[Dictionary] = []
+	for strength in ["live", "history"]:
+		var source: Dictionary = scan["%s_by_asset" % strength]
+		for reference in source.get(asset_id, []):
+			result.append(Dictionary(reference).duplicate(true))
+	return result
+
+
+func has_live_asset_reference(asset_id: String) -> bool:
+	var scan: Dictionary = AssetReferenceScanner.scan(current_project, AssetLibrary)
+	return Dictionary(scan["live_by_asset"]).has(asset_id)
 
 
 func save_project(path: String = "") -> Error:
@@ -182,6 +200,7 @@ func _open_project(path: String, as_recovered_copy: bool) -> Error:
 	current_project.project_path = "" if as_recovered_copy else path
 	current_project.recovered_from_path = path if as_recovered_copy else ""
 	current_project.dirty = false
+	_refresh_validation_warnings()
 
 	if not as_recovered_copy:
 		SettingsService.add_recent_project(path)
@@ -243,6 +262,7 @@ func mark_clean_shutdown() -> void:
 
 
 func _save_to_path(path: String) -> Error:
+	_refresh_validation_warnings()
 	_update_manifest_before_save()
 	var entries := {
 		"manifest.json": current_project.manifest,
@@ -261,6 +281,11 @@ func _save_to_path(path: String) -> Error:
 	for palette_path in palette_entries.keys():
 		entries[palette_path] = palette_entries[palette_path]
 	return FileIOScript.zip_pack(entries, path)
+
+
+func _refresh_validation_warnings() -> void:
+	var scan: Dictionary = AssetReferenceScanner.scan(current_project, AssetLibrary)
+	_validation_warnings = Array(scan.get("warnings", [])).duplicate(true)
 
 
 func _update_manifest_before_save() -> void:

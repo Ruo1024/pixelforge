@@ -18,6 +18,7 @@ var _png_bytes := {}
 var _image_cache := {}
 var _lru_order: Array = []
 var _ref_counts := {}
+var _bitmap_status := {}
 var _cache_limit_bytes := CACHE_LIMIT_BYTES
 var _cache_bytes := 0
 
@@ -28,6 +29,7 @@ func clear() -> void:
 	_image_cache.clear()
 	_lru_order.clear()
 	_ref_counts.clear()
+	_bitmap_status.clear()
 	_cache_limit_bytes = CACHE_LIMIT_BYTES
 	_cache_bytes = 0
 
@@ -62,6 +64,7 @@ func register_image(image: Image, name: String, extra_meta: Dictionary = {}) -> 
 	_png_bytes[asset_id] = rgba.save_png_to_buffer()
 	_store_in_cache(asset_id, rgba)
 	_ref_counts[asset_id] = int(_ref_counts.get(asset_id, 0))
+	_bitmap_status[asset_id] = "ready"
 
 	asset_added.emit(asset_id)
 	EventBus.asset_added.emit(asset_id)
@@ -81,18 +84,25 @@ func load_from_zip_files(files: Dictionary) -> Error:
 		var png_path := "assets/%s.png" % asset_id
 		if not files.has(png_path):
 			Log.warn("Asset PNG missing from project", {"asset_id": asset_id})
+			_bitmap_status[asset_id] = "missing"
 			continue
 
 		var bytes: PackedByteArray = files[png_path]
 		_png_bytes[asset_id] = bytes
+		if not _has_png_signature(bytes):
+			_bitmap_status[asset_id] = "decode_failed"
+			Log.warn("Asset PNG signature is invalid", {"asset_id": asset_id})
+			continue
 		var image := Image.new()
 		var load_error := image.load_png_from_buffer(bytes)
 		if load_error == OK:
 			if image.get_format() != Image.FORMAT_RGBA8:
 				image.convert(Image.FORMAT_RGBA8)
 			_store_in_cache(asset_id, image)
+			_bitmap_status[asset_id] = "ready"
 		else:
-			return load_error
+			_bitmap_status[asset_id] = "decode_failed"
+			Log.warn("Asset PNG could not be decoded", {"asset_id": asset_id, "error": load_error})
 
 	return OK
 
@@ -101,7 +111,8 @@ func export_zip_entries() -> Dictionary:
 	var entries := {}
 	for asset_id in _metadata.keys():
 		entries["assets/%s.meta.json" % asset_id] = _metadata[asset_id]
-		entries["assets/%s.png" % asset_id] = _png_bytes[asset_id]
+		if _png_bytes.has(asset_id):
+			entries["assets/%s.png" % asset_id] = _png_bytes[asset_id]
 	return entries
 
 
@@ -109,12 +120,16 @@ func has_asset(asset_id: String) -> bool:
 	return _metadata.has(asset_id)
 
 
+func get_bitmap_status(asset_id: String) -> String:
+	return String(_bitmap_status.get(asset_id, "missing" if has_asset(asset_id) else "not_found"))
+
+
 func get_image(asset_id: String) -> Image:
 	if _image_cache.has(asset_id):
 		_touch_lru(asset_id)
 		return _image_cache[asset_id].duplicate()
 
-	if not _png_bytes.has(asset_id):
+	if get_bitmap_status(asset_id) != "ready" or not _png_bytes.has(asset_id):
 		return null
 
 	var image := Image.new()
@@ -179,6 +194,7 @@ func remove_asset(asset_id: String) -> Error:
 	_png_bytes.erase(asset_id)
 	_remove_from_cache(asset_id)
 	_ref_counts.erase(asset_id)
+	_bitmap_status.erase(asset_id)
 	asset_removed.emit(asset_id)
 	EventBus.asset_removed.emit(asset_id)
 	return OK
@@ -186,21 +202,11 @@ func remove_asset(asset_id: String) -> Error:
 
 func _is_referenced_by_project(asset_id: String) -> bool:
 	var project_service := get_tree().root.get_node_or_null("ProjectService")
-	if project_service == null or project_service.current_project == null:
-		return false
-	for board_data in project_service.current_project.boards.values():
-		for layer_value in Dictionary(board_data).get("layers", []):
-			var layer: Dictionary = layer_value
-			for cell_value in Dictionary(layer.get("cells", {})).values():
-				if String(Dictionary(cell_value).get("asset_id", "")) == asset_id:
-					return true
-			for item_value in layer.get("items", []):
-				if String(Dictionary(item_value).get("asset_id", "")) == asset_id:
-					return true
-	for anim_data in project_service.current_project.animations.values():
-		if asset_id in Dictionary(anim_data).get("frames", []):
-			return true
-	return false
+	return (
+		project_service != null
+		and project_service.has_method("has_live_asset_reference")
+		and project_service.has_live_asset_reference(asset_id)
+	)
 
 
 func _store_in_cache(asset_id: String, image: Image) -> void:
@@ -234,3 +240,8 @@ func _prune_cache() -> void:
 	while _cache_bytes > _cache_limit_bytes and not _lru_order.is_empty():
 		var oldest_id := String(_lru_order.pop_front())
 		_remove_from_cache(oldest_id)
+
+
+func _has_png_signature(bytes: PackedByteArray) -> bool:
+	var signature := PackedByteArray([137, 80, 78, 71, 13, 10, 26, 10])
+	return bytes.size() >= signature.size() and bytes.slice(0, signature.size()) == signature

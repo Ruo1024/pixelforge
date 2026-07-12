@@ -9,8 +9,10 @@ const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_setting
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
+const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
 const Matting := preload("res://core/pixel/matting.gd")
 const Outliner := preload("res://core/pixel/outliner.gd")
+const Strings := preload("res://ui/shell/strings.gd")
 
 
 func test_matte_dialog_exposes_core_params() -> void:
@@ -74,6 +76,23 @@ func test_graph_node_params_dialog_builds_controls_from_node_schema() -> void:
 	assert_true(dialog.set_param_value("width", 48))
 	assert_eq(dialog.get_params()["width"], 48)
 	assert_eq(dialog.get_params()["height"], 24)
+
+
+func test_graph_node_params_dialog_uses_asset_ref_control() -> void:
+	var image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	var asset_id: String = AssetLibrary.register_image(image, "reference")
+	var dialog: ConfirmationDialog = GraphNodeParamsDialogScript.new()
+	add_child_autofree(dialog)
+	await wait_process_frames(1)
+	dialog.configure_for_node(
+		"graph_test", "reference", ImageInputNodeScript.new(), {"asset_id": asset_id}
+	)
+	assert_eq(dialog.get_param_value("asset_id"), asset_id)
+	assert_true(dialog.set_param_value("asset_id", "missing-reference"))
+	assert_eq(dialog.get_params()["asset_id"], "missing-reference")
+	assert_eq(
+		dialog._root.get_child(0).get_child(0).text, Strings.text("GRAPH_PARAM_REFERENCE_ASSET")
+	)
 
 
 func test_openai_session_dialog_masks_and_clears_the_session_secret() -> void:

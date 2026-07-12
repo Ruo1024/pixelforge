@@ -6,6 +6,9 @@ const MockRunnerScript := preload("res://services/graph_mock_runner.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
+const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
+const FileIOScript := preload("res://infra/file_io.gd")
 
 
 func before_each() -> void:
@@ -105,6 +108,71 @@ func test_mock_generate_chain_survives_project_roundtrip_after_materialization()
 	assert_true(asset_library.has_asset(String(loaded_batch["params"]["asset_ids"][0])))
 
 
+func test_reference_image_changes_mock_output_and_persists_provenance() -> void:
+	var asset_library := get_tree().root.get_node("AssetLibrary")
+	var red := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	red.fill(Color.RED)
+	var blue := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	blue.fill(Color.BLUE)
+	var red_id: String = asset_library.register_image(red, "red_reference")
+	var blue_id: String = asset_library.register_image(blue, "blue_reference")
+	var red_graph := _make_mock_graph_with_reference(red_id)
+	var blue_graph := _make_mock_graph_with_reference(blue_id)
+	var runner := MockRunnerScript.new()
+
+	var red_result: Dictionary = runner.run_to_batch(red_graph, asset_library, "batch_1")
+	var blue_result: Dictionary = runner.run_to_batch(blue_graph, asset_library, "batch_1")
+	assert_true(red_result["ok"])
+	assert_true(blue_result["ok"])
+	var red_output: Image = asset_library.get_image(String(red_result["asset_ids"][0]))
+	var blue_output: Image = asset_library.get_image(String(blue_result["asset_ids"][0]))
+	assert_ne(red_output.get_data(), blue_output.get_data())
+	var provenance: Dictionary = (
+		asset_library.get_asset_meta(String(red_result["asset_ids"][0]))["provenance"]
+	)
+	assert_eq(provenance["reference_asset_id"], red_id)
+	assert_eq(provenance["reference_content_sha256"], GraphContextScript.image_content_sha256(red))
+
+
+func test_unconnected_empty_reference_does_not_block_target_batch() -> void:
+	var graph := _make_mock_graph()
+	graph.add_node(ImageInputNodeScript.new(), "unused_reference", {}, Vector2.ZERO)
+	var result: Dictionary = MockRunnerScript.new().run_to_batch(graph, AssetLibrary, "batch_1")
+	assert_true(result["ok"])
+	assert_eq(result["asset_ids"].size(), 10)
+
+
+func test_connected_reference_reports_missing_not_found_and_decode_errors() -> void:
+	var graph := _make_mock_graph_with_reference("")
+	var runner := MockRunnerScript.new()
+	var missing: Dictionary = runner.run_to_batch(graph, AssetLibrary, "batch_1")
+	assert_false(missing["ok"])
+	assert_eq(missing["error"]["code"], "missing_asset_reference")
+	assert_eq(missing["error"]["node_id"], "reference")
+
+	graph.set_node_params("reference", {"asset_id": "missing-id"})
+	var not_found: Dictionary = runner.run_to_batch(graph, AssetLibrary, "batch_1")
+	assert_eq(not_found["error"]["code"], "asset_not_found")
+
+	var meta := {"id": "broken-id", "name": "broken", "origin": "imported", "provenance": {}}
+	assert_eq(
+		(
+			AssetLibrary
+			. load_from_zip_files(
+				{
+					"assets/broken-id.meta.json": FileIOScript.json_to_bytes(meta),
+					"assets/broken-id.png": PackedByteArray([1, 2, 3]),
+				}
+			)
+		),
+		OK
+	)
+	graph.set_node_params("reference", {"asset_id": "broken-id"})
+	var decode_failed: Dictionary = runner.run_to_batch(graph, AssetLibrary, "batch_1")
+	assert_eq(decode_failed["error"]["code"], "asset_decode_failed")
+	assert_eq(decode_failed["error"]["node_id"], "reference")
+
+
 func _make_mock_graph() -> PFGraph:
 	var graph := GraphScript.new()
 	graph.id = "graph_main"
@@ -131,6 +199,13 @@ func _make_mock_graph() -> PFGraph:
 	assert_true(bool(graph.add_edge("objects", "items", "generate", "items")["ok"]))
 	assert_true(bool(graph.add_edge("size", "spec", "generate", "spec")["ok"]))
 	assert_true(bool(graph.add_edge("generate", "images", "batch_1", "in")["ok"]))
+	return graph
+
+
+func _make_mock_graph_with_reference(asset_id: String) -> PFGraph:
+	var graph := _make_mock_graph()
+	graph.add_node(ImageInputNodeScript.new(), "reference", {"asset_id": asset_id}, Vector2.ZERO)
+	assert_true(bool(graph.add_edge("reference", "image", "generate", "image")["ok"]))
 	return graph
 
 

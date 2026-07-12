@@ -692,11 +692,8 @@ func _on_canvas_graph_connect_failed(reason: String) -> void:
 	_status_label.text = Strings.STATUS_GRAPH_CONNECT_FAILED % reason
 
 
-func _on_graph_node_action_requested(graph_id: String, _node_id: String, action_id: String) -> void:
-	if action_id == "cancel":
-		_m2_1_ui.cancel_graph_run(graph_id)
-	else:
-		_m2_1_ui.run_selected_mock_graph()
+func _on_graph_node_action_requested(graph_id: String, node_id: String, action_id: String) -> void:
+	_m2_1_ui.handle_graph_node_action(graph_id, node_id, action_id)
 
 
 func _on_canvas_graph_status(event: Dictionary) -> void:

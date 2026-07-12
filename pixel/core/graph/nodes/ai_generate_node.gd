@@ -80,13 +80,17 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 	var batch_size := maxi(1, int(params.get("batch_size", spec.get("per_subject", 1))))
 	var seed := int(params.get("seed", DEFAULT_SEED))
 	var subjects := _subjects_from_inputs(inputs)
+	var reference_hash := String(inputs.get("__reference_content_sha256", ""))
+	var reference_asset_id := String(inputs.get("__reference_asset_id", ""))
 	var images := []
 	var metadata := []
 
 	for subject in subjects:
 		for _index in range(batch_size):
 			var item_seed := seed + images.size()
-			images.append(_make_mock_image(String(subject), width, height, item_seed))
+			images.append(
+				_make_mock_image(String(subject), width, height, item_seed, reference_hash)
+			)
 			(
 				metadata
 				. append(
@@ -96,6 +100,10 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 						"prompt": String(subject),
 						"seed": item_seed,
 						"name": _asset_name(String(subject), item_seed),
+						"reference_asset_id":
+						reference_asset_id if not reference_asset_id.is_empty() else null,
+						"reference_content_sha256":
+						reference_hash if not reference_hash.is_empty() else null,
 					}
 				)
 			)
@@ -119,11 +127,14 @@ func _subjects_from_inputs(inputs: Dictionary) -> Array:
 	return result
 
 
-func _make_mock_image(subject: String, width: int, height: int, seed: int) -> Image:
+func _make_mock_image(
+	subject: String, width: int, height: int, seed: int, reference_hash: String = ""
+) -> Image:
 	var image := Image.create(width, height, false, Image.FORMAT_RGBA8)
-	var primary := _color_from_seed(subject, seed, 0)
-	var secondary := _color_from_seed(subject, seed, 83)
-	var accent := _color_from_seed(subject, seed, 191)
+	var hash_subject := "%s:%s" % [subject, reference_hash]
+	var primary := _color_from_seed(hash_subject, seed, 0)
+	var secondary := _color_from_seed(hash_subject, seed, 83)
+	var accent := _color_from_seed(hash_subject, seed, 191)
 	var block := maxi(1, mini(width, height) / 4)
 
 	for y in range(height):

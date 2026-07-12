@@ -15,6 +15,7 @@ const KIND_ENUM := "enum"
 const KIND_PALETTE := "palette"
 const KIND_PROVIDER := "provider"
 const KIND_SEED := "seed"
+const KIND_ASSET_REF := "asset_ref"
 
 var _ghost_type := ""
 var _ghost_json := {}
@@ -118,12 +119,18 @@ func _coerce_param_value(value: Variant, schema: Dictionary, fallback: Variant) 
 			return _clamp_float(float(value), schema, float(fallback) if fallback != null else 0.0)
 		KIND_BOOL:
 			return bool(value)
-		KIND_TEXT, KIND_TEXT_MULTILINE, KIND_PALETTE, KIND_PROVIDER:
-			return String(value)
+		KIND_TEXT, KIND_TEXT_MULTILINE, KIND_PALETTE, KIND_PROVIDER, KIND_ASSET_REF:
+			return _coerce_string_param(value, fallback, kind == KIND_ASSET_REF)
 		KIND_ENUM:
 			return _coerce_enum(String(value), schema, String(fallback))
 		_:
 			return value
+
+
+func _coerce_string_param(value: Variant, fallback: Variant, accepts_scalar: bool) -> String:
+	if value == null:
+		return String(fallback)
+	return str(value) if accepts_scalar else String(value)
 
 
 func _clamp_number(value: int, schema: Dictionary, fallback: int) -> int:

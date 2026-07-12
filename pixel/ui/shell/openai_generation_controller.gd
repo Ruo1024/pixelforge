@@ -13,6 +13,7 @@ const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.g
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const GraphRunnerScript := preload("res://services/graph_mock_runner.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
+const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
 
 var _canvas: Control = null
 var _status_label: Label = null
@@ -86,6 +87,21 @@ func _queue_graph(
 		_set_graph_status({"graph": graph}, "CONTENT_STATUS_FAILED", _status_label.text)
 		return
 	var request := _request_for_graph(graph)
+	if request.has("__error"):
+		var reference_error := String(request["__error"])
+		_set_graph_status({"graph": graph}, "CONTENT_STATUS_FAILED", reference_error)
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % reference_error
+		return
+	if (
+		request.get("ref_image") is Image
+		and not bool(provider.get_capabilities().get("img2img", false))
+	):
+		var unsupported := (
+			Strings.text("CONTENT_DETAIL_REFERENCE_UNSUPPORTED_FORMAT") % display_name
+		)
+		_set_graph_status({"graph": graph}, "CONTENT_STATUS_FAILED", unsupported)
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % unsupported
+		return
 	var estimate := CostService.estimate_request(provider_id, request)
 	var run_state := {
 		"graph": graph,
@@ -281,6 +297,8 @@ func _metadata(result: Dictionary, request: Dictionary, count: int, provider_id:
 					"seed": seeds[index] if index < seeds.size() else null,
 					"cost": total_cost / count if total_cost >= 0.0 and count > 0 else -1.0,
 					"provider_meta": provider_meta,
+					"reference_asset_id": request.get("reference_asset_id", null),
+					"reference_content_sha256": request.get("reference_content_sha256", null),
 					"name": "%s_%03d" % [provider_id, index + 1],
 				}
 			)
@@ -350,7 +368,50 @@ func _request_for_graph(graph: PFGraph) -> Dictionary:
 				request["extra"]["template_id"] = String(
 					params.get("template_id", "sdxl_pixel_txt2img")
 				)
+	var reference_node_id := _connected_reference_node_id(graph)
+	if not reference_node_id.is_empty():
+		var reference_asset_id := String(
+			graph.get_node_params(reference_node_id).get("asset_id", "")
+		)
+		if reference_asset_id.is_empty():
+			request["__error"] = Strings.text("CONTENT_REFERENCE_NONE")
+		elif not AssetLibrary.has_asset(reference_asset_id):
+			request["__error"] = (
+				Strings.text("CONTENT_REFERENCE_MISSING_FORMAT") % reference_asset_id.left(8)
+			)
+		else:
+			var reference_image: Image = AssetLibrary.get_image(reference_asset_id)
+			if reference_image == null:
+				request["__error"] = (
+					Strings.text("CONTENT_REFERENCE_DECODE_FAILED_FORMAT")
+					% reference_asset_id.left(8)
+				)
+			else:
+				request["mode"] = "img2img"
+				request["ref_image"] = reference_image
+				request["reference_asset_id"] = reference_asset_id
+				request["reference_content_sha256"] = (GraphContextScript.image_content_sha256(
+					reference_image
+				))
 	return request
+
+
+func _connected_reference_node_id(graph: PFGraph) -> String:
+	for edge in graph.edges:
+		var from_data: Array = edge.get("from", ["", ""])
+		var to_data: Array = edge.get("to", ["", ""])
+		if String(to_data[1]) != "image":
+			continue
+		var target: PFNode = graph.get_node(String(to_data[0]))
+		var source: PFNode = graph.get_node(String(from_data[0]))
+		if (
+			target != null
+			and target.get_type() == "ai_generate"
+			and source != null
+			and source.get_type() == "image_input"
+		):
+			return String(from_data[0])
+	return ""
 
 
 func _provider_id_for_graph(graph: PFGraph) -> String:

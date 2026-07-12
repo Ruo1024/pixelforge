@@ -7,6 +7,7 @@ extends RefCounted
 const Log := preload("res://core/util/log_util.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 
@@ -18,6 +19,7 @@ func _init(register_builtins: bool = true) -> void:
 	if register_builtins:
 		register("object_list", ObjectListNodeScript)
 		register("size_spec", SizeSpecNodeScript)
+		register("image_input", ImageInputNodeScript)
 		register("ai_generate", AiGenerateNodeScript)
 		register("batch", BatchNodeScript)
 	for type_name in _plugin_scripts:

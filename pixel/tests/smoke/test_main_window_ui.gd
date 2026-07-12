@@ -240,16 +240,19 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 
-	assert_eq(canvas.get_item_count(), 4)
+	assert_eq(canvas.get_item_count(), 5)
 	assert_eq(ProjectService.current_project.graphs.size(), 1)
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
-	var batch_node: Dictionary = graph_data["nodes"][3]
+	var batch_node: Dictionary = _node_data_for_id(graph_data["nodes"], "batch_1")
 	assert_eq(batch_node["type"], "batch")
 	assert_eq(batch_node["params"]["asset_ids"].size(), 10)
 	var canvas_items: Array = canvas.export_canvas_data()["items"]
-	assert_eq(canvas_items.size(), 4)
-	assert_eq(_node_ids_from_canvas_items(canvas_items), ["objects", "size", "generate", "batch_1"])
+	assert_eq(canvas_items.size(), 5)
+	assert_eq(
+		_node_ids_from_canvas_items(canvas_items),
+		["objects", "size", "reference", "generate", "batch_1"]
+	)
 	for canvas_item in canvas_items:
 		assert_eq(canvas_item["type"], "node")
 		assert_eq(canvas_item["graph_id"], graph_id)
@@ -263,7 +266,7 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	await wait_process_frames(2)
 
 	graph_data = ProjectService.current_project.graphs[graph_id]
-	batch_node = graph_data["nodes"][3]
+	batch_node = _node_data_for_id(graph_data["nodes"], "batch_1")
 	var rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
 	assert_eq(rerun_asset_ids.size(), 10)
 	assert_ne(rerun_asset_ids, first_asset_ids)
@@ -283,7 +286,7 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	await wait_process_frames(2)
 
 	graph_data = ProjectService.current_project.graphs[graph_id]
-	batch_node = graph_data["nodes"][3]
+	batch_node = _node_data_for_id(graph_data["nodes"], "batch_1")
 	var edge_rerun_asset_ids: Array = batch_node["params"]["asset_ids"]
 	assert_eq(edge_rerun_asset_ids.size(), 10)
 	assert_ne(edge_rerun_asset_ids, rerun_asset_ids)
@@ -334,7 +337,7 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "Node generate requires input port spec"
 	)
 	graph_data = ProjectService.current_project.graphs[graph_id]
-	batch_node = graph_data["nodes"][3]
+	batch_node = _node_data_for_id(graph_data["nodes"], "batch_1")
 	assert_eq(batch_node["params"]["asset_ids"], stable_asset_ids)
 	assert_eq(canvas._get_batch_asset_ids(batch_item_id), stable_asset_ids)
 	assert_eq(generate_card._status_badge, Strings.text("CONTENT_STATUS_FAILED"))
@@ -361,7 +364,7 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
 
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
-	var batch_node: Dictionary = graph_data["nodes"][3]
+	var batch_node: Dictionary = _node_data_for_id(graph_data["nodes"], "batch_1")
 	var first_asset_id := String(batch_node["params"]["asset_ids"][0])
 	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
 	var batch_card: Node = canvas._items_by_id[batch_item_id]
@@ -371,12 +374,12 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
 	assert_true(_send_key(controller, KEY_K))
 
 	graph_data = ProjectService.current_project.graphs[graph_id]
-	batch_node = graph_data["nodes"][3]
+	batch_node = _node_data_for_id(graph_data["nodes"], "batch_1")
 	assert_eq(batch_node["params"]["review_states"][first_asset_id], "keep")
 
 	assert_true(_send_key(controller, KEY_R))
 	graph_data = ProjectService.current_project.graphs[graph_id]
-	batch_node = graph_data["nodes"][3]
+	batch_node = _node_data_for_id(graph_data["nodes"], "batch_1")
 	assert_eq(batch_node["params"]["review_states"][first_asset_id], "reject")
 
 
@@ -424,15 +427,16 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 
-	assert_eq(controller._graph_add_menu.item_count, 4)
+	assert_eq(controller._graph_add_menu.item_count, 5)
 	assert_eq(
 		[
 			controller._graph_add_menu.get_item_text(0),
 			controller._graph_add_menu.get_item_text(1),
 			controller._graph_add_menu.get_item_text(2),
 			controller._graph_add_menu.get_item_text(3),
+			controller._graph_add_menu.get_item_text(4),
 		],
-		["AI Generate", "ComfyUI Workflow", "Object List", "Size Spec"]
+		["AI Generate", "ComfyUI Workflow", "Reference Image", "Object List", "Size Spec"]
 	)
 
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
@@ -445,15 +449,16 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	await wait_process_frames(1)
 
 	assert_true(controller._graph_quick_add_menu.visible)
-	assert_eq(controller._graph_quick_add_menu.item_count, 4)
+	assert_eq(controller._graph_quick_add_menu.item_count, 5)
 	assert_eq(
 		[
 			controller._graph_quick_add_menu.get_item_text(0),
 			controller._graph_quick_add_menu.get_item_text(1),
 			controller._graph_quick_add_menu.get_item_text(2),
 			controller._graph_quick_add_menu.get_item_text(3),
+			controller._graph_quick_add_menu.get_item_text(4),
 		],
-		["AI Generate", "ComfyUI Workflow", "Object List", "Size Spec"]
+		["AI Generate", "ComfyUI Workflow", "Reference Image", "Object List", "Size Spec"]
 	)
 
 	var existing_node_ids := {}
@@ -551,7 +556,7 @@ func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
 
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
-	var batch_node: Dictionary = graph_data["nodes"][3]
+	var batch_node: Dictionary = _node_data_for_id(graph_data["nodes"], "batch_1")
 	var asset_ids: Array = batch_node["params"]["asset_ids"]
 	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "batch_1")
 
@@ -560,14 +565,14 @@ func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
 	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[0]])
 
 	graph_data = ProjectService.current_project.graphs[graph_id]
-	batch_node = graph_data["nodes"][3]
+	batch_node = _node_data_for_id(graph_data["nodes"], "batch_1")
 	assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[0])
 
 	assert_true(_send_key(controller, KEY_RIGHT))
 	assert_eq(canvas._get_batch_selected_asset_ids(batch_item_id), [asset_ids[1]])
 
 	graph_data = ProjectService.current_project.graphs[graph_id]
-	batch_node = graph_data["nodes"][3]
+	batch_node = _node_data_for_id(graph_data["nodes"], "batch_1")
 	assert_eq(batch_node["params"]["focus_asset_id"], asset_ids[1])
 
 	assert_true(_send_key(controller, KEY_LEFT))

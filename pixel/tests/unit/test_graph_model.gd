@@ -40,8 +40,34 @@ func test_node_registry_registers_batch_and_rejects_duplicate_type() -> void:
 	assert_false(registry.register("batch", BatchNodeScript))
 	assert_eq(
 		registry.get_registered_types(),
-		["ai_generate", "batch", "comfyui.run_workflow", "object_list", "size_spec"]
+		["ai_generate", "batch", "comfyui.run_workflow", "image_input", "object_list", "size_spec"]
 	)
+
+
+func test_image_input_asset_ref_and_unknown_params_roundtrip() -> void:
+	var graph := (
+		GraphScript
+		. from_json(
+			{
+				"graph_version": 1,
+				"id": "reference_graph",
+				"nodes":
+				[
+					{
+						"id": "reference",
+						"type": "image_input",
+						"position": [0, 0],
+						"params": {"asset_id": 1234, "file_path": "/legacy/path.png"},
+					}
+				],
+				"edges": [],
+			}
+		)
+	)
+	assert_false(graph.get_node("reference").is_ghost())
+	assert_eq(graph.get_node_params("reference")["asset_id"], "1234")
+	assert_eq(graph.to_json()["nodes"][0]["params"]["file_path"], "/legacy/path.png")
+	assert_eq(graph.get_node("reference").get_param_schema()[0]["kind"], PFNode.KIND_ASSET_REF)
 
 
 func test_connection_matrix_follows_graph_schema_port_rules() -> void:

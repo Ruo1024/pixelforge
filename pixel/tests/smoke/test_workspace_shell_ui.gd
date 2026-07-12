@@ -56,6 +56,55 @@ func test_empty_add_input_creates_real_graph_atomically_and_updates_context() ->
 	assert_true(hint.visible)
 
 
+func test_empty_reference_import_creates_real_node_and_undo_keeps_asset() -> void:
+	var main := await _make_main()
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var flow: Node = main.get_node("M21UiController/ImportFlowController")
+	var image := Image.create(3, 2, false, Image.FORMAT_RGBA8)
+	image.fill(Color.DARK_ORANGE)
+	var path := "user://tests/workspace_reference.png"
+	assert_eq(image.save_png(path), OK)
+	var result: Dictionary = flow._import_reference_file(path, {"mode": "workspace"})
+	assert_true(result["ok"])
+	var asset_id := String(result["asset_id"])
+	assert_true(AssetLibrary.has_asset(asset_id))
+	assert_eq(ProjectService.current_project.graphs.size(), 1)
+	var graph: Dictionary = ProjectService.current_project.graphs.values()[0]
+	assert_eq(graph["nodes"][0]["type"], "image_input")
+	assert_eq(graph["nodes"][0]["params"]["asset_id"], asset_id)
+	assert_eq(canvas.get_item_count(), 1)
+
+	UndoService.undo()
+	assert_eq(ProjectService.current_project.graphs.size(), 0)
+	assert_eq(canvas.get_item_count(), 0)
+	assert_true(AssetLibrary.has_asset(asset_id))
+	UndoService.redo()
+	assert_eq(ProjectService.current_project.graphs.size(), 1)
+	assert_eq(canvas.get_item_count(), 1)
+
+
+func test_offline_example_is_one_undoable_reference_to_batch_workspace() -> void:
+	var main := await _make_main()
+	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var controller: Node = main.get_node("M21UiController")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+	assert_eq(canvas.get_item_count(), 5)
+	var graph: Dictionary = ProjectService.current_project.graphs.values()[0]
+	assert_eq(_node_type(graph, "reference"), "image_input")
+	assert_true(_has_edge(graph, "reference", "image", "generate", "image"))
+	var reference_id := String(_node_data(graph, "reference")["params"]["asset_id"])
+	assert_true(AssetLibrary.has_asset(reference_id))
+
+	assert_true(UndoService.undo())
+	assert_eq(canvas.get_item_count(), 0)
+	assert_true(ProjectService.current_project.graphs.is_empty())
+	assert_true(AssetLibrary.has_asset(reference_id))
+	assert_true(UndoService.redo())
+	assert_eq(canvas.get_item_count(), 5)
+	assert_eq(ProjectService.current_project.graphs.size(), 1)
+
+
 func test_context_inspector_reuses_cleanup_for_sprite_and_batch() -> void:
 	var main := await _make_main()
 	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
@@ -186,3 +235,27 @@ func _button_texts(parent: Control) -> Array:
 		if child is Button:
 			result.append(child.text)
 	return result
+
+
+func _node_data(graph: Dictionary, node_id: String) -> Dictionary:
+	for node_value in graph.get("nodes", []):
+		if node_value is Dictionary and String(node_value.get("id", "")) == node_id:
+			return node_value
+	return {}
+
+
+func _node_type(graph: Dictionary, node_id: String) -> String:
+	return String(_node_data(graph, node_id).get("type", ""))
+
+
+func _has_edge(
+	graph: Dictionary, from_node: String, from_port: String, to_node: String, to_port: String
+) -> bool:
+	for edge_value in graph.get("edges", []):
+		var edge: Dictionary = edge_value
+		if (
+			edge.get("from", []) == [from_node, from_port]
+			and edge.get("to", []) == [to_node, to_port]
+		):
+			return true
+	return false

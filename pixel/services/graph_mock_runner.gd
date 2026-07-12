@@ -5,6 +5,7 @@ extends RefCounted
 ## contract: 03-milestones/M3-开发规划.md G-2；只跑本地 mock 链并把 image_list 物化进 batch。
 
 const IdUtil := preload("res://core/util/id_util.gd")
+const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
 
 
 func run_to_batch(
@@ -17,13 +18,14 @@ func run_to_batch(
 	if not bool(setup_result["ok"]):
 		return setup_result
 
-	var order_result := _topological_order(graph)
+	var order_result := _topological_order(graph, batch_node_id)
 	if not bool(order_result["ok"]):
 		return order_result
 
 	var inputs_by_node := {}
 	var outputs_by_node := {}
 	var materialized_asset_ids := []
+	var context := GraphContextScript.new(asset_library)
 	for node_id in order_result["order"]:
 		var run_result := _run_node(
 			graph,
@@ -31,6 +33,7 @@ func run_to_batch(
 			inputs_by_node,
 			outputs_by_node,
 			asset_library,
+			context,
 			batch_node_id,
 			replace_batch_assets
 		)
@@ -77,6 +80,7 @@ func _run_node(
 	inputs_by_node: Dictionary,
 	outputs_by_node: Dictionary,
 	asset_library: Node,
+	context: PFGraphContext,
 	batch_node_id: String,
 	replace_batch_assets: bool
 ) -> Dictionary:
@@ -107,9 +111,9 @@ func _run_node(
 			asset_ids = materialized["asset_ids"]
 			outputs = {"images": _image_array(inputs.get("in", [])), "assets": asset_ids}
 	else:
-		outputs = node.execute(inputs, graph.get_node_params(node_id), {})
+		outputs = node.execute(inputs, graph.get_node_params(node_id), context)
 		if outputs.has("__error"):
-			return _error_from_node(outputs["__error"])
+			return _error_from_node(outputs["__error"], node_id)
 
 	outputs_by_node[node_id] = outputs
 	_propagate_outputs(graph, node_id, inputs_by_node, outputs_by_node)
@@ -171,6 +175,10 @@ func _propagate_outputs(
 		)
 		if from_port == "images" and outputs.has("metadata"):
 			target_inputs["__metadata"] = outputs["metadata"]
+		if from_port == "image":
+			for key in ["__reference_asset_id", "__reference_content_sha256"]:
+				if outputs.has(key):
+					target_inputs[key] = outputs[key]
 		inputs_by_node[to_node_id] = target_inputs
 
 
@@ -215,16 +223,19 @@ func _is_missing_input(value: Variant) -> bool:
 	return false
 
 
-func _topological_order(graph: PFGraph) -> Dictionary:
+func _topological_order(graph: PFGraph, target_node_id: String = "") -> Dictionary:
+	var included := _upstream_node_ids(graph, target_node_id)
 	var indegree := {}
 	var outgoing := {}
 	for node_id in graph.nodes.keys():
+		if not included.has(node_id):
+			continue
 		indegree[node_id] = 0
 		outgoing[node_id] = []
 	for edge in graph.edges:
 		var from_id := _edge_node(edge, "from")
 		var to_id := _edge_node(edge, "to")
-		if indegree.has(from_id) and indegree.has(to_id):
+		if included.has(from_id) and included.has(to_id):
 			indegree[to_id] = int(indegree[to_id]) + 1
 			outgoing[from_id].append(to_id)
 
@@ -244,9 +255,29 @@ func _topological_order(graph: PFGraph) -> Dictionary:
 				ready.append(target_id)
 		ready.sort()
 
-	if order.size() != graph.nodes.size():
+	if order.size() != included.size():
 		return _error("cycle", "Graph contains a cycle")
 	return {"ok": true, "order": order}
+
+
+func _upstream_node_ids(graph: PFGraph, target_node_id: String) -> Dictionary:
+	if target_node_id.is_empty() or not graph.nodes.has(target_node_id):
+		var all := {}
+		for node_id in graph.nodes.keys():
+			all[node_id] = true
+		return all
+	var included := {target_node_id: true}
+	var pending := [target_node_id]
+	while not pending.is_empty():
+		var current := String(pending.pop_back())
+		for edge in graph.edges:
+			if _edge_node(edge, "to") != current:
+				continue
+			var source := _edge_node(edge, "from")
+			if graph.nodes.has(source) and not included.has(source):
+				included[source] = true
+				pending.append(source)
+	return included
 
 
 func _asset_meta(graph_id: String, meta: Dictionary) -> Dictionary:
@@ -264,6 +295,8 @@ func _asset_meta(graph_id: String, meta: Dictionary) -> Dictionary:
 			"provider_meta": meta.get("provider_meta", {}),
 			"parent_asset": null,
 			"graph_id": graph_id,
+			"reference_asset_id": meta.get("reference_asset_id", null),
+			"reference_content_sha256": meta.get("reference_content_sha256", null),
 			"created_at": IdUtil.utc_now_iso(),
 		},
 	}
@@ -308,7 +341,9 @@ func _error(code: String, message: String) -> Dictionary:
 	return {"ok": false, "error": {"code": code, "message": message}}
 
 
-func _error_from_node(error: Dictionary) -> Dictionary:
-	return _error(
-		String(error.get("code", "node_error")), String(error.get("message", "Node failed"))
-	)
+func _error_from_node(error: Dictionary, node_id: String) -> Dictionary:
+	var detail := error.duplicate(true)
+	detail["code"] = String(detail.get("code", "node_error"))
+	detail["message"] = String(detail.get("message", "Node failed"))
+	detail["node_id"] = node_id
+	return {"ok": false, "error": detail}

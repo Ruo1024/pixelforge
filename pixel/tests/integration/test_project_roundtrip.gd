@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
 const FileIOScript := preload("res://infra/file_io.gd")
 const AppInfo := preload("res://core/util/app_info.gd")
 const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
+const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 
 
 func before_all() -> void:
@@ -355,6 +356,59 @@ func test_custom_palette_survives_project_roundtrip() -> void:
 	assert_not_null(resolved)
 	assert_eq(resolved.name, "Harvest")
 	assert_eq(resolved.colors[1].to_html(false), "e0c060")
+
+
+func test_broken_sprite_asset_opens_and_resaves_without_losing_bytes_or_item() -> void:
+	var project_service := get_tree().root.get_node("ProjectService")
+	var source_path := "user://tests/broken_asset_source.pxproj"
+	var saved_path := "user://tests/broken_asset_saved.pxproj"
+	var asset_id := "broken-reference"
+	var broken_bytes := PackedByteArray([1, 2, 3, 4, 5])
+	var manifest := {
+		"format_version": AppInfo.PROJECT_FORMAT_VERSION,
+		"app_version": AppInfo.APP_VERSION,
+		"id": "broken-project",
+		"name": "Broken Asset",
+		"entries":
+		{"canvases": ["canvas"], "graphs": [], "boards": [], "animations": [], "asset_count": 1},
+	}
+	var canvas_data := {
+		"camera": {"center": [0, 0], "zoom": 1.0},
+		"items": [_make_item("broken-sprite", asset_id, Vector2.ZERO, 0)],
+	}
+	var meta := {"id": asset_id, "name": "broken", "origin": "imported", "provenance": {}}
+	assert_eq(
+		(
+			FileIOScript
+			. zip_pack(
+				{
+					"manifest.json": manifest,
+					"canvas/canvas.json": canvas_data,
+					"assets/%s.meta.json" % asset_id: meta,
+					"assets/%s.png" % asset_id: broken_bytes,
+				},
+				source_path
+			)
+		),
+		OK
+	)
+	assert_eq(project_service.open_project(source_path), OK)
+	assert_eq(project_service.get_validation_warnings()[0]["code"], "asset_decode_failed")
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(512, 512)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+	canvas.load_canvas_data(project_service.current_project.canvas)
+	assert_eq(canvas.get_item_count(), 0)
+	assert_eq(canvas.export_canvas_data()["items"][0]["asset_id"], asset_id)
+	project_service.set_canvas_data(canvas.export_canvas_data(), true)
+	assert_eq(project_service.save_project(saved_path), OK)
+	var unpacked: Dictionary = FileIOScript.zip_unpack(saved_path)
+	assert_eq(unpacked["files"]["assets/%s.png" % asset_id], broken_bytes)
+	var saved_canvas: Dictionary = FileIOScript.bytes_to_json(
+		unpacked["files"]["canvas/canvas.json"]
+	)
+	assert_eq(saved_canvas["items"][0]["asset_id"], asset_id)
 
 
 func _make_item(item_id: String, asset_id: String, position: Vector2, z_index: int) -> Dictionary:
