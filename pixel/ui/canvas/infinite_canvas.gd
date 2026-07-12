@@ -351,6 +351,18 @@ func _set_graph_node_type_status(
 			item.set_execution_status(status, detail)
 
 
+func _set_graph_node_status(
+	graph_id: String, node_id: String, status: String, detail: String = ""
+) -> void:
+	for item in _items_by_id.values():
+		if (
+			item.get_script() == CanvasNodeCardScript
+			and item.graph_id == graph_id
+			and item.node_id == node_id
+		):
+			item.set_execution_status(status, detail)
+
+
 func delete_selected(record_undo: bool = true) -> void:
 	if _selection.is_empty():
 		return

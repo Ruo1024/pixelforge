@@ -301,8 +301,8 @@ func generate_openai_batch() -> void:
 	_openai_flow.generate_batch()
 
 
-func cancel_graph_run(graph_id: String) -> bool:
-	return _openai_flow.cancel_graph(graph_id)
+func cancel_graph_run(graph_id: String, generate_node_id: String = "") -> bool:
+	return _openai_flow.cancel_graph(graph_id, generate_node_id)
 
 
 func _import_reference_for_node(graph_id: String, node_id: String) -> void:
@@ -314,9 +314,9 @@ func _import_reference_for_node(graph_id: String, node_id: String) -> void:
 func handle_graph_node_action(graph_id: String, node_id: String, action_id: String) -> void:
 	match action_id:
 		"run":
-			run_selected_mock_graph()
+			_run_graph_node(graph_id, node_id)
 		"cancel":
-			cancel_graph_run(graph_id)
+			cancel_graph_run(graph_id, node_id)
 		"import_reference":
 			_import_reference_for_node(graph_id, node_id)
 
@@ -340,22 +340,39 @@ func run_selected_mock_graph() -> void:
 	if not ghost_error.is_empty():
 		_status_label.text = _graph_run_failure_status(ghost_error)
 		return
-	var batch_node_id := _first_batch_node_id(graph)
+	_run_bound_graph(graph, String(binding.get("node_id", "")))
+
+
+func _run_graph_node(graph_id: String, node_id: String) -> void:
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	if graph_data.is_empty():
+		_status_label.text = _graph_run_failure_status(
+			{"message": Strings.text("STATUS_GRAPH_RUN_MISSING_GRAPH")}
+		)
+		return
+	_run_bound_graph(GraphScript.from_json(graph_data), node_id)
+
+
+func _run_bound_graph(graph: PFGraph, selected_node_id: String) -> void:
+	var generate_node_id := _target_generate_node_id(graph, selected_node_id)
+	var batch_node_id := _target_batch_node_id(graph, generate_node_id, selected_node_id)
 	if batch_node_id.is_empty():
 		_status_label.text = _graph_run_failure_status(
 			{"message": Strings.text("STATUS_GRAPH_RUN_NO_BATCH")}
 		)
 		return
 	var batch_card_id := _graph_batch_card_id(graph.id, batch_node_id)
-	if _route_provider_graph_run(graph, batch_node_id, batch_card_id):
+	if _route_provider_graph_run(graph, generate_node_id, batch_node_id, batch_card_id):
 		return
-	_run_mock_graph(graph, batch_node_id, batch_card_id)
+	_run_mock_graph(graph, generate_node_id, batch_node_id, batch_card_id)
 
 
-func _run_mock_graph(graph: PFGraph, batch_node_id: String, batch_card_id: String) -> void:
-	_canvas._set_graph_node_type_status(
+func _run_mock_graph(
+	graph: PFGraph, generate_node_id: String, batch_node_id: String, batch_card_id: String
+) -> void:
+	_canvas._set_graph_node_status(
 		graph.id,
-		"ai_generate",
+		generate_node_id,
 		"CONTENT_STATUS_RUNNING",
 		Strings.text("CONTENT_DETAIL_MOCK_RUNNING")
 	)
@@ -373,7 +390,14 @@ func _run_mock_graph(graph: PFGraph, batch_node_id: String, batch_card_id: Strin
 			)
 			else "ai_generate"
 		)
-		_canvas._set_graph_node_type_status(graph.id, error_type, "CONTENT_STATUS_FAILED", message)
+		if error_type == "ai_generate":
+			_canvas._set_graph_node_status(
+				graph.id, generate_node_id, "CONTENT_STATUS_FAILED", message
+			)
+		else:
+			_canvas._set_graph_node_type_status(
+				graph.id, error_type, "CONTENT_STATUS_FAILED", message
+			)
 		_status_label.text = _graph_run_failure_status({"message": message})
 		return
 
@@ -381,15 +405,13 @@ func _run_mock_graph(graph: PFGraph, batch_node_id: String, batch_card_id: Strin
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if batch_card_id.is_empty():
 		var message := Strings.text("STATUS_GRAPH_RUN_MISSING_BATCH_CARD")
-		_canvas._set_graph_node_type_status(
-			graph.id, "ai_generate", "CONTENT_STATUS_FAILED", message
-		)
+		_canvas._set_graph_node_status(graph.id, generate_node_id, "CONTENT_STATUS_FAILED", message)
 		_status_label.text = _graph_run_failure_status({"message": message})
 		return
 	_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, true)
-	_canvas._set_graph_node_type_status(
+	_canvas._set_graph_node_status(
 		graph.id,
-		"ai_generate",
+		generate_node_id,
 		"CONTENT_STATUS_COMPLETE",
 		Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % asset_ids.size()
 	)
@@ -1085,20 +1107,17 @@ func _graph_node_add_position(binding: Dictionary) -> Vector2:
 	return _canvas.screen_to_world(_canvas.size * 0.5)
 
 
-func _graph_provider_id(graph: PFGraph) -> String:
-	for node_id in graph.nodes.keys():
-		var node: PFNode = graph.get_node(String(node_id))
-		if node != null and node.get_type() == "ai_generate":
-			return String(graph.get_node_params(String(node_id)).get("provider_id", "mock"))
-		if node != null and node.get_type() == "comfyui.run_workflow":
-			return "comfyui"
-	return "mock"
+func _graph_provider_id(graph: PFGraph, generate_node_id: String) -> String:
+	var node: PFNode = graph.get_node(generate_node_id)
+	if node != null and node.get_type() == "comfyui.run_workflow":
+		return "comfyui"
+	return String(graph.get_node_params(generate_node_id).get("provider_id", "mock"))
 
 
 func _route_provider_graph_run(
-	graph: PFGraph, batch_node_id: String, batch_card_id: String
+	graph: PFGraph, generate_node_id: String, batch_node_id: String, batch_card_id: String
 ) -> bool:
-	var provider_id := _graph_provider_id(graph)
+	var provider_id := _graph_provider_id(graph, generate_node_id)
 	if provider_id == "mock":
 		return false
 	if batch_card_id.is_empty():
@@ -1119,8 +1138,49 @@ func _route_provider_graph_run(
 		)
 		_provider_settings_dialog.show_settings()
 		return true
-	_openai_flow.run_graph(graph, batch_node_id, batch_card_id)
+	_openai_flow.run_graph(graph, batch_node_id, batch_card_id, generate_node_id)
 	return true
+
+
+func _target_generate_node_id(graph: PFGraph, selected_node_id: String) -> String:
+	var selected: PFNode = graph.get_node(selected_node_id)
+	if selected != null and selected.get_type() == "ai_generate":
+		return selected_node_id
+	if selected != null and selected.get_type() == "batch":
+		for edge in graph.edges:
+			var from_data: Array = edge.get("from", ["", ""])
+			var to_data: Array = edge.get("to", ["", ""])
+			var source: PFNode = graph.get_node(String(from_data[0]))
+			if (
+				String(to_data[0]) == selected_node_id
+				and source != null
+				and source.get_type() == "ai_generate"
+			):
+				return String(from_data[0])
+	for node_id in graph.nodes.keys():
+		var node: PFNode = graph.get_node(String(node_id))
+		if node != null and node.get_type() == "ai_generate":
+			return String(node_id)
+	return ""
+
+
+func _target_batch_node_id(
+	graph: PFGraph, generate_node_id: String, selected_node_id: String
+) -> String:
+	var selected: PFNode = graph.get_node(selected_node_id)
+	if selected != null and selected.get_type() == "batch":
+		return selected_node_id
+	for edge in graph.edges:
+		var from_data: Array = edge.get("from", ["", ""])
+		var to_data: Array = edge.get("to", ["", ""])
+		var target: PFNode = graph.get_node(String(to_data[0]))
+		if (
+			String(from_data[0]) == generate_node_id
+			and target != null
+			and target.get_type() == "batch"
+		):
+			return String(to_data[0])
+	return ""
 
 
 func _project_style_preset() -> Dictionary:

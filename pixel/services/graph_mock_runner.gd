@@ -297,6 +297,9 @@ func _asset_meta(graph_id: String, meta: Dictionary) -> Dictionary:
 			"graph_id": graph_id,
 			"reference_asset_id": meta.get("reference_asset_id", null),
 			"reference_content_sha256": meta.get("reference_content_sha256", null),
+			"reference_asset_ids": meta.get("reference_asset_ids", []),
+			"reference_content_sha256s": meta.get("reference_content_sha256s", []),
+			"generation_snapshot": meta.get("generation_snapshot", {}),
 			"created_at": IdUtil.utc_now_iso(),
 		},
 	}
