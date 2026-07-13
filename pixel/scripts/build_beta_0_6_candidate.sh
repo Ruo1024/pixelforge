@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/_godot_path.sh
 
-readonly VERSION="0.6.0-beta.1"
+readonly VERSION="0.6.0-beta.2"
 readonly PRESET="macOS"
 readonly OUTPUT="$(pwd)/build/PixelForge-${VERSION}-macOS.zip"
 readonly CHECKSUM="${OUTPUT}.sha256"
@@ -43,7 +43,7 @@ mkdir -p "${export_template_dir}"
 ln -s "${template_root}/macos.zip" "${export_template_dir}/macos.zip"
 
 mkdir -p build
-rm -f build/PixelForge-0.6.0-beta.1-macOS.zip build/PixelForge-0.6.0-beta.1-macOS.zip.sha256
+rm -f build/PixelForge-0.6.0-beta.2-macOS.zip build/PixelForge-0.6.0-beta.2-macOS.zip.sha256
 (
   cd "${work_dir}"
   GODOT_HOME="${export_home}" prepare_godot_env

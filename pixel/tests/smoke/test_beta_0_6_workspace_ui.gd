@@ -71,7 +71,6 @@ func test_inspector_docks_wide_overlays_narrow_and_preserves_camera() -> void:
 
 func test_fixed_eighteen_case_workspace_geometry_matrix() -> void:
 	SettingsService.set_setting("onboarding", "v1_complete", true, false)
-	SettingsService.set_setting("ui", "live_rescale", false, false)
 	var case_count := 0
 	for locale in MATRIX_LOCALES:
 		for window_size in MATRIX_WINDOWS:
@@ -110,13 +109,23 @@ func _assert_workspace_case(
 	assert_almost_eq(main._interface_scale, interface_scale, 0.001, case_label)
 	assert_almost_eq(get_tree().root.content_scale_factor, interface_scale, 0.001, case_label)
 	assert_eq(top_bar.size.y, 52.0, case_label)
+	var compact := window_size.x <= 1180.0
+	assert_eq(String(top_bar.get_meta("layout_mode", "")), "compact" if compact else "standard")
 	assert_eq(left_rail.size.x, 48.0, case_label)
 	assert_false(inspector.visible, case_label)
 	_assert_children_inside(top_bar, case_label)
 	_assert_children_inside(left_rail, case_label)
 	_assert_no_direct_child_overlap(top_bar, case_label)
 	for action_id in [
-		"file", "add_input", "import_reference", "run_selection", "export", "inspector", "more"
+		"file",
+		"undo",
+		"redo",
+		"add_input",
+		"import_reference",
+		"run_selection",
+		"export",
+		"inspector",
+		"more",
 	]:
 		assert_eq(_action_count(main, action_id), 1, "%s %s" % [case_label, action_id])
 		var action := _action_control(main, action_id)
@@ -124,7 +133,13 @@ func _assert_workspace_case(
 		assert_true(action.visible, "%s %s" % [case_label, action_id])
 		_assert_global_rect_inside(action, main, "%s %s" % [case_label, action_id])
 	assert_eq(title.text_overrun_behavior, TextServer.OVERRUN_TRIM_ELLIPSIS, case_label)
-	assert_lte(title.size.x, 280.5, case_label)
+	assert_almost_eq(title.custom_minimum_size.x, 120.0 if compact else 280.0, 0.5, case_label)
+	for adaptive_action in ["undo", "redo", "inspector"]:
+		var adaptive_button := _action_control(main, adaptive_action) as Button
+		assert_eq(
+			adaptive_button.text.is_empty(), compact, "%s %s label" % [case_label, adaptive_action]
+		)
+		assert_false(adaptive_button.tooltip_text.is_empty(), case_label)
 	assert_false(title.tooltip_text.is_empty(), case_label)
 	_assert_text_height(title, case_label)
 	_assert_text_height(status, case_label)

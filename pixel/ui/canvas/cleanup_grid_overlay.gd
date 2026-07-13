@@ -36,7 +36,7 @@ func configure(bounds: Rect2, scale: float, offset: Vector2, active: bool) -> vo
 	grid_scale = maxf(1.0, scale)
 	grid_offset = _normalized_offset(offset)
 	overlay_active = active and world_bounds.size.x > 0.0 and world_bounds.size.y > 0.0
-	mouse_filter = Control.MOUSE_FILTER_STOP if overlay_active else Control.MOUSE_FILTER_IGNORE
+	mouse_filter = Control.MOUSE_FILTER_PASS if overlay_active else Control.MOUSE_FILTER_IGNORE
 	visible = overlay_active
 	queue_redraw()
 
@@ -69,7 +69,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		_drag_start_world = canvas.screen_to_world(event.position)
 		_drag_start_offset = grid_offset
 		accept_event()
-	elif not event.pressed:
+	elif not event.pressed and _dragging:
 		_dragging = false
 		accept_event()
 

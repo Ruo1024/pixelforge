@@ -2,12 +2,10 @@ class_name PFWindowScalePolicy
 extends RefCounted
 
 ## 窗口尺寸缩放策略。
-## 输入：逻辑尺寸、界面缩放、屏幕像素倍率；输出：Godot Window 的像素尺寸。
+## DisplayServer 与 Window 的几何量使用同一套平台单位；这里仅应用界面倍率，禁止再猜测
+## Cocoa point/physical pixel 并做二次换算。
 
 const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
-
-const MAC_SCREEN_POINT_MAX_WIDTH := 2200
-const MAC_SCREEN_POINT_MAX_HEIGHT := 1400
 
 
 static func apply_minimum_size(
@@ -32,22 +30,11 @@ static func apply_startup_defaults(
 	var target_size := logical_size_to_window_pixels(default_logical_size, geometry_scale)
 	var usable_rect := DisplayServer.screen_get_usable_rect(window.current_screen)
 	if usable_rect.size.x > 0 and usable_rect.size.y > 0:
-		var margin := logical_size_to_window_pixels(Vector2i(screen_margin, 0), geometry_scale).x
-		var usable_size_for_window := usable_size_to_window_pixels(
-			usable_rect.size, window_pixel_scale, os_name
+		target_size = fit_size_to_usable_rect(
+			target_size, window.min_size, usable_rect.size, screen_margin
 		)
-		var minimum_fit := logical_size_to_window_pixels(Vector2i(960, 640), interface_scale)
-		var max_width := maxi(minimum_fit.x, usable_size_for_window.x - margin)
-		var max_height := maxi(minimum_fit.y, usable_size_for_window.y - margin)
-		target_size.x = mini(target_size.x, max_width)
-		target_size.y = mini(target_size.y, max_height)
-		target_size.x = maxi(target_size.x, mini(window.min_size.x, max_width))
-		target_size.y = maxi(target_size.y, mini(window.min_size.y, max_height))
 		window.size = target_size
-		var position_size := window_pixels_to_screen_units(
-			target_size, window_pixel_scale, os_name, usable_rect.size
-		)
-		window.position = usable_rect.position + (usable_rect.size - position_size) / 2
+		window.position = usable_rect.position + (usable_rect.size - target_size) / 2
 	else:
 		window.size = target_size
 	return {
@@ -70,47 +57,33 @@ static func logical_size_to_window_pixels(size: Vector2i, interface_scale: float
 	)
 
 
-static func effective_window_geometry_scale(
-	interface_scale: float, window_pixel_scale: float
-) -> float:
-	return maxf(
-		maxf(interface_scale, InterfaceScalePolicy.MIN_INTERFACE_SCALE),
-		maxf(window_pixel_scale, InterfaceScalePolicy.MIN_INTERFACE_SCALE)
+static func fit_size_to_usable_rect(
+	target_size: Vector2i, minimum_size: Vector2i, usable_size: Vector2i, screen_margin: int
+) -> Vector2i:
+	var margin := maxi(screen_margin, 0)
+	var available := Vector2i(maxi(1, usable_size.x - margin), maxi(1, usable_size.y - margin))
+	return Vector2i(
+		clampi(target_size.x, mini(minimum_size.x, available.x), available.x),
+		clampi(target_size.y, mini(minimum_size.y, available.y), available.y)
 	)
 
 
+static func effective_window_geometry_scale(
+	interface_scale: float, _window_pixel_scale: float
+) -> float:
+	return maxf(interface_scale, InterfaceScalePolicy.MIN_INTERFACE_SCALE)
+
+
 static func usable_size_to_window_pixels(
-	size: Vector2i, window_pixel_scale: float, os_name: String
+	size: Vector2i, _window_pixel_scale: float, _os_name: String
 ) -> Vector2i:
-	if should_convert_macos_screen_units(size, window_pixel_scale, os_name):
-		return Vector2i(
-			maxi(1, int(round(float(size.x) * window_pixel_scale))),
-			maxi(1, int(round(float(size.y) * window_pixel_scale)))
-		)
 	return size
 
 
 static func window_pixels_to_screen_units(
 	size: Vector2i,
-	window_pixel_scale: float,
-	os_name: String,
-	usable_screen_units: Vector2i = Vector2i.ZERO
+	_window_pixel_scale: float,
+	_os_name: String,
+	_usable_screen_units: Vector2i = Vector2i.ZERO
 ) -> Vector2i:
-	if should_convert_macos_screen_units(usable_screen_units, window_pixel_scale, os_name):
-		return Vector2i(
-			maxi(1, int(round(float(size.x) / window_pixel_scale))),
-			maxi(1, int(round(float(size.y) / window_pixel_scale)))
-		)
 	return size
-
-
-static func should_convert_macos_screen_units(
-	usable_size: Vector2i, window_pixel_scale: float, os_name: String
-) -> bool:
-	if os_name != "macOS" or window_pixel_scale <= 1.0:
-		return false
-	if usable_size == Vector2i.ZERO:
-		return false
-	return (
-		usable_size.x <= MAC_SCREEN_POINT_MAX_WIDTH and usable_size.y <= MAC_SCREEN_POINT_MAX_HEIGHT
-	)

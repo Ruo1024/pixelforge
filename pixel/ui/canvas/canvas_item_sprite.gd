@@ -196,6 +196,7 @@ func _rebuild_header_controls() -> void:
 		_title_button.name = "TitleButton"
 		_title_button.flat = true
 		_title_button.focus_mode = Control.FOCUS_NONE
+		_title_button.mouse_filter = Control.MOUSE_FILTER_PASS
 		_title_button.gui_input.connect(_on_title_button_input)
 		add_child(_title_button)
 	_title_button.position = Vector2(8, 2)
@@ -226,6 +227,7 @@ func begin_title_edit() -> void:
 func _on_title_button_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.double_click:
 		begin_title_edit()
+		_title_button.accept_event()
 
 
 func _on_title_edit_input(event: InputEvent) -> void:

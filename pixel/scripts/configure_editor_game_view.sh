@@ -66,19 +66,19 @@ configure_editor_settings() {
       wrote_game_embed_mode = 0
     }
     /^run\/window_placement\/game_embed_mode = / {
-      print "run/window_placement/game_embed_mode = 2"
+      print "run/window_placement/game_embed_mode = -1"
       wrote_game_embed_mode = 1
       next
     }
     { print }
     END {
       if (!wrote_game_embed_mode) {
-        print "run/window_placement/game_embed_mode = 2"
+        print "run/window_placement/game_embed_mode = -1"
       }
     }
   ' "${settings}" >"${tmp_settings}"
   mv "${tmp_settings}" "${settings}"
-  echo "configure_editor_game_view: disabled Godot Game embedding in ${settings}"
+  echo "configure_editor_game_view: selected an independent game window in ${settings}"
 }
 
 configure_editor_settings "${HOME}/Library/Application Support/Godot/editor_settings-4.6.tres"
@@ -87,7 +87,7 @@ if [[ -n "${APPDATA:-}" ]]; then
   configure_editor_settings "${APPDATA}/Godot/editor_settings-4.6.tres"
 fi
 
-echo "configure_editor_game_view: set embedded game view to Stretch to Fit"
+echo "configure_editor_game_view: kept Stretch to Fit as the per-project embedded fallback"
 
 if pgrep -f "[G]odot" >/dev/null 2>&1; then
   echo "configure_editor_game_view: restart the Godot editor so these settings are loaded" >&2

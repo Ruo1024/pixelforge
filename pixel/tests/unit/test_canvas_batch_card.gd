@@ -233,6 +233,7 @@ func test_canvas_batch_card_switches_semantic_lod_profiles() -> void:
 	var title: Control = card.get_node("TitleButton")
 	var collapse: Control = card.get_node("CollapseButton")
 	var more: Control = card.get_node("MoreButton")
+	assert_eq(title.mouse_filter, Control.MOUSE_FILTER_PASS)
 	assert_true(title.visible)
 	assert_true(collapse.visible)
 	assert_true(more.visible)

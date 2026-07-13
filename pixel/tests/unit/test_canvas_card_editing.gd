@@ -51,8 +51,91 @@ func test_graph_ports_follow_edit_lod_and_keep_a_forty_pixel_hit_target() -> voi
 	var title: Control = card.get_node("TitleButton")
 	var collapse: Control = card.get_node("CollapseButton")
 	var more: Control = card.get_node("MoreButton")
+	assert_eq(title.mouse_filter, Control.MOUSE_FILTER_PASS)
 	assert_gte(collapse.position.x - title.get_rect().end.x, 8.0)
 	assert_gte(more.position.x - collapse.get_rect().end.x, 8.0)
+
+
+func test_object_list_commit_keeps_replaced_content_in_tree_until_signal_finishes() -> void:
+	var card := _card("object_list", {}, {"rows": [{"text": "crate", "count": 1, "enabled": true}]})
+	var old_content: Control = card.get_node("Content")
+	var old_line: LineEdit = card.get_content_control("ObjectText0")
+	card.params_commit_requested.connect(
+		func(graph_id: String, node_id: String, params: Dictionary) -> void:
+			var graph: Dictionary = ProjectService.get_graph_data(graph_id)
+			for node_data in graph.get("nodes", []):
+				if String(node_data.get("id", "")) != node_id:
+					continue
+				var merged: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
+				merged.merge(params, true)
+				node_data["params"] = merged
+				break
+			ProjectService.set_graph_data(graph_id, graph, true)
+			card.refresh_from_graph()
+	)
+
+	old_line.text = "mossy crate"
+	old_line.focus_exited.emit()
+
+	var replacement: LineEdit = card.get_content_control("ObjectText0")
+	var replacement_content: Control = card.get_node("Content")
+	assert_true(is_instance_valid(old_content))
+	assert_true(old_content.is_queued_for_deletion())
+	assert_eq(old_content.get_parent(), card)
+	assert_true(replacement_content.is_ancestor_of(replacement))
+	assert_ne(replacement, old_line)
+	assert_eq(replacement.text, "mossy crate")
+	await wait_process_frames(1)
+	assert_false(is_instance_valid(old_content))
+	assert_false(is_instance_valid(old_line))
+
+
+func test_all_title_buttons_pass_single_clicks_and_own_double_clicks() -> void:
+	ProjectService.set_graph_data("graph_main", _graph_data("text_prompt"), false)
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(800, 600)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+	var quick_add_requests := []
+	var asset_edit_requests := []
+	canvas.graph_quick_add_requested.connect(
+		func(position: Vector2i) -> void: quick_add_requests.append(position)
+	)
+	canvas.asset_edit_requested.connect(
+		func(asset_id: String, version_id: String) -> void:
+			asset_edit_requests.append([asset_id, version_id])
+	)
+	var item_position := Vector2(-300, -220)
+
+	var graph_card: Node = canvas._add_graph_node_card(
+		"graph_main", "node", item_position, "graph_card", false
+	)
+	await _assert_title_input_contract(canvas, graph_card, quick_add_requests, asset_edit_requests)
+	canvas._remove_item_direct(graph_card.item_id)
+
+	var batch_card: Node = canvas._add_batch_card([], item_position, "Batch", "batch_card", false)
+	await _assert_title_input_contract(canvas, batch_card, quick_add_requests, asset_edit_requests)
+	canvas._remove_item_direct(batch_card.item_id)
+
+	var image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	image.fill(Color.WHITE)
+	var sprite_card: Node = canvas.add_sprite_item(image, "", item_position, "sprite_card", false)
+	await _assert_title_input_contract(canvas, sprite_card, quick_add_requests, asset_edit_requests)
+	canvas._remove_item_direct(sprite_card.item_id)
+
+	var frame: Node = (
+		canvas
+		. _add_frame_direct(
+			{
+				"id": "frame",
+				"type": "frame",
+				"title": "Stage",
+				"position": [item_position.x, item_position.y],
+				"size": [640, 480],
+			}
+		)
+	)
+	await _assert_title_input_contract(canvas, frame, quick_add_requests, asset_edit_requests)
 
 
 func test_display_title_and_requested_size_are_canvas_only_fields() -> void:
@@ -176,13 +259,14 @@ func test_frame_title_and_size_use_one_undo_and_frozen_bounds() -> void:
 	LocalizationService.set_language("en")
 	assert_false(frame.to_canvas_data().has("locked"))
 	var bounds: Rect2 = frame.get_canvas_bounds()
+	assert_eq(frame.get_node("TitleButton").mouse_filter, Control.MOUSE_FILTER_PASS)
 	for zoom in [0.1, 0.25, 0.5, 1.0, 4.0]:
 		frame.set_lod_camera_zoom(zoom)
 		assert_eq(frame.get_canvas_bounds(), bounds)
 
 
-func _card(node_type: String, fields: Dictionary) -> Node:
-	var graph := _graph_data(node_type)
+func _card(node_type: String, fields: Dictionary, params: Dictionary = {}) -> Node:
+	var graph := _graph_data(node_type, params)
 	ProjectService.set_graph_data("graph_main", graph, false)
 	var data := {
 		"id": "item",
@@ -198,11 +282,55 @@ func _card(node_type: String, fields: Dictionary) -> Node:
 	return card
 
 
-func _graph_data(node_type: String) -> Dictionary:
+func _graph_data(node_type: String, params: Dictionary = {}) -> Dictionary:
 	return {
 		"graph_version": 1,
 		"id": "graph_main",
 		"name": "Cards",
-		"nodes": [{"id": "node", "type": node_type, "position": [0, 0], "params": {}}],
+		"nodes":
+		[{"id": "node", "type": node_type, "position": [0, 0], "params": params.duplicate(true)}],
 		"edges": [],
 	}
+
+
+func _assert_title_input_contract(
+	canvas: Control, item: Node, quick_add_requests: Array, asset_edit_requests: Array
+) -> void:
+	await wait_process_frames(1)
+	var title: Button = item.get_node("TitleButton")
+	assert_eq(title.mouse_filter, Control.MOUSE_FILTER_PASS)
+	var local_position: Vector2 = canvas.world_to_screen(
+		item.position + title.position + title.size * 0.5
+	)
+	canvas._clear_selection()
+	_send_viewport_mouse_button(canvas, local_position, true)
+	await wait_process_frames(1)
+	assert_eq(canvas.get_selected_ids(), [item.item_id])
+	assert_true(canvas._selection.is_dragging_items)
+	_send_viewport_mouse_button(canvas, local_position, false)
+	await wait_process_frames(1)
+	assert_false(canvas._selection.is_dragging_items)
+
+	canvas._clear_selection()
+	quick_add_requests.clear()
+	asset_edit_requests.clear()
+	_send_viewport_mouse_button(canvas, local_position, true, true)
+	await wait_process_frames(1)
+	assert_true(item.get_node("TitleEdit").visible)
+	assert_true(quick_add_requests.is_empty())
+	assert_true(asset_edit_requests.is_empty())
+	_send_viewport_mouse_button(canvas, local_position, false)
+
+
+func _send_viewport_mouse_button(
+	canvas: Control, local_position: Vector2, pressed: bool, double_click: bool = false
+) -> void:
+	var viewport_position := canvas.get_global_rect().position + local_position
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.pressed = pressed
+	event.double_click = double_click
+	event.position = viewport_position
+	event.global_position = viewport_position
+	Input.parse_input_event(event)
+	Input.flush_buffered_events()

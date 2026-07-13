@@ -446,8 +446,9 @@ func test_dragging_imported_sprite_still_works_before_tool_activation() -> void:
 	canvas.tool_manager = tool_manager
 
 	var image := _make_checker_image(8)
-	canvas.add_sprite_item(image, "", Vector2.ZERO, "drag_source", false)
+	var sprite: Node = canvas.add_sprite_item(image, "", Vector2.ZERO, "drag_source", false)
 	assert_eq(canvas.get_selected_ids(), ["drag_source"])
+	assert_eq(sprite.get_node("TitleButton").mouse_filter, Control.MOUSE_FILTER_PASS)
 
 	canvas._gui_input(_mouse_button(MOUSE_BUTTON_LEFT, true, Vector2(130, 130)))
 	canvas._gui_input(_mouse_motion(Vector2(150, 150), Vector2(20, 20)))
@@ -499,14 +500,18 @@ func test_cleanup_preview_sprite_can_be_shown_and_cleared() -> void:
 
 func test_cleanup_grid_overlay_emits_dragged_offset() -> void:
 	var canvas: Control = CanvasScript.new()
-	canvas.size = Vector2(256, 256)
+	canvas.size = Vector2(800, 600)
 	add_child_autofree(canvas)
 	await wait_process_frames(2)
-	canvas._set_viewport_scale_factor_for_test(1.5)
 
 	var emitted := []
 	var image := _make_checker_image(16)
-	canvas.add_sprite_item(image, "", Vector2.ZERO, "grid_source", false)
+	var grid_source: Node = canvas.add_sprite_item(
+		image, "", Vector2(-360, -260), "grid_source", false
+	)
+	var drag_source: Node = canvas.add_sprite_item(
+		image, "", Vector2(40, -260), "drag_source", false
+	)
 	canvas.select_ids(["grid_source"])
 	canvas.cleanup_grid_changed.connect(
 		func(scale: float, offset: Vector2) -> void:
@@ -515,13 +520,41 @@ func test_cleanup_grid_overlay_emits_dragged_offset() -> void:
 	)
 	canvas.show_cleanup_grid_overlay(4.0, Vector2.ZERO)
 	var overlay: Control = canvas.get_node("CleanupGridOverlay")
-	var overlay_rect: Rect2 = overlay._world_rect_to_screen(Rect2(Vector2.ZERO, Vector2(16, 16)))
-	overlay.grid_changed.emit(4.0, Vector2(1.5, 2.0))
+	assert_eq(overlay.mouse_filter, Control.MOUSE_FILTER_PASS)
+	var overlay_rect: Rect2 = overlay._world_rect_to_screen(grid_source.get_canvas_bounds())
+	var grid_start: Vector2 = canvas.world_to_screen(grid_source.position + Vector2(100, 100))
+	_send_viewport_mouse_button(canvas, grid_start, true)
+	_send_viewport_mouse_motion(canvas, grid_start + Vector2(10, 6), Vector2(10, 6))
+	_send_viewport_mouse_button(canvas, grid_start + Vector2(10, 6), false)
+	await wait_process_frames(1)
 
-	assert_almost_eq(overlay_rect.size.x, 16.0 * canvas._get_art_logical_scale(), 0.001)
-	assert_almost_eq(overlay_rect.size.y, 16.0 * canvas._get_art_logical_scale(), 0.001)
+	assert_almost_eq(
+		overlay_rect.size.x,
+		grid_source.get_canvas_bounds().size.x * canvas._get_art_logical_scale(),
+		0.001
+	)
+	assert_almost_eq(
+		overlay_rect.size.y,
+		grid_source.get_canvas_bounds().size.y * canvas._get_art_logical_scale(),
+		0.001
+	)
 	assert_eq(emitted[0], 4.0)
-	assert_eq(emitted[1], Vector2(1.5, 2.0))
+	assert_eq(emitted[1], Vector2(2.0, 2.0))
+	assert_false(overlay._dragging)
+
+	var drag_before: Vector2 = drag_source.position
+	var drag_start: Vector2 = canvas.world_to_screen(drag_source.position + Vector2(100, 100))
+	_send_viewport_mouse_button(canvas, drag_start, true)
+	assert_eq(canvas.get_selected_ids(), ["drag_source"])
+	assert_true(canvas._selection.is_dragging_items)
+	_send_viewport_mouse_motion(canvas, drag_start + Vector2(16, 8), Vector2(16, 8))
+	_send_viewport_mouse_button(canvas, drag_start + Vector2(16, 8), false)
+	await wait_process_frames(1)
+	assert_eq(drag_source.position, drag_before + Vector2(16, 8))
+	assert_false(canvas._selection.is_dragging_items)
+
+	canvas.hide_cleanup_grid_overlay()
+	assert_eq(overlay.mouse_filter, Control.MOUSE_FILTER_IGNORE)
 
 
 func _make_checker_image(size: int) -> Image:
@@ -552,3 +585,21 @@ func _mouse_motion(position: Vector2, relative: Vector2) -> InputEventMouseMotio
 	event.relative = relative
 	event.button_mask = MOUSE_BUTTON_MASK_LEFT
 	return event
+
+
+func _send_viewport_mouse_button(canvas: Control, local_position: Vector2, pressed: bool) -> void:
+	var viewport_position := canvas.get_global_rect().position + local_position
+	var event := _mouse_button(MOUSE_BUTTON_LEFT, pressed, viewport_position)
+	event.global_position = viewport_position
+	Input.parse_input_event(event)
+	Input.flush_buffered_events()
+
+
+func _send_viewport_mouse_motion(
+	canvas: Control, local_position: Vector2, relative: Vector2
+) -> void:
+	var viewport_position := canvas.get_global_rect().position + local_position
+	var event := _mouse_motion(viewport_position, relative)
+	event.global_position = viewport_position
+	Input.parse_input_event(event)
+	Input.flush_buffered_events()

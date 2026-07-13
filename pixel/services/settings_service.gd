@@ -89,7 +89,6 @@ func _ensure_defaults() -> void:
 	var changed := false
 	changed = _set_default("ui", "language", "auto") or changed
 	changed = _set_default("ui", "interface_scale", 0.0) or changed
-	changed = _set_default("ui", "live_rescale", true) or changed
 	changed = _set_default("project", "recent_projects", []) or changed
 	changed = _set_default("tasks", "max_concurrency", 2) or changed
 	if changed:

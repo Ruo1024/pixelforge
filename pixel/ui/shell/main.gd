@@ -15,7 +15,9 @@ const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
 const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
 const WorkspaceNavigationScript := preload("res://ui/shell/workspace_navigation.gd")
 const ResponsiveWorkspaceScript := preload("res://ui/shell/responsive_workspace.gd")
+const ResponsiveTopBarScript := preload("res://ui/shell/responsive_top_bar.gd")
 const MonoIconButtonScript := preload("res://ui/widgets/mono_icon_button.gd")
+const AdaptiveToolbarButtonScript := preload("res://ui/widgets/adaptive_toolbar_button.gd")
 const CanvasMinimapControllerScript := preload("res://ui/shell/canvas_minimap_controller.gd")
 const WorkspaceStartControllerScript := preload("res://ui/shell/workspace_start_controller.gd")
 const CanvasGraphStatusPresenter := preload("res://ui/shell/canvas_graph_status_presenter.gd")
@@ -28,14 +30,13 @@ const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 const AppTheme := preload("res://ui/shell/app_theme.gd")
 const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
 const ScaleAudit := preload("res://ui/shell/scale_audit.gd")
-const ViewportFillPolicy := preload("res://ui/shell/viewport_fill_policy.gd")
 const WindowScalePolicy := preload("res://ui/shell/window_scale_policy.gd")
 
 const DEFAULT_WINDOW_WIDTH := 1440
 const DEFAULT_WINDOW_HEIGHT := 900
 const MIN_WINDOW_WIDTH := 1080
 const MIN_WINDOW_HEIGHT := 560
-const WINDOW_SCREEN_MARGIN := 80
+const WINDOW_SCREEN_MARGIN := 64
 const UI_FONT_SIZE := 16
 const UI_SMALL_FONT_SIZE := 14
 const TOP_BAR_HEIGHT := 52
@@ -47,8 +48,6 @@ const ZOOM_CONTROL_MARGIN := 12
 const FLEXIBLE_WIDTH := 0
 const CLEANUP_RESULT_GAP := 8
 const PREVIEW_OPACITY := 0.56
-const SCALE_MONITOR_INTERVAL_SECONDS := 0.25
-const SCALE_RESOLVE_DEBOUNCE_SECONDS := 0.35
 
 var _project_filters := PackedStringArray(["*.pxproj ; PixelForge Project"])
 var _interface_scale := 1.0
@@ -73,14 +72,9 @@ var _minimap_controller: RefCounted = null
 var _workspace_start: Node = null
 var _lifecycle_guard: Node = null
 var _export_flow: Node = null
-var _live_rescale_enabled := true
-var _scale_monitor_elapsed := 0.0
-var _rescale_debounce_elapsed := 0.0
-var _rescale_pending := false
-var _rescale_in_progress := false
 var _last_screen_snapshot := {}
-var _pending_screen_snapshot := {}
 var _localized_toolbar_buttons: Array[Button] = []
+var _responsive_top_bar: HBoxContainer = null
 
 
 func _ready() -> void:
@@ -88,15 +82,12 @@ func _ready() -> void:
 	LocalizationService.language_changed.connect(_refresh_toolbar_text)
 	var startup_snapshot := InterfaceScalePolicy.read_current_screen_snapshot()
 	_interface_scale = _resolve_interface_scale_from_snapshot(startup_snapshot, "startup")
-	_live_rescale_enabled = bool(SettingsService.get_setting("ui", "live_rescale", true))
 	_apply_window_defaults()
 	_apply_viewport_scale_policy()
 	_apply_runtime_theme()
 	_build_ui()
-	ViewportFillPolicy.apply(self, get_viewport_rect())
 	_connect_services()
 	_last_screen_snapshot = startup_snapshot
-	set_process(DisplayServer.get_name() != "headless")
 	_update_window_title()
 	_m2_1_ui.show_onboarding_if_needed(_recovery_dialog)
 	if ScaleAudit.is_requested():
@@ -108,11 +99,6 @@ func _notification(what: int) -> void:
 		if _lifecycle_guard == null:
 			return
 		_lifecycle_guard.request_action(ProjectLifecycleGuardScript.ACTION_QUIT)
-
-
-func _process(delta: float) -> void:
-	ViewportFillPolicy.apply(self, get_viewport_rect())
-	_poll_live_rescale(delta)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -138,23 +124,6 @@ func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String
 		snapshot, configured_scale, OS.get_name()
 	)
 	_window_pixel_scale = float(resolution["window_pixel_scale"])
-	# M0 复盘：残留 interface_scale=1.0 会旁路自动检测；仅在 macOS 自动档明显更大时迁回 auto。
-	if (
-		OS.get_name() == "macOS"
-		and is_equal_approx(configured_scale, 1.0)
-		and float(resolution["detected_F"]) > configured_scale
-	):
-		Log.warn(
-			"Stale interface_scale=1.0 override on a scaled display; resetting to auto.",
-			{"auto_scale": float(resolution["detected_F"])}
-		)
-		SettingsService.set_setting("ui", "interface_scale", 0.0)
-		configured_scale = 0.0
-		resolution = InterfaceScalePolicy.resolve_from_snapshot(
-			snapshot, configured_scale, OS.get_name()
-		)
-		_window_pixel_scale = float(resolution["window_pixel_scale"])
-
 	var resolved := float(resolution["resolved"])
 	var usable_size := Vector2i(resolution["usable_size"])
 	var screen_size := Vector2i(snapshot.get("screen_size", Vector2i.ZERO))
@@ -185,11 +154,13 @@ func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String
 				"window_pixel_scale": _window_pixel_scale,
 				"configured": configured_scale,
 				"reported_screen_scale": float(resolution["reported_screen_scale"]),
+				"max_screen_scale": float(resolution["max_screen_scale"]),
 				"screen_dpi": int(resolution["screen_dpi"]),
 				"usable_rect": [usable_size.x, usable_size.y],
 				"screen_size": [screen_size.x, screen_size.y],
 				"mac_retina_fallback": bool(resolution["mac_retina_fallback"]),
 				"current_screen": int(snapshot.get("screen", -1)),
+				"display_server": String(resolution["display_server"]),
 				"os": OS.get_name(),
 			}
 		)
@@ -199,72 +170,6 @@ func _resolve_interface_scale_from_snapshot(snapshot: Dictionary, reason: String
 
 func _apply_viewport_scale_policy() -> void:
 	InterfaceScalePolicy.apply_content_scale_policy(get_tree().root, _interface_scale)
-
-
-func _poll_live_rescale(delta: float) -> void:
-	if DisplayServer.get_name() == "headless" or not _live_rescale_enabled:
-		return
-
-	_scale_monitor_elapsed += delta
-	if _scale_monitor_elapsed >= SCALE_MONITOR_INTERVAL_SECONDS:
-		_scale_monitor_elapsed = 0.0
-		var current_snapshot := InterfaceScalePolicy.read_current_screen_snapshot()
-		if InterfaceScalePolicy.screen_scale_snapshot_changed(
-			_last_screen_snapshot, current_snapshot
-		):
-			if InterfaceScalePolicy.screen_scale_snapshot_changed(
-				_pending_screen_snapshot, current_snapshot
-			):
-				_pending_screen_snapshot = current_snapshot
-				_rescale_debounce_elapsed = 0.0
-			_rescale_pending = true
-
-	if not _rescale_pending:
-		return
-	_rescale_debounce_elapsed += delta
-	if _rescale_debounce_elapsed >= SCALE_RESOLVE_DEBOUNCE_SECONDS:
-		_apply_live_rescale(_pending_screen_snapshot)
-
-
-func _apply_live_rescale(screen_snapshot: Dictionary) -> void:
-	if _rescale_in_progress or screen_snapshot.is_empty():
-		return
-	_rescale_in_progress = true
-
-	var old_snapshot := _last_screen_snapshot.duplicate()
-	var old_scale := _interface_scale
-	var old_window_pixel_scale := _window_pixel_scale
-	_interface_scale = _resolve_interface_scale_from_snapshot(screen_snapshot, "live_rescale")
-	_apply_viewport_scale_policy()
-	_apply_runtime_theme()
-	_apply_window_minimum_size()
-	if _canvas != null:
-		_canvas.call("_update_layer_transform")
-		_canvas.call("_update_item_visibility")
-
-	_last_screen_snapshot = screen_snapshot
-	_pending_screen_snapshot = {}
-	_rescale_pending = false
-	_rescale_debounce_elapsed = 0.0
-	_rescale_in_progress = false
-
-	(
-		Log
-		. info(
-			"Interface scale reapplied",
-			{
-				"from_screen": int(old_snapshot.get("screen", -1)),
-				"to_screen": int(screen_snapshot.get("screen", -1)),
-				"from_F": old_scale,
-				"to_F": _interface_scale,
-				"from_window_pixel_scale": old_window_pixel_scale,
-				"to_window_pixel_scale": _window_pixel_scale,
-				"current_screen": int(screen_snapshot.get("screen", -1)),
-			}
-		)
-	)
-	if ScaleAudit.is_requested():
-		_log_scale_audit()
 
 
 func _log_scale_audit() -> void:
@@ -288,7 +193,7 @@ func _build_app_theme() -> Theme:
 
 func _apply_window_defaults() -> void:
 	var window := get_window()
-	if window == null or DisplayServer.get_name() == "headless":
+	if window == null or DisplayServer.get_name() in ["headless", "embedded"]:
 		return
 	Log.info(
 		"Window defaults applied",
@@ -304,15 +209,6 @@ func _apply_window_defaults() -> void:
 	)
 
 
-func _apply_window_minimum_size() -> void:
-	var window := get_window()
-	if window == null or DisplayServer.get_name() == "headless":
-		return
-	WindowScalePolicy.apply_minimum_size(
-		window, Vector2i(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT), _interface_scale
-	)
-
-
 func _build_ui() -> void:
 	custom_minimum_size = Vector2(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
 
@@ -321,7 +217,8 @@ func _build_ui() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(root)
 
-	var top_bar := HBoxContainer.new()
+	var top_bar: HBoxContainer = ResponsiveTopBarScript.new()
+	_responsive_top_bar = top_bar
 	top_bar.name = "TopBar"
 	top_bar.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, TOP_BAR_HEIGHT)
 	top_bar.alignment = BoxContainer.ALIGNMENT_BEGIN
@@ -338,16 +235,17 @@ func _build_ui() -> void:
 	_title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_title_label.add_theme_font_size_override("font_size", UI_FONT_SIZE)
 	top_bar.add_child(_title_label)
-	var top_bar_spacer := Control.new()
-	top_bar_spacer.name = "TopBarSpacer"
-	top_bar_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	top_bar.add_child(top_bar_spacer)
+	top_bar.call("setup_title", _title_label)
 
 	var history_actions := HBoxContainer.new()
 	history_actions.name = "HistoryActions"
 	top_bar.add_child(history_actions)
-	_add_toolbar_button(history_actions, "ACTION_UNDO", _undo_canvas_action, 44)
-	_add_toolbar_button(history_actions, "ACTION_REDO", _redo_canvas_action, 44)
+	_add_toolbar_button(history_actions, "ACTION_UNDO", _undo_canvas_action, 44, "undo", "undo")
+	_add_toolbar_button(history_actions, "ACTION_REDO", _redo_canvas_action, 44, "redo", "redo")
+	var top_bar_spacer := Control.new()
+	top_bar_spacer.name = "TopBarSpacer"
+	top_bar_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top_bar.add_child(top_bar_spacer)
 
 	var canvas_actions := HBoxContainer.new()
 	canvas_actions.name = "CanvasActions"
@@ -445,11 +343,14 @@ func _build_ui() -> void:
 		"run_selection"
 	)
 	_add_toolbar_button(canvas_actions, "ACTION_EXPORT", _export_selected_png, 68, "export")
-	_add_toolbar_button(canvas_actions, "ACTION_INSPECTOR", _toggle_inspector, 76, "inspector")
+	_add_toolbar_button(
+		canvas_actions, "ACTION_INSPECTOR", _toggle_inspector, 76, "inspector", "inspector"
+	)
 	var settings_controller := WorkspaceSettingsControllerScript.new()
 	settings_controller.name = "WorkspaceSettingsController"
 	add_child(settings_controller)
 	settings_controller.setup(canvas_actions, "more")
+	_responsive_top_bar.call("refresh_layout")
 	_zoom_overlay = ZoomOverlayControllerScript.new()
 	_zoom_overlay.setup(_canvas, ZOOM_CONTROL_MARGIN)
 	_minimap_controller = CanvasMinimapControllerScript.new()
@@ -464,16 +365,24 @@ func _add_toolbar_button(
 	text_key: String,
 	callback: Callable,
 	button_width: int = TOOLBAR_BUTTON_WIDTH,
-	action_id: String = ""
+	action_id: String = "",
+	compact_icon_id: String = ""
 ) -> void:
-	var button := Button.new()
-	button.text = Strings.text(text_key)
+	var button: Button
+	if compact_icon_id.is_empty():
+		button = Button.new()
+		button.text = Strings.text(text_key)
+	else:
+		button = AdaptiveToolbarButtonScript.new()
+		button.call("setup", text_key, compact_icon_id, button_width, COMPACT_BUTTON_WIDTH)
+		_responsive_top_bar.call("register_adaptive_button", button)
 	button.custom_minimum_size = Vector2(button_width, TOOLBAR_BUTTON_HEIGHT)
 	button.focus_mode = Control.FOCUS_NONE
 	button.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
 	button.pressed.connect(callback)
 	parent.add_child(button)
 	button.set_meta("text_key", text_key)
+	button.set_meta("adaptive_label", not compact_icon_id.is_empty())
 	if not action_id.is_empty():
 		button.set_meta("action_id", action_id)
 	_localized_toolbar_buttons.append(button)
@@ -490,6 +399,7 @@ func _add_rail_button(
 	button.focus_mode = Control.FOCUS_NONE
 	button.set_meta("text_key", text_key)
 	button.set_meta("action_id", action_id)
+	button.set_meta("icon_only", true)
 	button.pressed.connect(callback)
 	parent.add_child(button)
 	_localized_toolbar_buttons.append(button)
@@ -525,7 +435,15 @@ func _redo_canvas_action() -> void:
 func _refresh_toolbar_text(_preference: String, _locale: String) -> void:
 	for button in _localized_toolbar_buttons:
 		if is_instance_valid(button):
-			button.text = Strings.text(String(button.get_meta("text_key", "")))
+			var text_key := String(button.get_meta("text_key", ""))
+			if bool(button.get_meta("icon_only", false)):
+				button.tooltip_text = Strings.text(text_key)
+			elif bool(button.get_meta("adaptive_label", false)):
+				button.call("refresh_text")
+			else:
+				button.text = Strings.text(text_key)
+	if _responsive_top_bar != null:
+		_responsive_top_bar.call("refresh_layout")
 	_recovery_dialog.title = Strings.text("DIALOG_RECOVERY_TITLE")
 	_recovery_dialog.ok_button_text = Strings.text("ACTION_RECOVER")
 	_recovery_dialog.cancel_button_text = Strings.text("ACTION_CANCEL")
@@ -599,7 +517,6 @@ func _connect_services() -> void:
 	ProjectService.dirty_changed.connect(_on_dirty_changed)
 	ProjectService.recovery_available.connect(_on_recovery_available)
 	ProjectService.autosave_failed.connect(_on_autosave_failed)
-	SettingsService.setting_changed.connect(_on_setting_changed)
 
 	var window := get_window()
 	if window != null:
@@ -726,16 +643,6 @@ func _on_custom_palettes_changed() -> void:
 	ProjectService.mark_dirty()
 	_status_label.text = Strings.text("STATUS_DIRTY")
 	_update_window_title()
-
-
-func _on_setting_changed(section: String, key: String, value: Variant) -> void:
-	if section != "ui" or key != "live_rescale":
-		return
-	_live_rescale_enabled = bool(value)
-	if not _live_rescale_enabled:
-		_rescale_pending = false
-		_pending_screen_snapshot = {}
-		_rescale_debounce_elapsed = 0.0
 
 
 func _sync_cleanup_inspector_with_project(project: Variant) -> void:

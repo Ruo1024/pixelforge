@@ -478,8 +478,9 @@ func _is_overview() -> bool:
 
 func _rebuild_content_controls() -> void:
 	if _content_root != null:
-		remove_child(_content_root)
-		_content_root.free()
+		# Keep emitting descendants tree-owned until frame end and release the Content name.
+		_content_root.name = "RetiredContent"
+		_content_root.queue_free()
 		_content_root = null
 	_text_prompt_edit = null
 	_prompt_count_label = null
@@ -547,6 +548,7 @@ func _rebuild_header_controls() -> void:
 		_title_button.name = "TitleButton"
 		_title_button.flat = true
 		_title_button.focus_mode = Control.FOCUS_NONE
+		_title_button.mouse_filter = Control.MOUSE_FILTER_PASS
 		_title_button.gui_input.connect(_on_title_button_input)
 		add_child(_title_button)
 	_title_button.position = Vector2(8, 4)
@@ -608,6 +610,7 @@ func _draw_resize_handle() -> void:
 func _on_title_button_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.double_click:
 		begin_title_edit()
+		_title_button.accept_event()
 
 
 func _on_title_edit_input(event: InputEvent) -> void:

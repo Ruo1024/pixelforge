@@ -6,16 +6,47 @@ const GraphScript := preload("res://core/graph/pf_graph.gd")
 const GraphRunnerScript := preload("res://services/graph_mock_runner.gd")
 const MainScene := preload("res://ui/shell/main.tscn")
 const Log := preload("res://core/util/log_util.gd")
+const InterfaceScalePolicy := preload("res://ui/shell/interface_scale_policy.gd")
 
 const LEGACY_WINDOW_SIZE := Vector2i(1440, 900)
 const BETA_0_6_SCENARIOS := {
-	"closed": {"size": Vector2i(1080, 560), "zoom": 1.0, "center": Vector2(0, 0)},
-	"overlay": {"size": Vector2i(1080, 560), "zoom": 0.5, "center": Vector2(40, 20)},
-	"batch_12_13": {"size": Vector2i(1280, 720), "zoom": 0.5, "center": Vector2(610, 330)},
-	"inspector": {"size": Vector2i(1280, 720), "zoom": 1.0, "center": Vector2(-450, -170)},
-	"batch_50": {"size": Vector2i(1440, 900), "zoom": 0.5, "center": Vector2(360, 758)},
-	"card_families": {"size": Vector2i(1440, 900), "zoom": 1.0, "center": Vector2(0, 20)},
-	"inspect": {"size": Vector2i(1440, 900), "zoom": 4.0, "center": Vector2(170, 100)},
+	"closed": {"size": Vector2i(1080, 560), "scale": 2.0, "zoom": 1.0, "center": Vector2(0, 0)},
+	"overlay": {"size": Vector2i(1080, 560), "scale": 2.0, "zoom": 0.5, "center": Vector2(40, 20)},
+	"batch_12_13":
+	{
+		"size": Vector2i(1280, 720),
+		"scale": 1.25,
+		"zoom": 0.5,
+		"center": Vector2(610, 330),
+	},
+	"inspector":
+	{
+		"size": Vector2i(1280, 720),
+		"scale": 1.5,
+		"zoom": 1.0,
+		"center": Vector2(-450, -170),
+	},
+	"batch_50":
+	{
+		"size": Vector2i(1440, 900),
+		"scale": 1.0,
+		"zoom": 0.5,
+		"center": Vector2(360, 758),
+	},
+	"card_families":
+	{
+		"size": Vector2i(1440, 900),
+		"scale": 1.25,
+		"zoom": 1.0,
+		"center": Vector2(0, 20),
+	},
+	"inspect":
+	{
+		"size": Vector2i(1440, 900),
+		"scale": 1.0,
+		"zoom": 4.0,
+		"center": Vector2(170, 100),
+	},
 }
 
 
@@ -44,14 +75,15 @@ func _capture_workspace() -> void:
 
 	var scenario_spec: Dictionary = BETA_0_6_SCENARIOS[scenario]
 	var window_size: Vector2i = scenario_spec["size"]
-	_prepare_runtime(window_size, locale, 1.0)
+	var interface_scale := float(scenario_spec["scale"])
+	_prepare_runtime(window_size, locale, interface_scale)
 	if not _build_beta_0_6_project(scenario, locale):
 		return
 	var main := MainScene.instantiate()
 	get_tree().root.add_child(main)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	await _force_beta_0_6_geometry(main, window_size)
+	await _force_beta_0_6_geometry(main, window_size, interface_scale)
 	main._on_project_loaded(ProjectService.current_project)
 	main.get_node("M21UiController/ImportFlowController").refresh_empty_hint()
 	await _configure_beta_0_6_scene(main, scenario, scenario_spec)
@@ -59,12 +91,18 @@ func _capture_workspace() -> void:
 		return
 	for _frame in range(8):
 		await get_tree().process_frame
+	main.queue_redraw()
 	await RenderingServer.frame_post_draw
 
 	var image := get_viewport().get_texture().get_image()
-	if image.get_size() != window_size:
-		_fail("Screenshot viewport size does not match scenario", image.get_size())
+	var physical_size := get_window().size
+	if image.get_size() != physical_size:
+		_fail(
+			"Screenshot viewport size does not match scaled scenario",
+			{"actual": image.get_size(), "expected": physical_size},
+		)
 		return
+	image.resize(window_size.x, window_size.y, Image.INTERPOLATE_LANCZOS)
 	if not _save_image(image, output_path):
 		return
 	if not _save_metadata(main, scenario, locale, window_size, metadata_path):
@@ -92,6 +130,7 @@ func _capture_legacy(output_path: String, locale: String) -> void:
 	main.get_node("M21UiController/ImportFlowController").refresh_empty_hint()
 	for _frame in range(8):
 		await get_tree().process_frame
+	main.queue_redraw()
 	await RenderingServer.frame_post_draw
 	if not _save_image(get_viewport().get_texture().get_image(), output_path):
 		return
@@ -99,21 +138,18 @@ func _capture_legacy(output_path: String, locale: String) -> void:
 
 
 func _prepare_runtime(window_size: Vector2i, locale: String, interface_scale: float) -> void:
-	DisplayServer.window_set_size(window_size)
+	DisplayServer.window_set_size(_physical_size(window_size, interface_scale))
 	SettingsService.set_setting("onboarding", "v1_complete", true, false)
-	var configured_scale := 1.0001 if is_equal_approx(interface_scale, 1.0) else interface_scale
-	SettingsService.set_setting("ui", "interface_scale", configured_scale, false)
-	SettingsService.set_setting("ui", "live_rescale", false, false)
+	SettingsService.set_setting("ui", "interface_scale", interface_scale, false)
 	LocalizationService.apply_language(locale, locale)
 	AssetLibrary.clear()
 
 
-func _force_beta_0_6_geometry(main: Control, window_size: Vector2i) -> void:
-	main._interface_scale = 1.0
-	get_tree().root.content_scale_factor = 1.0
-	get_tree().root.content_scale_size = window_size
-	get_window().min_size = Vector2i(1080, 560)
-	DisplayServer.window_set_size(window_size)
+func _force_beta_0_6_geometry(main: Control, window_size: Vector2i, interface_scale: float) -> void:
+	main._interface_scale = interface_scale
+	InterfaceScalePolicy.apply_content_scale_policy(get_tree().root, interface_scale)
+	get_window().min_size = _physical_size(Vector2i(1080, 560), interface_scale)
+	DisplayServer.window_set_size(_physical_size(window_size, interface_scale))
 	for _frame in range(3):
 		await get_tree().process_frame
 
@@ -411,6 +447,27 @@ func _configure_beta_0_6_scene(main: Control, scenario: String, spec: Dictionary
 			canvas.select_ids(["inspect_sprite"])
 	for _frame in range(4):
 		await get_tree().process_frame
+	await _wait_for_capture_items(canvas, scenario)
+
+
+func _wait_for_capture_items(canvas: Control, scenario: String) -> void:
+	var expected_ids: Array[String] = []
+	match scenario:
+		"batch_12_13":
+			expected_ids = ["batch_12", "batch_13"]
+		"batch_50":
+			expected_ids = ["batch_50"]
+	if expected_ids.is_empty():
+		return
+	for _frame in range(30):
+		var all_ready := true
+		for item_id in expected_ids:
+			if not canvas._items_by_id.has(item_id):
+				all_ready = false
+				break
+		if all_ready:
+			return
+		await get_tree().process_frame
 
 
 func _assert_beta_0_6_scene(
@@ -422,7 +479,8 @@ func _assert_beta_0_6_scene(
 	if LocalizationService.current_locale != locale:
 		_fail("Screenshot locale assertion failed", LocalizationService.current_locale)
 		return false
-	if Vector2i(roundi(main.size.x), roundi(main.size.y)) != window_size:
+	var logical_size_error := (main.size - Vector2(window_size)).abs()
+	if logical_size_error.x > 1.0 or logical_size_error.y > 1.0:
 		_fail(
 			"Logical window assertion failed",
 			{
@@ -457,12 +515,18 @@ func _assert_beta_0_6_scene(
 			return false
 	match scenario:
 		"batch_12_13":
+			if not canvas._items_by_id.has("batch_12") or not canvas._items_by_id.has("batch_13"):
+				_fail("12/13 result cards were not ready")
+				return false
 			var twelve: Node = canvas._items_by_id["batch_12"]
 			var thirteen: Node = canvas._items_by_id["batch_13"]
 			if twelve._rows() != 3 or thirteen._rows() != 4:
 				_fail("12/13 row boundary assertion failed", [twelve._rows(), thirteen._rows()])
 				return false
 		"batch_50":
+			if not canvas._items_by_id.has("batch_50"):
+				_fail("50 result card was not ready")
+				return false
 			var batch: Node = canvas._items_by_id["batch_50"]
 			if (
 				batch.get_visible_asset_ids().size() != 50
@@ -527,7 +591,8 @@ func _save_metadata(
 			if inspector.visible and workspace.is_inspector_overlay()
 			else ("dock" if inspector.visible else "closed")
 		),
-		"toolbar_mode": "compact" if window_size.x <= 1080 else "standard",
+		"window_pixel_size": [get_window().size.x, get_window().size.y],
+		"toolbar_mode": String(main.get_node("Root/TopBar").get_meta("layout_mode", "unknown")),
 		"batch_counts": batch_counts,
 		"card_bounds": card_bounds,
 	}
@@ -542,6 +607,13 @@ func _save_metadata(
 		return false
 	file.store_string(JSON.stringify(metadata, "\t"))
 	return true
+
+
+func _physical_size(logical_size: Vector2i, interface_scale: float) -> Vector2i:
+	return Vector2i(
+		roundi(float(logical_size.x) * interface_scale),
+		roundi(float(logical_size.y) * interface_scale),
+	)
 
 
 func _register_assets(count: int, prefix: String) -> Array[String]:
