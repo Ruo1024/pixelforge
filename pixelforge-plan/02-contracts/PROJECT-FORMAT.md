@@ -109,7 +109,9 @@ my_project.pxproj (ZIP)
       "type": "sprite",            // sprite | batch_card(M2.1 temp) | node | frame | note | graph_anchor(legacy)
       "asset_id": "a1b2c3d4-...",  // type=sprite 时必填
       "position": [128, -64],      // 画布世界坐标，整数（像素对齐）
-      "scale_factor": 1,           // 仅允许正整数倍预览缩放
+      "scale_factor": 1,           // 旧图片预览倍率；Beta 0.6 保留兼容，见 §4.1
+      "display_title": "Scarecrow", // 可选；独立图片卡显示标题
+      "size": [320, 380],          // 可选；独立图片卡请求的外框尺寸
       "z_index": 0,
       "locked": false,
       "frame_id": null             // 所属编组框
@@ -126,6 +128,8 @@ my_project.pxproj (ZIP)
       "compare_mode": "current",     // current | previous | split
       "review_layout": "contact",    // contact | focus
       "label": "Batch",
+      "display_title": "Farm props", // 可选；只覆盖画布显示标题
+      "size": [600, 240],             // 可选；用户请求的展开尺寸
       "position": [320, 64],
       "z_index": 1,
       "locked": false
@@ -137,8 +141,11 @@ my_project.pxproj (ZIP)
       "graph_id": "graph_main",
       "position": [256, -32],
       "z_index": 0,
+      "display_title": "Forest props", // 可选；不进入 Graph 或执行
+      "size": [400, 520],             // 可选；画布世界整数，请求的展开尺寸
       "review_layout": "contact",    // 仅 batch 节点使用：contact | focus
       "collapsed": false,          // LOD/折叠态（仅显示，不影响逻辑）
+      "locked": false,             // 锁定时禁止移动、改名和缩放
       "frame_id": null             // 所属显式阶段组；缺省表示未分组
     },
     {
@@ -157,14 +164,101 @@ my_project.pxproj (ZIP)
 
 规则：
 - 画布元素 position 强制整数（像素网格对齐，体验原则1）。
-- `node` 元素是画布上一切图节点（style/prompt/generate/batch/process…）的统一引用形态：只存"画在哪、第几层、是否折叠"，以及 batch 这类画布驻留节点的审阅视图状态；节点的类型/参数/连线全在 `graphs/`。连线在画布上从 graphs 渲染，不写进本文件。
+- `node` 元素是画布上一切图节点（style/prompt/generate/batch/process…）的统一引用形态：只存布局与显示状态（位置、层级、显示标题、请求尺寸、折叠），以及 batch 这类画布驻留节点的审阅视图状态；节点的类型/参数/连线全在 `graphs/`。连线在画布上从 graphs 渲染，不写进本文件。
 - `frame` 是显式阶段组。最小字段为 `id / type / graph_id / title / color / position / size / z_index`；不保存 `member_ids`。成员归属的唯一真相是 `node` 画布项的 `frame_id`。
+- `frame.title` 使用与 `display_title` 相同的单行清理和 80 code point 计数；空白时回退本地化“阶段”。`frame.size` 是实际世界边界，读取为整数并钳制到 `320×240` 至 `32768×32768`；它不是成员自动包围盒，也不使用 batch 的请求/有效双尺寸。
 - 一个 frame 只能容纳同一 `graph_id` 的节点。成组或移入组遇到跨 graph 节点时必须拒绝并返回结构化原因；空间重叠或拖过边界不会自动改变成员。
 - `frame_id` 只由“成组 / 移入组 / 移出组 / 解组”显式动作修改。旧项目缺少该字段时按 `null` 读取；引用不存在或 graph 不匹配时按未分组显示，产生 `frame_reference_not_found` 或 `frame_graph_mismatch` 结构化警告，同时原始 `frame_id` 必须在保存重开中保留。
 - frame 不嵌套、不折叠、不锁定、不自动布局。删除 frame 等同解组：保留节点和内部连线，并清除有效成员的 `frame_id`。
 - `batch` 是 `type:"node"` 的一种（其 graphs 节点 `type=batch`），渲染为容器卡（队列网格 + 边框菜单）；物化的 `asset_id` 队列存在 graphs 节点 params 中。这就是「一等节点 + 画布卡」双身份的落地方式（见 GRAPH-SCHEMA §5a）。
 - **M2.1 临时例外**：M3 前尚无正式 graph 持久化，alpha 清洗台先允许 `type:"batch_card"` 直接在 canvas.json 中保存 `asset_ids` 队列、卡片位置和卡内勾选状态。它不含端口、不含连线、不写 graphs；M3 实施正式 batch 节点时，应把该形态迁入 `type:"node"` + `graphs/{graph_id}.json` 的 `type=batch` params。
 - `graph_anchor` 标记为 **legacy**：统一画布后整张图直接长在画布上，锚点退化；保留仅为读取早期数据，不再新写。
+
+### 4.1 Beta 0.6 卡片显示标题与请求尺寸
+
+`display_title` 与 `size` 适用于正式 `type:"node"`、兼容读取的旧 `type:"batch_card"` 和独立图片卡 `type:"sprite"`。它们不写入 graph params。`frame` 继续使用已有 `title / size`，不新增同义字段。
+
+#### `display_title`
+
+- 只改变画布显示，不影响节点类型、端口、执行、缓存、provenance 或模板参数；
+- 是用户数据，不随界面语言翻译；字段缺失或清除后，系统默认标题随界面语言翻译；
+- graph batch 的回退顺序为 `display_title` → `node.params.label` → 本地化“结果”；`image_input` 和 `sprite` 为 `display_title` → 可解析素材名 → 本地化“图片”；其他节点为 `display_title` → 本地化节点类型；旧 batch_card 为 `display_title` → `label` → 本地化“结果”；
+- 提交时把换行和 Tab 转为空格、去首尾空白，最多 80 个 Unicode code point；按 Godot `String.length()` 计数并在 code point 边界截断，不按 UTF-8 字节计数，组合符号分别计数；全空白等于删除字段；
+- 非字符串值按无覆盖标题渲染，保存时移除无效值；未知的其他 canvas 字段仍须原样往返。
+
+#### `size`
+
+- 表示用户请求的**展开尺寸**，格式为 `[width, height]`，单位是画布世界整数；不乘 UI scale，也不得通过 `Node2D.scale` 拉伸文字或控件；
+- 缺失是合法旧数据，使用节点类型默认值；形态错误时使用默认值；数值读取后四舍五入，再按类型最小值与用户请求上限 `1600×1200` 钳制；下一次保存写规范化整数；
+- 折叠只把有效高度改为 56，不覆盖请求的展开高度；展开后恢复并重新计算；
+- 普通节点的有效尺寸等于规范化请求尺寸；batch 的有效高度还要容纳全部当前结果；
+- 只有请求尺寸写项目、剪贴板和模板；派生的有效高度禁止持久化。
+
+| 节点 | 缺省尺寸 | 最小尺寸 |
+|---|---:|---:|
+| `text_prompt` | 360×300 | 320×240 |
+| `object_list` | 400×520 | 360×360 |
+| `style_preset` | 320×280 | 280×220 |
+| `size_spec` | 320×260 | 280×220 |
+| `image_input` | 320×380 | 280×300 |
+| `sprite` 独立图片卡 | 见下方旧数据公式；素材不可解析时 320×380 | 200×188 |
+| `reference_set` | 400×480 | 360×320 |
+| `ai_generate` | 400×520 | 360×400 |
+| graph `batch` / 旧 `batch_card` | 600×240 | 360×240 |
+| 幽灵、未知和其他轻节点 | 320×180 | 240×144 |
+
+`sprite` 缺少 `size` 时，按旧图片尺寸得到确定默认值，再在下次保存写成显式尺寸：
+
+```text
+legacy_preview_width = image_width * max(1, scale_factor)
+legacy_preview_height = image_height * max(1, scale_factor)
+default_width = clamp(legacy_preview_width + 32, 200, 1600)
+default_height = clamp(legacy_preview_height + 60, 188, 1200)
+```
+
+宽度的 32 是左右各 16 内边距；高度的 60 是 32 标题轨 + 28 元数据栏。图片缺失/不可解码时使用 320×380。`scale_factor` 继续原样往返，只用于缺少 `size` 的旧数据推导；一旦存在 `size`，外框与预览布局以 `size` 为准，图片按比例、最近邻、居中显示，不拉伸。旧 sprite 的左上 position 保持不变，不自动重排其他元素；不得删除旧 `scale_factor`。
+
+Batch 的规范计算如下：
+
+```text
+header = 44
+padding = 16
+thumbnail = 128
+gap = 12
+action_row = 40
+focus_preview_height = clamp(round((width - 2*padding) * 9/16), 240, 480)
+
+columns = max(1, floor((width - 2*padding + gap) / (thumbnail + gap)))
+rows = ceil(slot_count / columns)
+grid_height = rows*thumbnail + max(0, rows-1)*gap
+focus_active = review_layout == "focus" and focus_asset_id resolves to a visible slot
+action_y = header + padding
+preview_y = action_y + action_row + gap
+grid_y = preview_y + (focus_preview_height + gap if focus_active else 0)
+required_content_height = max(
+  240,
+  grid_y + grid_height + padding
+)
+
+effective_width = requested_width
+effective_height = max(requested_height, required_content_height)
+```
+
+- `review_filter == "all"` 时，已完成任务的 `slot_count` 等于全部实际结果数；任务未完成时为 `max(asset_ids.size, expected_count)`，不足部分显示占位格；
+- 其他筛选下，`slot_count` 等于当前筛选可见项，界面必须同时显示可见数/总数与清除筛选入口；
+- 垂直顺序固定为 `Header → 16 padding → Action row → 12 gap → Focus/Compare preview（仅有效 focus）→ 12 gap → 完整网格 → 16 padding`；不得把 Action row 放到几千像素高的网格底部；
+- Contact、Focus 与 Compare 都必须保留完整候选网格；有效 Focus/Compare 在网格上方增加同一个 `focus_preview_height` 主预览区，Compare 在区内并排显示 A/B；focus 引用失效或不在当前可见筛选时回退 Contact 并显示可修复说明；不得分页、使用卡内纵向滚动、截断尾项或只创建前 N 个 slot；
+- 用户宽度改变会改变列数与派生高度；素材减少时自动增长部分可收回，但不能低于请求高度；
+- 派生高度变化不单独进入 Undo，也不得修改 frame size 或 `frame_id`；
+- 选框、命中、剔除、小地图、端口、连线和 Fit All 一律使用有效尺寸。
+
+#### 编辑、复制与兼容
+
+- 一次标题提交或一次缩放拖拽各是一条 Undo；鼠标移动只预览，Esc 取消且不入栈；rename/resize/collapse 前后 Graph 必须不变；
+- Graph clipboard v1 对 node 原样携带 `display_title / size / collapsed`；粘贴只重映射 ID 和位置，不保存派生高度、不自动加“副本”后缀；独立 sprite 不进入 Graph clipboard，但现有 Duplicate/Undo 必须保留其 `display_title / size / scale_factor`；
+- 工作流模板的相同规则见 `WORKFLOW-TEMPLATE.md`；
+- 10%/25%/50% 等 LOD 只改变绘制详略，不改变请求尺寸、有效尺寸、世界边界、端口或连线；
+- 项目仍保持 `format_version = 1`，属于首个公开分发前已批准的可选字段补全。
 
 ## 4a. boards/{board_id}.json（M5）
 
