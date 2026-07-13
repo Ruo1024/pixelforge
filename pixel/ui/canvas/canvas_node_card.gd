@@ -1,3 +1,4 @@
+# gdlint: disable=max-file-lines
 class_name PFCanvasNodeCard
 extends Node2D
 
@@ -31,7 +32,8 @@ const EDGE_ERROR_BORDER := AppTheme.ERROR
 const BADGE_BACKGROUND := AppTheme.SECTION
 const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
 const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
-const PORT_HIT_RADIUS := 10.0
+const PORT_VISIBLE_SCREEN_RADIUS := 6.0
+const PORT_HIT_SCREEN_RADIUS := 20.0
 const OBJECT_EDITOR_MIN_SIZE := Vector2(0, 116)
 const SPIN_CONTROL_MIN_SIZE := Vector2(76, 30)
 const FLEXIBLE_WIDTH := 0
@@ -202,6 +204,8 @@ func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
 
 
 func _graph_port_at_world(world_position: Vector2) -> Dictionary:
+	if _lod_camera_zoom < 0.75:
+		return {}
 	var input_hit := _port_hit_at_world(world_position, true)
 	if not input_hit.is_empty():
 		return input_hit
@@ -222,18 +226,21 @@ func _draw() -> void:
 	_draw_ports()
 	if _font == null:
 		return
-	draw_string(
-		_font,
-		Vector2(PADDING, 22),
-		_display_name,
-		HORIZONTAL_ALIGNMENT_LEFT,
-		card_size.x - PADDING * 2,
-		16,
-		AppTheme.MEDIA_RAIL_TEXT if _node_type == "image_input" else AppTheme.TEXT_PRIMARY
-	)
+	if _lod_camera_zoom >= 0.25:
+		draw_string(
+			_font,
+			Vector2(PADDING, 22),
+			_display_name,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			card_size.x - PADDING * 2,
+			16,
+			AppTheme.MEDIA_RAIL_TEXT if _node_type == "image_input" else AppTheme.TEXT_PRIMARY
+		)
 	_draw_status_badge()
 	_draw_resize_handle()
-	if collapsed or not _is_content_node():
+	if collapsed or not _is_content_node() or _is_overview():
+		if _lod_camera_zoom < 0.25:
+			return
 		draw_string(
 			_font,
 			Vector2(PADDING, 54),
@@ -243,24 +250,26 @@ func _draw() -> void:
 			13,
 			Color(0.66, 0.72, 0.74, 1.0)
 		)
-		draw_string(
-			_font,
-			Vector2(PADDING, 82),
-			_summary,
-			HORIZONTAL_ALIGNMENT_LEFT,
-			card_size.x - PADDING * 2,
-			13,
-			Color(0.82, 0.84, 0.82, 1.0)
-		)
+		if _lod_camera_zoom >= 0.5:
+			draw_string(
+				_font,
+				Vector2(PADDING, 82),
+				_summary,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				card_size.x - PADDING * 2,
+				13,
+				Color(0.82, 0.84, 0.82, 1.0)
+			)
 
 
 func _draw_ports() -> void:
 	if _lod_camera_zoom < 0.75:
 		return
+	var visible_radius := PORT_VISIBLE_SCREEN_RADIUS / maxf(_lod_camera_zoom, 0.01)
 	for index in range(_input_count):
-		draw_circle(_port_position(index, _input_count, true), 5.0, PORT_IN)
+		draw_circle(_port_position(index, _input_count, true), visible_radius, PORT_IN)
 	for index in range(_output_count):
-		draw_circle(_port_position(index, _output_count, false), 5.0, PORT_OUT)
+		draw_circle(_port_position(index, _output_count, false), visible_radius, PORT_OUT)
 
 
 func _port_position(index: int, count: int, is_input: bool) -> Vector2:
@@ -277,9 +286,10 @@ func _port_index(port_name: String, is_input: bool) -> int:
 func _port_hit_at_world(world_position: Vector2, is_input: bool) -> Dictionary:
 	var ports := _visible_input_ports if is_input else _visible_output_ports
 	var count := ports.size()
+	var hit_radius := PORT_HIT_SCREEN_RADIUS / maxf(_lod_camera_zoom, 0.01)
 	for index in range(count):
 		var anchor := position + _port_position(index, count, is_input)
-		if anchor.distance_to(world_position) <= PORT_HIT_RADIUS:
+		if anchor.distance_to(world_position) <= hit_radius:
 			return {"port_name": ports[index], "is_input": is_input, "port_index": index}
 	return {}
 
@@ -512,8 +522,9 @@ func _rebuild_content_controls() -> void:
 
 func _rebuild_header_controls() -> void:
 	if not _is_content_node() or _is_ghost or _is_overview():
-		if _collapse_button != null:
-			_collapse_button.visible = false
+		for control in [_collapse_button, _title_button, _more_button, _title_edit]:
+			if control != null:
+				control.visible = false
 		return
 	if _collapse_button == null:
 		_collapse_button = Button.new()
@@ -773,9 +784,10 @@ func _build_generate_controls() -> void:
 func _build_size_controls() -> void:
 	var hero := Label.new()
 	hero.name = "SizeHero"
-	hero.text = "%d × %d px" % [
-		int(_params_snapshot.get("width", 32)), int(_params_snapshot.get("height", 32))
-	]
+	hero.text = (
+		"%d × %d px"
+		% [int(_params_snapshot.get("width", 32)), int(_params_snapshot.get("height", 32))]
+	)
 	hero.add_theme_font_size_override("font_size", AppTheme.STRUCTURED_HERO_FONT_SIZE)
 	hero.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_content_root.add_child(hero)
@@ -1072,20 +1084,21 @@ func _on_prompt_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-func _commit_size_params(
-	width: SpinBox, height: SpinBox, count: SpinBox, preset: int = -1
-) -> void:
+func _commit_size_params(width: SpinBox, height: SpinBox, count: SpinBox, preset: int = -1) -> void:
 	if preset > 0:
 		width.value = preset
 		height.value = preset
-	params_commit_requested.emit(
-		graph_id,
-		node_id,
-		{
-			"width": int(width.value),
-			"height": int(height.value),
-			"per_subject": int(count.value),
-		}
+	(
+		params_commit_requested
+		. emit(
+			graph_id,
+			node_id,
+			{
+				"width": int(width.value),
+				"height": int(height.value),
+				"per_subject": int(count.value),
+			}
+		)
 	)
 
 

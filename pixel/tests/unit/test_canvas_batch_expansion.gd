@@ -27,6 +27,48 @@ func test_five_column_threshold_is_exact() -> void:
 	assert_eq(exact._columns(), 5)
 
 
+func test_result_counts_and_widths_follow_one_growth_formula() -> void:
+	var expected_default_rows := {0: 0, 1: 1, 4: 1, 12: 3, 13: 4, 50: 13}
+	for count in expected_default_rows:
+		var card := _batch_card(600, 240, count)
+		assert_eq(card._columns(), 4, "count %s" % count)
+		assert_eq(card._rows(), expected_default_rows[count], "count %s" % count)
+		assert_eq(card.get_slot_count(), count, "count %s" % count)
+		if count > 0:
+			var tail: Rect2 = card._slot_rect(count - 1)
+			assert_eq(card.asset_index_at_world(card.position + tail.get_center()), count - 1)
+	var expected_columns := {360: 2, 600: 4, 880: 6, 1600: 11}
+	for width in expected_columns:
+		var card := _batch_card(width, 240, 50)
+		assert_eq(card._columns(), expected_columns[width], "width %s" % width)
+		assert_eq(
+			card._rows(), int(ceil(50.0 / float(expected_columns[width]))), "width %s" % width
+		)
+		assert_gte(card.get_canvas_bounds().size.y, card._slot_rect(49).end.y + 16.0)
+
+
+func test_auto_growth_retracts_and_placeholders_do_not_jump() -> void:
+	var card := _batch_card(600, 240, 50)
+	var expanded_bounds: Rect2 = card.get_canvas_bounds()
+	card.set_asset_ids(["only"])
+	assert_lt(card.get_canvas_bounds().size.y, expanded_bounds.size.y)
+	assert_eq(card._rows(), 1)
+
+	var placeholder := _batch_card(600, 240, 0, "contact", 50)
+	var placeholder_bounds: Rect2 = placeholder.get_canvas_bounds()
+	var ids: Array[String] = []
+	for index in range(50):
+		ids.append("asset-%02d" % index)
+	placeholder.set_asset_ids(ids)
+	assert_eq(placeholder.get_canvas_bounds(), placeholder_bounds)
+	assert_eq(
+		placeholder.asset_index_at_world(
+			placeholder.position + placeholder._slot_rect(49).get_center()
+		),
+		49
+	)
+
+
 func test_focus_keeps_complete_grid_and_tail_hit_target() -> void:
 	var card := _batch_card(600, 240, 50, "focus")
 	var last_rect: Rect2 = card._slot_rect(49)
@@ -79,15 +121,18 @@ func _batch_card(
 		ids.append("asset-%02d" % index)
 	var card: Node = CanvasBatchCardScript.new()
 	add_child_autofree(card)
-	card.setup_from_data(
-		{
-			"id": "batch",
-			"type": "batch_card",
-			"asset_ids": ids,
-			"position": [40, 60],
-			"size": [width, height],
-			"review_layout": layout,
-			"run_state": {"status": "running", "expected_count": expected_count},
-		}
+	(
+		card
+		. setup_from_data(
+			{
+				"id": "batch",
+				"type": "batch_card",
+				"asset_ids": ids,
+				"position": [40, 60],
+				"size": [width, height],
+				"review_layout": layout,
+				"run_state": {"status": "running", "expected_count": expected_count},
+			}
+		)
 	)
 	return card

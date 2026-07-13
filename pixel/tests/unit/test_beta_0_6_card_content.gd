@@ -41,7 +41,9 @@ func test_prompt_uses_five_line_draft_commit_and_escape_restore() -> void:
 func test_object_list_keeps_fifty_real_rows_inside_its_scroll_region() -> void:
 	var rows := []
 	for index in range(50):
-		rows.append({"id": "row_%d" % index, "text": "object %d" % index, "count": 2, "enabled": true})
+		rows.append(
+			{"id": "row_%d" % index, "text": "object %d" % index, "count": 2, "enabled": true}
+		)
 	var fixture := await _card(ObjectListNodeScript.new(), "objects", {"rows": rows})
 	var card: Node = fixture["card"]
 	assert_not_null(card.get_content_control("ObjectRowsScroll"))
@@ -59,7 +61,8 @@ func test_style_palette_and_size_presets_are_visible_without_apply_buttons() -> 
 		StylePresetNodeScript.new(),
 		"style",
 		{
-			"preset": {
+			"preset":
+			{
 				"name": "Original",
 				"base_size": 32,
 				"palette": {"colors": ["#111111", "#ffffff", "#6fa8ff"]},
@@ -79,9 +82,7 @@ func test_style_palette_and_size_presets_are_visible_without_apply_buttons() -> 
 
 func test_generate_card_has_one_primary_action_for_every_frozen_state() -> void:
 	var fixture := await _card(
-		AiGenerateNodeScript.new(),
-		"generate",
-		{"provider_id": "mock", "batch_size": 2, "seed": 1}
+		AiGenerateNodeScript.new(), "generate", {"provider_id": "mock", "batch_size": 2, "seed": 1}
 	)
 	var card: Node = fixture["card"]
 	var primary: Button = card.get_content_control("PrimaryActionButton")

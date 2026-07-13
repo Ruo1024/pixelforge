@@ -1049,7 +1049,11 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		if Input.is_key_pressed(KEY_SPACE):
 			_is_panning = event.pressed
 		elif event.pressed and event.double_click:
-			if not _reset_resize_handle_at(event.position) and not _emit_asset_edit_request(event.position):
+			if (
+				not _focus_low_lod_item_at(event.position)
+				and not _reset_resize_handle_at(event.position)
+				and not _emit_asset_edit_request(event.position)
+			):
 				graph_quick_add_requested.emit(
 					Vector2i(get_screen_position()) + Vector2i(event.position)
 				)
@@ -1058,6 +1062,28 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		else:
 			_finish_left_interaction(event.position)
 		accept_event()
+
+
+func _focus_low_lod_item_at(screen_position: Vector2) -> bool:
+	if camera_zoom >= 0.75:
+		return false
+	var hit := _hit_at_world(screen_to_world(screen_position))
+	var item: Node = hit.get("item", null)
+	if item == null:
+		return false
+	var bounds: Rect2 = item.get_canvas_bounds()
+	if item.get_script() == CanvasItemFrameScript:
+		var target := minf(size.x * 0.72 / bounds.size.x, size.y * 0.72 / bounds.size.y)
+		var fit_zoom := float(ZOOM_LEVELS[0])
+		for level in ZOOM_LEVELS:
+			if float(level) > target:
+				break
+			fit_zoom = float(level)
+		set_camera_zoom(fit_zoom, size * 0.5)
+	else:
+		set_camera_zoom(1.0, size * 0.5)
+	_center_on_world(bounds.get_center())
+	return true
 
 
 func _emit_asset_edit_request(screen_position: Vector2) -> bool:
@@ -1285,9 +1311,7 @@ func _commit_resize_drag() -> void:
 			_update_item_visibility()
 			_emit_canvas_changed()
 	UndoService.perform_action(
-		"Resize canvas card",
-		func() -> void: apply.call(after),
-		func() -> void: apply.call(before)
+		"Resize canvas card", func() -> void: apply.call(after), func() -> void: apply.call(before)
 	)
 
 
@@ -1422,9 +1446,7 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 	return item
 
 
-func _on_batch_face_action_requested(
-	card_id: String, action_id: String, asset_ids: Array
-) -> void:
+func _on_batch_face_action_requested(card_id: String, action_id: String, asset_ids: Array) -> void:
 	_select_only([card_id])
 	match action_id:
 		"filter_all":
@@ -1495,6 +1517,9 @@ func _add_node_direct(item_data: Dictionary) -> Node:
 func _add_frame_direct(item_data: Dictionary) -> Node:
 	var item: Node = CanvasItemFrameScript.new()
 	item.setup_from_data(item_data)
+	item.display_title_change_requested.connect(_set_canvas_item_display_title)
+	item.size_change_requested.connect(_set_canvas_item_size)
+	item.set_lod_camera_zoom(camera_zoom)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
 	_update_item_visibility()

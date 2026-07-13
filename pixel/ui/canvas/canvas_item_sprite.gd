@@ -4,14 +4,14 @@ extends Sprite2D
 ## 无限画布上的 sprite 元素。
 ## contract: 02-contracts/PROJECT-FORMAT.md §4；position 始终是整数世界坐标，texture_filter 始终最近邻。
 
+signal display_title_change_requested(item_id: String, display_title: String)
+signal size_change_requested(item_id: String, requested_size: Vector2i)
+
 const IdUtil := preload("res://core/util/id_util.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
 const AppTheme := preload("res://ui/shell/app_theme.gd")
 const UIFont := preload("res://ui/widgets/ui_font.gd")
-
-signal display_title_change_requested(item_id: String, display_title: String)
-signal size_change_requested(item_id: String, requested_size: Vector2i)
 
 var item_id := ""
 var asset_id := ""
@@ -109,6 +109,8 @@ func set_display_title(value: Variant) -> void:
 
 func set_lod_camera_zoom(value: float) -> void:
 	_lod_camera_zoom = maxf(0.0, value)
+	if _preview_sprite != null:
+		_preview_sprite.visible = _lod_camera_zoom >= 0.25
 	_rebuild_header_controls()
 	queue_redraw()
 
@@ -118,16 +120,15 @@ func resize_handle_contains_world(world_position: Vector2) -> bool:
 		return false
 	var hit_world := 16.0 / maxf(_lod_camera_zoom, 0.01)
 	var local := world_position - position
-	return Rect2(
-		Vector2(requested_size) - Vector2.ONE * hit_world, Vector2.ONE * hit_world
-	).has_point(local)
+	return (
+		Rect2(Vector2(requested_size) - Vector2.ONE * hit_world, Vector2.ONE * hit_world)
+		. has_point(local)
+	)
 
 
 func default_requested_size() -> Vector2i:
 	return CardContract.default_size_for_type(
-		"sprite",
-		source_image.get_size() if source_image != null else Vector2i.ZERO,
-		scale_factor
+		"sprite", source_image.get_size() if source_image != null else Vector2i.ZERO, scale_factor
 	)
 
 
@@ -145,15 +146,16 @@ func _draw() -> void:
 		return
 	var fallback := String(AssetLibrary.get_asset_meta(asset_id).get("name", ""))
 	var title := display_title if not display_title.is_empty() else fallback
-	draw_string(
-		font,
-		Vector2(16, 22),
-		title,
-		HORIZONTAL_ALIGNMENT_LEFT,
-		requested_size.x - 32,
-		15,
-		AppTheme.MEDIA_RAIL_TEXT
-	)
+	if _lod_camera_zoom >= 0.25:
+		draw_string(
+			font,
+			Vector2(16, 22),
+			title,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			requested_size.x - 32,
+			15,
+			AppTheme.MEDIA_RAIL_TEXT
+		)
 	var meta := ""
 	if source_image != null:
 		meta = "%d×%d" % [source_image.get_width(), source_image.get_height()]

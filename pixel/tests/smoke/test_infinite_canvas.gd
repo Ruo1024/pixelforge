@@ -166,13 +166,75 @@ func test_batch_lod_uses_camera_zoom_not_compensated_art_scale() -> void:
 	await wait_process_frames(1)
 
 	assert_almost_eq(canvas._get_art_logical_scale(), 0.333, 0.001)
-	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_BROWSE)
 
 	canvas.set_camera_zoom(4.0, Vector2(160, 120))
 	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
 
 	canvas.set_camera_zoom(1.0, Vector2(160, 120))
-	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_EDIT)
+
+
+func test_low_lod_double_click_focuses_card_at_one_hundred_percent() -> void:
+	ProjectService.new_project("Low LOD focus")
+	(
+		ProjectService
+		. set_graph_data(
+			"graph_main",
+			{
+				"graph_version": 1,
+				"id": "graph_main",
+				"name": "Focus",
+				"nodes":
+				[{"id": "prompt", "type": "text_prompt", "position": [0, 0], "params": {}}],
+				"edges": [],
+			},
+			false
+		)
+	)
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(900, 700)
+	add_child_autofree(canvas)
+	await wait_process_frames(1)
+	var card: Node = canvas._add_graph_node_card(
+		"graph_main", "prompt", Vector2(140, 90), "prompt_card", false
+	)
+	canvas.set_camera_zoom(0.25, canvas.size * 0.5)
+	canvas._center_on_world(card.get_canvas_bounds().get_center())
+
+	assert_true(canvas._focus_low_lod_item_at(canvas.size * 0.5))
+	assert_almost_eq(canvas.camera_zoom, 1.0, 0.001)
+	assert_almost_eq(canvas.camera_center.x, card.get_canvas_bounds().get_center().x, 0.001)
+	assert_almost_eq(canvas.camera_center.y, card.get_canvas_bounds().get_center().y, 0.001)
+
+
+func test_low_lod_double_click_fits_frame_without_resetting_its_size() -> void:
+	ProjectService.new_project("Low LOD frame focus")
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(900, 700)
+	add_child_autofree(canvas)
+	await wait_process_frames(1)
+	var frame: Node = (
+		canvas
+		. _add_frame_direct(
+			{
+				"id": "frame",
+				"type": "frame",
+				"title": "Stage",
+				"position": [100, 50],
+				"size": [1600, 1000],
+			}
+		)
+	)
+	var bounds: Rect2 = frame.get_canvas_bounds()
+	canvas.set_camera_zoom(0.25, canvas.size * 0.5)
+	canvas._center_on_world(bounds.get_center())
+
+	assert_true(canvas._focus_low_lod_item_at(canvas.size * 0.5))
+	assert_almost_eq(canvas.camera_zoom, 0.25, 0.001)
+	assert_eq(frame.requested_size, Vector2i(1600, 1000))
+	assert_almost_eq(canvas.camera_center.x, bounds.get_center().x, 0.001)
+	assert_almost_eq(canvas.camera_center.y, bounds.get_center().y, 0.001)
 
 
 func test_zoom_anchor_stays_fixed_with_fractional_content_scale() -> void:

@@ -78,7 +78,8 @@ static func build_from_frame(
 			"type": String(raw_node.get("type", "")),
 			"params": sanitized["params"],
 			"position": _position(relative),
-			"size": CardContract.size_array(
+			"size":
+			CardContract.size_array(
 				CardContract.normalize_requested_size(
 					String(raw_node.get("type", "unknown")), item.get("size", null)
 				)
@@ -230,7 +231,8 @@ static func instantiate(
 			"node_id": new_id,
 			"position": _position(position),
 			"z_index": canvas_items.size(),
-			"size": CardContract.size_array(
+			"size":
+			CardContract.size_array(
 				CardContract.normalize_requested_size(
 					String(node.get("type", "unknown")), node.get("size", null)
 				)

@@ -8,12 +8,13 @@ signal project_resource_activated(resource: Dictionary)
 
 const CleanupInspectorScript := preload("res://ui/inspector/cleanup_inspector.gd")
 const Strings := preload("res://ui/shell/strings.gd")
+const AppTheme := preload("res://ui/shell/app_theme.gd")
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
 const ProjectResourceBrowserScript := preload("res://ui/inspector/project_resource_browser.gd")
 
-const PANEL_WIDTH := 420
+const PANEL_WIDTH := 360
 const CONTENT_GAP := 8
 const GENERATION_SNAPSHOT_KEYS: Array[String] = [
 	"provider_id",
@@ -57,6 +58,11 @@ var _canvas: Control = null
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(PANEL_WIDTH, 0)
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = AppTheme.ELEVATED
+	panel_style.border_color = AppTheme.BORDER
+	panel_style.border_width_left = 1
+	add_theme_stylebox_override("panel", panel_style)
 
 	var root := VBoxContainer.new()
 	root.name = "ContextRoot"

@@ -67,10 +67,7 @@ static func minimum_size_for_type(card_type: String) -> Vector2i:
 
 
 static func normalize_requested_size(
-	card_type: String,
-	value: Variant,
-	image_size: Vector2i = Vector2i.ZERO,
-	scale_factor: int = 1
+	card_type: String, value: Variant, image_size: Vector2i = Vector2i.ZERO, scale_factor: int = 1
 ) -> Vector2i:
 	var fallback := default_size_for_type(card_type, image_size, scale_factor)
 	var values: Array = []
@@ -119,9 +116,7 @@ static func batch_geometry(
 	)
 	var safe_count := maxi(0, slot_count)
 	var rows := int(ceil(float(safe_count) / float(columns))) if safe_count > 0 else 0
-	var grid_height := (
-		rows * THUMBNAIL_SIZE + maxi(0, rows - 1) * GAP if rows > 0 else 0
-	)
+	var grid_height := rows * THUMBNAIL_SIZE + maxi(0, rows - 1) * GAP if rows > 0 else 0
 	var focus_height := clampi(int(round(float(width - PADDING * 2) * 9.0 / 16.0)), 240, 480)
 	var action_y := HEADER_HEIGHT + PADDING
 	var preview_y := action_y + ACTION_ROW_HEIGHT + GAP
@@ -159,9 +154,9 @@ static func lod_mode(camera_zoom: float) -> String:
 	if camera_zoom < 0.25:
 		return "map"
 	if camera_zoom < 0.5:
-		return "overview"
-	if camera_zoom < 0.75:
 		return "browse"
+	if camera_zoom < 0.75:
+		return "summary"
 	if camera_zoom < 4.0:
 		return "edit"
 	return "inspect"

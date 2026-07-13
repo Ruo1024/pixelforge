@@ -1,3 +1,4 @@
+# gdlint: disable=max-file-lines,max-public-methods
 class_name PFCanvasBatchCard
 extends Node2D
 
@@ -49,7 +50,8 @@ const FOCUS_BORDER := Color(0.96, 0.96, 0.9, 1.0)
 const COMPARE_DIVIDER := Color(0.96, 0.96, 0.9, 0.85)
 const INPUT_PORTS: Array[String] = ["in"]
 const OUTPUT_PORTS: Array[String] = ["images", "assets"]
-const PORT_HIT_RADIUS := 10.0
+const PORT_VISIBLE_SCREEN_RADIUS := 6.0
+const PORT_HIT_SCREEN_RADIUS := 20.0
 const CHECKER_SIZE := 8
 const MAX_INSPECT_COLOR_HINTS := 256
 const CHECKER_LIGHT := Color(0.18, 0.19, 0.2, 1.0)
@@ -256,7 +258,7 @@ func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
 
 
 func _graph_port_at_world(world_position: Vector2) -> Dictionary:
-	if not has_graph_binding():
+	if not has_graph_binding() or _lod_camera_zoom < 0.75:
 		return {}
 	var input_hit := _port_hit_at_world(world_position, true)
 	if not input_hit.is_empty():
@@ -457,7 +459,7 @@ func _draw() -> void:
 		Rect2(Vector2.ZERO, Vector2(requested_size.x, HEADER_HEIGHT)), AppTheme.ELEVATED, true
 	)
 	var visible_ids := get_visible_asset_ids()
-	if _font != null:
+	if _font != null and _lod_camera_zoom >= 0.25:
 		var visible_count := visible_ids.size()
 		var visible_title := display_title if not display_title.is_empty() else label
 		var title := "%s (%d)" % [visible_title, asset_ids.size()]
@@ -481,12 +483,15 @@ func _draw() -> void:
 		if has_graph_binding():
 			_draw_graph_ports()
 		return
+	if _lod_camera_zoom < 0.25:
+		_draw_resize_handle()
+		return
 
 	_draw_action_row()
 	if _is_focus_active():
 		_draw_focus_layout(visible_ids)
 	for index in range(visible_ids.size()):
-		_draw_thumbnail(visible_ids[index], _slot_rect(index))
+		_draw_thumbnail(visible_ids[index], _slot_rect(index), index + 1)
 	for index in range(visible_ids.size(), get_slot_count()):
 		_draw_placeholder(_slot_rect(index))
 	if has_graph_binding():
@@ -610,10 +615,10 @@ func _draw_focus_layout(visible_ids: Array[String]) -> void:
 	var focused_asset_id := _focused_visible_asset_id()
 	if focused_asset_id.is_empty():
 		return
-	_draw_thumbnail(focused_asset_id, _focus_rect())
+	_draw_thumbnail(focused_asset_id, _focus_rect(), visible_ids.find(focused_asset_id) + 1)
 
 
-func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
+func _draw_thumbnail(asset_id: String, rect: Rect2, sequence_number: int = 0) -> void:
 	var inspect_mode := _get_lod_profile() == LODProfile.PROFILE_INSPECT
 	if inspect_mode:
 		_draw_checkerboard(rect)
@@ -627,6 +632,18 @@ func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
 		_draw_inspect_overlay(asset_id, rect)
 	var border_color := SELECTED_BORDER if selected_asset_ids.has(asset_id) else BORDER
 	draw_rect(rect, border_color, false, 1.5)
+	if sequence_number > 0 and _font != null:
+		var sequence_rect := Rect2(rect.position + Vector2(6, 6), Vector2(38, 24))
+		draw_rect(sequence_rect, HINT_BACKGROUND, true)
+		draw_string(
+			_font,
+			sequence_rect.position + Vector2(6, 17),
+			str(sequence_number),
+			HORIZONTAL_ALIGNMENT_LEFT,
+			sequence_rect.size.x - 12,
+			16,
+			AppTheme.TEXT_PRIMARY
+		)
 	_draw_review_marker(rect, String(review_states.get(asset_id, REVIEW_NONE)))
 	if focus_asset_id == asset_id:
 		draw_rect(rect.grow(3.0), FOCUS_BORDER, false, 2.5)
@@ -753,7 +770,7 @@ func _draw_review_marker(rect: Rect2, review_state: String) -> void:
 			)
 
 
-func _thumb_rect(index: int, columns: int) -> Rect2:
+func _thumb_rect(index: int, _columns: int) -> Rect2:
 	return _slot_rect(index)
 
 
@@ -801,10 +818,13 @@ func _is_focus_active() -> bool:
 func _draw_graph_ports() -> void:
 	if _lod_camera_zoom < 0.75:
 		return
+	var visible_radius := PORT_VISIBLE_SCREEN_RADIUS / maxf(_lod_camera_zoom, 0.01)
 	for index in range(INPUT_PORTS.size()):
-		draw_circle(_graph_port_position(index, INPUT_PORTS.size(), true), 5.0, PORT_IN)
+		draw_circle(_graph_port_position(index, INPUT_PORTS.size(), true), visible_radius, PORT_IN)
 	for index in range(OUTPUT_PORTS.size()):
-		draw_circle(_graph_port_position(index, OUTPUT_PORTS.size(), false), 5.0, PORT_OUT)
+		draw_circle(
+			_graph_port_position(index, OUTPUT_PORTS.size(), false), visible_radius, PORT_OUT
+		)
 
 
 func _border_color() -> Color:
@@ -854,8 +874,9 @@ func _rebuild_header_controls() -> void:
 	_collapse_button.tooltip_text = Strings.text(
 		"ACTION_EXPAND_MODULE" if collapsed else "ACTION_COLLAPSE_MODULE"
 	)
-	_collapse_button.position = Vector2(requested_size.x - 36, 10)
+	_collapse_button.position = Vector2(requested_size.x - 68, 10)
 	_collapse_button.size = Vector2(24, 24)
+	_collapse_button.visible = _lod_camera_zoom >= 0.75
 	var retryable := String(run_state.get("status", "")) in ["failed", "canceled"]
 	if _retry_button == null:
 		_retry_button = Button.new()
@@ -865,8 +886,8 @@ func _rebuild_header_controls() -> void:
 			func() -> void: run_action_requested.emit(graph_id, node_id, "retry")
 		)
 		add_child(_retry_button)
-	_retry_button.visible = retryable
-	_retry_button.position = Vector2(requested_size.x - 168, 9)
+	_retry_button.visible = retryable and _lod_camera_zoom >= 0.75
+	_retry_button.position = Vector2(requested_size.x - 210, 9)
 	_retry_button.size = Vector2(66, 26)
 	if _remove_placeholder_button == null:
 		_remove_placeholder_button = Button.new()
@@ -876,8 +897,8 @@ func _rebuild_header_controls() -> void:
 			func() -> void: run_action_requested.emit(graph_id, node_id, "remove")
 		)
 		add_child(_remove_placeholder_button)
-	_remove_placeholder_button.visible = retryable
-	_remove_placeholder_button.position = Vector2(requested_size.x - 100, 9)
+	_remove_placeholder_button.visible = retryable and _lod_camera_zoom >= 0.75
+	_remove_placeholder_button.position = Vector2(requested_size.x - 136, 9)
 	_remove_placeholder_button.size = Vector2(60, 26)
 	if _title_button == null:
 		_title_button = Button.new()
@@ -887,7 +908,7 @@ func _rebuild_header_controls() -> void:
 		_title_button.gui_input.connect(_on_title_button_input)
 		add_child(_title_button)
 	_title_button.position = Vector2(8, 4)
-	_title_button.size = Vector2(maxf(48.0, requested_size.x - 84.0), 36)
+	_title_button.size = Vector2(maxf(48.0, requested_size.x - (226.0 if retryable else 84.0)), 36)
 	_title_button.visible = not locked and _lod_camera_zoom >= 0.75
 	_title_button.tooltip_text = display_title if not display_title.is_empty() else label
 	if _more_button == null:
@@ -927,10 +948,13 @@ func resize_handle_contains_world(world_position: Vector2) -> bool:
 		return false
 	var hit_world := 16.0 / maxf(_lod_camera_zoom, 0.01)
 	var local := world_position - position
-	return Rect2(
-		Vector2(requested_size.x, _card_height()) - Vector2.ONE * hit_world,
-		Vector2.ONE * hit_world
-	).has_point(local)
+	return (
+		Rect2(
+			Vector2(requested_size.x, _card_height()) - Vector2.ONE * hit_world,
+			Vector2.ONE * hit_world
+		)
+		. has_point(local)
+	)
 
 
 func default_requested_size() -> Vector2i:
@@ -994,9 +1018,10 @@ func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
 func _port_hit_at_world(world_position: Vector2, is_input: bool) -> Dictionary:
 	var ports := INPUT_PORTS if is_input else OUTPUT_PORTS
 	var count := ports.size()
+	var hit_radius := PORT_HIT_SCREEN_RADIUS / maxf(_lod_camera_zoom, 0.01)
 	for index in range(count):
 		var anchor := position + _graph_port_position(index, count, is_input)
-		if anchor.distance_to(world_position) <= PORT_HIT_RADIUS:
+		if anchor.distance_to(world_position) <= hit_radius:
 			return {"port_name": ports[index], "is_input": is_input, "port_index": index}
 	return {}
 

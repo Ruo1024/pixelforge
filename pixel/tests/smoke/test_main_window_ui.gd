@@ -209,7 +209,7 @@ func test_cleanup_inspector_keeps_apply_actions_reachable_below_scroll() -> void
 	)
 	var root: VBoxContainer = inspector.get_node("InspectorRoot")
 
-	assert_gte(inspector.custom_minimum_size.x, 420.0)
+	assert_gte(inspector.custom_minimum_size.x, 360.0)
 	assert_not_null(root.get_node("CleanupScroll"))
 	assert_not_null(root.get_node("CleanupActions/ApplyCleanupButton"))
 	assert_eq(

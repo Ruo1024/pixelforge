@@ -1,3 +1,4 @@
+# gdlint: disable=max-file-lines
 class_name PFMain
 extends Control
 
@@ -333,9 +334,14 @@ func _build_ui() -> void:
 	_title_label = Label.new()
 	_title_label.name = "ProjectTitle"
 	_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_title_label.custom_minimum_size.x = 280
+	_title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_title_label.add_theme_font_size_override("font_size", UI_FONT_SIZE)
 	top_bar.add_child(_title_label)
+	var top_bar_spacer := Control.new()
+	top_bar_spacer.name = "TopBarSpacer"
+	top_bar_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top_bar.add_child(top_bar_spacer)
 
 	var history_actions := HBoxContainer.new()
 	history_actions.name = "HistoryActions"
@@ -349,6 +355,7 @@ func _build_ui() -> void:
 
 	var content := HBoxContainer.new()
 	content.name = "Content"
+	content.add_theme_constant_override("separation", 0)
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(content)
@@ -1097,6 +1104,7 @@ func _update_window_title() -> void:
 	var project_name: String = ProjectService.current_project.get_name()
 	var title := "%s%s - %s" % [dirty_marker, project_name, AppInfo.APP_NAME]
 	_title_label.text = "%s%s" % [project_name, dirty_marker]
+	_title_label.tooltip_text = project_name
 
 	var window := get_window()
 	if window != null:

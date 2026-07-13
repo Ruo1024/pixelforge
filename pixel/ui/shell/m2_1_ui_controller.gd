@@ -1,4 +1,4 @@
-# gdlint: disable=max-file-lines
+# gdlint: disable=max-file-lines,max-public-methods
 class_name PFM21UiController
 extends Node
 

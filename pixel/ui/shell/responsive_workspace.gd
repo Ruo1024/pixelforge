@@ -3,8 +3,8 @@ extends Container
 
 ## Keeps the canvas full-width below the dock breakpoint and overlays the inspector.
 
-const INSPECTOR_DOCK_BREAKPOINT := 1440.0
-const INSPECTOR_WIDTH := 420.0
+const INSPECTOR_DOCK_BREAKPOINT := 1392.0
+const INSPECTOR_WIDTH := 360.0
 
 
 func _notification(what: int) -> void:
@@ -29,7 +29,7 @@ func _layout_workspace() -> void:
 		canvas, Rect2(Vector2.ZERO, Vector2(size.x - inspector_width if docked else size.x, size.y))
 	)
 	fit_child_in_rect(
-		inspector,
-		Rect2(Vector2(size.x - inspector_width, 0), Vector2(inspector_width, size.y))
+		inspector, Rect2(Vector2(size.x - inspector_width, 0), Vector2(inspector_width, size.y))
 	)
-	inspector.z_index = 20 if is_inspector_overlay() else 0
+	inspector.z_as_relative = false
+	inspector.z_index = 4095 if is_inspector_overlay() else 0

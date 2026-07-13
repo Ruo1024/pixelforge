@@ -213,18 +213,31 @@ func test_canvas_batch_card_switches_semantic_lod_profiles() -> void:
 	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
 	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 
-	assert_eq(LODProfile.profile_for_camera_zoom(0.25), LODProfile.PROFILE_REVIEW)
-	assert_eq(LODProfile.profile_for_camera_zoom(1.0), LODProfile.PROFILE_REVIEW)
+	assert_eq(LODProfile.profile_for_camera_zoom(0.1), LODProfile.PROFILE_MAP)
+	assert_eq(LODProfile.profile_for_camera_zoom(0.25), LODProfile.PROFILE_BROWSE)
+	assert_eq(LODProfile.profile_for_camera_zoom(0.5), LODProfile.PROFILE_SUMMARY)
+	assert_eq(LODProfile.profile_for_camera_zoom(1.0), LODProfile.PROFILE_EDIT)
 	assert_eq(LODProfile.profile_for_camera_zoom(4.0), LODProfile.PROFILE_INSPECT)
-	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_EDIT)
 
 	card.set_lod_camera_zoom(0.25)
-	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
+	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_BROWSE)
 	assert_eq(card.asset_index_at_world(card.position + card._slot_rect(0).get_center()), 0)
+	assert_false(card.get_node("CollapseButton").visible)
+	assert_false(card.get_node("TitleButton").visible)
+	assert_false(card.get_node("MoreButton").visible)
 
 	card.set_lod_camera_zoom(4.0)
 	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
 	assert_false(card._asset_hint_for(ids[0]).is_empty())
+	var title: Control = card.get_node("TitleButton")
+	var collapse: Control = card.get_node("CollapseButton")
+	var more: Control = card.get_node("MoreButton")
+	assert_true(title.visible)
+	assert_true(collapse.visible)
+	assert_true(more.visible)
+	assert_gte(collapse.position.x - title.get_rect().end.x, 8.0)
+	assert_gte(more.position.x - collapse.get_rect().end.x, 8.0)
 
 
 func test_canvas_batch_card_keeps_previous_version_for_compare() -> void:
@@ -682,8 +695,7 @@ func test_prompt_and_style_cards_show_real_content_and_prompt_emits_commit() -> 
 	prompt_edit.text = "tiny watermill"
 	prompt_edit.text_changed.emit()
 	assert_eq(
-		prompt_card.get_content_control("PromptDraft").text,
-		Strings.text("CONTENT_PROMPT_DRAFT")
+		prompt_card.get_content_control("PromptDraft").text, Strings.text("CONTENT_PROMPT_DRAFT")
 	)
 	prompt_edit.focus_exited.emit()
 	assert_eq(commits, [[graph.id, "prompt", {"text": "tiny watermill"}]])

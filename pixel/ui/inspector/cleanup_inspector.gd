@@ -18,7 +18,7 @@ const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 
-const PANEL_WIDTH := 420
+const PANEL_WIDTH := 360
 const CONTROL_HEIGHT := 30
 const PREVIEW_DEBOUNCE_SECONDS := 0.3
 const RESAMPLE_LABEL_KEYS := [

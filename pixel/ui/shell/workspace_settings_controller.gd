@@ -13,7 +13,9 @@ var _dialog: ConfirmationDialog = null
 func setup(button_parent: Control, action_id: String = "") -> void:
 	_button = Button.new()
 	_button.name = "SettingsButton"
-	_button.text = Strings.text("ACTION_MORE") if not action_id.is_empty() else Strings.text("SETTINGS_ACTION")
+	_button.text = (
+		Strings.text("ACTION_MORE") if not action_id.is_empty() else Strings.text("SETTINGS_ACTION")
+	)
 	_button.focus_mode = Control.FOCUS_NONE
 	if not action_id.is_empty():
 		_button.set_meta("action_id", action_id)

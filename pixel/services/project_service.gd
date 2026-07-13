@@ -443,7 +443,10 @@ func _normalize_canvas_card_title(item_data: Dictionary) -> void:
 func _node_type_for_canvas_item(item_data: Dictionary, graphs: Dictionary) -> String:
 	var graph_data: Dictionary = graphs.get(String(item_data.get("graph_id", "")), {})
 	for raw_node in graph_data.get("nodes", []):
-		if raw_node is Dictionary and String(raw_node.get("id", "")) == String(item_data.get("node_id", "")):
+		if (
+			raw_node is Dictionary
+			and String(raw_node.get("id", "")) == String(item_data.get("node_id", ""))
+		):
 			return String(raw_node.get("type", "unknown"))
 	return "unknown"
 
