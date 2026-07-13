@@ -8,6 +8,7 @@ const Strings := preload("res://ui/shell/strings.gd")
 
 const PASTE_MIN_SIZE := Vector2(0, 64)
 const COUNT_MIN_SIZE := Vector2(76, 30)
+const ROW_MENU_MIN_SIZE := Vector2(32, 30)
 
 var _params := {}
 var _paste_edit: TextEdit
@@ -23,7 +24,8 @@ func _build() -> void:
 	var count_label := Label.new()
 	count_label.name = "ItemCount"
 	count_label.text = (
-		Strings.text("CONTENT_OBJECT_SELECTED_FORMAT") % [_enabled_count(rows), rows.size()]
+		Strings.text("CONTENT_OBJECT_CARD_SUMMARY")
+		% [_enabled_count(rows), rows.size(), _expected_count(rows)]
 	)
 	add_child(count_label)
 	var search := LineEdit.new()
@@ -41,26 +43,24 @@ func _build() -> void:
 	scroll.add_child(row_list)
 	add_child(scroll)
 	search.text_changed.connect(_filter_rows.bind(row_list, rows))
-	var selection_actions := HBoxContainer.new()
-	for enabled in [true, false]:
-		var select_button := Button.new()
-		select_button.text = Strings.text(
-			"ACTION_SELECT_ALL_ROWS" if enabled else "ACTION_CLEAR_ALL_ROWS"
-		)
-		select_button.pressed.connect(_set_all_enabled.bind(rows, enabled))
-		selection_actions.add_child(select_button)
-	add_child(selection_actions)
+	var add_button := Button.new()
+	add_button.name = "AddObjectRow"
+	add_button.text = Strings.text("ACTION_ADD_OBJECT_ROW")
+	add_button.pressed.connect(_add_row.bind(rows))
+	add_child(add_button)
+	var paste_toggle := Button.new()
+	paste_toggle.name = "PasteRowsToggle"
+	paste_toggle.text = Strings.text("ACTION_PASTE_OBJECT_ROWS")
+	paste_toggle.toggle_mode = true
+	add_child(paste_toggle)
 	_paste_edit = TextEdit.new()
 	_paste_edit.name = "ObjectEdit"
 	_paste_edit.custom_minimum_size = PASTE_MIN_SIZE
 	_paste_edit.placeholder_text = Strings.text("CONTENT_OBJECT_PASTE_PLACEHOLDER")
+	_paste_edit.visible = false
 	_paste_edit.focus_exited.connect(_commit_pasted_rows)
 	add_child(_paste_edit)
-	var apply_button := Button.new()
-	apply_button.name = "ApplyButton"
-	apply_button.text = Strings.text("ACTION_APPLY")
-	apply_button.pressed.connect(_commit_pasted_rows)
-	add_child(apply_button)
+	paste_toggle.toggled.connect(func(value: bool) -> void: _paste_edit.visible = value)
 
 
 func _row_control(rows: Array, index: int) -> Control:
@@ -93,6 +93,13 @@ func _row_control(rows: Array, index: int) -> Control:
 		func(value: float) -> void: _commit_row(rows, index, {"count": int(value)})
 	)
 	row.add_child(count)
+	var menu := MenuButton.new()
+	menu.name = "ObjectMenu%d" % index
+	menu.text = "..."
+	menu.custom_minimum_size = ROW_MENU_MIN_SIZE
+	menu.get_popup().add_item(Strings.text("ACTION_REMOVE"), 0)
+	menu.get_popup().id_pressed.connect(func(_id: int) -> void: _remove_row(rows, index))
+	row.add_child(menu)
 	return row
 
 
@@ -129,6 +136,18 @@ func _set_all_enabled(rows: Array, enabled: bool) -> void:
 	_emit_rows(updated)
 
 
+func _add_row(rows: Array) -> void:
+	var updated := rows.duplicate(true)
+	updated.append({"id": IdUtil.uuid_v4(), "text": "", "count": 1, "enabled": true})
+	_emit_rows(updated)
+
+
+func _remove_row(rows: Array, index: int) -> void:
+	var updated := rows.duplicate(true)
+	updated.remove_at(index)
+	_emit_rows(updated)
+
+
 func _emit_rows(rows: Array) -> void:
 	var lines: Array[String] = []
 	for row in rows:
@@ -153,4 +172,12 @@ func _enabled_count(rows: Array) -> int:
 	for row in rows:
 		if row is Dictionary and bool(row.get("enabled", true)):
 			count += 1
+	return count
+
+
+func _expected_count(rows: Array) -> int:
+	var count := 0
+	for row in rows:
+		if row is Dictionary and bool(row.get("enabled", true)):
+			count += maxi(1, int(row.get("count", 1)))
 	return count

@@ -28,6 +28,14 @@ const CONTROL_RADIUS := 8
 const CARD_HEADER_HEIGHT := 44
 const MEDIA_HEADER_HEIGHT := 32
 const CARD_PADDING := 16
+const LEFT_RAIL_WIDTH := 48
+const INSPECTOR_MIN_WIDTH := 320
+const RAIL_BUTTON_SIZE := 40
+const PROMPT_MIN_HEIGHT := 132
+const PALETTE_SWATCH_SIZE := 20
+const REFERENCE_TILE_SIZE := 96
+const REFERENCE_TILE_ROW_HEIGHT := 132
+const STRUCTURED_HERO_FONT_SIZE := 24
 
 
 static func build(default_font_size: int, small_font_size: int) -> Theme:

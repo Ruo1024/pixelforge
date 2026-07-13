@@ -15,28 +15,27 @@ func test_workspace_groups_global_and_canvas_actions_with_three_empty_starts() -
 	var main := await _make_main()
 	var global_actions: Control = main.get_node("Root/TopBar/GlobalActions")
 	var canvas_actions: Control = main.get_node("Root/TopBar/CanvasActions")
-	var hint: Control = main.get_node("Root/Content/InfiniteCanvas/EmptyCanvasImportHint")
+	var left_rail: Control = main.get_node("Root/Content/LeftRail")
+	var hint: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas/EmptyCanvasImportHint")
 
-	var global_texts := _button_texts(global_actions)
-	for action_text in [
-		Strings.ACTION_NEW, Strings.ACTION_OPEN, Strings.ACTION_SAVE, Strings.ACTION_EXPORT_PNG
-	]:
-		assert_true(global_texts.has(action_text))
-	assert_true(_button_texts(canvas_actions).has(Strings.ACTION_ADD_INPUT))
-	assert_true(_button_texts(canvas_actions).has(Strings.ACTION_IMPORT_REFERENCE))
-	assert_true(_button_texts(canvas_actions).has(Strings.ACTION_OPEN_EXAMPLE))
+	assert_true(_button_texts(global_actions).has(Strings.text("MENU_FILE")))
+	assert_true(_button_texts(canvas_actions).has(Strings.text("ACTION_RUN_SELECTION")))
+	assert_true(_button_texts(canvas_actions).has(Strings.text("ACTION_EXPORT")))
+	assert_not_null(left_rail.get_node("AddInput"))
+	assert_not_null(left_rail.get_node("ImportReference"))
+	assert_not_null(left_rail.get_node("Library"))
 	assert_not_null(hint.get_node("EmptyContent/EmptyActions/AddInput"))
 	assert_not_null(hint.get_node("EmptyContent/EmptyActions/ImportReference"))
 	assert_not_null(hint.get_node("EmptyContent/EmptyActions/OpenExample"))
-	assert_not_null(global_actions.get_node("SettingsButton"))
+	assert_not_null(canvas_actions.get_node("SettingsButton"))
 	assert_not_null(main.get_node("WorkspaceSettingsController/WorkspaceSettingsDialog"))
 
 
 func test_empty_add_input_creates_real_graph_atomically_and_updates_context() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var hint: Control = canvas.get_node("EmptyCanvasImportHint")
-	var context: Control = main.get_node("Root/Content/ContextInspector")
+	var context: Control = main.get_node("Root/Content/Workspace/ContextInspector")
 
 	(hint.get_node("EmptyContent/EmptyActions/AddInput") as Button).pressed.emit()
 	await wait_process_frames(2)
@@ -59,7 +58,7 @@ func test_empty_add_input_creates_real_graph_atomically_and_updates_context() ->
 
 func test_empty_reference_import_creates_real_node_and_undo_keeps_asset() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var flow: Node = main.get_node("M21UiController/ImportFlowController")
 	var image := Image.create(3, 2, false, Image.FORMAT_RGBA8)
 	image.fill(Color.DARK_ORANGE)
@@ -85,7 +84,7 @@ func test_empty_reference_import_creates_real_node_and_undo_keeps_asset() -> voi
 
 func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var hint: Control = canvas.get_node("EmptyCanvasImportHint")
 	var controller: Node = main.get_node("M21UiController")
 	(hint.get_node("EmptyContent/EmptyActions/AddInput") as Button).pressed.emit()
@@ -176,7 +175,7 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 
 func test_offline_example_is_one_undoable_reference_to_batch_workspace() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var controller: Node = main.get_node("M21UiController")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
@@ -198,8 +197,8 @@ func test_offline_example_is_one_undoable_reference_to_batch_workspace() -> void
 
 func test_context_inspector_reuses_cleanup_for_sprite_and_batch() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
-	var context: Control = main.get_node("Root/Content/ContextInspector")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
+	var context: Control = main.get_node("Root/Content/Workspace/ContextInspector")
 	var cleanup: Control = context.get_node("ContextRoot/CleanupInspector")
 	var image := Image.create(24, 16, false, Image.FORMAT_RGBA8)
 	image.fill(Color.CORNFLOWER_BLUE)
@@ -219,7 +218,7 @@ func test_context_inspector_reuses_cleanup_for_sprite_and_batch() -> void:
 
 func test_navigation_buttons_focus_selected_and_all_canvas_content() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var navigation: Control = canvas.get_node("WorkspaceNavigation")
 	var minimap: Control = canvas.get_node("CanvasMinimap")
 	var image := Image.create(32, 32, false, Image.FORMAT_RGBA8)
@@ -273,13 +272,13 @@ func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> vo
 	var main := await _make_main()
 	var global_actions: Control = main.get_node("Root/TopBar/GlobalActions")
 	var canvas_actions: Control = main.get_node("Root/TopBar/CanvasActions")
-	var hint: Control = main.get_node("Root/Content/InfiniteCanvas/EmptyCanvasImportHint")
+	var hint: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas/EmptyCanvasImportHint")
 
 	LocalizationService.set_language("zh_CN")
 	await wait_process_frames(2)
 
-	assert_true(_button_texts(global_actions).has(Strings.text("ACTION_NEW")))
-	assert_true(_button_texts(canvas_actions).has(Strings.text("ACTION_ADD_INPUT")))
+	assert_true(_button_texts(global_actions).has(Strings.text("MENU_FILE")))
+	assert_true(_button_texts(canvas_actions).has(Strings.text("ACTION_RUN_SELECTION")))
 	assert_eq(
 		hint.get_node("EmptyContent/HintLabel").text, Strings.text("EMPTY_CANVAS_IMPORT_HINT")
 	)
@@ -331,14 +330,14 @@ func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> vo
 	assert_eq(unsaved.get_cancel_button().text, Strings.text("ACTION_CANCEL"))
 	(hint.get_node("EmptyContent/EmptyActions/AddInput") as Button).pressed.emit()
 	await wait_process_frames(2)
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var card: Node = canvas._items_by_id.values()[0]
 	assert_eq(card._display_name, Strings.text("NODE_OBJECT_LIST"))
 	assert_eq(SettingsService.get_setting("ui", "language", "auto"), "zh_CN")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 	var cleanup: Control = main.get_node(
-		"Root/Content/ContextInspector/ContextRoot/CleanupInspector"
+		"Root/Content/Workspace/ContextInspector/ContextRoot/CleanupInspector"
 	)
 	assert_eq(cleanup.find_child("CleanupTitle", true, false).text, Strings.text("CLEANUP_TITLE"))
 	assert_eq(

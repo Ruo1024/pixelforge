@@ -62,6 +62,8 @@ var _execution_detail := ""
 var _font: Font = null
 var _content_root: Control = null
 var _text_prompt_edit: TextEdit = null
+var _prompt_count_label: Label = null
+var _prompt_draft_label: Label = null
 var _model_option: OptionButton = null
 var _model_capability_label: Label = null
 var _cost_estimate_label: Label = null
@@ -211,7 +213,11 @@ func _draw() -> void:
 	var card_size := _card_size()
 	var rect := Rect2(Vector2.ZERO, card_size)
 	draw_rect(rect, BACKGROUND, true)
-	draw_rect(Rect2(Vector2.ZERO, Vector2(card_size.x, HEADER_HEIGHT)), HEADER, true)
+	draw_rect(
+		Rect2(Vector2.ZERO, Vector2(card_size.x, _header_height())),
+		AppTheme.MEDIA_RAIL if _node_type == "image_input" else HEADER,
+		true
+	)
 	draw_rect(rect, _border_color(), false, 1.4)
 	_draw_ports()
 	if _font == null:
@@ -223,7 +229,7 @@ func _draw() -> void:
 		HORIZONTAL_ALIGNMENT_LEFT,
 		card_size.x - PADDING * 2,
 		16,
-		Color(0.92, 0.94, 0.94, 1.0)
+		AppTheme.MEDIA_RAIL_TEXT if _node_type == "image_input" else AppTheme.TEXT_PRIMARY
 	)
 	_draw_status_badge()
 	_draw_resize_handle()
@@ -258,8 +264,8 @@ func _draw_ports() -> void:
 
 
 func _port_position(index: int, count: int, is_input: bool) -> Vector2:
-	var usable_height := _card_size().y - HEADER_HEIGHT - PADDING * 2
-	var y := HEADER_HEIGHT + PADDING + usable_height * float(index + 1) / float(count + 1)
+	var usable_height := _card_size().y - _header_height() - PADDING * 2
+	var y := _header_height() + PADDING + usable_height * float(index + 1) / float(count + 1)
 	return Vector2(0.0 if is_input else _card_size().x, y)
 
 
@@ -302,6 +308,11 @@ func _resolve_graph_node() -> void:
 		return
 
 	_display_name = _localized_display_name(node)
+	if _node_type == "image_input":
+		var asset_id := String(_params_snapshot.get("asset_id", ""))
+		var asset_name := String(AssetLibrary.get_asset_meta(asset_id).get("name", ""))
+		if not asset_name.is_empty():
+			_display_name = asset_name
 	if not display_title.is_empty():
 		_display_name = display_title
 	_input_ports = _port_names(node.get_input_ports())
@@ -430,6 +441,10 @@ func _card_size() -> Vector2:
 	return Vector2(CardContract.effective_size(_node_type, safe_requested, collapsed))
 
 
+func _header_height() -> float:
+	return float(CardContract.CONTENT_RAIL_HEIGHT if _node_type == "image_input" else HEADER_HEIGHT)
+
+
 func _is_content_node() -> bool:
 	return (
 		_node_type
@@ -455,6 +470,8 @@ func _rebuild_content_controls() -> void:
 		_content_root.free()
 		_content_root = null
 	_text_prompt_edit = null
+	_prompt_count_label = null
+	_prompt_draft_label = null
 	_model_option = null
 	_model_capability_label = null
 	_cost_estimate_label = null
@@ -469,8 +486,8 @@ func _rebuild_content_controls() -> void:
 
 	_content_root = VBoxContainer.new()
 	_content_root.name = "Content"
-	_content_root.position = Vector2(PADDING, HEADER_HEIGHT + PADDING)
-	_content_root.size = _card_size() - Vector2(PADDING * 2, HEADER_HEIGHT + PADDING * 2)
+	_content_root.position = Vector2(PADDING, _header_height() + PADDING)
+	_content_root.size = _card_size() - Vector2(PADDING * 2, _header_height() + PADDING * 2)
 	_content_root.mouse_filter = Control.MOUSE_FILTER_PASS
 	_content_root.add_theme_constant_override("separation", 8)
 	add_child(_content_root)
@@ -618,15 +635,23 @@ func _build_text_prompt_controls() -> void:
 	_text_prompt_edit = TextEdit.new()
 	_text_prompt_edit.name = "PromptEdit"
 	_text_prompt_edit.text = String(_params_snapshot.get("text", ""))
-	_text_prompt_edit.custom_minimum_size = OBJECT_EDITOR_MIN_SIZE
+	_text_prompt_edit.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, AppTheme.PROMPT_MIN_HEIGHT)
+	_text_prompt_edit.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_text_prompt_edit.placeholder_text = Strings.text("CONTENT_PROMPT_PLACEHOLDER")
 	_text_prompt_edit.focus_exited.connect(_commit_text_prompt)
+	_text_prompt_edit.text_changed.connect(_sync_prompt_draft)
+	_text_prompt_edit.gui_input.connect(_on_prompt_input)
 	_content_root.add_child(_text_prompt_edit)
-	var apply_button := Button.new()
-	apply_button.name = "ApplyButton"
-	apply_button.text = Strings.text("ACTION_APPLY")
-	apply_button.pressed.connect(_commit_text_prompt)
-	_content_root.add_child(apply_button)
+	var footer := HBoxContainer.new()
+	_prompt_draft_label = Label.new()
+	_prompt_draft_label.name = "PromptDraft"
+	_prompt_draft_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	footer.add_child(_prompt_draft_label)
+	_prompt_count_label = Label.new()
+	_prompt_count_label.name = "PromptCharacterCount"
+	footer.add_child(_prompt_count_label)
+	_content_root.add_child(footer)
+	_sync_prompt_draft()
 
 
 func _build_style_controls() -> void:
@@ -637,6 +662,18 @@ func _build_style_controls() -> void:
 	name_label.text = String(preset.get("name", Strings.text("CONTENT_STYLE_DEFAULT")))
 	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_content_root.add_child(name_label)
+	var palette_strip := HBoxContainer.new()
+	palette_strip.name = "PaletteStrip"
+	var palette_value: Variant = preset.get("palette", {})
+	var colors: Array = (
+		Dictionary(palette_value).get("colors", []) if palette_value is Dictionary else []
+	)
+	for raw_color in colors.slice(0, mini(12, colors.size())):
+		var swatch := ColorRect.new()
+		swatch.custom_minimum_size = Vector2.ONE * AppTheme.PALETTE_SWATCH_SIZE
+		swatch.color = Color.from_string(String(raw_color), Color.TRANSPARENT)
+		palette_strip.add_child(swatch)
+	_content_root.add_child(palette_strip)
 	var summary_label := Label.new()
 	summary_label.name = "StyleDetail"
 	summary_label.text = _style_summary(preset)
@@ -736,6 +773,14 @@ func _build_generate_controls() -> void:
 
 
 func _build_size_controls() -> void:
+	var hero := Label.new()
+	hero.name = "SizeHero"
+	hero.text = "%d × %d px" % [
+		int(_params_snapshot.get("width", 32)), int(_params_snapshot.get("height", 32))
+	]
+	hero.add_theme_font_size_override("font_size", AppTheme.STRUCTURED_HERO_FONT_SIZE)
+	hero.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_content_root.add_child(hero)
 	var row := HBoxContainer.new()
 	var width := _make_spin("Width", 1, 512, int(_params_snapshot.get("width", 32)))
 	var height := _make_spin("Height", 1, 512, int(_params_snapshot.get("height", 32)))
@@ -744,31 +789,35 @@ func _build_size_controls() -> void:
 	row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_HEIGHT"), height))
 	row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_PER_SUBJECT"), count))
 	_content_root.add_child(row)
-	var apply_button := Button.new()
-	apply_button.name = "ApplyButton"
-	apply_button.text = Strings.text("ACTION_APPLY")
-	apply_button.pressed.connect(
-		func() -> void:
-			params_commit_requested.emit(
-				graph_id,
-				node_id,
-				{
-					"width": int(width.value),
-					"height": int(height.value),
-					"per_subject": int(count.value)
-				}
-			)
+	var presets := HBoxContainer.new()
+	presets.name = "SizePresets"
+	for value in [16, 24, 32, 48, 64]:
+		var button := Button.new()
+		button.name = "SizePreset%d" % value
+		button.text = str(value)
+		button.pressed.connect(_commit_size_params.bind(width, height, count, value))
+		presets.add_child(button)
+	_content_root.add_child(presets)
+	width.get_line_edit().text_submitted.connect(
+		func(_value: String) -> void: _commit_size_params(width, height, count)
 	)
-	_content_root.add_child(apply_button)
+	height.get_line_edit().text_submitted.connect(
+		func(_value: String) -> void: _commit_size_params(width, height, count)
+	)
+	count.get_line_edit().text_submitted.connect(
+		func(_value: String) -> void: _commit_size_params(width, height, count)
+	)
 
 
 func _build_reference_controls() -> void:
 	var asset_id := String(_params_snapshot.get("asset_id", ""))
 	var preview := TextureRect.new()
 	preview.name = "ReferencePreview"
-	preview.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, 92)
+	preview.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, 220)
+	preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	var detail := Label.new()
 	detail.name = "ReferenceDetail"
 	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -784,9 +833,10 @@ func _build_reference_controls() -> void:
 		else:
 			preview.texture = ImageTexture.create_from_image(image)
 			detail.text = (
-				"%s · %s"
+				"%d×%d · %s"
 				% [
-					String(meta.get("name", asset_id.left(8))),
+					image.get_width(),
+					image.get_height(),
 					(
 						Strings.text("CONTENT_REFERENCE_ORIGIN_FORMAT")
 						% String(meta.get("origin", "imported"))
@@ -798,6 +848,7 @@ func _build_reference_controls() -> void:
 	_reference_field = AssetRefFieldScript.new()
 	_reference_field.name = "ReferenceField"
 	_reference_field.set_value(asset_id)
+	_reference_field.visible = false
 	_reference_field.value_changed.connect(
 		func(value: String) -> void:
 			params_commit_requested.emit(graph_id, node_id, {"asset_id": value})
@@ -806,22 +857,57 @@ func _build_reference_controls() -> void:
 		func() -> void: action_requested.emit(graph_id, node_id, "import_reference")
 	)
 	_content_root.add_child(_reference_field)
+	var actions := HBoxContainer.new()
+	var replace := Button.new()
+	replace.name = "ReferenceReplace"
+	replace.text = Strings.text("ACTION_REPLACE")
+	replace.pressed.connect(
+		func() -> void: action_requested.emit(graph_id, node_id, "import_reference")
+	)
+	actions.add_child(replace)
+	var remove := Button.new()
+	remove.name = "ReferenceRemove"
+	remove.text = Strings.text("ACTION_REMOVE")
+	remove.pressed.connect(
+		func() -> void: params_commit_requested.emit(graph_id, node_id, {"asset_id": ""})
+	)
+	actions.add_child(remove)
+	_content_root.add_child(actions)
 
 
 func _build_reference_set_controls() -> void:
 	var asset_ids: Array = _params_snapshot.get("asset_ids", []).duplicate()
+	var summary := Label.new()
+	summary.name = "ReferenceSetSummary"
+	summary.text = Strings.text("CONTENT_REFERENCE_SET_ORDER_SUMMARY") % asset_ids.size()
+	_content_root.add_child(summary)
 	var scroll := ScrollContainer.new()
 	scroll.name = "ReferenceSetScroll"
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var rows := VBoxContainer.new()
+	var rows := GridContainer.new()
 	rows.name = "ReferenceSetRows"
+	rows.columns = maxi(1, int(floor(float(requested_size.x - 32) / 108.0)))
 	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for index in range(asset_ids.size()):
 		rows.add_child(_reference_set_row(asset_ids, index))
+	var add_tile := Button.new()
+	add_tile.name = "ReferenceSetAddTile"
+	add_tile.text = Strings.text("ACTION_ADD_REFERENCE")
+	add_tile.custom_minimum_size = Vector2.ONE * AppTheme.REFERENCE_TILE_SIZE
+	add_tile.pressed.connect(
+		func() -> void: action_requested.emit(graph_id, node_id, "import_reference_set")
+	)
+	rows.add_child(add_tile)
 	scroll.add_child(rows)
 	_content_root.add_child(scroll)
+	var limit := _reference_limit()
+	var limit_label := Label.new()
+	limit_label.name = "ReferenceSetLimit"
+	limit_label.text = Strings.text("CONTENT_REFERENCE_SET_LIMIT") % limit
+	_content_root.add_child(limit_label)
 	var add_field := AssetRefFieldScript.new()
 	add_field.name = "ReferenceSetAddField"
+	add_field.visible = false
 	add_field.set_value("")
 	add_field.value_changed.connect(
 		func(asset_id: String) -> void:
@@ -839,17 +925,20 @@ func _build_reference_set_controls() -> void:
 
 func _reference_set_row(asset_ids: Array, index: int) -> Control:
 	var asset_id := String(asset_ids[index])
-	var row := HBoxContainer.new()
+	var row := VBoxContainer.new()
 	row.name = "ReferenceSetRow%d" % index
+	row.custom_minimum_size = Vector2(
+		AppTheme.REFERENCE_TILE_SIZE, AppTheme.REFERENCE_TILE_ROW_HEIGHT
+	)
 	var preview := TextureRect.new()
 	preview.name = "ReferenceSetPreview%d" % index
-	preview.custom_minimum_size = REFERENCE_SET_PREVIEW_SIZE
+	preview.custom_minimum_size = Vector2.ONE * AppTheme.REFERENCE_TILE_SIZE
 	preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	var detail := Label.new()
 	detail.name = "ReferenceSetDetail%d" % index
-	detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	if asset_id.is_empty():
 		detail.text = Strings.text("CONTENT_REFERENCE_NONE")
 	elif not AssetLibrary.has_asset(asset_id):
@@ -861,25 +950,15 @@ func _reference_set_row(asset_ids: Array, index: int) -> Control:
 			detail.text = Strings.text("CONTENT_REFERENCE_DECODE_FAILED_FORMAT") % asset_id.left(8)
 		else:
 			preview.texture = ImageTexture.create_from_image(image)
-			detail.text = (
-				"%d. %s\n%s"
-				% [
-					index + 1,
-					String(meta.get("name", asset_id.left(8))),
-					(
-						Strings.text("CONTENT_REFERENCE_ORIGIN_FORMAT")
-						% String(meta.get("origin", "imported"))
-					),
-				]
-			)
+			detail.text = "%d. %s" % [index + 1, String(meta.get("name", ""))]
 	row.add_child(preview)
 	row.add_child(detail)
-	var controls := VBoxContainer.new()
 	var field := AssetRefFieldScript.new()
 	field.name = "ReferenceSetField%d" % index
+	field.visible = false
 	field.set_value(asset_id)
 	field.value_changed.connect(_replace_reference_set_item.bind(asset_ids, index))
-	controls.add_child(field)
+	row.add_child(field)
 	var action_row := HBoxContainer.new()
 	for action in ["up", "down", "remove"]:
 		var button := Button.new()
@@ -889,10 +968,31 @@ func _reference_set_row(asset_ids: Array, index: int) -> Control:
 			(action == "up" and index == 0) or (action == "down" and index == asset_ids.size() - 1)
 		)
 		button.pressed.connect(_change_reference_set_item.bind(asset_ids, index, action))
+		button.visible = false
 		action_row.add_child(button)
-	controls.add_child(action_row)
-	row.add_child(controls)
+	row.add_child(action_row)
+	var menu := MenuButton.new()
+	menu.name = "ReferenceSetMenu%d" % index
+	menu.text = Strings.text("ACTION_MORE")
+	menu.get_popup().add_item(Strings.text("ACTION_REPLACE"), 0)
+	menu.get_popup().add_item(Strings.text("ACTION_REMOVE"), 1)
+	menu.get_popup().id_pressed.connect(
+		func(action_id: int) -> void:
+			if action_id == 0:
+				action_requested.emit(graph_id, node_id, "replace_reference:%d" % index)
+			else:
+				_change_reference_set_item(asset_ids, index, "remove")
+	)
+	row.add_child(menu)
 	return row
+
+
+func _reference_limit() -> int:
+	var descriptors := ProviderService.get_selectable_model_descriptors()
+	if descriptors.is_empty():
+		return 0
+	var capabilities: Dictionary = descriptors[0].get("capabilities", {})
+	return maxi(0, int(capabilities.get("max_reference_images", 0)))
 
 
 func _replace_reference_set_item(asset_id: String, asset_ids: Array, index: int) -> void:
@@ -942,8 +1042,53 @@ func _commit_text_prompt() -> void:
 		return
 	var text := _text_prompt_edit.text
 	if text == String(_params_snapshot.get("text", "")):
+		_sync_prompt_draft()
 		return
 	params_commit_requested.emit(graph_id, node_id, {"text": text})
+	_params_snapshot["text"] = text
+	_sync_prompt_draft()
+
+
+func _sync_prompt_draft() -> void:
+	if _text_prompt_edit == null:
+		return
+	var changed := _text_prompt_edit.text != String(_params_snapshot.get("text", ""))
+	if _prompt_draft_label != null:
+		_prompt_draft_label.text = Strings.text("CONTENT_PROMPT_DRAFT") if changed else ""
+	if _prompt_count_label != null:
+		_prompt_count_label.text = (
+			Strings.text("CONTENT_PROMPT_CHARACTER_COUNT") % _text_prompt_edit.text.length()
+		)
+
+
+func _on_prompt_input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or not event.pressed:
+		return
+	if event.keycode == KEY_ESCAPE:
+		_text_prompt_edit.text = String(_params_snapshot.get("text", ""))
+		_text_prompt_edit.release_focus()
+		_sync_prompt_draft()
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_ENTER and event.is_command_or_control_pressed():
+		_commit_text_prompt()
+		get_viewport().set_input_as_handled()
+
+
+func _commit_size_params(
+	width: SpinBox, height: SpinBox, count: SpinBox, preset: int = -1
+) -> void:
+	if preset > 0:
+		width.value = preset
+		height.value = preset
+	params_commit_requested.emit(
+		graph_id,
+		node_id,
+		{
+			"width": int(width.value),
+			"height": int(height.value),
+			"per_subject": int(count.value),
+		}
+	)
 
 
 func _commit_generate_params() -> void:

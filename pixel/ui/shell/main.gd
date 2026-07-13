@@ -13,6 +13,8 @@ const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
 const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
 const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
 const WorkspaceNavigationScript := preload("res://ui/shell/workspace_navigation.gd")
+const ResponsiveWorkspaceScript := preload("res://ui/shell/responsive_workspace.gd")
+const MonoIconButtonScript := preload("res://ui/widgets/mono_icon_button.gd")
 const CanvasMinimapControllerScript := preload("res://ui/shell/canvas_minimap_controller.gd")
 const WorkspaceStartControllerScript := preload("res://ui/shell/workspace_start_controller.gd")
 const CanvasGraphStatusPresenter := preload("res://ui/shell/canvas_graph_status_presenter.gd")
@@ -35,7 +37,7 @@ const MIN_WINDOW_HEIGHT := 560
 const WINDOW_SCREEN_MARGIN := 80
 const UI_FONT_SIZE := 16
 const UI_SMALL_FONT_SIZE := 14
-const TOP_BAR_HEIGHT := 48
+const TOP_BAR_HEIGHT := 52
 const BOTTOM_BAR_HEIGHT := 32
 const TOOLBAR_BUTTON_WIDTH := 96
 const COMPACT_BUTTON_WIDTH := 72
@@ -321,47 +323,63 @@ func _build_ui() -> void:
 	var top_bar := HBoxContainer.new()
 	top_bar.name = "TopBar"
 	top_bar.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, TOP_BAR_HEIGHT)
-	top_bar.alignment = BoxContainer.ALIGNMENT_END
+	top_bar.alignment = BoxContainer.ALIGNMENT_BEGIN
 	root.add_child(top_bar)
 
+	var global_actions := HBoxContainer.new()
+	global_actions.name = "GlobalActions"
+	top_bar.add_child(global_actions)
+
 	_title_label = Label.new()
+	_title_label.name = "ProjectTitle"
 	_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_title_label.add_theme_font_size_override("font_size", UI_FONT_SIZE)
 	top_bar.add_child(_title_label)
 
-	var global_actions := HBoxContainer.new()
-	global_actions.name = "GlobalActions"
-	top_bar.add_child(global_actions)
-	_add_toolbar_button(global_actions, "ACTION_NEW", _create_new_project, COMPACT_BUTTON_WIDTH)
-	_add_toolbar_button(global_actions, "ACTION_OPEN", _show_open_dialog, COMPACT_BUTTON_WIDTH)
-	_add_toolbar_button(global_actions, "ACTION_SAVE", _save_current_project, COMPACT_BUTTON_WIDTH)
-	_add_toolbar_button(global_actions, "ACTION_EXPORT_PNG", _export_selected_png)
-	var settings_controller := WorkspaceSettingsControllerScript.new()
-	settings_controller.name = "WorkspaceSettingsController"
-	add_child(settings_controller)
-	settings_controller.setup(global_actions)
+	var history_actions := HBoxContainer.new()
+	history_actions.name = "HistoryActions"
+	top_bar.add_child(history_actions)
+	_add_toolbar_button(history_actions, "ACTION_UNDO", _undo_canvas_action, 44)
+	_add_toolbar_button(history_actions, "ACTION_REDO", _redo_canvas_action, 44)
 
 	var canvas_actions := HBoxContainer.new()
 	canvas_actions.name = "CanvasActions"
 	top_bar.add_child(canvas_actions)
 
-	var content := HSplitContainer.new()
+	var content := HBoxContainer.new()
 	content.name = "Content"
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(content)
+	var left_rail := VBoxContainer.new()
+	left_rail.name = "LeftRail"
+	left_rail.custom_minimum_size = Vector2(AppTheme.LEFT_RAIL_WIDTH, 0)
+	content.add_child(left_rail)
+	_add_rail_button(left_rail, "ACTION_ADD_INPUT", _workspace_add_input, "add_input")
+	_add_rail_button(
+		left_rail, "ACTION_IMPORT_REFERENCE", _workspace_import_reference, "import_reference"
+	)
+	_add_rail_button(left_rail, "ACTION_LIBRARY", _toggle_library, "library")
+
+	var workspace := ResponsiveWorkspaceScript.new()
+	workspace.name = "Workspace"
+	workspace.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content.add_child(workspace)
 
 	_canvas = InfiniteCanvasScript.new()
 	_canvas.name = "InfiniteCanvas"
 	_canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	content.add_child(_canvas)
+	workspace.add_child(_canvas)
 
 	_context_inspector = ContextInspectorScript.new()
 	_context_inspector.name = "ContextInspector"
 	_context_inspector.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	content.add_child(_context_inspector)
+	_context_inspector.custom_minimum_size = Vector2(AppTheme.INSPECTOR_MIN_WIDTH, 0)
+	_context_inspector.visible = false
+	workspace.add_child(_context_inspector)
 	_cleanup_inspector = _context_inspector.get_cleanup_inspector()
 
 	var bottom_bar := HBoxContainer.new()
@@ -412,45 +430,19 @@ func _build_ui() -> void:
 	_m2_1_ui.export_snapshots_requested.connect(_export_flow.request_export)
 	_m2_1_ui.add_file_menu(global_actions)
 	_m2_1_ui.add_tool_buttons(canvas_actions)
-	_add_toolbar_button(canvas_actions, "ACTION_RUN_SELECTION", _m2_1_ui.run_selected_mock_graph)
-	_add_toolbar_button(
-		canvas_actions, "ACTION_SAVE_WORKFLOW", _m2_1_ui._save_selected_frame_as_workflow
-	)
-	_add_toolbar_button(canvas_actions, "ACTION_GROUP", _canvas._group_selected_nodes)
-	_add_toolbar_button(
-		canvas_actions, "ACTION_DELETE", _canvas.delete_selected, COMPACT_BUTTON_WIDTH
-	)
-	_add_toolbar_button(canvas_actions, "ACTION_TOGGLE_EDGES", _m2_1_ui._toggle_canvas_edges)
 	_add_toolbar_button(
 		canvas_actions,
-		"ACTION_ADD_INPUT",
-		_workspace_start.create_input_workspace,
-		TOOLBAR_BUTTON_WIDTH
+		"ACTION_RUN_SELECTION",
+		_m2_1_ui.run_selected_mock_graph,
+		76,
+		"run_selection"
 	)
-	_add_toolbar_button(
-		canvas_actions,
-		"ACTION_IMPORT_REFERENCE",
-		_workspace_start.import_reference,
-		TOOLBAR_BUTTON_WIDTH
-	)
-	_add_toolbar_button(
-		canvas_actions,
-		"ACTION_OPEN_EXAMPLE",
-		_workspace_start.open_example_workspace,
-		TOOLBAR_BUTTON_WIDTH
-	)
-	_add_toolbar_button(
-		canvas_actions, "ACTION_BATCH", _m2_1_ui.batch_selected_sprites, COMPACT_BUTTON_WIDTH
-	)
-	_add_toolbar_button(
-		canvas_actions, "ACTION_MATTE", _m2_1_ui.open_matte_dialog, COMPACT_BUTTON_WIDTH
-	)
-	_add_toolbar_button(
-		canvas_actions, "ACTION_SLICE", _m2_1_ui.open_slice_dialog, COMPACT_BUTTON_WIDTH
-	)
-	_add_toolbar_button(
-		canvas_actions, "ACTION_OUTLINE", _m2_1_ui.open_outline_dialog, COMPACT_BUTTON_WIDTH
-	)
+	_add_toolbar_button(canvas_actions, "ACTION_EXPORT", _export_selected_png, 68, "export")
+	_add_toolbar_button(canvas_actions, "ACTION_INSPECTOR", _toggle_inspector, 76, "inspector")
+	var settings_controller := WorkspaceSettingsControllerScript.new()
+	settings_controller.name = "WorkspaceSettingsController"
+	add_child(settings_controller)
+	settings_controller.setup(canvas_actions, "more")
 	_zoom_overlay = ZoomOverlayControllerScript.new()
 	_zoom_overlay.setup(_canvas, ZOOM_CONTROL_MARGIN)
 	_minimap_controller = CanvasMinimapControllerScript.new()
@@ -461,7 +453,11 @@ func _build_ui() -> void:
 
 
 func _add_toolbar_button(
-	parent: Control, text_key: String, callback: Callable, button_width: int = TOOLBAR_BUTTON_WIDTH
+	parent: Control,
+	text_key: String,
+	callback: Callable,
+	button_width: int = TOOLBAR_BUTTON_WIDTH,
+	action_id: String = ""
 ) -> void:
 	var button := Button.new()
 	button.text = Strings.text(text_key)
@@ -471,7 +467,52 @@ func _add_toolbar_button(
 	button.pressed.connect(callback)
 	parent.add_child(button)
 	button.set_meta("text_key", text_key)
+	if not action_id.is_empty():
+		button.set_meta("action_id", action_id)
 	_localized_toolbar_buttons.append(button)
+
+
+func _add_rail_button(
+	parent: Control, text_key: String, callback: Callable, action_id: String
+) -> void:
+	var button := MonoIconButtonScript.new()
+	button.name = action_id.to_pascal_case()
+	button.setup(action_id)
+	button.tooltip_text = Strings.text(text_key)
+	button.custom_minimum_size = Vector2.ONE * AppTheme.RAIL_BUTTON_SIZE
+	button.focus_mode = Control.FOCUS_NONE
+	button.set_meta("text_key", text_key)
+	button.set_meta("action_id", action_id)
+	button.pressed.connect(callback)
+	parent.add_child(button)
+	_localized_toolbar_buttons.append(button)
+
+
+func _workspace_add_input() -> void:
+	_workspace_start.create_input_workspace()
+
+
+func _workspace_import_reference() -> void:
+	_workspace_start.import_reference()
+
+
+func _toggle_library() -> void:
+	_context_inspector.visible = true
+	_context_inspector.project_resource_browser.grab_focus()
+	_context_inspector.get_parent().queue_sort()
+
+
+func _toggle_inspector() -> void:
+	_context_inspector.visible = not _context_inspector.visible
+	_context_inspector.get_parent().queue_sort()
+
+
+func _undo_canvas_action() -> void:
+	UndoService.undo()
+
+
+func _redo_canvas_action() -> void:
+	UndoService.redo()
 
 
 func _refresh_toolbar_text(_preference: String, _locale: String) -> void:
@@ -1054,7 +1095,7 @@ func _update_window_title() -> void:
 	var dirty_marker := "*" if ProjectService.current_project.dirty else ""
 	var project_name: String = ProjectService.current_project.get_name()
 	var title := "%s%s - %s" % [dirty_marker, project_name, AppInfo.APP_NAME]
-	_title_label.text = "%s  %s" % [AppInfo.APP_NAME, dirty_marker]
+	_title_label.text = "%s%s" % [project_name, dirty_marker]
 
 	var window := get_window()
 	if window != null:

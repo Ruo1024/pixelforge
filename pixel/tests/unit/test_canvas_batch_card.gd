@@ -616,18 +616,19 @@ func test_object_node_card_exposes_content_and_emits_atomic_param_commit() -> vo
 		graph.id, "objects", Vector2(24, 32), "node_item_objects", false
 	)
 	var edit: TextEdit = card.get_content_control("ObjectEdit")
-	var apply_button: Button = card.get_content_control("ApplyButton")
 
 	assert_not_null(edit)
-	assert_not_null(apply_button)
+	assert_null(card.get_content_control("ApplyButton"))
+	assert_false(edit.visible)
 	assert_gt(card.get_canvas_bounds().size.y, 116.0)
 	assert_eq(
 		card.get_content_control("ItemCount").text,
-		Strings.text("CONTENT_OBJECT_SELECTED_FORMAT") % [2, 2]
+		Strings.text("CONTENT_OBJECT_CARD_SUMMARY") % [2, 2, 2]
 	)
 	assert_eq(card.get_content_control("ObjectText0").text, "barrel")
+	(card.get_content_control("PasteRowsToggle") as Button).button_pressed = true
 	edit.text = "well"
-	apply_button.pressed.emit()
+	edit.focus_exited.emit()
 	assert_eq(commits.size(), 1)
 	assert_eq(commits[0][0], graph.id)
 	assert_eq(commits[0][1], "objects")
@@ -676,8 +677,15 @@ func test_prompt_and_style_cards_show_real_content_and_prompt_emits_commit() -> 
 
 	var prompt_edit: TextEdit = prompt_card.get_content_control("PromptEdit")
 	assert_eq(prompt_edit.text, "tiny windmill")
+	assert_gte(prompt_edit.custom_minimum_size.y, 132.0)
+	assert_null(prompt_card.get_content_control("ApplyButton"))
 	prompt_edit.text = "tiny watermill"
-	(prompt_card.get_content_control("ApplyButton") as Button).pressed.emit()
+	prompt_edit.text_changed.emit()
+	assert_eq(
+		prompt_card.get_content_control("PromptDraft").text,
+		Strings.text("CONTENT_PROMPT_DRAFT")
+	)
+	prompt_edit.focus_exited.emit()
 	assert_eq(commits, [[graph.id, "prompt", {"text": "tiny watermill"}]])
 	assert_eq(style_card.get_content_control("StyleName").text, "Farm DB32")
 	assert_eq(style_card.get_content_control("StyleDetail").text, "32 px base · Palette: db32")

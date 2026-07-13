@@ -189,6 +189,8 @@ func setup(
 
 func add_file_menu(parent: Control) -> void:
 	var file_menu_button := MenuButton.new()
+	file_menu_button.name = "FileMenu"
+	file_menu_button.set_meta("action_id", "file")
 	file_menu_button.custom_minimum_size = Vector2(FILE_MENU_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT)
 	file_menu_button.focus_mode = Control.FOCUS_NONE
 	file_menu_button.add_theme_font_size_override("font_size", TOOLBAR_FONT_SIZE)

@@ -182,7 +182,7 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	await wait_process_frames(2)
 
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	main.get_node("RecoveryDialog").hide()
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
@@ -263,7 +263,7 @@ func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_res
 	await wait_process_frames(2)
 
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])

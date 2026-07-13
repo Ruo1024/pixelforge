@@ -29,7 +29,7 @@ func before_each() -> void:
 
 func test_empty_canvas_hint_and_dialog_import_are_stable_and_atomic() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var import_flow: Node = main.get_node("M21UiController/ImportFlowController")
 	var hint: Control = canvas.get_node("EmptyCanvasImportHint")
 	assert_true(hint.visible)
@@ -62,7 +62,7 @@ func test_empty_canvas_hint_and_dialog_import_are_stable_and_atomic() -> void:
 
 func test_existing_workspace_import_stays_in_view_without_forced_focus() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var import_flow: Node = main.get_node("M21UiController/ImportFlowController")
 	var first: Dictionary = import_flow.import_files_from_dialog(
 		PackedStringArray([VALID_IMAGE_PATH])
@@ -83,7 +83,7 @@ func test_existing_workspace_import_stays_in_view_without_forced_focus() -> void
 
 func test_multi_image_import_creates_reference_grid_as_one_undo_action() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var import_flow: Node = main.get_node("M21UiController/ImportFlowController")
 	var anchor: Vector2 = import_flow.stable_import_anchor()
 	var result: Dictionary = import_flow.import_files_from_dialog(
@@ -108,7 +108,7 @@ func test_multi_image_import_creates_reference_grid_as_one_undo_action() -> void
 
 func test_1254_preview_reaches_running_and_done_instead_of_stale_queued() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var image := _solid_image(Vector2i(1254, 1254), Color(0.2, 0.4, 0.7, 1.0))
 	var asset_id: String = AssetLibrary.register_image(image, "large", {"origin": "imported"})
 	canvas.add_sprite_item(image, asset_id, Vector2.ZERO)

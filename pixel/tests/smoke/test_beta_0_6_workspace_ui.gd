@@ -10,8 +10,6 @@ func before_each() -> void:
 
 
 func test_workspace_shell_exposes_frozen_primary_regions() -> void:
-	pending("B6-2 workspace shell")
-	return
 	var main := await _make_main()
 	var top_bar: Control = main.get_node("Root/TopBar")
 	var left_rail: Control = main.get_node("Root/Content/LeftRail")
@@ -25,15 +23,38 @@ func test_workspace_shell_exposes_frozen_primary_regions() -> void:
 
 
 func test_loaded_fifty_percent_zoom_is_synchronized_in_one_frame() -> void:
-	pending("B6-2 workspace shell")
-	return
 	var main := await _make_main()
 	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	canvas.load_canvas_data({"camera": {"center": [0, 0], "zoom": 0.5}, "items": []})
 	await wait_process_frames(1)
 	assert_eq(canvas.camera_zoom, 0.5)
 	assert_eq(canvas.zoom_index, 2)
-	assert_eq(main.get_node("Root/Content/Workspace/InfiniteCanvas/ZoomControl/ZoomLabel").text, "50%")
+	assert_eq(
+		main.get_node("Root/Content/Workspace/InfiniteCanvas/ZoomControl/ZoomRow/ZoomLabel").text,
+		"50%"
+	)
+
+
+func test_inspector_docks_wide_overlays_narrow_and_preserves_camera() -> void:
+	var main := await _make_main()
+	var workspace: Control = main.get_node("Root/Content/Workspace")
+	var canvas: Control = workspace.get_node("InfiniteCanvas")
+	var inspector: Control = workspace.get_node("ContextInspector")
+	canvas.set_camera_zoom(0.75)
+	canvas.camera_center = Vector2(120, -48)
+	main.size = Vector2(1600, 800)
+	await wait_process_frames(2)
+	main._toggle_inspector()
+	await wait_process_frames(2)
+	assert_false(workspace.is_inspector_overlay())
+	assert_true(inspector.visible)
+	assert_lt(canvas.size.x, workspace.size.x)
+	main.size = Vector2(1200, 700)
+	await wait_process_frames(2)
+	assert_true(workspace.is_inspector_overlay())
+	assert_almost_eq(canvas.size.x, workspace.size.x, 1.0)
+	assert_eq(canvas.camera_center, Vector2(120, -48))
+	assert_eq(canvas.camera_zoom, 0.75)
 
 
 func _make_main() -> Control:

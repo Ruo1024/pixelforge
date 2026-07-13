@@ -509,6 +509,7 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 	_suppress_change_signal = false
 	_update_layer_transform()
 	_update_item_visibility()
+	_emit_zoom_changed()
 
 
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:

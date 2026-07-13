@@ -10,11 +10,13 @@ var _button: Button = null
 var _dialog: ConfirmationDialog = null
 
 
-func setup(button_parent: Control) -> void:
+func setup(button_parent: Control, action_id: String = "") -> void:
 	_button = Button.new()
 	_button.name = "SettingsButton"
-	_button.text = Strings.text("SETTINGS_ACTION")
+	_button.text = Strings.text("ACTION_MORE") if not action_id.is_empty() else Strings.text("SETTINGS_ACTION")
 	_button.focus_mode = Control.FOCUS_NONE
+	if not action_id.is_empty():
+		_button.set_meta("action_id", action_id)
 	_button.pressed.connect(_show_settings)
 	button_parent.add_child(_button)
 
@@ -35,7 +37,11 @@ func _show_settings() -> void:
 
 
 func _refresh_text(_preference: String, _locale: String) -> void:
-	_button.text = Strings.text("SETTINGS_ACTION")
+	_button.text = (
+		Strings.text("ACTION_MORE")
+		if not String(_button.get_meta("action_id", "")).is_empty()
+		else Strings.text("SETTINGS_ACTION")
+	)
 	_dialog.title = Strings.text("SETTINGS_TITLE")
 	_dialog.ok_button_text = Strings.text("ACTION_OK")
 	_dialog.cancel_button_text = Strings.text("ACTION_CANCEL")

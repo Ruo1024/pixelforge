@@ -24,7 +24,7 @@ func test_main_window_uses_readable_minimum_sizes() -> void:
 	var bottom_bar: Control = root.get_node("BottomBar")
 
 	assert_eq(main.custom_minimum_size, Vector2(1080, 560))
-	assert_eq(top_bar.custom_minimum_size.y, 48.0)
+	assert_eq(top_bar.custom_minimum_size.y, 52.0)
 	assert_eq(bottom_bar.custom_minimum_size.y, 32.0)
 
 	for child in top_bar.get_children():
@@ -39,7 +39,7 @@ func test_main_window_zoom_overlay_controls_canvas_zoom() -> void:
 	add_child_autofree(main)
 	await wait_process_frames(2)
 
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var zoom_control: Control = canvas.get_node("ZoomControl")
 	var bottom_bar: Control = main.get_node("Root/BottomBar")
 	var slider: HSlider = zoom_control.get_node("ZoomRow/ZoomSlider")
@@ -205,7 +205,7 @@ func test_cleanup_inspector_keeps_apply_actions_reachable_below_scroll() -> void
 	await wait_process_frames(2)
 
 	var inspector: Control = main.get_node(
-		"Root/Content/ContextInspector/ContextRoot/CleanupInspector"
+		"Root/Content/Workspace/ContextInspector/ContextRoot/CleanupInspector"
 	)
 	var root: VBoxContainer = inspector.get_node("InspectorRoot")
 
@@ -241,7 +241,7 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	await wait_process_frames(2)
 
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 
@@ -368,7 +368,7 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
 	await wait_process_frames(2)
 
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 	canvas.set_camera_zoom(1.0, canvas.size * 0.5)
@@ -407,7 +407,7 @@ func test_selected_graph_node_params_are_undoable_and_affect_rerun() -> void:
 	await wait_process_frames(2)
 
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 
@@ -443,7 +443,7 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	await wait_process_frames(2)
 
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 
@@ -577,7 +577,7 @@ func test_quick_add_on_empty_canvas_creates_default_graph_at_requested_position_
 	add_child_autofree(main)
 	await wait_process_frames(2)
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var requested_world := Vector2(-240, 180)
 	var requested_screen := Vector2i(
 		canvas.get_screen_position() + canvas.world_to_screen(requested_world)
@@ -615,7 +615,7 @@ func test_batch_review_focus_shortcuts_step_selected_mock_thumbnail() -> void:
 	await wait_process_frames(2)
 
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 
@@ -652,7 +652,7 @@ func test_batch_processing_replaces_selected_asset_without_dropping_unselected_i
 	await wait_process_frames(2)
 
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 
@@ -707,7 +707,7 @@ func test_graph_status_events_update_status_bar() -> void:
 	add_child_autofree(main)
 	await wait_process_frames(2)
 
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
 	canvas.graph_status.emit({"type": "connect_preview", "state": "valid"})
 	assert_eq(_status_label(main).text, Strings.text("STATUS_GRAPH_CONNECT_PREVIEW_VALID"))
@@ -748,7 +748,7 @@ func test_run_selected_graph_reports_ghost_node_type() -> void:
 	await wait_process_frames(2)
 
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	(
 		ProjectService
 		. set_graph_data(
@@ -824,7 +824,7 @@ func test_candidate_continue_branch_is_one_undoable_canvas_action() -> void:
 	add_child_autofree(main)
 	await wait_process_frames(2)
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	canvas._add_batch_card(
 		[asset_id], Vector2.ZERO, "Source", "source_item", false, graph.id, "source_batch"
 	)
@@ -868,7 +868,7 @@ func test_workflow_template_inserts_at_anchor_and_undoes_as_one_canvas_action() 
 	ProjectService.new_project("Workflow insert")
 	await wait_process_frames(1)
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var result: Dictionary = controller._insert_workflow_template(
 		WorkflowTemplateService.builtin_templates()[0], Vector2(500, 300)
 	)
@@ -912,7 +912,7 @@ func test_selected_stage_runs_each_valid_target_without_unrelated_empty_inputs()
 	ProjectService.project_loaded.emit(ProjectService.current_project)
 	await wait_process_frames(1)
 	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/InfiniteCanvas")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	canvas.select_ids(["stage_a"])
 	controller.run_selected_mock_graph()
 
