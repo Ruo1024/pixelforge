@@ -1,22 +1,25 @@
 # PixelForge Beta 0.6 项目所有者统一人工验收单
 
-> 候选：`PixelForge-0.6.0-beta.1-macOS.zip`
+> 候选：`PixelForge-0.6.0-beta.2-macOS.zip`
 >
-> SHA-256：`9e230a8e577ade62046d307221a2360b8a14c7baf53956398aaaa5ee19eb05eb`
+> SHA-256：`9aa88053fe0dac4e800d4cc8cc8db59e46c981f5132aadf45675bad3ac232d0c`
 >
-> 分支：`codex/beta0-6-card-productization`（本地，未合并 `main`、未 push）
+> 分支：`codex/beta0-6-adaptive-shell-repair`（本地，未合并 `main`、未 push）
 >
 > 当前状态：**工程通过、人工待验、发布未通过**
 >
 > 执行者：项目所有者。下列方框全部保持未填写；脚本截图和自动化不能替代本清单。
 
+`PixelForge-0.6.0-beta.1-macOS.zip` 已被项目所有者否决，禁止继续按本清单验收。本清单只对应上述 beta.2 候选，现在可以开始一次统一人工验收。
+
 ## 0. 候选准备
 
-1. 对 `pixel/build/PixelForge-0.6.0-beta.1-macOS.zip` 运行 `shasum -a 256`，确认与上方值一致。
-2. 解压到仓库外临时目录，不覆盖旧候选。
+1. 对 `pixel/build/PixelForge-0.6.0-beta.2-macOS.zip` 运行 `shasum -a 256`，确认与上方值一致。
+2. 优先解压到仓库外临时目录并独立启动候选，不覆盖旧候选。
 3. 准备可安全保存临时 `.pxproj`、模板和导出结果的目录，以及项目所有者有权使用的测试图片。
 4. 准备内建 Retina 和外接屏；记录 macOS 版本、机器、分辨率/缩放档、测试时间和候选路径。
 5. 真实云端步骤仅使用项目所有者自己的密钥；不要把密钥写入项目、截图、报告或聊天。
+6. 如果必须从 Godot 编辑器运行，先在仓库根目录执行 `./pixel/scripts/configure_editor_game_view.sh`，完全重启 Godot，并确认 PixelForge 在独立原生窗口中打开；嵌入式 Game 视图不能作为本轮验收环境。
 
 ## 1. 工作区与双语入口
 
@@ -83,6 +86,8 @@
 ## 8. macOS 内屏、外屏与跨屏
 
 分别以 English/简中在内建 Retina、外接屏执行代表旅程，并移动窗口内屏 → 外屏 → 内屏：
+
+- [ ] 使用独立 PixelForge 项目窗口执行；若从 Godot 编辑器启动，先确认项目没有运行在嵌入式 Game 视图中。嵌入式视图结果不能替代本节。
 
 - [ ] 顶栏、左侧栏、检查器、卡片、状态栏与主要弹窗没有重叠、截断或不可达按钮。
 - [ ] UI 不随跨屏累计放大/缩小，画布相机、选择和 10/25/50/100/400% 档位保持稳定。

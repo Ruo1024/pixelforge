@@ -150,8 +150,8 @@ class_name PFTask
 - 信号命名过去式（`task_finished`），方法命令式（`run_task`）。
 - 注释只写关键节点：模块职责、契约引用、非显然不变量、兼容/安全原因和影响应用行为的重要实现决策。不要逐行复述代码或用注释保存临时思考。
 - 魔法数字提取为有语义的常量。用户可见字符串经过集中 i18n 目录/访问层；`ui/shell/strings.gd` 在 Beta 0.2 可作为迁移兼容入口，不再作为英文常量终点。
-- **UI 缩放**：现有基线由根 `Window.content_scale_factor` 统一驱动，组件不得私设第二套倍率或用局部 padding/字号补丁绕过根因；画布美术仍按设备像素整数对齐与 NEAREST 自管。2026-07-12 的 macOS 实机证据表明现有根策略尚未完成视觉验收，Beta 0.2 必须按 `BETA-0.2-UI-DIAGNOSTICS.md` 先归因再决定是否修订根策略。`scripts/check_ui_scaling.sh` 继续作为静态守护，但不能替代真实字形与跨屏测试。
-- PixelForge 的编辑器调试默认禁用 Godot Game embedding（全局 editor setting `run/window_placement/game_embed_mode=2`，可运行 `pixel/scripts/configure_editor_game_view.sh` 设置），让 Play 行为接近导出后的独立桌面窗口。若临时启用 Game bar 调试，内嵌 Game View 必须使用 `Stretch to Fit`（本地 `.godot/editor/project_metadata.cfg` 的 `embed_size_mode=2`）；默认 `Fixed Size` 会按项目基准分辨率居中显示并暴露外圈盲区，这是编辑器调试视图设置，不应在产品窗口代码中补偿。
+- **UI 缩放与响应式外壳**：chrome 只使用根 `Window` 的一套会话倍率。macOS 自动档在启动时取 `DisplayServer.screen_get_max_scale()`，一次会话内固定；拖到另一块屏幕只触发布局重排，不热切 Theme 或倍率。根窗口使用 `CONTENT_SCALE_MODE_DISABLED`、`content_scale_size=ZERO` 和 `content_scale_factor=F`；逻辑默认/最小窗口尺寸只乘一次 `F`。`DisplayServer` 屏幕几何与 `Window` 几何视为同单位，禁止自行猜测 Cocoa point/物理像素并再次乘除。工具栏、标题和检查器按可见逻辑宽度切换紧凑/标准/停靠布局；组件不得私设第二套倍率或硬编码像素字号。画布美术仍按设备像素整数对齐与 NEAREST 自管。`scripts/check_ui_scaling.sh` 是静态守护；真实根窗口倍率、resize、点击命中与脚本截图矩阵共同作为工程证据，不能替代项目所有者跨屏签收。
+- PixelForge 的编辑器调试默认使用真正独立的运行窗口（全局 editor setting `run/window_placement/game_embed_mode=-1`，可运行 `pixel/scripts/configure_editor_game_view.sh` 设置）。值 `2` 只是浮动的嵌入式 Game workspace，仍使用合成屏幕几何，不能作为跨显示器证据。若临时启用 Game bar 调试，内嵌 Game View 使用 `Stretch to Fit`（本地 `.godot/editor/project_metadata.cfg` 的 `embed_size_mode=2`），并让应用走中性 1× 调试路径；内嵌截图不得计入独立桌面窗口验收。
 
 - **文件行数**：单文件软上限约 1000 行（gdlint `max-file-lines: 1000`）。这是**软目标不是硬指标**——不要为压行数而把内聚逻辑拆散、牺牲可读性；只有当拆分本身让代码更清晰时才拆（按职责拆，不按行数）。
 - **功能「完成」的定义**：每个功能须声明它在使用体验闭环（见 PRODUCT「统领原则·使用体验闭环优先」）中的角色——入口/反馈/出口/交接——且**在闭环里走通**才算完成；孤立单测绿 ≠ 完成。**Why**：缩放滑条等就是因为没被当成闭环的一部分设计、用时才补，导致全项目打补丁。
