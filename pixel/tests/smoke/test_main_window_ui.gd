@@ -382,7 +382,11 @@ func test_batch_review_shortcuts_mark_selected_mock_thumbnail() -> void:
 	var batch_card: Node = canvas._items_by_id[batch_item_id]
 
 	canvas.select_ids([batch_item_id])
-	assert_true(batch_card.toggle_asset_at_world(batch_card.position + Vector2(20, 60)))
+	assert_true(
+		batch_card.toggle_asset_at_world(
+			batch_card.position + batch_card._slot_rect(0).get_center()
+		)
+	)
 	assert_true(_send_key(controller, KEY_K))
 
 	graph_data = ProjectService.current_project.graphs[graph_id]

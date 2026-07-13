@@ -125,7 +125,7 @@ func test_canvas_batch_card_filters_visible_review_subset() -> void:
 		canvas._set_batch_review_filter("batch_1", CanvasBatchCardScript.FILTER_PENDING, false)
 	)
 	assert_eq(card.get_visible_asset_ids(), [ids[2]])
-	assert_true(card.toggle_asset_at_world(card.position + Vector2(20, 60)))
+	assert_true(card.toggle_asset_at_world(card.position + card._slot_rect(0).get_center()))
 	assert_eq(card.get_selected_asset_ids(), [ids[2]])
 
 	var data: Dictionary = canvas.export_canvas_data()
@@ -194,10 +194,10 @@ func test_canvas_batch_card_switches_review_layout_for_focus_view() -> void:
 		canvas._set_batch_review_layout("batch_1", CanvasBatchCardScript.LAYOUT_FOCUS, false)
 	)
 	assert_eq(card.get_review_layout(), CanvasBatchCardScript.LAYOUT_FOCUS)
-	assert_true(card.get_canvas_bounds().size.y < contact_height)
+	assert_true(card.get_canvas_bounds().size.y > contact_height)
 	assert_eq(card._focused_visible_asset_id(), ids[0])
 	assert_eq(card.asset_index_at_world(card.position + card._focus_rect().get_center()), 0)
-	assert_eq(card.asset_index_at_world(card.position + card._filmstrip_rect(3).get_center()), 3)
+	assert_eq(card.asset_index_at_world(card.position + card._slot_rect(3).get_center()), 3)
 
 	var data: Dictionary = canvas.export_canvas_data()
 	var item: Dictionary = data["items"][0]
@@ -220,7 +220,7 @@ func test_canvas_batch_card_switches_semantic_lod_profiles() -> void:
 
 	card.set_lod_camera_zoom(0.25)
 	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_REVIEW)
-	assert_eq(card.asset_index_at_world(card.position + Vector2(24, 64)), 0)
+	assert_eq(card.asset_index_at_world(card.position + card._slot_rect(0).get_center()), 0)
 
 	card.set_lod_camera_zoom(4.0)
 	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
@@ -696,11 +696,11 @@ func test_content_card_uses_structural_summary_only_at_ten_percent_overview() ->
 		graph.id, "prompt", Vector2.ZERO, "prompt_item", false
 	)
 	assert_not_null(card.get_content_control("PromptEdit"))
-	assert_eq(card.get_canvas_bounds().size, Vector2(240, 238))
+	assert_eq(card.get_canvas_bounds().size, Vector2(360, 300))
 
 	canvas.set_camera_zoom(0.1)
 	assert_null(card.get_content_control("PromptEdit"))
-	assert_eq(card.get_canvas_bounds().size, Vector2(220, 116))
+	assert_eq(card.get_canvas_bounds().size, Vector2(360, 300))
 	canvas.set_camera_zoom(1.0)
 	assert_not_null(card.get_content_control("PromptEdit"))
 
@@ -750,7 +750,7 @@ func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> v
 	assert_true(cancel_button.visible)
 	assert_eq(card._status_badge, Strings.text("CONTENT_STATUS_RUNNING"))
 	assert_eq(card.get_content_control("ExecutionDetail").text, "42% · rendering")
-	assert_eq(card.get_canvas_bounds().size, Vector2(280, 390))
+	assert_eq(card.get_canvas_bounds().size, Vector2(400, 520))
 	cancel_button.pressed.emit()
 	assert_eq(actions, [[graph.id, "generate", "run"], [graph.id, "generate", "cancel"]])
 	card.set_execution_status("CONTENT_STATUS_CANCELED", "Previous results preserved")
@@ -763,7 +763,7 @@ func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> v
 	var collapse_button: Button = card.get_node("CollapseButton")
 	collapse_button.pressed.emit()
 	assert_true(card.collapsed)
-	assert_eq(card.get_canvas_bounds().size, Vector2(220, 116))
+	assert_eq(card.get_canvas_bounds().size, Vector2(400, 56))
 	assert_null(card.get_content_control("RunButton"))
 	assert_true(UndoService.undo())
 	assert_false(card.collapsed)
@@ -785,7 +785,7 @@ func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> v
 			}
 		)
 	)
-	assert_eq(collapsed_card.get_canvas_bounds().size, Vector2(220, 116))
+	assert_eq(collapsed_card.get_canvas_bounds().size, Vector2(400, 56))
 	assert_null(collapsed_card.get_content_control("RunButton"))
 	var collapsed_data: Dictionary = collapsed_card.to_canvas_data()
 	assert_true(collapsed_data["collapsed"])

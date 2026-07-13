@@ -53,6 +53,7 @@ const IdUtil := preload("res://core/util/id_util.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const Log := preload("res://core/util/log_util.gd")
 const Strings := preload("res://ui/shell/strings.gd")
+const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
 
 var camera_center := Vector2.ZERO
 var zoom_index := DEFAULT_ZOOM_INDEX
@@ -80,6 +81,7 @@ var _selected_graph_edge := {}
 var _graph_clipboard := {}
 var _graph_edge_preview_signature := ""
 var _graph_edges_visible := true
+var _resize_drag := {}
 
 
 func _ready() -> void:
@@ -142,7 +144,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 
-	if event.keycode == KEY_DELETE or event.keycode == KEY_BACKSPACE:
+	if event.keycode == KEY_ESCAPE and not _resize_drag.is_empty():
+		_cancel_resize_drag()
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_DELETE or event.keycode == KEY_BACKSPACE:
 		if not _selected_graph_edge.is_empty():
 			var delete_result := GraphEdgeInteraction.delete_edge(
 				_selected_graph_edge, _emit_canvas_changed
@@ -1042,7 +1047,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		if Input.is_key_pressed(KEY_SPACE):
 			_is_panning = event.pressed
 		elif event.pressed and event.double_click:
-			if not _emit_asset_edit_request(event.position):
+			if not _reset_resize_handle_at(event.position) and not _emit_asset_edit_request(event.position):
 				graph_quick_add_requested.emit(
 					Vector2i(get_screen_position()) + Vector2i(event.position)
 				)
@@ -1137,6 +1142,9 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	elif _selection.is_dragging_items:
 		_drag_selected_to(screen_to_world(event.position))
 		accept_event()
+	elif not _resize_drag.is_empty():
+		_preview_resize_drag(screen_to_world(event.position))
+		accept_event()
 	elif _selection.is_box_selecting:
 		_selection.update_box(event.position)
 		queue_redraw()
@@ -1148,6 +1156,18 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 	var hit := _hit_at_world(world_position)
 	var hit_item: Node = hit.get("item", null)
 	if hit_item != null:
+		if (
+			hit_item.has_method("resize_handle_contains_world")
+			and hit_item.resize_handle_contains_world(world_position)
+		):
+			_select_only([hit_item.item_id])
+			_resize_drag = {
+				"item_id": hit_item.item_id,
+				"start_world": world_position,
+				"before": Vector2i(hit_item.requested_size),
+			}
+			queue_redraw()
+			return
 		if String(hit.get("kind", "")) == HitPolicy.KIND_GRAPH_PORT:
 			if additive:
 				_selection.toggle(hit_item.item_id, _items_by_id.keys())
@@ -1220,12 +1240,77 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
 	elif _selection.is_dragging_items:
 		_commit_drag_if_needed()
 		_selection.stop_drag()
+	elif not _resize_drag.is_empty():
+		_commit_resize_drag()
 	elif _selection.is_box_selecting:
 		_selection.update_box(screen_position)
 		_finish_box_selection()
 		_selection.stop_box()
 
 	queue_redraw()
+
+
+func _preview_resize_drag(world_position: Vector2) -> void:
+	var item_id := String(_resize_drag.get("item_id", ""))
+	if not _items_by_id.has(item_id):
+		_resize_drag = {}
+		return
+	var item: Node = _items_by_id[item_id]
+	var before: Vector2i = _resize_drag.get("before", Vector2i.ZERO)
+	var delta := (world_position - Vector2(_resize_drag["start_world"])).round()
+	var next_size := before + Vector2i(delta)
+	if bool(item.get("collapsed")):
+		next_size.y = before.y
+	item.set_requested_size(next_size)
+	_update_item_visibility()
+	queue_redraw()
+
+
+func _commit_resize_drag() -> void:
+	var drag := _resize_drag.duplicate(true)
+	_resize_drag = {}
+	var item_id := String(drag.get("item_id", ""))
+	if not _items_by_id.has(item_id):
+		return
+	var item: Node = _items_by_id[item_id]
+	var before: Vector2i = drag.get("before", Vector2i.ZERO)
+	var after := Vector2i(item.requested_size)
+	if before == after:
+		return
+	var apply := func(value: Vector2i) -> void:
+		if _items_by_id.has(item_id):
+			_items_by_id[item_id].set_requested_size(value)
+			_update_item_visibility()
+			_emit_canvas_changed()
+	UndoService.perform_action(
+		"Resize canvas card",
+		func() -> void: apply.call(after),
+		func() -> void: apply.call(before)
+	)
+
+
+func _cancel_resize_drag() -> void:
+	var item_id := String(_resize_drag.get("item_id", ""))
+	var before: Vector2i = _resize_drag.get("before", Vector2i.ZERO)
+	_resize_drag = {}
+	if _items_by_id.has(item_id):
+		_items_by_id[item_id].set_requested_size(before)
+		_update_item_visibility()
+		queue_redraw()
+
+
+func _reset_resize_handle_at(screen_position: Vector2) -> bool:
+	var world_position := screen_to_world(screen_position)
+	var hit := _hit_at_world(world_position)
+	var item: Node = hit.get("item", null)
+	if (
+		item == null
+		or not item.has_method("resize_handle_contains_world")
+		or not item.resize_handle_contains_world(world_position)
+		or not item.has_method("default_requested_size")
+	):
+		return false
+	return _set_canvas_item_size(item.item_id, item.default_requested_size(), true)
 
 
 func _drag_selected_to(world_position: Vector2) -> void:
@@ -1301,6 +1386,9 @@ func _finish_box_selection() -> void:
 func _add_sprite_direct(item_data: Dictionary, image: Image) -> Node:
 	var item: Node = CanvasItemSpriteScript.new()
 	item.setup_from_image(item_data, image)
+	item.display_title_change_requested.connect(_set_canvas_item_display_title)
+	item.size_change_requested.connect(_set_canvas_item_size)
+	item.set_lod_camera_zoom(camera_zoom)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
 	if not item.asset_id.is_empty():
@@ -1314,6 +1402,8 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 	var item: Node = CanvasBatchCardScript.new()
 	item.setup_from_data(item_data)
 	item.collapsed_change_requested.connect(_set_batch_collapsed)
+	item.display_title_change_requested.connect(_set_canvas_item_display_title)
+	item.size_change_requested.connect(_set_canvas_item_size)
 	item.run_action_requested.connect(
 		func(graph_id: String, node_id: String, action_id: String) -> void:
 			_select_only([item.item_id])
@@ -1364,6 +1454,8 @@ func _add_node_direct(item_data: Dictionary) -> Node:
 			graph_node_action_requested.emit(graph_id, node_id, action_id)
 	)
 	item.collapsed_change_requested.connect(_set_graph_node_collapsed)
+	item.display_title_change_requested.connect(_set_canvas_item_display_title)
+	item.size_change_requested.connect(_set_canvas_item_size)
 	item.set_lod_camera_zoom(camera_zoom)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
@@ -1398,6 +1490,57 @@ func _set_graph_node_collapsed(item_id: String, value: bool, record_undo: bool =
 			"Collapse graph module",
 			func() -> void: apply.call(value),
 			func() -> void: apply.call(before)
+		)
+	else:
+		apply.call(value)
+	return true
+
+
+func _set_canvas_item_display_title(
+	item_id: String, value: String, record_undo: bool = true
+) -> bool:
+	if not _items_by_id.has(item_id):
+		return false
+	var item: Node = _items_by_id[item_id]
+	if not item.has_method("set_display_title") or item.locked:
+		return false
+	var before := String(item.display_title)
+	var normalized := CardContract.normalize_display_title(value)
+	if before == normalized:
+		return false
+	var apply := func(next_value: String) -> void:
+		item.set_display_title(next_value)
+		_emit_canvas_changed()
+	if record_undo:
+		UndoService.perform_action(
+			"Rename canvas card",
+			func() -> void: apply.call(normalized),
+			func() -> void: apply.call(before)
+		)
+	else:
+		apply.call(normalized)
+	return true
+
+
+func _set_canvas_item_size(item_id: String, value: Vector2i, record_undo: bool = true) -> bool:
+	if not _items_by_id.has(item_id):
+		return false
+	var item: Node = _items_by_id[item_id]
+	if not item.has_method("set_requested_size") or item.locked:
+		return false
+	var before := Vector2i(item.requested_size)
+	var apply := func(next_value: Vector2i) -> void:
+		item.set_requested_size(next_value)
+		_update_item_visibility()
+		_emit_canvas_changed()
+	if record_undo:
+		apply.call(value)
+		UndoService.perform_action(
+			"Resize canvas card",
+			func() -> void: apply.call(value),
+			func() -> void: apply.call(before),
+			0,
+			false
 		)
 	else:
 		apply.call(value)

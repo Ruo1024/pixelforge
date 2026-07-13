@@ -7,6 +7,8 @@ extends Node2D
 signal params_commit_requested(graph_id: String, node_id: String, params: Dictionary)
 signal action_requested(graph_id: String, node_id: String, action_id: String)
 signal collapsed_change_requested(item_id: String, collapsed: bool)
+signal display_title_change_requested(item_id: String, display_title: String)
+signal size_change_requested(item_id: String, requested_size: Vector2i)
 
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
@@ -15,29 +17,24 @@ const Strings := preload("res://ui/shell/strings.gd")
 const UIFont := preload("res://ui/widgets/ui_font.gd")
 const AssetRefFieldScript := preload("res://ui/widgets/asset_ref_field.gd")
 const ObjectListEditorScript := preload("res://ui/canvas/object_list_editor.gd")
+const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
+const AppTheme := preload("res://ui/shell/app_theme.gd")
 
-const SUMMARY_CARD_SIZE := Vector2(220, 116)
-const CONTENT_CARD_SIZE := Vector2(240, 238)
-const OBJECT_LIST_CARD_SIZE := Vector2(240, 430)
-const GENERATE_CARD_SIZE := Vector2(280, 390)
-const REFERENCE_CARD_SIZE := Vector2(260, 330)
-const REFERENCE_SET_CARD_SIZE := Vector2(320, 430)
 const REFERENCE_SET_PREVIEW_SIZE := Vector2(52, 52)
-const HEADER_HEIGHT := 32
-const PADDING := 12
-const BACKGROUND := Color(0.13, 0.145, 0.155, 0.98)
-const HEADER := Color(0.22, 0.27, 0.3, 1.0)
-const BORDER := Color(0.56, 0.64, 0.66, 1.0)
-const GHOST_BORDER := Color(0.8, 0.36, 0.36, 1.0)
-const EDGE_ERROR_BORDER := Color(0.94, 0.5, 0.22, 1.0)
-const BADGE_BACKGROUND := Color(0.12, 0.08, 0.06, 0.92)
+const HEADER_HEIGHT := CardContract.HEADER_HEIGHT
+const PADDING := CardContract.PADDING
+const BACKGROUND := AppTheme.CARD
+const HEADER := AppTheme.ELEVATED
+const BORDER := AppTheme.BORDER
+const GHOST_BORDER := AppTheme.ERROR
+const EDGE_ERROR_BORDER := AppTheme.ERROR
+const BADGE_BACKGROUND := AppTheme.SECTION
 const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
 const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
 const PORT_HIT_RADIUS := 10.0
 const OBJECT_EDITOR_MIN_SIZE := Vector2(0, 116)
 const SPIN_CONTROL_MIN_SIZE := Vector2(76, 30)
 const FLEXIBLE_WIDTH := 0
-const OVERVIEW_MAX_ZOOM := 0.1
 
 var item_id := ""
 var graph_id := ""
@@ -45,6 +42,8 @@ var node_id := ""
 var locked := false
 var collapsed := false
 var frame_id: Variant = null
+var display_title := ""
+var requested_size := Vector2i.ZERO
 
 var _node_type := ""
 var _display_name := "Missing Node"
@@ -73,6 +72,9 @@ var _cancel_button: Button = null
 var _execution_detail_label: Label = null
 var _reference_field: Control = null
 var _collapse_button: Button = null
+var _title_button: Button = null
+var _title_edit: LineEdit = null
+var _more_button: MenuButton = null
 var _params_snapshot := {}
 var _raw_data := {}
 var _lod_camera_zoom := 1.0
@@ -86,6 +88,7 @@ func setup_from_data(data: Dictionary) -> void:
 	locked = bool(data.get("locked", false))
 	collapsed = bool(data.get("collapsed", false))
 	frame_id = data.get("frame_id", null)
+	display_title = CardContract.normalize_display_title(data.get("display_title", ""))
 	z_index = int(data.get("z_index", 0))
 	var raw_position: Variant = data.get("position", [0, 0])
 	position = Vector2(float(raw_position[0]), float(raw_position[1])).round()
@@ -93,6 +96,7 @@ func setup_from_data(data: Dictionary) -> void:
 	if not LocalizationService.language_changed.is_connected(_on_language_changed):
 		LocalizationService.language_changed.connect(_on_language_changed)
 	_resolve_graph_node()
+	requested_size = CardContract.normalize_requested_size(_node_type, data.get("size", null))
 	_rebuild_content_controls()
 	_rebuild_header_controls()
 	queue_redraw()
@@ -109,6 +113,11 @@ func to_canvas_data() -> Dictionary:
 	result["collapsed"] = collapsed
 	result["locked"] = locked
 	result["frame_id"] = frame_id
+	result["size"] = CardContract.size_array(requested_size)
+	if display_title.is_empty():
+		result.erase("display_title")
+	else:
+		result["display_title"] = display_title
 	return result
 
 
@@ -140,12 +149,28 @@ func set_collapsed(value: bool) -> void:
 	queue_redraw()
 
 
+func set_display_title(value: Variant) -> void:
+	display_title = CardContract.normalize_display_title(value)
+	_resolve_graph_node()
+	_rebuild_header_controls()
+	queue_redraw()
+
+
+func set_requested_size(value: Variant) -> void:
+	requested_size = CardContract.normalize_requested_size(_node_type, value)
+	_rebuild_content_controls()
+	_rebuild_header_controls()
+	queue_redraw()
+
+
+func get_requested_size() -> Vector2i:
+	return requested_size
+
+
 func set_lod_camera_zoom(value: float) -> void:
-	var was_overview := _is_overview()
 	_lod_camera_zoom = maxf(0.0, value)
-	if was_overview != _is_overview():
-		_rebuild_content_controls()
-		_rebuild_header_controls()
+	_rebuild_content_controls()
+	_rebuild_header_controls()
 	queue_redraw()
 
 
@@ -201,6 +226,7 @@ func _draw() -> void:
 		Color(0.92, 0.94, 0.94, 1.0)
 	)
 	_draw_status_badge()
+	_draw_resize_handle()
 	if collapsed or not _is_content_node():
 		draw_string(
 			_font,
@@ -223,6 +249,8 @@ func _draw() -> void:
 
 
 func _draw_ports() -> void:
+	if _lod_camera_zoom < 0.75:
+		return
 	for index in range(_input_count):
 		draw_circle(_port_position(index, _input_count, true), 5.0, PORT_IN)
 	for index in range(_output_count):
@@ -274,6 +302,8 @@ func _resolve_graph_node() -> void:
 		return
 
 	_display_name = _localized_display_name(node)
+	if not display_title.is_empty():
+		_display_name = display_title
 	_input_ports = _port_names(node.get_input_ports())
 	_output_ports = _port_names(node.get_output_ports())
 	_visible_input_ports = _visible_input_ports_for_node(_node_type, _input_ports)
@@ -394,18 +424,10 @@ func _summarize_params(params: Variant) -> String:
 
 
 func _card_size() -> Vector2:
-	if collapsed or _is_overview() or not _is_content_node():
-		return SUMMARY_CARD_SIZE
-	match _node_type:
-		"object_list":
-			return OBJECT_LIST_CARD_SIZE
-		"ai_generate":
-			return GENERATE_CARD_SIZE
-		"image_input":
-			return REFERENCE_CARD_SIZE
-		"reference_set":
-			return REFERENCE_SET_CARD_SIZE
-	return CONTENT_CARD_SIZE
+	var safe_requested := requested_size
+	if safe_requested == Vector2i.ZERO:
+		safe_requested = CardContract.default_size_for_type(_node_type)
+	return Vector2(CardContract.effective_size(_node_type, safe_requested, collapsed))
 
 
 func _is_content_node() -> bool:
@@ -424,7 +446,7 @@ func _is_content_node() -> bool:
 
 
 func _is_overview() -> bool:
-	return _lod_camera_zoom <= OVERVIEW_MAX_ZOOM
+	return _lod_camera_zoom < 0.75
 
 
 func _rebuild_content_controls() -> void:
@@ -488,8 +510,97 @@ func _rebuild_header_controls() -> void:
 	_collapse_button.tooltip_text = Strings.text(
 		"ACTION_EXPAND_MODULE" if collapsed else "ACTION_COLLAPSE_MODULE"
 	)
-	_collapse_button.position = Vector2(_card_size().x - 28, 4)
+	_collapse_button.position = Vector2(_card_size().x - 68, 10)
 	_collapse_button.size = Vector2(24, 24)
+	if _title_button == null:
+		_title_button = Button.new()
+		_title_button.name = "TitleButton"
+		_title_button.flat = true
+		_title_button.focus_mode = Control.FOCUS_NONE
+		_title_button.gui_input.connect(_on_title_button_input)
+		add_child(_title_button)
+	_title_button.position = Vector2(8, 4)
+	_title_button.size = Vector2(maxf(32.0, _card_size().x - 84.0), 36)
+	_title_button.tooltip_text = _display_name
+	_title_button.visible = not locked
+	if _more_button == null:
+		_more_button = MenuButton.new()
+		_more_button.name = "MoreButton"
+		_more_button.text = "..."
+		_more_button.tooltip_text = Strings.text("ACTION_MORE")
+		_more_button.get_popup().add_item(Strings.text("ACTION_RENAME"), 1)
+		_more_button.get_popup().add_item(Strings.text("ACTION_RESET_CARD_SIZE"), 2)
+		_more_button.get_popup().id_pressed.connect(_on_more_action)
+		add_child(_more_button)
+	_more_button.position = Vector2(_card_size().x - 36, 10)
+	_more_button.size = Vector2(28, 24)
+	_more_button.visible = not locked
+
+
+func begin_title_edit() -> void:
+	if locked or _is_overview():
+		return
+	if _title_edit == null:
+		_title_edit = LineEdit.new()
+		_title_edit.name = "TitleEdit"
+		_title_edit.text_submitted.connect(func(_value: String) -> void: _commit_title_edit())
+		_title_edit.focus_exited.connect(_commit_title_edit)
+		_title_edit.gui_input.connect(_on_title_edit_input)
+		add_child(_title_edit)
+	_title_edit.position = Vector2(36, 7)
+	_title_edit.size = Vector2(maxf(64.0, _card_size().x - 116.0), 30)
+	_title_edit.text = display_title if not display_title.is_empty() else _display_name
+	_title_edit.visible = true
+	_title_edit.grab_focus()
+	_title_edit.select_all()
+
+
+func resize_handle_contains_world(world_position: Vector2) -> bool:
+	if locked or _lod_camera_zoom < 0.75:
+		return false
+	var hit_world := 16.0 / maxf(_lod_camera_zoom, 0.01)
+	var local := world_position - position
+	return Rect2(_card_size() - Vector2.ONE * hit_world, Vector2.ONE * hit_world).has_point(local)
+
+
+func default_requested_size() -> Vector2i:
+	return CardContract.default_size_for_type(_node_type)
+
+
+func _draw_resize_handle() -> void:
+	if locked or _lod_camera_zoom < 0.75:
+		return
+	var end := _card_size() - Vector2(4, 4)
+	draw_line(end - Vector2(8, 0), end, AppTheme.TEXT_MUTED, 2.0)
+	draw_line(end - Vector2(0, 8), end, AppTheme.TEXT_MUTED, 2.0)
+
+
+func _on_title_button_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.double_click:
+		begin_title_edit()
+
+
+func _on_title_edit_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		_title_edit.visible = false
+		get_viewport().set_input_as_handled()
+
+
+func _commit_title_edit() -> void:
+	if _title_edit == null or not _title_edit.visible:
+		return
+	var normalized := CardContract.normalize_display_title(_title_edit.text)
+	_title_edit.visible = false
+	if normalized != display_title:
+		display_title_change_requested.emit(item_id, normalized)
+
+
+func _on_more_action(action_id: int) -> void:
+	match action_id:
+		1:
+			begin_title_edit()
+		2:
+			size_change_requested.emit(item_id, default_requested_size())
 
 
 func _build_object_list_controls() -> void:

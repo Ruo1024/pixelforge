@@ -358,4 +358,7 @@
 	,"STATUS_GRAPH_ADD_DONE_FORMAT": "Graph node added: %s"
 	,"COST_MONTH_FORMAT": "This month: $%.2f"
 	,"COST_MONTH_ESTIMATE_FORMAT": "This month: $%.2f · Next ≈$%.2f"
+	,"ACTION_MORE": "More"
+	,"ACTION_RENAME": "Rename"
+	,"ACTION_RESET_CARD_SIZE": "Reset Size"
 }

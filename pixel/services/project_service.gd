@@ -21,6 +21,7 @@ const GraphScript := preload("res://core/graph/pf_graph.gd")
 const AssetReferenceScanner := preload("res://services/asset_reference_scanner.gd")
 const Log := preload("res://core/util/log_util.gd")
 const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
+const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
 const MIGRATIONS: Array = []
 
 var current_project: Variant = ProjectModel.new()
@@ -190,6 +191,8 @@ func _open_project(path: String, as_recovered_copy: bool) -> Error:
 		load_error = AssetLibrary.load_from_zip_files(files)
 	if load_error != OK:
 		return load_error
+	_normalize_loaded_node_card_fields(canvas, loaded_graphs["graphs"])
+	_normalize_loaded_sprite_sizes(canvas)
 
 	current_project = ProjectModel.new()
 	current_project.manifest = manifest
@@ -387,26 +390,87 @@ func _normalize_loaded_project(manifest: Dictionary, canvas: Dictionary) -> void
 		var item_data: Dictionary = item
 		var position: Variant = item_data.get("position", [0, 0])
 		item_data["position"] = [int(round(float(position[0]))), int(round(float(position[1])))]
-		item_data["scale_factor"] = int(item_data.get("scale_factor", 1))
+		item_data["scale_factor"] = maxi(1, int(item_data.get("scale_factor", 1)))
 		item_data["z_index"] = int(item_data.get("z_index", 0))
 		item_data["locked"] = bool(item_data.get("locked", false))
-		if String(item_data.get("type", "")) == "node":
+		var item_type := String(item_data.get("type", ""))
+		if item_type == "node":
 			item_data["node_id"] = String(item_data.get("node_id", ""))
 			item_data["graph_id"] = String(item_data.get("graph_id", ""))
 			item_data["collapsed"] = bool(item_data.get("collapsed", false))
 			if item_data.has("frame_id") and item_data["frame_id"] != null:
 				item_data["frame_id"] = String(item_data["frame_id"])
-		elif String(item_data.get("type", "")) == "frame":
+			_normalize_canvas_card_title(item_data)
+		elif item_type == "batch_card":
+			item_data["collapsed"] = bool(item_data.get("collapsed", false))
+			_normalize_canvas_card_fields(item_data, "batch_card")
+		elif item_type == "sprite":
+			_normalize_canvas_card_title(item_data)
+			if item_data.has("size"):
+				item_data["size"] = CardContract.size_array(
+					CardContract.normalize_requested_size("sprite", item_data["size"])
+				)
+		elif item_type == "frame":
 			item_data["graph_id"] = String(item_data.get("graph_id", ""))
-			item_data["title"] = String(item_data.get("title", ""))
+			item_data["title"] = CardContract.normalize_display_title(item_data.get("title", ""))
 			item_data["color"] = String(item_data.get("color", "4f6f8fff"))
 			var raw_size: Variant = item_data.get("size", [320, 240])
+			if not (raw_size is Array) or Array(raw_size).size() != 2:
+				raw_size = [320, 240]
 			item_data["size"] = [
-				maxi(1, int(round(float(raw_size[0])))),
-				maxi(1, int(round(float(raw_size[1])))),
+				clampi(int(round(float(raw_size[0]))), 320, 32768),
+				clampi(int(round(float(raw_size[1]))), 240, 32768),
 			]
 		normalized_items.append(item_data)
 	canvas["items"] = normalized_items
+
+
+func _normalize_canvas_card_fields(item_data: Dictionary, card_type: String) -> void:
+	_normalize_canvas_card_title(item_data)
+	item_data["size"] = CardContract.size_array(
+		CardContract.normalize_requested_size(card_type, item_data.get("size", null))
+	)
+
+
+func _normalize_canvas_card_title(item_data: Dictionary) -> void:
+	var title := CardContract.normalize_display_title(item_data.get("display_title", ""))
+	if title.is_empty():
+		item_data.erase("display_title")
+	else:
+		item_data["display_title"] = title
+
+
+func _node_type_for_canvas_item(item_data: Dictionary, graphs: Dictionary) -> String:
+	var graph_data: Dictionary = graphs.get(String(item_data.get("graph_id", "")), {})
+	for raw_node in graph_data.get("nodes", []):
+		if raw_node is Dictionary and String(raw_node.get("id", "")) == String(item_data.get("node_id", "")):
+			return String(raw_node.get("type", "unknown"))
+	return "unknown"
+
+
+func _normalize_loaded_node_card_fields(canvas: Dictionary, graphs: Dictionary) -> void:
+	for raw_item in canvas.get("items", []):
+		if not (raw_item is Dictionary):
+			continue
+		var item: Dictionary = raw_item
+		if String(item.get("type", "")) == "node":
+			_normalize_canvas_card_fields(item, _node_type_for_canvas_item(item, graphs))
+
+
+func _normalize_loaded_sprite_sizes(canvas: Dictionary) -> void:
+	for raw_item in canvas.get("items", []):
+		if not (raw_item is Dictionary):
+			continue
+		var item: Dictionary = raw_item
+		if String(item.get("type", "")) != "sprite" or item.has("size"):
+			continue
+		var image: Image = AssetLibrary.get_image(String(item.get("asset_id", "")))
+		var image_size := image.get_size() if image != null else Vector2i.ZERO
+		item["size"] = CardContract.size_array(
+			CardContract.default_size_for_type(
+				"sprite", image_size, maxi(1, int(item.get("scale_factor", 1)))
+			)
+		)
 
 
 func _load_graphs_from_files(files: Dictionary, manifest: Dictionary) -> Dictionary:

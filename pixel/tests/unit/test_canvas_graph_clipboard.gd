@@ -37,6 +37,8 @@ func test_capture_keeps_relative_layout_internal_edges_and_safe_asset_references
 	assert_false(_by_id(payload["nodes"], "generate")["params"].has("task_id"))
 	assert_false(_by_id(payload["items"], "item_generate").has("progress"))
 	assert_null(_by_id(payload["items"], "item_generate")["frame_id"])
+	assert_eq(_by_id(payload["items"], "item_prompt")["display_title"], "Castle ideas")
+	assert_eq(_by_id(payload["items"], "item_prompt")["size"], [420, 320])
 
 	_by_id(payload["nodes"], "reference")["params"]["asset_id"] = "changed"
 	assert_eq(_by_id(graph["nodes"], "reference")["params"]["asset_id"], "asset-safe")
@@ -93,6 +95,8 @@ func test_instantiate_remaps_ids_edges_and_places_selection_at_target() -> void:
 	)
 	assert_eq(_by_id(result["nodes"], "node-reference-new")["params"]["asset_id"], "asset-safe")
 	assert_null(_by_id(result["items"], "item-generate-new")["frame_id"])
+	assert_eq(_by_id(result["items"], "item-prompt-new")["display_title"], "Castle ideas")
+	assert_eq(_by_id(result["items"], "item-prompt-new")["size"], [420, 320])
 
 
 func test_capture_rejects_empty_or_mismatched_selection() -> void:
@@ -169,6 +173,8 @@ func _canvas_fixture() -> Array:
 			"node_id": "prompt",
 			"position": [100, 120],
 			"z_index": 0,
+			"display_title": "Castle ideas",
+			"size": [420, 320],
 		},
 		{
 			"id": "item_generate",

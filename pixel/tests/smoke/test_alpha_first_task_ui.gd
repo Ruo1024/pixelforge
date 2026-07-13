@@ -19,6 +19,7 @@ func before_all() -> void:
 
 
 func before_each() -> void:
+	LocalizationService.set_language("en")
 	get_tree().root.get_node("ProjectService").new_project("AR2 UI")
 	get_tree().root.get_node("AssetLibrary").clear()
 	for path in [EXPORT_PATH, EXPORT_PATH.get_basename() + ".json"]:

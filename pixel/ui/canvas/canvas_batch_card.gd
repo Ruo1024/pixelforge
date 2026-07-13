@@ -6,25 +6,28 @@ extends Node2D
 
 signal collapsed_change_requested(item_id: String, collapsed: bool)
 signal run_action_requested(graph_id: String, node_id: String, action_id: String)
+signal display_title_change_requested(item_id: String, display_title: String)
+signal size_change_requested(item_id: String, requested_size: Vector2i)
 
 const IdUtil := preload("res://core/util/id_util.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const UIFont := preload("res://ui/widgets/ui_font.gd")
+const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
+const AppTheme := preload("res://ui/shell/app_theme.gd")
 
-const CARD_WIDTH := 600
-const HEADER_HEIGHT := 40
-const PADDING := 16
-const THUMB_SIZE := 128
+const HEADER_HEIGHT := CardContract.HEADER_HEIGHT
+const PADDING := CardContract.PADDING
+const THUMB_SIZE := CardContract.THUMBNAIL_SIZE
 const THUMB_TEXTURE_SIZE := 192
-const THUMB_GAP := 12
-const MIN_CARD_HEIGHT := 216
-const BACKGROUND := Color(0.16, 0.17, 0.18, 0.96)
-const BORDER := Color(0.52, 0.62, 0.72, 1.0)
-const EDGE_ERROR_BORDER := Color(0.94, 0.5, 0.22, 1.0)
-const SELECTED_BORDER := Color(0.1, 0.85, 0.65, 1.0)
-const THUMB_BACKGROUND := Color(0.08, 0.085, 0.09, 1.0)
+const THUMB_GAP := CardContract.GAP
+const MIN_CARD_HEIGHT := 240
+const BACKGROUND := AppTheme.CARD
+const BORDER := AppTheme.BORDER
+const EDGE_ERROR_BORDER := AppTheme.ERROR
+const SELECTED_BORDER := AppTheme.SELECTION
+const THUMB_BACKGROUND := AppTheme.SECTION
 const PORT_IN := Color(0.32, 0.64, 1.0, 1.0)
 const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
 const REVIEW_NONE := ""
@@ -45,9 +48,6 @@ const FOCUS_BORDER := Color(0.96, 0.96, 0.9, 1.0)
 const COMPARE_DIVIDER := Color(0.96, 0.96, 0.9, 0.85)
 const INPUT_PORTS: Array[String] = ["in"]
 const OUTPUT_PORTS: Array[String] = ["images", "assets"]
-const FOCUS_IMAGE_HEIGHT := 320
-const FOCUS_FILMSTRIP_THUMB_SIZE := 72
-const FOCUS_FILMSTRIP_VISIBLE := 7
 const PORT_HIT_RADIUS := 10.0
 const CHECKER_SIZE := 8
 const MAX_INSPECT_COLOR_HINTS := 256
@@ -56,7 +56,7 @@ const CHECKER_DARK := Color(0.1, 0.105, 0.11, 1.0)
 const INSPECT_GRID := Color(1.0, 1.0, 1.0, 0.16)
 const HINT_BACKGROUND := Color(0.02, 0.025, 0.03, 0.78)
 const BADGE_BACKGROUND := Color(0.12, 0.08, 0.06, 0.92)
-const COLLAPSED_HEIGHT := 100
+const COLLAPSED_HEIGHT := CardContract.COLLAPSED_HEIGHT
 
 var item_id := ""
 var graph_id := ""
@@ -74,6 +74,8 @@ var locked := false
 var collapsed := false
 var frame_id: Variant = null
 var run_state := {}
+var display_title := ""
+var requested_size := Vector2i(600, 240)
 
 var _thumbnail_textures := {}
 var _asset_hints := {}
@@ -83,6 +85,9 @@ var _has_graph_edge_error := false
 var _collapse_button: Button = null
 var _retry_button: Button = null
 var _remove_placeholder_button: Button = null
+var _title_button: Button = null
+var _title_edit: LineEdit = null
+var _more_button: MenuButton = null
 var _raw_data := {}
 
 
@@ -95,8 +100,12 @@ func setup_from_data(data: Dictionary) -> void:
 	var graph_node_data := _resolve_graph_batch_node_data()
 	var graph_params: Dictionary = graph_node_data.get("params", {})
 	label = String(graph_params.get("label", data.get("label", "Batch")))
+	display_title = CardContract.normalize_display_title(data.get("display_title", ""))
+	requested_size = CardContract.normalize_requested_size(
+		"batch" if not graph_id.is_empty() else "batch_card", data.get("size", null)
+	)
 	asset_ids = _string_array(graph_params.get("asset_ids", data.get("asset_ids", [])))
-	run_state = graph_params.get("run_state", {}).duplicate(true)
+	run_state = graph_params.get("run_state", data.get("run_state", {})).duplicate(true)
 	selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
 	review_states = _review_state_map(
 		graph_params.get("review_states", data.get("review_states", {})), asset_ids
@@ -145,6 +154,11 @@ func to_canvas_data() -> Dictionary:
 		result["review_layout"] = review_layout
 		result["locked"] = locked
 		result["frame_id"] = frame_id
+		result["size"] = CardContract.size_array(requested_size)
+		if display_title.is_empty():
+			result.erase("display_title")
+		else:
+			result["display_title"] = display_title
 		for graph_param_key in [
 			"asset_ids",
 			"selected_asset_ids",
@@ -172,6 +186,11 @@ func to_canvas_data() -> Dictionary:
 	result["z_index"] = z_index
 	result["locked"] = locked
 	result["collapsed"] = collapsed
+	result["size"] = CardContract.size_array(requested_size)
+	if display_title.is_empty():
+		result.erase("display_title")
+	else:
+		result["display_title"] = display_title
 	return result
 
 
@@ -180,7 +199,22 @@ func has_graph_binding() -> bool:
 
 
 func get_canvas_bounds() -> Rect2:
-	return Rect2(position, Vector2(CARD_WIDTH, _card_height()))
+	return Rect2(position, Vector2(requested_size.x, _card_height()))
+
+
+func get_requested_size() -> Vector2i:
+	return requested_size
+
+
+func set_requested_size(value: Variant) -> void:
+	requested_size = CardContract.normalize_requested_size("batch", value)
+	_rebuild_header_controls()
+	queue_redraw()
+
+
+func set_display_title(value: Variant) -> void:
+	display_title = CardContract.normalize_display_title(value)
+	queue_redraw()
 
 
 func set_lod_camera_zoom(camera_zoom_value: float) -> void:
@@ -188,6 +222,7 @@ func set_lod_camera_zoom(camera_zoom_value: float) -> void:
 	if is_equal_approx(_lod_camera_zoom, normalized_zoom):
 		return
 	_lod_camera_zoom = normalized_zoom
+	_rebuild_header_controls()
 	queue_redraw()
 
 
@@ -207,7 +242,7 @@ func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
 	var ports := INPUT_PORTS if is_input else OUTPUT_PORTS
 	var count := ports.size()
 	if count <= 0:
-		return position + Vector2(0.0 if is_input else CARD_WIDTH, _card_height() * 0.5)
+		return position + Vector2(0.0 if is_input else requested_size.x, _card_height() * 0.5)
 	var index := ports.find(port_name)
 	if index < 0:
 		index = 0
@@ -390,14 +425,13 @@ func asset_index_at_world(world_position: Vector2) -> int:
 	var local := world_position - position
 	if local.y < HEADER_HEIGHT:
 		return -1
-	if review_layout == LAYOUT_FOCUS:
-		return _focus_layout_asset_index_at_local(local)
-	var columns := _columns()
 	var visible_ids := get_visible_asset_ids()
 	for index in range(visible_ids.size()):
-		var rect := _thumb_rect(index, columns)
+		var rect := _slot_rect(index)
 		if rect.has_point(local):
 			return index
+	if _is_focus_active() and _focus_rect().has_point(local):
+		return visible_ids.find(_focused_visible_asset_id())
 	return -1
 
 
@@ -407,16 +441,17 @@ func _get_lod_profile() -> String:
 
 func _draw() -> void:
 	_font = UIFont.get_font() if _font == null else _font
-	var card_rect := Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, _card_height()))
+	var card_rect := Rect2(Vector2.ZERO, Vector2(requested_size.x, _card_height()))
 	draw_rect(card_rect, BACKGROUND, true)
 	draw_rect(card_rect, _border_color(), false, 1.0)
 	draw_rect(
-		Rect2(Vector2.ZERO, Vector2(CARD_WIDTH, HEADER_HEIGHT)), Color(0.21, 0.22, 0.24, 1.0), true
+		Rect2(Vector2.ZERO, Vector2(requested_size.x, HEADER_HEIGHT)), AppTheme.ELEVATED, true
 	)
 	var visible_ids := get_visible_asset_ids()
 	if _font != null:
 		var visible_count := visible_ids.size()
-		var title := "%s (%d)" % [label, asset_ids.size()]
+		var visible_title := display_title if not display_title.is_empty() else label
+		var title := "%s (%d)" % [visible_title, asset_ids.size()]
 		if visible_count != asset_ids.size():
 			title = "%s (%d/%d)" % [label, visible_count, asset_ids.size()]
 		if compare_mode == COMPARE_PREVIOUS:
@@ -428,7 +463,7 @@ func _draw() -> void:
 			Vector2(PADDING, 28),
 			title,
 			HORIZONTAL_ALIGNMENT_LEFT,
-			CARD_WIDTH - PADDING * 2,
+			requested_size.x - PADDING * 2,
 			18,
 			Color(0.9, 0.92, 0.92, 1.0)
 		)
@@ -438,32 +473,43 @@ func _draw() -> void:
 			_draw_graph_ports()
 		return
 
-	if review_layout == LAYOUT_FOCUS:
+	_draw_action_row()
+	if _is_focus_active():
 		_draw_focus_layout(visible_ids)
-	elif visible_ids.is_empty() and int(run_state.get("expected_count", 0)) > 0:
-		_draw_placeholders()
-	else:
-		var columns := _columns()
-		for index in range(visible_ids.size()):
-			_draw_thumbnail(visible_ids[index], _thumb_rect(index, columns))
+	for index in range(visible_ids.size()):
+		_draw_thumbnail(visible_ids[index], _slot_rect(index))
+	for index in range(visible_ids.size(), get_slot_count()):
+		_draw_placeholder(_slot_rect(index))
 	if has_graph_binding():
 		_draw_graph_ports()
+	_draw_resize_handle()
+
+
+func _draw_placeholder(rect: Rect2) -> void:
+	draw_rect(rect, THUMB_BACKGROUND, true)
+	draw_rect(rect, BORDER.darkened(0.3), false, 1.5)
+	draw_line(rect.position + Vector2(12, 12), rect.end - Vector2(12, 12), BORDER, 2.0)
+	draw_line(
+		Vector2(rect.end.x - 12, rect.position.y + 12),
+		Vector2(rect.position.x + 12, rect.end.y - 12),
+		BORDER,
+		2.0
+	)
+
+
+func _draw_action_row() -> void:
+	var geometry := _geometry()
+	var rect := Rect2(
+		Vector2(PADDING, int(geometry["action_y"])),
+		Vector2(requested_size.x - PADDING * 2, CardContract.ACTION_ROW_HEIGHT)
+	)
+	draw_rect(rect, AppTheme.SECTION, true)
+	draw_rect(rect, AppTheme.BORDER, false, 1.0)
 
 
 func _draw_placeholders() -> void:
-	var expected_count := int(run_state.get("expected_count", 0))
-	var columns := _columns()
-	for index in range(expected_count):
-		var rect := _thumb_rect(index, columns)
-		draw_rect(rect, THUMB_BACKGROUND, true)
-		draw_rect(rect, BORDER.darkened(0.3), false, 1.5)
-		draw_line(rect.position + Vector2(12, 12), rect.end - Vector2(12, 12), BORDER, 2.0)
-		draw_line(
-			Vector2(rect.end.x - 12, rect.position.y + 12),
-			Vector2(rect.position.x + 12, rect.end.y - 12),
-			BORDER,
-			2.0
-		)
+	for index in range(get_slot_count()):
+		_draw_placeholder(_slot_rect(index))
 	var detail := String(run_state.get("detail", ""))
 	if not detail.is_empty() and _font != null:
 		draw_string(
@@ -471,7 +517,7 @@ func _draw_placeholders() -> void:
 			Vector2(PADDING, _card_height() - 12),
 			detail,
 			HORIZONTAL_ALIGNMENT_LEFT,
-			CARD_WIDTH - PADDING * 2,
+			requested_size.x - PADDING * 2,
 			13,
 			Color(0.86, 0.88, 0.88, 1.0)
 		)
@@ -484,10 +530,6 @@ func _draw_focus_layout(visible_ids: Array[String]) -> void:
 	if focused_asset_id.is_empty():
 		return
 	_draw_thumbnail(focused_asset_id, _focus_rect())
-	var start_index := _filmstrip_start_index(visible_ids)
-	var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
-	for index in range(start_index, end_index):
-		_draw_thumbnail(visible_ids[index], _filmstrip_rect(index - start_index))
 
 
 func _draw_thumbnail(asset_id: String, rect: Rect2) -> void:
@@ -631,62 +673,53 @@ func _draw_review_marker(rect: Rect2, review_state: String) -> void:
 
 
 func _thumb_rect(index: int, columns: int) -> Rect2:
-	var col := index % columns
-	var row := int(index / columns)
-	return Rect2(
-		Vector2(
-			PADDING + col * (THUMB_SIZE + THUMB_GAP),
-			HEADER_HEIGHT + PADDING + row * (THUMB_SIZE + THUMB_GAP)
-		),
-		Vector2(THUMB_SIZE, THUMB_SIZE)
-	)
+	return _slot_rect(index)
+
+
+func _slot_rect(index: int) -> Rect2:
+	return CardContract.slot_rect(requested_size, index, _is_focus_active())
 
 
 func _focus_rect() -> Rect2:
+	var geometry := _geometry()
 	return Rect2(
-		Vector2(PADDING, HEADER_HEIGHT + PADDING),
-		Vector2(CARD_WIDTH - PADDING * 2, FOCUS_IMAGE_HEIGHT)
-	)
-
-
-func _filmstrip_rect(slot_index: int) -> Rect2:
-	var y := HEADER_HEIGHT + PADDING + FOCUS_IMAGE_HEIGHT + THUMB_GAP
-	return Rect2(
-		Vector2(PADDING + slot_index * (FOCUS_FILMSTRIP_THUMB_SIZE + THUMB_GAP), y),
-		Vector2(FOCUS_FILMSTRIP_THUMB_SIZE, FOCUS_FILMSTRIP_THUMB_SIZE)
+		Vector2(PADDING, int(geometry["preview_y"])),
+		Vector2(requested_size.x - PADDING * 2, int(geometry["focus_preview_height"]))
 	)
 
 
 func _card_height() -> int:
 	if collapsed:
 		return COLLAPSED_HEIGHT
-	var visible_count := get_visible_asset_ids().size()
-	if visible_count <= 0:
-		visible_count = int(run_state.get("expected_count", 0))
-	if visible_count <= 0:
-		return MIN_CARD_HEIGHT
-	if review_layout == LAYOUT_FOCUS:
-		return maxi(
-			MIN_CARD_HEIGHT,
-			(
-				HEADER_HEIGHT
-				+ PADDING * 2
-				+ FOCUS_IMAGE_HEIGHT
-				+ THUMB_GAP
-				+ FOCUS_FILMSTRIP_THUMB_SIZE
-			)
-		)
-	var rows := int(ceil(float(visible_count) / float(_columns())))
-	return maxi(
-		MIN_CARD_HEIGHT, HEADER_HEIGHT + PADDING * 2 + rows * THUMB_SIZE + (rows - 1) * THUMB_GAP
-	)
+	return int(_geometry()["effective_height"])
 
 
 func _columns() -> int:
-	return maxi(1, int((CARD_WIDTH - PADDING * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP)))
+	return int(_geometry()["columns"])
+
+
+func _rows() -> int:
+	return int(_geometry()["rows"])
+
+
+func get_slot_count() -> int:
+	var visible_count := get_visible_asset_ids().size()
+	if review_filter != FILTER_ALL:
+		return visible_count
+	return maxi(visible_count, int(run_state.get("expected_count", 0)))
+
+
+func _geometry() -> Dictionary:
+	return CardContract.batch_geometry(requested_size, get_slot_count(), _is_focus_active())
+
+
+func _is_focus_active() -> bool:
+	return review_layout == LAYOUT_FOCUS and not _focused_visible_asset_id().is_empty()
 
 
 func _draw_graph_ports() -> void:
+	if _lod_camera_zoom < 0.75:
+		return
 	for index in range(INPUT_PORTS.size()):
 		draw_circle(_graph_port_position(index, INPUT_PORTS.size(), true), 5.0, PORT_IN)
 	for index in range(OUTPUT_PORTS.size()):
@@ -706,7 +739,7 @@ func _draw_graph_status_badge() -> void:
 	var badge_size := Vector2(78, 18)
 	var action_space := 164.0 if run_status in ["failed", "canceled"] else 30.0
 	var badge_rect := Rect2(
-		Vector2(CARD_WIDTH - PADDING - action_space - badge_size.x, 11), badge_size
+		Vector2(requested_size.x - PADDING - action_space - badge_size.x, 13), badge_size
 	)
 	var badge_color := EDGE_ERROR_BORDER if _has_graph_edge_error else BORDER
 	draw_rect(badge_rect, BADGE_BACKGROUND, true)
@@ -740,7 +773,7 @@ func _rebuild_header_controls() -> void:
 	_collapse_button.tooltip_text = Strings.text(
 		"ACTION_EXPAND_MODULE" if collapsed else "ACTION_COLLAPSE_MODULE"
 	)
-	_collapse_button.position = Vector2(CARD_WIDTH - 28, 7)
+	_collapse_button.position = Vector2(requested_size.x - 36, 10)
 	_collapse_button.size = Vector2(24, 24)
 	var retryable := String(run_state.get("status", "")) in ["failed", "canceled"]
 	if _retry_button == null:
@@ -752,7 +785,7 @@ func _rebuild_header_controls() -> void:
 		)
 		add_child(_retry_button)
 	_retry_button.visible = retryable
-	_retry_button.position = Vector2(CARD_WIDTH - 160, 7)
+	_retry_button.position = Vector2(requested_size.x - 168, 9)
 	_retry_button.size = Vector2(66, 26)
 	if _remove_placeholder_button == null:
 		_remove_placeholder_button = Button.new()
@@ -763,8 +796,100 @@ func _rebuild_header_controls() -> void:
 		)
 		add_child(_remove_placeholder_button)
 	_remove_placeholder_button.visible = retryable
-	_remove_placeholder_button.position = Vector2(CARD_WIDTH - 92, 7)
+	_remove_placeholder_button.position = Vector2(requested_size.x - 100, 9)
 	_remove_placeholder_button.size = Vector2(60, 26)
+	if _title_button == null:
+		_title_button = Button.new()
+		_title_button.name = "TitleButton"
+		_title_button.flat = true
+		_title_button.focus_mode = Control.FOCUS_NONE
+		_title_button.gui_input.connect(_on_title_button_input)
+		add_child(_title_button)
+	_title_button.position = Vector2(8, 4)
+	_title_button.size = Vector2(maxf(48.0, requested_size.x - 84.0), 36)
+	_title_button.visible = not locked and _lod_camera_zoom >= 0.75
+	_title_button.tooltip_text = display_title if not display_title.is_empty() else label
+	if _more_button == null:
+		_more_button = MenuButton.new()
+		_more_button.name = "MoreButton"
+		_more_button.text = "..."
+		_more_button.tooltip_text = Strings.text("ACTION_MORE")
+		_more_button.get_popup().add_item(Strings.text("ACTION_RENAME"), 1)
+		_more_button.get_popup().add_item(Strings.text("ACTION_RESET_CARD_SIZE"), 2)
+		_more_button.get_popup().id_pressed.connect(_on_more_action)
+		add_child(_more_button)
+	_more_button.position = Vector2(requested_size.x - 36, 10)
+	_more_button.size = Vector2(28, 24)
+	_more_button.visible = not locked and _lod_camera_zoom >= 0.75
+
+
+func begin_title_edit() -> void:
+	if locked or _lod_camera_zoom < 0.75:
+		return
+	if _title_edit == null:
+		_title_edit = LineEdit.new()
+		_title_edit.name = "TitleEdit"
+		_title_edit.text_submitted.connect(func(_value: String) -> void: _commit_title_edit())
+		_title_edit.focus_exited.connect(_commit_title_edit)
+		_title_edit.gui_input.connect(_on_title_edit_input)
+		add_child(_title_edit)
+	_title_edit.position = Vector2(36, 7)
+	_title_edit.size = Vector2(maxf(64.0, requested_size.x - 116.0), 30)
+	_title_edit.text = display_title if not display_title.is_empty() else label
+	_title_edit.visible = true
+	_title_edit.grab_focus()
+	_title_edit.select_all()
+
+
+func resize_handle_contains_world(world_position: Vector2) -> bool:
+	if locked or _lod_camera_zoom < 0.75:
+		return false
+	var hit_world := 16.0 / maxf(_lod_camera_zoom, 0.01)
+	var local := world_position - position
+	return Rect2(
+		Vector2(requested_size.x, _card_height()) - Vector2.ONE * hit_world,
+		Vector2.ONE * hit_world
+	).has_point(local)
+
+
+func default_requested_size() -> Vector2i:
+	return CardContract.default_size_for_type("batch")
+
+
+func _draw_resize_handle() -> void:
+	if locked or _lod_camera_zoom < 0.75:
+		return
+	var end := Vector2(requested_size.x, _card_height()) - Vector2(4, 4)
+	draw_line(end - Vector2(8, 0), end, AppTheme.TEXT_MUTED, 2.0)
+	draw_line(end - Vector2(0, 8), end, AppTheme.TEXT_MUTED, 2.0)
+
+
+func _on_title_button_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.double_click:
+		begin_title_edit()
+
+
+func _on_title_edit_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		_title_edit.visible = false
+		get_viewport().set_input_as_handled()
+
+
+func _commit_title_edit() -> void:
+	if _title_edit == null or not _title_edit.visible:
+		return
+	var normalized := CardContract.normalize_display_title(_title_edit.text)
+	_title_edit.visible = false
+	if normalized != display_title:
+		display_title_change_requested.emit(item_id, normalized)
+
+
+func _on_more_action(action_id: int) -> void:
+	match action_id:
+		1:
+			begin_title_edit()
+		2:
+			size_change_requested.emit(item_id, default_requested_size())
 
 
 func _graph_has_edge_error() -> bool:
@@ -782,7 +907,7 @@ func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:
 		THUMB_SIZE, maxf(0.0, float(_card_height()) - HEADER_HEIGHT - PADDING * 2)
 	)
 	var y := HEADER_HEIGHT + PADDING + lane_height * float(index + 1) / float(count + 1)
-	return Vector2(0.0 if is_input else CARD_WIDTH, y)
+	return Vector2(0.0 if is_input else requested_size.x, y)
 
 
 func _port_hit_at_world(world_position: Vector2, is_input: bool) -> Dictionary:
@@ -976,22 +1101,10 @@ func _focus_layout_asset_index_at_local(local: Vector2) -> int:
 		return -1
 	if _focus_rect().has_point(local):
 		return visible_ids.find(_focused_visible_asset_id())
-	var start_index := _filmstrip_start_index(visible_ids)
-	var end_index := mini(visible_ids.size(), start_index + FOCUS_FILMSTRIP_VISIBLE)
-	for index in range(start_index, end_index):
-		if _filmstrip_rect(index - start_index).has_point(local):
+	for index in range(visible_ids.size()):
+		if _slot_rect(index).has_point(local):
 			return index
 	return -1
-
-
-func _filmstrip_start_index(visible_ids: Array[String]) -> int:
-	if visible_ids.size() <= FOCUS_FILMSTRIP_VISIBLE:
-		return 0
-	var anchor_index := _focus_anchor_index(visible_ids)
-	if anchor_index < 0:
-		anchor_index = 0
-	var half_window := int(floor(float(FOCUS_FILMSTRIP_VISIBLE) * 0.5))
-	return clampi(anchor_index - half_window, 0, visible_ids.size() - FOCUS_FILMSTRIP_VISIBLE)
 
 
 func _visible_selected_array(value: Array) -> Array[String]:

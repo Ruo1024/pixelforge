@@ -358,4 +358,7 @@
 	,"STATUS_GRAPH_ADD_DONE_FORMAT": "已添加流程模块：%s"
 	,"COST_MONTH_FORMAT": "本月费用：$%.2f"
 	,"COST_MONTH_ESTIMATE_FORMAT": "本月费用：$%.2f · 下次约 $%.2f"
+	,"ACTION_MORE": "更多"
+	,"ACTION_RENAME": "重命名"
+	,"ACTION_RESET_CARD_SIZE": "重置尺寸"
 }

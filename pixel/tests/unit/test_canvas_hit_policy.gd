@@ -18,7 +18,7 @@ func test_canvas_hit_policy_prioritizes_batch_thumbnail_inside_review_card() -> 
 	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
 	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 
-	var hit := _hit(canvas, card.position + Vector2(20, 60))
+	var hit := _hit(canvas, card.position + card._slot_rect(0).get_center())
 
 	assert_eq(hit["kind"], HitPolicy.KIND_BATCH_THUMBNAIL)
 	assert_eq(hit["item_id"], "batch_1")
@@ -30,7 +30,9 @@ func test_canvas_left_click_on_batch_thumbnail_does_not_start_card_drag() -> voi
 	var ids := [_register_asset(Color.RED, "red")]
 	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 
-	canvas._begin_left_interaction(canvas.world_to_screen(card.position + Vector2(20, 60)), false)
+	canvas._begin_left_interaction(
+		canvas.world_to_screen(card.position + card._slot_rect(0).get_center()), false
+	)
 
 	assert_eq(canvas.get_selected_ids(), ["batch_1"])
 	assert_eq(card.get_selected_asset_ids(), [ids[0]])
@@ -43,7 +45,7 @@ func test_canvas_hit_policy_keeps_batch_thumbnail_available_at_25_percent() -> v
 	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
 	card.set_lod_camera_zoom(0.25)
 
-	var hit := _hit(canvas, card.position + Vector2(20, 60))
+	var hit := _hit(canvas, card.position + card._slot_rect(0).get_center())
 
 	assert_eq(hit["kind"], HitPolicy.KIND_BATCH_THUMBNAIL)
 	assert_eq(hit["item_id"], "batch_1")
@@ -109,10 +111,10 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 		_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
 	)
 	var generate: Node = canvas._add_node_direct(
-		_node_item("generate_item", "graph_hit", "generate", Vector2(380, 100))
+		_node_item("generate_item", "graph_hit", "generate", Vector2(700, 100))
 	)
 	var target_anchor: Vector2 = generate.get_graph_port_anchor("items", true)
-	var hot_zone_world := target_anchor + Vector2(126, 28)
+	var hot_zone_world := target_anchor + Vector2(24, 28)
 
 	canvas._begin_left_interaction(
 		canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
@@ -217,7 +219,7 @@ func test_canvas_delete_key_removes_selected_graph_edge() -> void:
 		_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
 	)
 	var generate: Node = canvas._add_node_direct(
-		_node_item("generate_item", "graph_hit", "generate", Vector2(380, 100))
+		_node_item("generate_item", "graph_hit", "generate", Vector2(700, 100))
 	)
 	var edge_midpoint: Vector2 = objects.get_graph_port_anchor("items", false).lerp(
 		generate.get_graph_port_anchor("items", true), 0.5
@@ -369,7 +371,7 @@ func test_canvas_right_click_routes_batch_before_empty_graph_quick_add() -> void
 	assert_eq(batch_requests[0][0], "batch_1")
 	assert_eq(graph_requests, [])
 
-	canvas._handle_mouse_button(_right_click_event(Vector2(500, 500)))
+	canvas._handle_mouse_button(_right_click_event(canvas.world_to_screen(Vector2(2000, 2000))))
 
 	assert_eq(batch_requests.size(), 1)
 	assert_eq(graph_requests.size(), 1)

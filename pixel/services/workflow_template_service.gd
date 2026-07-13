@@ -4,6 +4,7 @@ extends RefCounted
 const FileIO := preload("res://infra/file_io.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
+const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
 
 const SCHEMA := "pixelforge.workflow-template"
 const VERSION := 1
@@ -72,18 +73,22 @@ static func build_from_frame(
 			return sanitized
 		var item: Dictionary = node_ids[node_id]
 		var relative := _vector2(item.get("position", [0, 0])) - frame_position
-		(
-			template_nodes
-			. append(
-				{
-					"id": node_id,
-					"type": String(raw_node.get("type", "")),
-					"params": sanitized["params"],
-					"position": _position(relative),
-					"collapsed": bool(item.get("collapsed", false)),
-				}
-			)
-		)
+		var template_node := {
+			"id": node_id,
+			"type": String(raw_node.get("type", "")),
+			"params": sanitized["params"],
+			"position": _position(relative),
+			"size": CardContract.size_array(
+				CardContract.normalize_requested_size(
+					String(raw_node.get("type", "unknown")), item.get("size", null)
+				)
+			),
+			"collapsed": bool(item.get("collapsed", false)),
+		}
+		var title := CardContract.normalize_display_title(item.get("display_title", ""))
+		if not title.is_empty():
+			template_node["display_title"] = title
+		template_nodes.append(template_node)
 	var internal_edges: Array[Dictionary] = []
 	var external_edge_count := 0
 	for raw_edge in graph_data.get("edges", []):
@@ -218,21 +223,24 @@ static func instantiate(
 		)
 		var item_id := IdUtil.uuid_v4()
 		item_ids.append(item_id)
-		(
-			canvas_items
-			. append(
-				{
-					"id": item_id,
-					"type": "node",
-					"graph_id": graph_id,
-					"node_id": new_id,
-					"position": _position(position),
-					"z_index": canvas_items.size(),
-					"collapsed": bool(node.get("collapsed", false)),
-					"frame_id": frame_id,
-				}
-			)
-		)
+		var canvas_item := {
+			"id": item_id,
+			"type": "node",
+			"graph_id": graph_id,
+			"node_id": new_id,
+			"position": _position(position),
+			"z_index": canvas_items.size(),
+			"size": CardContract.size_array(
+				CardContract.normalize_requested_size(
+					String(node.get("type", "unknown")), node.get("size", null)
+				)
+			),
+			"collapsed": bool(node.get("collapsed", false)),
+			"frame_id": frame_id,
+		}
+		if node.has("display_title"):
+			canvas_item["display_title"] = node["display_title"]
+		canvas_items.append(canvas_item)
 	var graph_edges: Array = graph_after.get("edges", []).duplicate(true)
 	for raw_edge in template.get("edges", []):
 		var edge: Dictionary = raw_edge.duplicate(true)
@@ -292,6 +300,15 @@ static func validate_template(template: Dictionary) -> Dictionary:
 		var sanitized := _sanitize_node(node)
 		if not bool(sanitized.get("ok", false)):
 			return sanitized
+		if node.has("display_title"):
+			if not (node["display_title"] is String):
+				return _failure("invalid_template_node_title", node_id)
+			var title := String(node["display_title"])
+			if title.is_empty() or CardContract.normalize_display_title(title) != title:
+				return _failure("invalid_template_node_title", node_id)
+		if node.has("size"):
+			if not _valid_template_size(node_type, node["size"]):
+				return _failure("invalid_template_node_size", node_id)
 	for raw_edge in template.get("edges", []):
 		if not (raw_edge is Dictionary):
 			return _failure("invalid_template_edge", "edges")
@@ -400,7 +417,27 @@ static func _builtin(
 
 
 static func _node(id: String, type: String, params: Dictionary, position: Array) -> Dictionary:
-	return {"id": id, "type": type, "params": params, "position": position, "collapsed": false}
+	return {
+		"id": id,
+		"type": type,
+		"params": params,
+		"position": position,
+		"size": CardContract.size_array(CardContract.default_size_for_type(type)),
+		"collapsed": false,
+	}
+
+
+static func _valid_template_size(node_type: String, value: Variant) -> bool:
+	if not (value is Array) or Array(value).size() != 2:
+		return false
+	var raw: Array = value
+	if typeof(raw[0]) not in [TYPE_INT, TYPE_FLOAT] or typeof(raw[1]) not in [TYPE_INT, TYPE_FLOAT]:
+		return false
+	var normalized := CardContract.normalize_requested_size(node_type, raw)
+	return (
+		is_equal_approx(float(raw[0]), float(normalized.x))
+		and is_equal_approx(float(raw[1]), float(normalized.y))
+	)
 
 
 static func _edge(from_id: String, from_port: String, to_id: String, to_port: String) -> Dictionary:

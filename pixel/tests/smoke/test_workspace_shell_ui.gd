@@ -227,7 +227,7 @@ func test_navigation_buttons_focus_selected_and_all_canvas_content() -> void:
 	var first_id: String = AssetLibrary.register_image(image, "first", {"origin": "imported"})
 	var second_id: String = AssetLibrary.register_image(image, "second", {"origin": "imported"})
 	var first: Node = canvas.add_sprite_item(image, first_id, Vector2(-800, -300))
-	canvas.add_sprite_item(image, second_id, Vector2(900, 500))
+	var second: Node = canvas.add_sprite_item(image, second_id, Vector2(900, 500))
 	await wait_process_frames(1)
 	assert_true(minimap.visible)
 	(navigation.get_node("NavigationRow/ToggleMinimap") as Button).pressed.emit()
@@ -237,7 +237,9 @@ func test_navigation_buttons_focus_selected_and_all_canvas_content() -> void:
 
 	(navigation.get_node("NavigationRow/FocusAll") as Button).pressed.emit()
 	await wait_process_frames(1)
-	var all_center := Rect2(Vector2(-800, -300), Vector2(1732, 832)).get_center()
+	var all_center: Vector2 = (
+		first.get_canvas_bounds().merge(second.get_canvas_bounds()).get_center()
+	)
 	assert_almost_eq(canvas.world_to_screen(all_center).x, canvas.size.x * 0.5, 1.0)
 	assert_almost_eq(canvas.world_to_screen(all_center).y, canvas.size.y * 0.5, 1.0)
 	var minimap_target := Vector2(900, 500)

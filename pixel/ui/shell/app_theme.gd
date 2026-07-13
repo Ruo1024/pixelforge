@@ -5,6 +5,30 @@ extends RefCounted
 
 const UIFont := preload("res://ui/widgets/ui_font.gd")
 
+const CANVAS := Color("0d121c")
+const GRID := Color("283246")
+const CARD := Color("151c29")
+const ELEVATED := Color("1b2535")
+const SECTION := Color("101722")
+const BORDER := Color("2b3850")
+const BORDER_HOVER := Color("455773")
+const TEXT_PRIMARY := Color("f2f5fa")
+const TEXT_SECONDARY := Color("aab4c4")
+const TEXT_MUTED := Color("7b879b")
+const SELECTION := Color("6fa8ff")
+const SUCCESS := Color("45d6a3")
+const WARNING := Color("f4b45f")
+const ERROR := Color("f06b6b")
+const MEDIA_RAIL := Color("dde8f7")
+const MEDIA_RAIL_TEXT := Color("111827")
+
+const OUTER_RADIUS := 14
+const SECTION_RADIUS := 10
+const CONTROL_RADIUS := 8
+const CARD_HEADER_HEIGHT := 44
+const MEDIA_HEADER_HEIGHT := 32
+const CARD_PADDING := 16
+
 
 static func build(default_font_size: int, small_font_size: int) -> Theme:
 	var app_theme := Theme.new()

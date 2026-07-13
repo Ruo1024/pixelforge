@@ -24,6 +24,8 @@ func test_capture_filters_external_edges_and_clears_assets_and_results() -> void
 	assert_eq(template["requirements"]["reference_slots"], 1)
 	assert_eq(_node(template, "reference")["params"]["asset_id"], "")
 	assert_eq(_node(template, "batch")["params"], {"label": "Results"})
+	assert_eq(_node(template, "prompt")["display_title"], "Ideas")
+	assert_eq(_node(template, "prompt")["size"], [420, 320])
 	assert_false(JSON.stringify(template).contains("asset-reference"))
 
 
@@ -103,6 +105,7 @@ func test_builtins_validate_and_instantiate_remaps_all_ids_and_positions() -> vo
 	var canvas_node := _canvas_node(first["canvas"], first_node_id)
 	assert_eq(canvas_node["position"], [540, 380])
 	assert_eq(canvas_node["frame_id"], first["frame_id"])
+	assert_eq(canvas_node["size"], builtins[0]["nodes"][0]["size"])
 	assert_eq(first["graph"]["edges"][0]["from"][0], first_node_id)
 	assert_eq(builtins[0]["nodes"][0]["id"], "objects")
 
@@ -209,6 +212,9 @@ func _canvas_fixture() -> Dictionary:
 				"frame_id": "frame-a"
 			}
 		)
+		if node_id == "prompt":
+			items[items.size() - 1]["display_title"] = "Ideas"
+			items[items.size() - 1]["size"] = [420, 320]
 	return {"camera": {"center": [0, 0], "zoom": 1.0}, "items": items}
 
 
