@@ -6,6 +6,7 @@ const TextPromptNodeScript := preload("res://core/graph/nodes/text_prompt_node.g
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const StylePresetNodeScript := preload("res://core/graph/nodes/style_preset_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 
 
 func before_each() -> void:
@@ -76,6 +77,37 @@ func test_style_palette_and_size_presets_are_visible_without_apply_buttons() -> 
 	assert_null(size_card.get_content_control("ApplyButton"))
 
 
+func test_generate_card_has_one_primary_action_for_every_frozen_state() -> void:
+	var fixture := await _card(
+		AiGenerateNodeScript.new(),
+		"generate",
+		{"provider_id": "mock", "batch_size": 2, "seed": 1}
+	)
+	var card: Node = fixture["card"]
+	var primary: Button = card.get_content_control("PrimaryActionButton")
+	assert_not_null(primary)
+	assert_null(card.get_content_control("CancelButton"))
+	assert_false(card.get_content_control("AdvancedSettings").visible)
+	var cases := [
+		["CONTENT_STATUS_INCOMPLETE", "Fix input", "fix_input", false],
+		["CONTENT_STATUS_READY", "Generate", "run", false],
+		["CONTENT_STATUS_QUEUED", "Cancel", "cancel", false],
+		["CONTENT_STATUS_RUNNING", "Cancel", "cancel", false],
+		["CONTENT_STATUS_CANCELING", "Stopping…", "", true],
+		["CONTENT_STATUS_COMPLETE", "Generate again", "run", false],
+		["CONTENT_STATUS_PARTIAL", "Retry failed items", "retry_failed", false],
+		["CONTENT_STATUS_FAILED", "Retry", "retry", false],
+		["CONTENT_STATUS_CANCELED", "Generate again", "run", false],
+	]
+	for spec in cases:
+		card.set_execution_status(spec[0])
+		assert_eq(primary.text, spec[1])
+		assert_eq(primary.disabled, spec[3])
+		if not String(spec[2]).is_empty():
+			primary.pressed.emit()
+			assert_eq(fixture["actions"][-1][2], spec[2])
+
+
 func _card(node: PFNode, node_id: String, params: Dictionary) -> Dictionary:
 	var graph := GraphScript.new()
 	graph.id = "graph_%s" % node_id
@@ -86,11 +118,16 @@ func _card(node: PFNode, node_id: String, params: Dictionary) -> Dictionary:
 	add_child_autofree(canvas)
 	await wait_process_frames(2)
 	var commits := []
+	var actions := []
 	canvas.graph_node_params_commit_requested.connect(
 		func(graph_id: String, committed_node_id: String, committed: Dictionary) -> void:
 			commits.append([graph_id, committed_node_id, committed])
 	)
+	canvas.graph_node_action_requested.connect(
+		func(graph_id: String, committed_node_id: String, action_id: String) -> void:
+			actions.append([graph_id, committed_node_id, action_id])
+	)
 	var card: Node = canvas._add_graph_node_card(
 		graph.id, node_id, Vector2.ZERO, "item_%s" % node_id, false
 	)
-	return {"canvas": canvas, "card": card, "commits": commits}
+	return {"canvas": canvas, "card": card, "commits": commits, "actions": actions}

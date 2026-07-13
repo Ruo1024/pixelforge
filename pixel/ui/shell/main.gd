@@ -575,6 +575,7 @@ func _connect_services() -> void:
 	_canvas.graph_node_params_commit_requested.connect(_m2_1_ui.apply_graph_node_params)
 	_canvas.graph_node_action_requested.connect(_on_graph_node_action_requested)
 	_canvas.batch_run_action_requested.connect(_m2_1_ui._handle_batch_run_action)
+	_canvas.batch_face_action_requested.connect(_m2_1_ui.handle_batch_face_action)
 	_canvas.project_resource_dropped.connect(_m2_1_ui._handle_project_resource_drop)
 	_context_inspector.candidate_action_requested.connect(_m2_1_ui._handle_candidate_action)
 	_context_inspector.project_resource_activated.connect(

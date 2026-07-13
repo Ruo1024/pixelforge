@@ -8,6 +8,7 @@ signal collapsed_change_requested(item_id: String, collapsed: bool)
 signal run_action_requested(graph_id: String, node_id: String, action_id: String)
 signal display_title_change_requested(item_id: String, display_title: String)
 signal size_change_requested(item_id: String, requested_size: Vector2i)
+signal face_action_requested(item_id: String, action_id: String, asset_ids: Array)
 
 const IdUtil := preload("res://core/util/id_util.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
@@ -88,6 +89,7 @@ var _remove_placeholder_button: Button = null
 var _title_button: Button = null
 var _title_edit: LineEdit = null
 var _more_button: MenuButton = null
+var _action_root: HBoxContainer = null
 var _raw_data := {}
 
 
@@ -134,6 +136,7 @@ func setup_from_data(data: Dictionary) -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_rebuild_thumbnails()
 	_rebuild_header_controls()
+	_rebuild_action_controls()
 	queue_redraw()
 
 
@@ -209,6 +212,7 @@ func get_requested_size() -> Vector2i:
 func set_requested_size(value: Variant) -> void:
 	requested_size = CardContract.normalize_requested_size("batch", value)
 	_rebuild_header_controls()
+	_rebuild_action_controls()
 	queue_redraw()
 
 
@@ -223,6 +227,7 @@ func set_lod_camera_zoom(camera_zoom_value: float) -> void:
 		return
 	_lod_camera_zoom = normalized_zoom
 	_rebuild_header_controls()
+	_rebuild_action_controls()
 	queue_redraw()
 
 
@@ -235,6 +240,7 @@ func _set_collapsed(value: bool) -> void:
 		return
 	collapsed = value
 	_rebuild_header_controls()
+	_rebuild_action_controls()
 	queue_redraw()
 
 
@@ -337,6 +343,7 @@ func set_review_filter(new_review_filter: String) -> void:
 	review_filter = _normalize_review_filter(new_review_filter)
 	_prune_selected_to_visible()
 	_prune_focus_to_visible()
+	call_deferred("_rebuild_action_controls")
 	queue_redraw()
 
 
@@ -365,6 +372,7 @@ func _set_focus_asset_id(new_focus_asset_id: String, select_focused: bool = fals
 
 func _set_selected_asset_ids(new_selected_asset_ids: Array) -> void:
 	selected_asset_ids = _visible_selected_array(new_selected_asset_ids)
+	_rebuild_action_controls()
 	queue_redraw()
 
 
@@ -415,6 +423,7 @@ func toggle_asset_at_world(world_position: Vector2) -> bool:
 	else:
 		selected_asset_ids.append(asset_id)
 		focus_asset_id = asset_id
+	_rebuild_action_controls()
 	queue_redraw()
 	return true
 
@@ -505,6 +514,78 @@ func _draw_action_row() -> void:
 	)
 	draw_rect(rect, AppTheme.SECTION, true)
 	draw_rect(rect, AppTheme.BORDER, false, 1.0)
+
+
+func _rebuild_action_controls() -> void:
+	if _action_root != null:
+		remove_child(_action_root)
+		_action_root.free()
+		_action_root = null
+	if collapsed or _lod_camera_zoom < 0.75:
+		return
+	_action_root = HBoxContainer.new()
+	_action_root.name = "BatchActionRow"
+	var geometry := _geometry()
+	_action_root.position = Vector2(PADDING + 4, int(geometry["action_y"]) + 4)
+	_action_root.size = Vector2(requested_size.x - PADDING * 2 - 8, 32)
+	_action_root.add_theme_constant_override("separation", 4)
+	add_child(_action_root)
+	var has_selection := not selected_asset_ids.is_empty()
+	var specs := (
+		[
+			["BATCH_FACE_KEEP", "review_keep"],
+			["BATCH_FACE_REJECT", "review_reject"],
+			["BATCH_FACE_FLAG", "review_flag"],
+			["BATCH_FACE_PROCESS", "process"],
+			["BATCH_FACE_CONTINUE", "continue"],
+			["BATCH_FACE_EXPORT", "export"],
+		]
+		if has_selection
+		else [
+			["BATCH_FACE_ALL", "filter_all"],
+			["BATCH_FACE_PENDING", "filter_pending"],
+			["BATCH_FACE_KEEP", "filter_keep"],
+			["BATCH_FACE_REJECT", "filter_reject"],
+			["BATCH_FACE_FLAG", "filter_flag"],
+			["BATCH_FACE_PROCESS_ALL", "process_all"],
+		]
+	)
+	var visible_count := specs.size() if requested_size.x >= 560 else mini(3, specs.size())
+	for index in range(visible_count):
+		_add_face_button(String(specs[index][0]), String(specs[index][1]))
+	if visible_count < specs.size():
+		var menu := MenuButton.new()
+		menu.name = "BatchActionMore"
+		menu.text = Strings.text("ACTION_MORE")
+		var actions := {}
+		for index in range(visible_count, specs.size()):
+			var popup_id := index - visible_count
+			menu.get_popup().add_item(Strings.text(String(specs[index][0])), popup_id)
+			actions[popup_id] = String(specs[index][1])
+		menu.get_popup().id_pressed.connect(
+			func(popup_id: int) -> void: _emit_face_action(String(actions.get(popup_id, "")))
+		)
+		_action_root.add_child(menu)
+
+
+func _add_face_button(text_key: String, action_id: String) -> void:
+	var button := Button.new()
+	button.name = action_id.to_pascal_case()
+	button.text = Strings.text(text_key)
+	button.focus_mode = Control.FOCUS_NONE
+	button.pressed.connect(_emit_face_action.bind(action_id))
+	_action_root.add_child(button)
+
+
+func _emit_face_action(action_id: String) -> void:
+	if action_id.is_empty():
+		return
+	var targets: Array = (
+		selected_asset_ids.duplicate()
+		if not selected_asset_ids.is_empty()
+		else asset_ids.duplicate()
+	)
+	face_action_requested.emit(item_id, action_id, targets)
 
 
 func _draw_placeholders() -> void:

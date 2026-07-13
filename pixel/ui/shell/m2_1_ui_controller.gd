@@ -366,10 +366,12 @@ func _import_reference_for_node(graph_id: String, node_id: String) -> void:
 
 func handle_graph_node_action(graph_id: String, node_id: String, action_id: String) -> void:
 	match action_id:
-		"run":
+		"run", "retry", "retry_failed":
 			_run_graph_node(graph_id, node_id)
 		"cancel":
 			cancel_graph_run(graph_id, node_id)
+		"fix_input":
+			edit_selected_graph_node()
 		"import_reference":
 			_import_reference_for_node(graph_id, node_id)
 		"import_reference_set":
@@ -384,6 +386,34 @@ func _handle_batch_run_action(graph_id: String, node_id: String, action_id: Stri
 			_run_graph_node(graph_id, node_id)
 		"remove":
 			_canvas.delete_selected()
+
+
+func handle_batch_face_action(card_id: String, action_id: String, asset_ids: Array) -> void:
+	match action_id:
+		"process", "process_all":
+			_m2_actions.batch_cleanup(
+				card_id,
+				asset_ids,
+				Pipeline.normalize_params(_cleanup_inspector.get_params(), _project_style_preset())
+			)
+		"export":
+			_emit_batch_export(asset_ids)
+		"continue":
+			var card: Node = _canvas._items_by_id.get(card_id, null)
+			if card == null or asset_ids.is_empty():
+				_status_label.text = Strings.text("STATUS_CANDIDATE_BRANCH_FAILED")
+				return
+			var meta: Dictionary = AssetLibrary.get_asset_meta(String(asset_ids[0]))
+			var provenance: Dictionary = meta.get("provenance", {})
+			_apply_result_branch(
+				"continue_branch",
+				{
+					"graph_id": String(card.graph_id),
+					"batch_node_id": String(card.node_id),
+					"asset_ids": asset_ids.duplicate(),
+					"snapshot": provenance.get("generation_snapshot", {}),
+				}
+			)
 
 
 func _handle_candidate_action(action_id: String, context: Dictionary) -> void:

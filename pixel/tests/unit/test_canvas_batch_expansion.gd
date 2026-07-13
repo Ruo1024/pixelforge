@@ -1,6 +1,7 @@
 extends "res://addons/gut/test.gd"
 
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
+const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 
 
 func before_each() -> void:
@@ -39,6 +40,35 @@ func test_expected_placeholders_reserve_the_same_fifty_slots() -> void:
 	assert_eq(card.get_slot_count(), 50)
 	assert_eq(card._rows(), 13)
 	assert_eq(card.get_canvas_bounds().size.y, 1936.0)
+
+
+func test_last_of_fifty_uses_front_action_row_without_scroll_or_paging() -> void:
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(900, 700)
+	add_child_autofree(canvas)
+	var ids := []
+	for index in range(50):
+		ids.append("asset-%02d" % index)
+	var card: Node = canvas._add_batch_card(ids, Vector2.ZERO, "Results", "batch", false)
+	assert_not_null(card.get_node("BatchActionRow/FilterAll"))
+	assert_not_null(card.get_node("BatchActionRow/ProcessAll"))
+	assert_true(card.toggle_asset_at_world(card.position + card._slot_rect(49).get_center()))
+	assert_not_null(card.get_node("BatchActionRow/ReviewKeep"))
+	assert_not_null(card.get_node("BatchActionRow/Continue"))
+	var face_events := []
+	canvas.batch_face_action_requested.connect(
+		func(card_id: String, action_id: String, asset_ids: Array) -> void:
+			face_events.append([card_id, action_id, asset_ids])
+	)
+	(card.get_node("BatchActionRow/ReviewKeep") as Button).pressed.emit()
+	assert_eq(card.get_review_states()[ids[49]], CanvasBatchCardScript.REVIEW_KEEP)
+	assert_true(UndoService.undo())
+	assert_false(card.get_review_states().has(ids[49]))
+	(card.get_node("BatchActionRow/Continue") as Button).pressed.emit()
+	assert_eq(face_events, [["batch", "continue", [ids[49]]]])
+	for child in card.get_children():
+		assert_false(child is ScrollContainer)
+	assert_true(card.find_children("*Next*", "Button", true, false).is_empty())
 
 
 func _batch_card(

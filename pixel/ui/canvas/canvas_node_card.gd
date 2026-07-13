@@ -326,6 +326,8 @@ func _resolve_graph_node() -> void:
 		_status_badge = Strings.GRAPH_NODE_BADGE_EDGE_ERROR
 	if not _execution_status_key.is_empty():
 		_status_badge = Strings.text(_execution_status_key)
+	elif _node_type == "ai_generate" and not _has_edge_error:
+		_status_badge = Strings.text("CONTENT_STATUS_READY")
 
 
 func _visible_input_ports_for_node(node_type: String, port_names: Array[String]) -> Array[String]:
@@ -736,33 +738,29 @@ func _build_generate_controls() -> void:
 	settings_row.add_child(
 		_labeled_control(Strings.text("GRAPH_PARAM_BATCH_SIZE"), _batch_size_spin)
 	)
-	settings_row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_SEED"), _seed_spin))
 	_content_root.add_child(settings_row)
+	var advanced_toggle := Button.new()
+	advanced_toggle.name = "AdvancedToggle"
+	advanced_toggle.text = Strings.text("CONTENT_ADVANCED")
+	advanced_toggle.toggle_mode = true
+	_content_root.add_child(advanced_toggle)
+	var advanced := VBoxContainer.new()
+	advanced.name = "AdvancedSettings"
+	advanced.visible = false
+	advanced.add_child(_labeled_control(Strings.text("GRAPH_PARAM_SEED"), _seed_spin))
+	advanced_toggle.toggled.connect(func(value: bool) -> void: advanced.visible = value)
+	_content_root.add_child(advanced)
 
 	_cost_estimate_label = Label.new()
 	_cost_estimate_label.name = "CostEstimate"
 	_content_root.add_child(_cost_estimate_label)
 	_sync_model_controls()
 
-	var action_row := HBoxContainer.new()
 	_run_button = Button.new()
-	_run_button.name = "RunButton"
-	_run_button.text = Strings.text("CONTENT_RUN_GENERATION")
+	_run_button.name = "PrimaryActionButton"
 	_run_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_run_button.pressed.connect(
-		func() -> void:
-			_commit_generate_params()
-			action_requested.emit(graph_id, node_id, "run")
-	)
-	action_row.add_child(_run_button)
-	_cancel_button = Button.new()
-	_cancel_button.name = "CancelButton"
-	_cancel_button.text = Strings.text("CONTENT_CANCEL_GENERATION")
-	_cancel_button.pressed.connect(
-		func() -> void: action_requested.emit(graph_id, node_id, "cancel")
-	)
-	action_row.add_child(_cancel_button)
-	_content_root.add_child(action_row)
+	_run_button.pressed.connect(_on_generation_primary_pressed)
+	_content_root.add_child(_run_button)
 	_execution_detail_label = Label.new()
 	_execution_detail_label.name = "ExecutionDetail"
 	_execution_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1257,11 +1255,46 @@ func _on_language_changed(_preference: String, _locale: String) -> void:
 
 
 func _sync_run_controls() -> void:
-	if _run_button == null or _cancel_button == null:
+	if _run_button == null:
 		return
-	var is_running := _execution_status_key == "CONTENT_STATUS_RUNNING"
-	_run_button.disabled = is_running
-	_cancel_button.visible = is_running
+	var state := _generation_state()
+	var text_key_by_state := {
+		"INCOMPLETE": "CONTENT_ACTION_FIX_INPUT",
+		"READY": "CONTENT_ACTION_GENERATE",
+		"QUEUED": "CONTENT_ACTION_CANCEL",
+		"RUNNING": "CONTENT_ACTION_CANCEL",
+		"CANCELING": "CONTENT_ACTION_STOPPING",
+		"COMPLETE": "CONTENT_ACTION_GENERATE_AGAIN",
+		"PARTIAL": "CONTENT_ACTION_RETRY_FAILED",
+		"FAILED": "CONTENT_ACTION_RETRY",
+		"CANCELED": "CONTENT_ACTION_GENERATE_AGAIN",
+	}
+	_run_button.text = Strings.text(String(text_key_by_state.get(state, "CONTENT_ACTION_GENERATE")))
+	_run_button.disabled = state == "CANCELING"
+
+
+func _generation_state() -> String:
+	if _execution_status_key.begins_with("CONTENT_STATUS_"):
+		return _execution_status_key.trim_prefix("CONTENT_STATUS_")
+	return "READY"
+
+
+func _on_generation_primary_pressed() -> void:
+	var state := _generation_state()
+	match state:
+		"INCOMPLETE":
+			action_requested.emit(graph_id, node_id, "fix_input")
+		"QUEUED", "RUNNING":
+			action_requested.emit(graph_id, node_id, "cancel")
+		"PARTIAL":
+			action_requested.emit(graph_id, node_id, "retry_failed")
+		"FAILED":
+			action_requested.emit(graph_id, node_id, "retry")
+		"CANCELING":
+			return
+		_:
+			_commit_generate_params()
+			action_requested.emit(graph_id, node_id, "run")
 
 
 func _sync_execution_detail() -> void:

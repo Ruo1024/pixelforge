@@ -16,6 +16,7 @@ signal asset_edit_requested(asset_id: String, batch_id: String)
 signal graph_node_params_commit_requested(graph_id: String, node_id: String, params: Dictionary)
 signal graph_node_action_requested(graph_id: String, node_id: String, action_id: String)
 signal batch_run_action_requested(graph_id: String, node_id: String, action_id: String)
+signal batch_face_action_requested(card_id: String, action_id: String, asset_ids: Array)
 signal project_resource_dropped(resource: Dictionary, world_position: Vector2)
 signal image_paste_requested(world_position: Vector2)
 
@@ -1410,6 +1411,7 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 			_select_only([item.item_id])
 			batch_run_action_requested.emit(graph_id, node_id, action_id)
 	)
+	item.face_action_requested.connect(_on_batch_face_action_requested)
 	item.set_lod_camera_zoom(camera_zoom)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
@@ -1418,6 +1420,31 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 	_update_item_visibility()
 	queue_redraw()
 	return item
+
+
+func _on_batch_face_action_requested(
+	card_id: String, action_id: String, asset_ids: Array
+) -> void:
+	_select_only([card_id])
+	match action_id:
+		"filter_all":
+			_set_batch_review_filter(card_id, CanvasBatchCardScript.FILTER_ALL, true)
+		"filter_pending":
+			_set_batch_review_filter(card_id, CanvasBatchCardScript.FILTER_PENDING, true)
+		"filter_keep":
+			_set_batch_review_filter(card_id, CanvasBatchCardScript.REVIEW_KEEP, true)
+		"filter_reject":
+			_set_batch_review_filter(card_id, CanvasBatchCardScript.REVIEW_REJECT, true)
+		"filter_flag":
+			_set_batch_review_filter(card_id, CanvasBatchCardScript.REVIEW_FLAG, true)
+		"review_keep":
+			_set_batch_review_state(card_id, asset_ids, CanvasBatchCardScript.REVIEW_KEEP, true)
+		"review_reject":
+			_set_batch_review_state(card_id, asset_ids, CanvasBatchCardScript.REVIEW_REJECT, true)
+		"review_flag":
+			_set_batch_review_state(card_id, asset_ids, CanvasBatchCardScript.REVIEW_FLAG, true)
+		_:
+			batch_face_action_requested.emit(card_id, action_id, asset_ids)
 
 
 func _set_batch_collapsed(item_id: String, value: bool, record_undo: bool = true) -> bool:
