@@ -181,7 +181,8 @@ func test_coordinator_events_and_errors_never_expose_credential_sentinel() -> vo
 	assert_false(Scanner.contains(events, Scanner.VALUE))
 
 
-func test_generation_controller_routes_progress_and_both_cancel_outcomes_through_coordinator() -> void:
+func test_generation_controller_routes_progress_and_both_cancel_outcomes_through_coordinator(
+) -> void:
 	var source := FileAccess.get_file_as_string("res://ui/shell/generation_run_controller.gd")
 	var coordinator_source := FileAccess.get_file_as_string(
 		"res://services/generation_run_coordinator.gd"
@@ -204,7 +205,8 @@ func test_submit_failure_uses_atomic_pending_output_rollback_path() -> void:
 	assert_true(source.contains("_canvas._remove_item_direct("))
 
 
-func test_manual_retry_routes_original_failed_slots_to_retry_run_without_full_output_creation() -> void:
+func test_manual_retry_routes_original_failed_slots_to_retry_run_without_full_output_creation(
+) -> void:
 	var controller := FileAccess.get_file_as_string("res://ui/shell/generation_run_controller.gd")
 	var shell := FileAccess.get_file_as_string("res://ui/shell/m2_1_ui_controller.gd")
 	assert_true(controller.contains("func retry_graph("))
