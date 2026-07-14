@@ -702,7 +702,7 @@ func _build_generate_controls() -> void:
 	_model_option.name = "ProviderOption"
 	_model_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var descriptors := ProviderService.get_selectable_model_descriptors()
-	var current_provider := String(_params_snapshot.get("provider_id", "mock"))
+	var current_provider := String(_params_snapshot.get("provider_id", ""))
 	var current_model := String(_params_snapshot.get("model_id", ""))
 	var selected_index := 0
 	for descriptor in descriptors:
@@ -719,7 +719,9 @@ func _build_generate_controls() -> void:
 			)
 		):
 			selected_index = index
-	_model_option.select(selected_index)
+	_model_option.disabled = descriptors.is_empty()
+	if not descriptors.is_empty():
+		_model_option.select(selected_index)
 	_model_option.item_selected.connect(_on_model_selected)
 	model_row.add_child(_model_option)
 	_content_root.add_child(model_row)
@@ -1050,7 +1052,12 @@ func _on_prompt_input(event: InputEvent) -> void:
 
 
 func _commit_generate_params() -> void:
-	if _model_option == null or _batch_size_spin == null or _seed_spin == null:
+	if (
+		_model_option == null
+		or _model_option.item_count == 0
+		or _batch_size_spin == null
+		or _seed_spin == null
+	):
 		return
 	var descriptor: Dictionary = _model_option.get_item_metadata(_model_option.selected)
 	(
@@ -1059,7 +1066,7 @@ func _commit_generate_params() -> void:
 			graph_id,
 			node_id,
 			{
-				"provider_id": String(descriptor.get("provider_id", "mock")),
+				"provider_id": String(descriptor.get("provider_id", "")),
 				"model_id": String(descriptor.get("model_id", "")),
 				"target_width": int(_params_snapshot.get("target_width", 32)),
 				"target_height": int(_params_snapshot.get("target_height", 32)),

@@ -21,18 +21,32 @@ func before_each() -> void:
 func test_service_aggregates_catalog_and_resolves_provider_defaults() -> void:
 	var catalog := _service.get_model_descriptors()
 	assert_eq(catalog.size(), 4)
-	assert_eq(_service.get_selectable_model_descriptors().size(), 1)
-	assert_eq(_service.get_selectable_model_descriptors()[0]["model_id"], "pixel_mock_v1")
+	assert_eq(_service.get_selectable_model_descriptors().size(), 0)
 	_service._set_validation_state("openai_image", "verified", "")
-	assert_eq(_service.get_selectable_model_descriptors().size(), 2)
+	assert_eq(_service.get_selectable_model_descriptors().size(), 1)
 	assert_eq(_service.get_model_descriptors("openai_image").size(), 1)
-	assert_eq(_service.resolve_model_id("mock"), "pixel_mock_v1")
-	assert_eq(_service.get_model_descriptor("mock")["provider_id"], "mock")
+	assert_eq(_service.resolve_model_id("mock"), "")
+	assert_eq(_service.get_model_descriptor("mock"), {})
 	assert_eq(_service.resolve_model_id("openai_image"), "gpt-image-2")
 	assert_eq(_service.resolve_model_id("retrodiffusion"), "rd_plus")
 	assert_eq(_service.resolve_model_id("retrodiffusion", "rd_pro"), "rd_pro")
 	assert_eq(_service.resolve_model_id("retrodiffusion", "missing"), "")
 	assert_eq(_service.get_model_descriptor("retrodiffusion", "rd_fast")["display_name"], "RD Fast")
+
+
+func test_production_catalog_excludes_mock_until_explicit_automation_injection() -> void:
+	assert_false(_service.get_selectable_provider_ids().has("mock"))
+	for descriptor in _service.get_selectable_model_descriptors():
+		assert_ne(String(descriptor.get("provider_id", "")), "mock")
+	assert_eq(_service.get_model_descriptor("mock"), {})
+	assert_eq(_service.resolve_model_id("mock"), "")
+
+	_service.enable_automation_mock_for_tests()
+	assert_true(_service.get_selectable_provider_ids().has("mock"))
+	var descriptor := _service.get_model_descriptor("mock")
+	assert_eq(descriptor["model_id"], "pixel_mock_v1")
+	assert_false(descriptor["capabilities"].has("output_size_constraints"))
+	assert_true(_service._model_descriptors_are_valid("mock", [descriptor]))
 
 
 func test_openai_descriptor_and_validation_reject_unsupported_requests() -> void:

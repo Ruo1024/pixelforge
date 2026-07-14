@@ -5,6 +5,7 @@ extends RefCounted
 
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const SchemaTextResolverScript := preload("res://services/schema_text_resolver.gd")
+const PROVIDER_API_VERSION := 2
 
 var _plugin_service: Node = null
 var _provider_service: Node = null
@@ -39,7 +40,12 @@ func register_node_type(type_name: String, node_script: Script) -> bool:
 
 
 func register_provider(provider: PFProvider) -> bool:
-	if _provider_service == null or provider == null or not _validate_provider_schemas(provider):
+	if _provider_service == null or provider == null:
+		return false
+	# Provider version is the only call allowed before the hard compatibility gate.
+	if provider.get_api_version() != PROVIDER_API_VERSION:
+		return false
+	if not _validate_provider_schemas(provider):
 		return false
 	var result: Dictionary = _provider_service.register_provider(provider)
 	if not bool(result.get("ok", false)):

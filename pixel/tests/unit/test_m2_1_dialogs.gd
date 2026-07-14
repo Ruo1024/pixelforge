@@ -6,9 +6,7 @@ const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
 const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
 const OpenAISessionDialogScript := preload("res://ui/dialogs/openai_session_dialog.gd")
 const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_settings_dialog.gd")
-const OpenAIGenerationControllerScript := preload(
-	"res://ui/shell/openai_generation_controller.gd"
-)
+const OpenAIGenerationControllerScript := preload("res://ui/shell/openai_generation_controller.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
 const Matting := preload("res://core/pixel/matting.gd")
@@ -61,19 +59,22 @@ func test_graph_node_params_dialog_builds_controls_from_node_schema() -> void:
 	add_child_autofree(dialog)
 	await wait_process_frames(1)
 
-	dialog.configure_for_node(
-		"graph_test",
-		"generate",
-		AiGenerateNodeScript.new(),
-		{
-			"provider_id": "mock",
-			"model_id": "pixel_mock_v1",
-			"target_width": 32,
-			"target_height": 24,
-			"batch_size": 2,
-			"seed": -1,
-			"extra": {},
-		}
+	(
+		dialog
+		. configure_for_node(
+			"graph_test",
+			"generate",
+			AiGenerateNodeScript.new(),
+			{
+				"provider_id": "mock",
+				"model_id": "pixel_mock_v1",
+				"target_width": 32,
+				"target_height": 24,
+				"batch_size": 2,
+				"seed": -1,
+				"extra": {},
+			}
+		)
 	)
 	assert_true(dialog.set_param_value("target_width", 48))
 	assert_eq(dialog.get_params()["target_width"], 48)
@@ -81,7 +82,10 @@ func test_graph_node_params_dialog_builds_controls_from_node_schema() -> void:
 
 	var original_language: String = LocalizationService.current_preference
 	LocalizationService.set_language("zh_CN")
-	assert_eq(dialog.title, Strings.text("DIALOG_GRAPH_NODE_PARAMS_TITLE_FORMAT") % Strings.text("NODE_AI_GENERATE"))
+	assert_eq(
+		dialog.title,
+		Strings.text("DIALOG_GRAPH_NODE_PARAMS_TITLE_FORMAT") % Strings.text("NODE_AI_GENERATE")
+	)
 	assert_eq(dialog._root.get_child(2).get_child(0).text, Strings.text("GRAPH_PARAM_TARGET_WIDTH"))
 	assert_eq(dialog.get_ok_button().text, Strings.text("ACTION_APPLY"))
 	LocalizationService.set_language(original_language)
@@ -153,7 +157,7 @@ func test_legacy_openai_session_action_redirects_to_unified_provider_settings() 
 	assert_null(controller.get_node_or_null("OpenAISessionDialog"))
 
 
-func test_ai_generate_provider_field_only_lists_verified_providers_plus_mock() -> void:
+func test_ai_generate_provider_field_does_not_inject_production_mock() -> void:
 	var dialog: ConfirmationDialog = GraphNodeParamsDialogScript.new()
 	add_child_autofree(dialog)
 	await wait_process_frames(1)
@@ -164,7 +168,7 @@ func test_ai_generate_provider_field_only_lists_verified_providers_plus_mock() -
 		{"provider_id": "openai_image", "batch_size": 1, "seed": 1}
 	)
 
-	assert_eq(dialog.get_param_value("provider_id"), "mock")
+	assert_eq(dialog.get_param_value("provider_id"), "openai_image")
 
 
 func _make_source_image() -> Image:

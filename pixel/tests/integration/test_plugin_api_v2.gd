@@ -63,6 +63,24 @@ class LocalizedSchemaProvider:
 		]
 
 
+class LegacyProviderWithCallCounters:
+	extends PFProvider
+
+	var config_schema_calls := 0
+	var model_descriptor_calls := 0
+
+	func get_api_version() -> int:
+		return 1
+
+	func get_config_schema() -> Array[Dictionary]:
+		config_schema_calls += 1
+		return []
+
+	func get_model_descriptors() -> Array[Dictionary]:
+		model_descriptor_calls += 1
+		return []
+
+
 func before_each() -> void:
 	_remove_tree(ProjectSettings.globalize_path(ROOT))
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(ROOT))
@@ -204,6 +222,20 @@ func test_plugin_node_and_provider_schemas_share_the_resolver_gate() -> void:
 	assert_true(api.register_node_type("test.localized_schema", LocalizedSchemaNode))
 	assert_false(api._validate_provider_schemas(RawSchemaProvider.new()))
 	assert_true(api._validate_provider_schemas(LocalizedSchemaProvider.new()))
+
+
+func test_legacy_provider_is_rejected_before_schema_or_descriptor_calls() -> void:
+	var service := PluginService.new()
+	service.scan_on_ready = false
+	add_child_autofree(service)
+	await wait_process_frames(1)
+	var provider := LegacyProviderWithCallCounters.new()
+	var api := PluginAPI.new(service, service, "legacy_provider_plugin")
+
+	assert_false(api.register_provider(provider))
+	assert_eq(provider.config_schema_calls, 0)
+	assert_eq(provider.model_descriptor_calls, 0)
+	assert_eq(api.get_ledger(), [])
 
 
 func test_manifest_validator_does_not_coerce_version_types() -> void:

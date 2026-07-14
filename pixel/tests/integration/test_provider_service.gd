@@ -36,7 +36,7 @@ func test_saved_provider_is_encrypted_validated_and_filtered_for_nodes() -> void
 
 	assert_true(result["ok"])
 	assert_eq(_service.get_validation_state("fixture_provider"), "configured")
-	assert_eq(_service.get_selectable_provider_ids(), ["mock"])
+	assert_eq(_service.get_selectable_provider_ids(), [])
 	var file := FileAccess.open(TEST_PATH, FileAccess.READ)
 	assert_not_null(file)
 	assert_false(file.get_as_text().contains("fixture-good-key"))
@@ -45,7 +45,7 @@ func test_saved_provider_is_encrypted_validated_and_filtered_for_nodes() -> void
 	_queue.submit(task)
 	assert_true(await _wait_until(func() -> bool: return _queue.is_idle()))
 	assert_eq(_service.get_validation_state("fixture_provider"), "verified")
-	assert_eq(_service.get_selectable_provider_ids(), ["mock", "fixture_provider"])
+	assert_eq(_service.get_selectable_provider_ids(), ["fixture_provider"])
 	assert_true(_service.set_default_provider_id("fixture_provider"))
 	assert_eq(_service.get_default_provider_id(), "fixture_provider")
 
@@ -87,7 +87,7 @@ func test_unsafe_validation_provider_is_offline_until_explicit_first_generation(
 		_service.get_validation_message("fixture_provider"), "first real generation"
 	)
 	assert_null(_service.validate_provider("fixture_provider"))
-	assert_eq(_service.get_selectable_provider_ids(), ["mock", "fixture_provider"])
+	assert_eq(_service.get_selectable_provider_ids(), ["fixture_provider"])
 	var task: Variant = _service.generate("fixture_provider", _generation_request())
 	assert_not_null(task)
 	assert_true(task is PFProviderTaskV2)
@@ -120,7 +120,7 @@ func test_unsafe_validation_provider_auth_failure_becomes_invalid() -> void:
 		)
 	)
 	assert_eq(_service.get_validation_state("fixture_provider"), "invalid")
-	assert_eq(_service.get_selectable_provider_ids(), ["mock"])
+	assert_eq(_service.get_selectable_provider_ids(), [])
 
 
 func test_unique_credential_sentinel_is_persisted_only_as_ciphertext() -> void:

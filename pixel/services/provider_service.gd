@@ -18,23 +18,39 @@ const BUILTIN_PROVIDER_PLUGINS := [
 	"res://plugins/provider_retrodiffusion/main.gd",
 ]
 const API_VERSION := 2
-const DEFAULT_PROVIDER := "mock"
+const AUTOMATION_PROVIDER := "mock"
 const MOCK_MODEL_DESCRIPTOR := {
 	"provider_id": "mock",
 	"model_id": "pixel_mock_v1",
 	"display_name": "PixelForge Mock",
 	"is_default": true,
+	"ui_scope": "main",
+	"provider_meta_keys": [],
 	"capabilities":
 	{
 		"txt2img": true,
 		"img2img": true,
 		"max_reference_images": 16,
-		"output_size_constraints": {"min_side": 1, "max_side": 512},
 		"max_batch": 16,
+		"target_size_constraints":
+		{
+			"min_width": 1,
+			"max_width": 512,
+			"width_step": 1,
+			"min_height": 1,
+			"max_height": 512,
+			"height_step": 1,
+			"allowed_sizes": [],
+		},
+		"provider_output_sizes": [],
+		"native_pixel": true,
+		"native_idempotency": false,
+		"safe_validation": false,
 		"seed": true,
 		"transparent_bg": false,
 		"cost_estimate": true,
 	},
+	"dynamic_params": [],
 }
 
 var load_builtin_plugins := true
@@ -42,6 +58,7 @@ var _providers := {}
 var _plugins := []
 var _validation_states := {}
 var _credential_store: RefCounted = null
+var _automation_mock_enabled := false
 
 
 func _ready() -> void:
@@ -134,7 +151,9 @@ func get_model_descriptors(provider_id: String = "") -> Array[Dictionary]:
 
 
 func get_selectable_model_descriptors() -> Array[Dictionary]:
-	var descriptors: Array[Dictionary] = [MOCK_MODEL_DESCRIPTOR.duplicate(true)]
+	var descriptors: Array[Dictionary] = []
+	if _automation_mock_enabled:
+		descriptors.append(MOCK_MODEL_DESCRIPTOR.duplicate(true))
 	for provider_id in get_provider_ids():
 		if not _provider_can_generate(String(provider_id)):
 			continue
@@ -143,7 +162,7 @@ func get_selectable_model_descriptors() -> Array[Dictionary]:
 
 
 func get_model_descriptor(provider_id: String, model_id: String = "") -> Dictionary:
-	if provider_id == DEFAULT_PROVIDER:
+	if _automation_mock_enabled and provider_id == AUTOMATION_PROVIDER:
 		var requested := model_id.strip_edges()
 		return (
 			MOCK_MODEL_DESCRIPTOR.duplicate(true)
@@ -159,7 +178,7 @@ func get_model_descriptor(provider_id: String, model_id: String = "") -> Diction
 
 
 func resolve_model_id(provider_id: String, model_id: String = "") -> String:
-	if provider_id == DEFAULT_PROVIDER:
+	if _automation_mock_enabled and provider_id == AUTOMATION_PROVIDER:
 		var requested := model_id.strip_edges()
 		return (
 			String(MOCK_MODEL_DESCRIPTOR["model_id"])
@@ -184,7 +203,7 @@ func validate_generation_request(provider_id: String, request: Dictionary) -> Va
 
 
 func get_selectable_provider_ids() -> Array:
-	var ids := [DEFAULT_PROVIDER]
+	var ids := [AUTOMATION_PROVIDER] if _automation_mock_enabled else []
 	for provider_id in get_provider_ids():
 		if _provider_can_generate(String(provider_id)):
 			ids.append(String(provider_id))
@@ -192,10 +211,11 @@ func get_selectable_provider_ids() -> Array:
 
 
 func get_default_provider_id() -> String:
-	var provider_id := String(
-		SettingsService.get_setting("provider", "default_id", DEFAULT_PROVIDER)
-	)
-	return provider_id if get_selectable_provider_ids().has(provider_id) else DEFAULT_PROVIDER
+	var selectable := get_selectable_provider_ids()
+	if selectable.is_empty():
+		return ""
+	var provider_id := String(SettingsService.get_setting("provider", "default_id", ""))
+	return provider_id if selectable.has(provider_id) else String(selectable[0])
 
 
 func set_default_provider_id(provider_id: String) -> bool:
@@ -203,6 +223,11 @@ func set_default_provider_id(provider_id: String) -> bool:
 		return false
 	SettingsService.set_setting("provider", "default_id", provider_id)
 	return true
+
+
+func enable_automation_mock_for_tests() -> void:
+	## Explicit automation-only substitute; production startup never calls this path.
+	_automation_mock_enabled = true
 
 
 func get_provider_config(provider_id: String) -> Dictionary:
