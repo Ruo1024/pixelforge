@@ -7,7 +7,7 @@ const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 
 
 func test_every_click_new_output_and_single_failure_continues() -> void:
-	var coordinator := load(COORDINATOR_PATH).new()
+	var coordinator: Variant = load(COORDINATOR_PATH).new()
 	var graph := _graph()
 	assert_true(coordinator.prepare_cleanup_run(graph, "cleanup", "output-1", _plan("run-1"))["ok"])
 	assert_eq(coordinator.next_cleanup_operation(graph, "output-1")["source_asset_id"], "source-a")
@@ -24,7 +24,7 @@ func test_every_click_new_output_and_single_failure_continues() -> void:
 
 
 func test_cancel_keeps_success_and_cancels_remaining() -> void:
-	var coordinator := load(COORDINATOR_PATH).new()
+	var coordinator: Variant = load(COORDINATOR_PATH).new()
 	var graph := _graph()
 	assert_true(coordinator.prepare_cleanup_run(graph, "cleanup", "output", _plan("run-cancel"))["ok"])
 	assert_true(coordinator.mark_cleanup_running(graph, "output", "request-a")["ok"])
@@ -39,7 +39,7 @@ func test_cancel_keeps_success_and_cancels_remaining() -> void:
 
 
 func test_retry_interrupted_same_output_original_snapshots_only() -> void:
-	var coordinator := load(COORDINATOR_PATH).new()
+	var coordinator: Variant = load(COORDINATOR_PATH).new()
 	var graph := _graph()
 	assert_true(coordinator.prepare_cleanup_run(graph, "cleanup", "output", _plan("run-old"))["ok"])
 	assert_true(coordinator.mark_cleanup_running(graph, "output", "request-a")["ok"])
@@ -71,10 +71,10 @@ func _plan(run_id: String) -> Dictionary:
 		var suffix := "a" if index == 0 else "b"
 		var snapshot := {
 			"kind": "cleanup", "graph_id": "graph", "source_node_id": "cleanup",
-			"source_input_node_id": "source", "source_input_type": "reference_set",
-			"source_asset_id": "source-%s" % suffix, "source_batch_id": "", "source_slot_id": "",
+			"input_source_node_id": "source", "input_source_kind": "reference_set",
+			"source_asset_id": "source-%s" % suffix, "source_batch_node_id": "", "source_slot_id": "",
 			"preset_id": "cleanup-16bit-db32", "settings": settings.duplicate(true),
-			"palette_snapshot": null, "effective_target_size": [0, 0], "source_size": [8, 8],
+			"palette_snapshot": null, "effective_target_size": [0, 0],
 		}
 		slots.append({
 			"slot_id": "slot-%s" % suffix, "request_id": "request-%s" % suffix,
@@ -85,7 +85,7 @@ func _plan(run_id: String) -> Dictionary:
 
 
 func _error(request_id: String) -> Dictionary:
-	return {"code": "cleanup_failed", "stage": "cleanup", "provider_id": "", "request_id": request_id, "attempts": 1, "requested_count": 1, "received_count": 0, "retryable": false}
+	return {"code": "cleanup_failed", "stage": "cleanup", "provider_id": "", "request_id": request_id, "attempts": 1, "expected_count": 1, "received_count": 0, "retryable": false, "retry_after_seconds": null, "status_code": null}
 
 
 func _report() -> Dictionary:

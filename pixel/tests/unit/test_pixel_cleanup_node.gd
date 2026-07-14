@@ -36,7 +36,7 @@ func test_manual_policy_and_valid_sources() -> void:
 	var generated := _fixture("ai_generate")
 	var rejected: Dictionary = builder.build(generated.graph, "cleanup", generated.assets)
 	assert_false(rejected.get("ok", false))
-	assert_eq(rejected.get("code"), "cleanup_requires_output_source")
+	assert_eq(rejected.get("issue", {}).get("code"), "cleanup_requires_output_source")
 	assert_null(generated.graph.get_node("output"), "validation must happen before Output creation")
 
 
@@ -49,14 +49,14 @@ func test_source_projection_and_effective_target_are_frozen_per_asset() -> void:
 	assert_true(plan.get("ok", false))
 	assert_eq(plan["slots"].size(), 2)
 	assert_eq(plan["slots"][0]["source_asset_id"], "generated")
-	assert_eq(plan["slots"][0]["input_snapshot"]["source_batch_id"], "source")
+	assert_eq(plan["slots"][0]["input_snapshot"]["source_batch_node_id"], "source")
 	assert_eq(plan["slots"][0]["input_snapshot"]["source_slot_id"], "source-slot-a")
 	assert_eq(plan["slots"][0]["input_snapshot"]["effective_target_size"], [32, 24])
 	assert_eq(plan["slots"][1]["input_snapshot"]["effective_target_size"], [16, 12])
 	assert_eq(plan["slots"][0]["planned_size"], [32, 24])
 	var direct := _fixture("image_input")
 	var direct_plan: Dictionary = builder.build(direct.graph, "cleanup", direct.assets)
-	assert_eq(direct_plan["slots"][0]["input_snapshot"]["source_batch_id"], "")
+	assert_eq(direct_plan["slots"][0]["input_snapshot"]["source_batch_node_id"], "")
 	assert_eq(direct_plan["slots"][0]["input_snapshot"]["source_slot_id"], "")
 	assert_eq(direct_plan["slots"][0]["input_snapshot"]["effective_target_size"], [0, 0])
 
@@ -69,7 +69,7 @@ func test_zero_and_thousand_rejected_before_output() -> void:
 		var fixture := _fixture("reference_set", count)
 		var result: Dictionary = builder.build(fixture.graph, "cleanup", fixture.assets)
 		assert_false(result.get("ok", false))
-		assert_eq(result.get("code"), "missing_cleanup_input" if count == 0 else "cleanup_input_limit_exceeded")
+		assert_eq(result.get("issue", {}).get("code"), "missing_cleanup_input" if count == 0 else "cleanup_input_limit_exceeded")
 		assert_null(fixture.graph.get_node("output"))
 
 

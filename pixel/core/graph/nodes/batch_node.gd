@@ -406,7 +406,42 @@ static func _snapshot_is_valid(snapshot: Dictionary) -> bool:
 		):
 			return false
 		return snapshot["extra"] is Dictionary
+	if String(snapshot["kind"]) == "cleanup":
+		var keys := [
+			"kind", "graph_id", "source_node_id", "input_source_kind",
+			"input_source_node_id", "source_batch_node_id", "source_slot_id",
+			"source_asset_id", "effective_target_size", "preset_id", "settings",
+			"palette_snapshot",
+		]
+		if not _has_exact_keys(snapshot, keys):
+			return false
+		for key in ["graph_id", "source_node_id", "input_source_kind", "input_source_node_id", "source_batch_node_id", "source_slot_id", "source_asset_id", "preset_id"]:
+			if not (snapshot[key] is String):
+				return false
+		var kind := String(snapshot["input_source_kind"])
+		if kind not in ["batch", "image_input", "reference_set"] or String(snapshot["graph_id"]).is_empty() or String(snapshot["source_node_id"]).is_empty() or String(snapshot["input_source_node_id"]).is_empty() or String(snapshot["source_asset_id"]).is_empty():
+			return false
+		if kind == "batch":
+			if String(snapshot["source_batch_node_id"]).is_empty() or String(snapshot["source_slot_id"]).is_empty():
+				return false
+		elif not String(snapshot["source_batch_node_id"]).is_empty() or not String(snapshot["source_slot_id"]).is_empty():
+			return false
+		if not (snapshot["effective_target_size"] is Array) or snapshot["effective_target_size"].size() != 2:
+			return false
+		if not (snapshot["settings"] is Dictionary):
+			return false
+		return _cleanup_palette_is_valid(snapshot["palette_snapshot"])
 	return false
+
+
+static func _cleanup_palette_is_valid(value: Variant) -> bool:
+	if value == null:
+		return true
+	if not (value is Dictionary) or not _has_exact_keys(value, ["palette_id", "content_sha256", "colors_rgba8"]):
+		return false
+	if String(value["palette_id"]).is_empty() or String(value["content_sha256"]).length() != 64 or not (value["colors_rgba8"] is Array) or value["colors_rgba8"].is_empty():
+		return false
+	return true
 
 
 static func _positive_size(value: Variant) -> bool:

@@ -19,6 +19,7 @@ const UIFont := preload("res://ui/widgets/ui_font.gd")
 const AssetRefFieldScript := preload("res://ui/widgets/asset_ref_field.gd")
 const ObjectListEditorScript := preload("res://ui/canvas/object_list_editor.gd")
 const GenerationCardViewScript := preload("res://ui/canvas/generation_card_view.gd")
+const CleanupCardViewScript := preload("res://ui/canvas/cleanup_card_view.gd")
 const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
 const AppTheme := preload("res://ui/shell/app_theme.gd")
 
@@ -66,6 +67,7 @@ var _text_prompt_edit: TextEdit = null
 var _prompt_count_label: Label = null
 var _prompt_draft_label: Label = null
 var _generation_view: Control = null
+var _cleanup_view: Control = null
 var _reference_field: Control = null
 var _collapse_button: Button = null
 var _title_button: Button = null
@@ -480,13 +482,14 @@ func _rebuild_content_controls() -> void:
 	_prompt_count_label = null
 	_prompt_draft_label = null
 	_generation_view = null
+	_cleanup_view = null
 	_reference_field = null
 	if collapsed or _is_overview() or not _is_content_node() or _is_ghost:
 		return
 
 	_content_root = VBoxContainer.new()
 	_content_root.name = "Content"
-	if _node_type == "ai_generate":
+	if _node_type in ["ai_generate", "pixel_cleanup"]:
 		_content_root.position = Vector2(0, _header_height())
 		_content_root.size = _card_size() - Vector2(0, _header_height())
 	else:
@@ -677,15 +680,12 @@ func _build_prompt_preset_controls() -> void:
 
 
 func _build_cleanup_shell_controls() -> void:
-	var preset_label := Label.new()
-	preset_label.name = "CleanupPresetId"
-	preset_label.text = String(_params_snapshot.get("preset_id", ""))
-	_content_root.add_child(preset_label)
-	var settings_label := Label.new()
-	settings_label.name = "CleanupSettingsSnapshot"
-	settings_label.text = JSON.stringify(_params_snapshot.get("settings", {}))
-	settings_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_content_root.add_child(settings_label)
+	_cleanup_view = CleanupCardViewScript.new()
+	_cleanup_view.name = "CleanupCardView"
+	_cleanup_view.action_requested.connect(func(action_id: String) -> void: action_requested.emit(graph_id, node_id, action_id))
+	_cleanup_view.params_commit_requested.connect(func(params: Dictionary) -> void: params_commit_requested.emit(graph_id, node_id, params))
+	_content_root.add_child(_cleanup_view)
+	_cleanup_view.configure({"params": _params_snapshot.duplicate(true), "run": {"state": _generation_state().capitalize()}, "input": {}})
 
 
 func _build_generate_controls() -> void:
