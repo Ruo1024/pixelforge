@@ -169,8 +169,8 @@ func test_retro_mock_generation_returns_deferred_v2_terminal() -> void:
 	assert_eq(outcome["status"], "completed")
 	assert_eq(outcome["progress"], 1)
 	assert_null(ContractV2.validate_gen_result(outcome["value"], [], ["remote_task_id"]))
-	assert_eq(outcome["value"]["items"][0]["error"]["code"], "ambiguous_result")
-	assert_false(outcome["value"]["items"][0]["error"].has("message"))
+	assert_null(outcome["value"]["items"][0]["error"])
+	assert_eq(outcome["value"]["items"][0]["image"].get_size(), Vector2i(32, 32))
 	provider.clear_session_config()
 
 

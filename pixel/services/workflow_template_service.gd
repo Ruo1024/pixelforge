@@ -6,6 +6,8 @@ const IdUtil := preload("res://core/util/id_util.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
 const PixelCleanupNode := preload("res://core/graph/nodes/pixel_cleanup_node.gd")
+const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
+const PaletteScript := preload("res://core/pixel/palette.gd")
 
 const SCHEMA := "pixelforge.workflow-template"
 const VERSION := 2
@@ -16,9 +18,8 @@ const PARAM_WHITELIST := {
 	"prompt_preset": ["preset"],
 	"image_input": ["asset_id"],
 	"reference_set": ["asset_ids"],
-	"ai_generate": [
-		"provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"
-	],
+	"ai_generate":
+	["provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"],
 	"pixel_cleanup": ["preset_id", "settings"],
 	"batch": ["label"],
 }
@@ -35,6 +36,19 @@ const TRANSIENT_PARAMS := {
 }
 const SENSITIVE_FRAGMENTS := [
 	"api_key", "authorization", "credential", "header", "password", "response", "secret", "token"
+]
+const TEMPLATE_KEYS := [
+	"schema",
+	"version",
+	"id",
+	"name",
+	"description",
+	"created_at",
+	"nodes",
+	"edges",
+	"frame",
+	"requirements",
+	"palette_requirements",
 ]
 
 
@@ -103,6 +117,9 @@ static func build_from_frame(
 			internal_edges.append(edge.duplicate(true))
 		elif node_ids.has(from_id) or node_ids.has(to_id):
 			external_edge_count += 1
+	var palette_result := _palette_requirements(template_nodes)
+	if not bool(palette_result.get("ok", false)):
+		return palette_result
 	var template := {
 		"schema": SCHEMA,
 		"version": VERSION,
@@ -120,6 +137,7 @@ static func build_from_frame(
 			"color": String(frame.get("color", "4f6f8fff")),
 		},
 		"requirements": _requirements(template_nodes),
+		"palette_requirements": palette_result["requirements"],
 	}
 	var validation := validate_template(template)
 	if not bool(validation.get("ok", false)):
@@ -156,6 +174,9 @@ static func load_template(template_id: String) -> Dictionary:
 	var parsed: Variant = parser.data
 	if not (parsed is Dictionary):
 		return _failure("template_corrupt", template_id)
+	# JSON numbers arrive as floats; normalize only the exact integral version at the file boundary.
+	if parsed.get("version", null) is float and float(parsed["version"]) == VERSION:
+		parsed["version"] = VERSION
 	var validation := validate_template(parsed)
 	if not bool(validation.get("ok", false)):
 		return validation
@@ -218,7 +239,6 @@ static func instantiate(
 				{
 					"id": new_id,
 					"type": String(node.get("type", "")),
-					"position": _position(position),
 					"params": Dictionary(node.get("params", {})).duplicate(true),
 				}
 			)
@@ -280,7 +300,17 @@ static func instantiate(
 
 
 static func validate_template(template: Dictionary) -> Dictionary:
-	if String(template.get("schema", "")) != SCHEMA or int(template.get("version", 0)) != VERSION:
+	var allowed_keys: Array = TEMPLATE_KEYS.duplicate()
+	if template.get("builtin", false) is bool and bool(template.get("builtin", false)):
+		allowed_keys.append("builtin")
+	var unknown_key := _first_unknown_key(template, allowed_keys)
+	if not unknown_key.is_empty():
+		return _failure("unknown_template_field", unknown_key)
+	if (
+		String(template.get("schema", "")) != SCHEMA
+		or not (template.get("version", null) is int)
+		or int(template["version"]) != VERSION
+	):
 		return _failure("unsupported_template_version", String(template.get("id", "")))
 	if (
 		String(template.get("id", "")).is_empty()
@@ -290,6 +320,8 @@ static func validate_template(template: Dictionary) -> Dictionary:
 	var sensitive_path := _first_unsafe_path(template)
 	if not sensitive_path.is_empty():
 		return _failure("unsafe_template_value", sensitive_path)
+	if not (template.get("nodes", null) is Array) or not (template.get("edges", null) is Array):
+		return _failure("invalid_template_shape", String(template.get("id", "")))
 	var node_ids := {}
 	for raw_node in template.get("nodes", []):
 		if not (raw_node is Dictionary):
@@ -303,6 +335,8 @@ static func validate_template(template: Dictionary) -> Dictionary:
 		var sanitized := _sanitize_node(node)
 		if not bool(sanitized.get("ok", false)):
 			return sanitized
+		if Dictionary(node.get("params", {})) != Dictionary(sanitized.get("params", {})):
+			return _failure("noncanonical_template_params", node_id)
 		if node.has("display_title"):
 			if not (node["display_title"] is String):
 				return _failure("invalid_template_node_title", node_id)
@@ -331,6 +365,18 @@ static func validate_template(template: Dictionary) -> Dictionary:
 	var edge_errors: Array[Dictionary] = GraphScript.from_json(graph_data).validate_edges()
 	if not edge_errors.is_empty():
 		return _failure("invalid_template_edge", JSON.stringify(edge_errors[0]))
+	var palette_requirements: Variant = template.get("palette_requirements", null)
+	if not (palette_requirements is Array):
+		return _failure("invalid_palette_requirements", "palette_requirements")
+	var palette_validation := _validate_palette_requirements(palette_requirements)
+	if not bool(palette_validation.get("ok", false)):
+		return palette_validation
+	if not bool(template.get("builtin", false)):
+		var expected_palettes := _palette_requirements(template.get("nodes", []))
+		if not bool(expected_palettes.get("ok", false)):
+			return expected_palettes
+		if Array(palette_requirements) != Array(expected_palettes["requirements"]):
+			return _failure("invalid_palette_requirements", "palette_requirements")
 	return {"ok": true}
 
 
@@ -365,7 +411,7 @@ static func _builtin_object_batch() -> Dictionary:
 			_node(
 				"objects",
 				"object_list",
-				{"rows": [{"id": "tower", "text": "small tower", "count": 1, "enabled": true}]},
+				{"rows": [{"id": "tower", "text": "small tower", "count": 1}]},
 				[40, 80]
 			),
 			_node("generate", "ai_generate", _generate_params(), [400, 80]),
@@ -491,9 +537,107 @@ static func _sanitize_node(node: Dictionary) -> Dictionary:
 		sanitized["asset_id"] = ""
 	elif node_type == "reference_set":
 		sanitized["asset_ids"] = []
+	elif node_type == "ai_generate":
+		sanitized["extra"] = _template_safe_extra(params)
 	elif node_type == "batch":
-		sanitized = {"label": String(params.get("label", "Results"))}
+		sanitized = {
+			"label": String(params.get("label", "Results")),
+			"source_node_id": "",
+			"source_run_id": "",
+			"role": "standalone",
+			"input_snapshots": {},
+			"request_records": [],
+			"result_slots": [],
+		}
 	return {"ok": true, "params": sanitized}
+
+
+static func _template_safe_extra(params: Dictionary) -> Dictionary:
+	var descriptor: Dictionary = ProviderService.get_model_descriptor(
+		String(params.get("provider_id", "")), String(params.get("model_id", ""))
+	)
+	var safe_keys: Array[String] = []
+	for raw_spec in descriptor.get("dynamic_params", []):
+		if raw_spec is Dictionary and bool(raw_spec.get("template_safe", false)):
+			safe_keys.append(String(raw_spec.get("key", "")))
+	var extra: Variant = params.get("extra", {})
+	var result := {}
+	if extra is Dictionary:
+		for key in safe_keys:
+			if extra.has(key):
+				result[key] = extra[key]
+	return result
+
+
+static func _palette_requirements(nodes: Array) -> Dictionary:
+	var palette_ids: Array[String] = []
+	for raw_node in nodes:
+		if not (raw_node is Dictionary) or String(raw_node.get("type", "")) != "pixel_cleanup":
+			continue
+		var settings: Variant = Dictionary(raw_node.get("params", {})).get("settings", {})
+		if not (settings is Dictionary):
+			continue
+		var quantize: Variant = settings.get("quantize", {})
+		if not (quantize is Dictionary) or not bool(quantize.get("enabled", false)):
+			continue
+		var palette_id := String(quantize.get("palette_id", ""))
+		if not palette_id.is_empty() and not palette_ids.has(palette_id):
+			palette_ids.append(palette_id)
+	palette_ids.sort()
+	var requirements: Array[Dictionary] = []
+	for palette_id in palette_ids:
+		var palette := PaletteRegistry.resolve({"palette_id": palette_id}, "")
+		if palette == null or palette.id != palette_id:
+			return _failure("missing_template_palette", palette_id)
+		var colors: Array[String] = []
+		for color in palette.colors:
+			colors.append(PaletteScript.color_to_hex(color).to_lower())
+		var content := JSON.stringify(colors, "", false)
+		requirements.append({"palette_id": palette_id, "content_sha256": content.sha256_text()})
+	return {"ok": true, "requirements": requirements}
+
+
+static func _validate_palette_requirements(requirements: Array) -> Dictionary:
+	var previous_id := ""
+	for raw_requirement in requirements:
+		if not (raw_requirement is Dictionary):
+			return _failure("invalid_palette_requirements", "palette_requirements")
+		var requirement: Dictionary = raw_requirement
+		if _sorted_keys(requirement) != ["content_sha256", "palette_id"]:
+			return _failure("invalid_palette_requirements", "palette_requirements")
+		var palette_id := String(requirement.get("palette_id", ""))
+		var content_hash := String(requirement.get("content_sha256", ""))
+		if (
+			palette_id.is_empty()
+			or (not previous_id.is_empty() and palette_id <= previous_id)
+			or not _is_lower_sha256(content_hash)
+		):
+			return _failure("invalid_palette_requirements", palette_id)
+		previous_id = palette_id
+	return {"ok": true}
+
+
+static func _is_lower_sha256(value: String) -> bool:
+	if value.length() != 64:
+		return false
+	for character in value:
+		if character not in "0123456789abcdef":
+			return false
+	return true
+
+
+static func _first_unknown_key(value: Dictionary, allowed: Array) -> String:
+	for raw_key in value:
+		var key := String(raw_key)
+		if key not in allowed:
+			return key
+	return ""
+
+
+static func _sorted_keys(value: Dictionary) -> Array:
+	var keys := value.keys()
+	keys.sort()
+	return keys
 
 
 static func _requirements(nodes: Array) -> Dictionary:

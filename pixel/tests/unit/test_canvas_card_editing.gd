@@ -193,6 +193,36 @@ func test_rename_and_resize_each_create_one_undo_without_changing_graph() -> voi
 	assert_eq(ProjectService.get_graph_data("graph_main"), graph_before)
 
 
+func test_prompt_preset_title_size_and_undo_use_generic_canvas_contract() -> void:
+	var graph := _graph_data("prompt_preset", {})
+	ProjectService.set_graph_data("graph_main", graph, false)
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(900, 700)
+	add_child_autofree(canvas)
+	await wait_process_frames(1)
+	var card: Node = canvas._add_graph_node_card(
+		"graph_main", "node", Vector2.ZERO, "prompt-preset-item", false
+	)
+	assert_eq(card.requested_size, Vector2i(320, 280))
+	assert_true(
+		canvas._set_canvas_item_display_title("prompt-preset-item", "My style prompt", true)
+	)
+	assert_eq(card.display_title, "My style prompt")
+	assert_true(UndoService.undo())
+	assert_eq(card.display_title, "")
+	assert_true(UndoService.redo())
+	assert_eq(card.display_title, "My style prompt")
+	assert_true(canvas._set_canvas_item_size("prompt-preset-item", Vector2i(10, 9999), true))
+	assert_eq(card.requested_size, Vector2i(280, 1200))
+	assert_true(UndoService.undo())
+	assert_eq(card.requested_size, Vector2i(320, 280))
+	assert_true(UndoService.redo())
+	assert_eq(card.requested_size, Vector2i(280, 1200))
+	for node in ProjectService.get_graph_data("graph_main")["nodes"]:
+		assert_false(node.has("display_title"))
+		assert_false(node.has("size"))
+
+
 func test_title_and_size_roundtrip_through_project_without_graph_fields() -> void:
 	var graph := _graph_data("text_prompt", {"text": ""})
 	ProjectService.set_graph_data("graph_main", graph, false)
@@ -287,8 +317,7 @@ func _graph_data(node_type: String, params: Dictionary = {}) -> Dictionary:
 		"graph_version": 2,
 		"id": "graph_main",
 		"name": "Cards",
-		"nodes":
-		[{"id": "node", "type": node_type, "params": params.duplicate(true)}],
+		"nodes": [{"id": "node", "type": node_type, "params": params.duplicate(true)}],
 		"edges": [],
 	}
 

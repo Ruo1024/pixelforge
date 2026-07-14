@@ -28,7 +28,21 @@ static func contains(value: Variant, sentinel: String) -> bool:
 				return true
 		return false
 	if value is PackedByteArray:
-		return value.get_string_from_utf8().contains(sentinel)
+		return _bytes_contain(value, sentinel.to_utf8_buffer())
+	return false
+
+
+static func _bytes_contain(haystack: PackedByteArray, needle: PackedByteArray) -> bool:
+	if needle.is_empty() or needle.size() > haystack.size():
+		return false
+	for start in range(haystack.size() - needle.size() + 1):
+		var matches := true
+		for offset in range(needle.size()):
+			if haystack[start + offset] != needle[offset]:
+				matches = false
+				break
+		if matches:
+			return true
 	return false
 
 

@@ -11,42 +11,25 @@ func test_single_terminal_items_become_final_slots_without_legacy_truth() -> voi
 	var image := Image.create(12, 10, false, Image.FORMAT_RGBA8)
 	image.fill(Color("4ac7c1"))
 	var adapter := Adapter.new()
-	var result: Dictionary = adapter.materialize_terminal(
-		"graph-main",
-		"generate-1",
-		{"label": "Result", "asset_ids": ["legacy-must-not-survive"]},
-		[
-			{
-				"image": image,
-				"metadata": {
-					"provider": "mock",
-					"model": "pixel_mock_v1",
-					"prompt": "tower",
-					"seed": 700,
-					"cost": 99.5,
-					"source_row_id": "row-tower",
-					"reference_asset_ids": ["reference-a"],
-					"reference_content_sha256s": ["abc123"],
-					"generation_snapshot": {
-						"width": 12,
-						"height": 10,
-						"seed": 700,
-					},
+	var result: Dictionary = (
+		adapter
+		. materialize_terminal(
+			"graph-main",
+			"generate-1",
+			{"label": "Result", "asset_ids": ["legacy-must-not-survive"]},
+			[
+				{
+					"image": image,
+					"metadata": _metadata("tower", 700, "row-tower", ["reference-a"]),
 				},
-			},
-			{
-				"image": null,
-				"metadata": {
-					"provider": "mock",
-					"model": "pixel_mock_v1",
-					"prompt": "barrel",
-					"source_row_id": "row-barrel",
-					"generation_snapshot": {"width": 12, "height": 10},
+				{
+					"image": null,
+					"metadata": _metadata("barrel", -1, "row-barrel"),
+					"error": {"code": "mock_failed", "message": "unsafe legacy detail"},
 				},
-				"error": {"code": "mock_failed", "message": "unsafe legacy detail"},
-			},
-		],
-		get_tree().root.get_node("AssetLibrary")
+			],
+			get_tree().root.get_node("AssetLibrary")
+		)
 	)
 
 	assert_true(result["ok"])
@@ -78,7 +61,7 @@ func test_single_terminal_items_become_final_slots_without_legacy_truth() -> voi
 	assert_eq(snapshot["source_node_id"], "generate-1")
 	assert_eq(snapshot["source_row_id"], "row-tower")
 	assert_eq(snapshot["reference_asset_ids"], ["reference-a"])
-	assert_eq(snapshot["reference_content_sha256s"], ["abc123"])
+	assert_eq(snapshot["reference_content_sha256s"], ["a".repeat(64)])
 	assert_eq(snapshot["target_width"], 12)
 	assert_eq(snapshot["target_height"], 10)
 	assert_eq(snapshot["provider_output_size"], [12, 10])
@@ -106,19 +89,86 @@ func test_empty_terminal_result_is_rejected_without_mutating_assets() -> void:
 	assert_eq(AssetLibrary.get_all_meta(), before)
 
 
+func test_old_generation_snapshot_aliases_are_rejected() -> void:
+	var image := Image.create(12, 10, false, Image.FORMAT_RGBA8)
+	var result := (
+		Adapter
+		. new()
+		. materialize_terminal(
+			"graph-main",
+			"generate-1",
+			{},
+			[
+				{
+					"image": image,
+					"metadata":
+					{
+						"provider": "mock",
+						"model": "pixel_mock_v1",
+						"generation_snapshot": {"width": 12, "height": 10, "seed": 7},
+					},
+				}
+			],
+			AssetLibrary
+		)
+	)
+	assert_false(result.get("ok", true))
+	assert_eq(result["error"]["code"], "invalid_generation_snapshot")
+
+
 func test_mixed_terminal_providers_fail_before_asset_registration() -> void:
 	var image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
 	var before: Dictionary = AssetLibrary.get_all_meta()
-	var result: Dictionary = Adapter.new().materialize_terminal(
-		"graph-main",
-		"generate-1",
-		{},
-		[
-			{"image": image, "metadata": {"provider": "mock-a"}},
-			{"image": image, "metadata": {"provider": "mock-b"}},
-		],
-		AssetLibrary
+	var result: Dictionary = (
+		Adapter
+		. new()
+		. materialize_terminal(
+			"graph-main",
+			"generate-1",
+			{},
+			[
+				{"image": image, "metadata": _metadata("a", -1, "", [], "mock-a")},
+				{"image": image, "metadata": _metadata("b", -1, "", [], "mock-b")},
+			],
+			AssetLibrary
+		)
 	)
 	assert_false(result["ok"])
 	assert_eq(result["error"], {"code": "mixed_terminal_providers", "args": {}})
 	assert_eq(AssetLibrary.get_all_meta(), before)
+
+
+func _metadata(
+	prompt: String,
+	seed: int,
+	row_id: String,
+	reference_ids: Array = [],
+	provider_id: String = "mock"
+) -> Dictionary:
+	var hashes := []
+	for _reference_id in reference_ids:
+		hashes.append("a".repeat(64))
+	return {
+		"name": prompt,
+		"actual_seed": seed if seed >= 0 else null,
+		"generation_snapshot":
+		{
+			"provider_id": provider_id,
+			"model_id": "pixel_mock_v1",
+			"mode": "img2img" if not reference_ids.is_empty() else "txt2img",
+			"prompt": prompt,
+			"prompt_preset_id": "",
+			"prompt_prefix": "",
+			"target_width": 12,
+			"target_height": 10,
+			"provider_output_size": [12, 10],
+			"batch_size": 1,
+			"requested_seed": seed,
+			"reference_asset_ids": reference_ids,
+			"reference_content_sha256s": hashes,
+			"source_row_id": row_id,
+			"source_node_id": "generate-1",
+			"run_id": "",
+			"extra": {},
+		},
+	}

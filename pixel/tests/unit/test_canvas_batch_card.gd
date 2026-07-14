@@ -1,5 +1,6 @@
 # gdlint: disable=max-public-methods
 extends "res://addons/gut/test.gd"
+# gdlint: disable=max-file-lines
 
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
@@ -325,7 +326,7 @@ func test_graph_batch_card_reads_slot_projection_and_never_writes_legacy_fields(
 	assert_eq(reloaded_canvas._get_batch_asset_ids("node_item_1"), ids)
 
 
-func test_moving_graph_cards_updates_graph_positions_in_same_undo_action() -> void:
+func test_moving_graph_cards_keeps_layout_in_canvas_in_same_undo_action() -> void:
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(512, 512)
 	add_child_autofree(canvas)
@@ -336,10 +337,7 @@ func test_moving_graph_cards_updates_graph_positions_in_same_undo_action() -> vo
 	graph.id = "graph_move_cards"
 	graph.add_node(ObjectListNodeScript.new(), "objects", _object_rows(["barrel"]), Vector2(10, 20))
 	graph.add_node(
-		BatchNodeScript.new(),
-		"batch_1",
-		_output_params(ids, "Candidates"),
-		Vector2(300, 20)
+		BatchNodeScript.new(), "batch_1", _output_params(ids, "Candidates"), Vector2(300, 20)
 	)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 	canvas._add_graph_node_card(graph.id, "objects", Vector2(10, 20), "objects_item", false)
@@ -349,15 +347,19 @@ func test_moving_graph_cards_updates_graph_positions_in_same_undo_action() -> vo
 	canvas.select_ids(["objects_item", "batch_item"])
 	canvas.move_selected_by(Vector2(15, 25), true)
 
-	var moved_graph: Dictionary = ProjectService.get_graph_data(graph.id)
-	assert_eq(_node_position(moved_graph, "objects"), [25, 45])
-	assert_eq(_node_position(moved_graph, "batch_1"), [315, 45])
+	var moved_items: Array = canvas.export_canvas_data()["items"]
+	assert_eq(_item_by_id(moved_items, "objects_item")["position"], [25, 45])
+	assert_eq(_item_by_id(moved_items, "batch_item")["position"], [315, 45])
+	for node in ProjectService.get_graph_data(graph.id)["nodes"]:
+		assert_false(node.has("position"))
 	assert_true(UndoService.undo())
-	var restored_graph: Dictionary = ProjectService.get_graph_data(graph.id)
-	assert_eq(_node_position(restored_graph, "objects"), [10, 20])
-	assert_eq(_node_position(restored_graph, "batch_1"), [300, 20])
+	var restored_items: Array = canvas.export_canvas_data()["items"]
+	assert_eq(_item_by_id(restored_items, "objects_item")["position"], [10, 20])
+	assert_eq(_item_by_id(restored_items, "batch_item")["position"], [300, 20])
 	assert_true(UndoService.redo())
-	assert_eq(_node_position(ProjectService.get_graph_data(graph.id), "objects"), [25, 45])
+	assert_eq(
+		_item_by_id(canvas.export_canvas_data()["items"], "objects_item")["position"], [25, 45]
+	)
 
 
 func test_graph_batch_card_review_state_is_ephemeral_and_not_graph_schema() -> void:
@@ -537,10 +539,7 @@ func test_graph_batch_card_compare_is_ephemeral_and_not_graph_schema() -> void:
 	var graph := GraphScript.new()
 	graph.id = "graph_batch_compare_test"
 	graph.add_node(
-		BatchNodeScript.new(),
-		"batch_1",
-		_output_params(before_ids, "Candidates"),
-		Vector2(16, 24)
+		BatchNodeScript.new(), "batch_1", _output_params(before_ids, "Candidates"), Vector2(16, 24)
 	)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 
@@ -701,9 +700,7 @@ func test_prompt_and_prompt_preset_cards_show_v2_content_and_prompt_emits_commit
 	prompt_edit.focus_exited.emit()
 	assert_eq(commits, [[graph.id, "prompt", {"text": "tiny watermill"}]])
 	assert_eq(preset_card.get_content_control("PresetName").text, "Farm sprites")
-	assert_eq(
-		preset_card.get_content_control("PresetPrefix").text, "16-bit farming game sprite"
-	)
+	assert_eq(preset_card.get_content_control("PresetPrefix").text, "16-bit farming game sprite")
 
 
 func test_content_card_uses_structural_summary_only_at_ten_percent_overview() -> void:
@@ -736,19 +733,22 @@ func test_generate_content_card_routes_run_and_collapsed_state_roundtrips() -> v
 
 	var graph := GraphScript.new()
 	graph.id = "graph_generate_card"
-	graph.add_node(
-		AiGenerateNodeScript.new(),
-		"generate",
-		{
-			"provider_id": "mock",
-			"model_id": "pixel_mock_v1",
-			"target_width": 32,
-			"target_height": 24,
-			"batch_size": 2,
-			"seed": 7,
-			"extra": {},
-		},
-		Vector2(24, 32)
+	(
+		graph
+		. add_node(
+			AiGenerateNodeScript.new(),
+			"generate",
+			{
+				"provider_id": "mock",
+				"model_id": "pixel_mock_v1",
+				"target_width": 32,
+				"target_height": 24,
+				"batch_size": 2,
+				"seed": 7,
+				"extra": {},
+			},
+			Vector2(24, 32)
+		)
 	)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 	var actions := []
@@ -867,10 +867,7 @@ func test_graph_cards_mark_loaded_invalid_edge_status() -> void:
 	graph.id = "graph_invalid_edge_badge"
 	graph.add_node(ObjectListNodeScript.new(), "objects", _object_rows(["barrel"]), Vector2(24, 32))
 	graph.add_node(
-		BatchNodeScript.new(),
-		"batch_1",
-		_output_params(ids, "Candidates"),
-		Vector2(320, 32)
+		BatchNodeScript.new(), "batch_1", _output_params(ids, "Candidates"), Vector2(320, 32)
 	)
 	graph.edges.append({"from": ["objects", "subjects"], "to": ["batch_1", "in"]})
 	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
@@ -903,10 +900,7 @@ func test_ai_generate_inputs_share_single_canvas_anchor() -> void:
 		Vector2(10, 20)
 	)
 	graph.add_node(
-		BatchNodeScript.new(),
-		"batch_1",
-		_output_params(ids, "Candidates"),
-		Vector2(300, 69)
+		BatchNodeScript.new(), "batch_1", _output_params(ids, "Candidates"), Vector2(300, 69)
 	)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 
@@ -945,14 +939,11 @@ func test_ai_generate_inputs_share_single_canvas_anchor() -> void:
 func test_failed_batch_placeholder_keeps_expected_slots_and_routes_retry_remove() -> void:
 	var graph := GraphScript.new()
 	graph.id = "graph_batch_placeholder"
-	(
-		graph
-		. add_node(
-			BatchNodeScript.new(),
-			"batch",
-			_output_failure_params(5, "provider_internal", "Cloud result"),
-			Vector2.ZERO
-		)
+	graph.add_node(
+		BatchNodeScript.new(),
+		"batch",
+		_output_failure_params(5, "provider_internal", "Cloud result"),
+		Vector2.ZERO
 	)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 	var canvas: Control = CanvasScript.new()
@@ -985,13 +976,16 @@ func _register_asset(color: Color, name: String) -> String:
 func _output_params(asset_ids: Array, label: String = "") -> Dictionary:
 	var slots := []
 	for index in range(asset_ids.size()):
-		slots.append(
-			{
-				"slot_id": "slot-%d" % index,
-				"status": "succeeded",
-				"asset_id": String(asset_ids[index]),
-				"detached": false,
-			}
+		(
+			slots
+			. append(
+				{
+					"slot_id": "slot-%d" % index,
+					"status": "succeeded",
+					"asset_id": String(asset_ids[index]),
+					"detached": false,
+				}
+			)
 		)
 	return {
 		"label": label,
@@ -1007,13 +1001,16 @@ func _output_params(asset_ids: Array, label: String = "") -> Dictionary:
 func _output_failure_params(count: int, error_code: String, label: String = "") -> Dictionary:
 	var params := _output_params([], label)
 	for index in range(count):
-		params["result_slots"].append(
-			{
-				"slot_id": "slot-%d" % index,
-				"status": "failed",
-				"detached": false,
-				"error": {"code": error_code, "args": {}},
-			}
+		(
+			params["result_slots"]
+			. append(
+				{
+					"slot_id": "slot-%d" % index,
+					"status": "failed",
+					"detached": false,
+					"error": {"code": error_code, "args": {}},
+				}
+			)
 		)
 	return params
 
@@ -1021,13 +1018,16 @@ func _output_failure_params(count: int, error_code: String, label: String = "") 
 func _object_rows(texts: Array) -> Dictionary:
 	var rows := []
 	for index in range(texts.size()):
-		rows.append(
-			{
-				"id": "row-%d" % index,
-				"text": String(texts[index]),
-				"count": 1,
-				"enabled": true,
-			}
+		(
+			rows
+			. append(
+				{
+					"id": "row-%d" % index,
+					"text": String(texts[index]),
+					"count": 1,
+					"enabled": true,
+				}
+			)
 		)
 	return {"rows": rows}
 
@@ -1046,9 +1046,8 @@ func _assert_no_legacy_output_fields(params: Dictionary) -> void:
 		assert_false(params.has(key), "legacy Output field must be absent: %s" % key)
 
 
-func _node_position(graph_data: Dictionary, node_id: String) -> Array:
-	for node_value in graph_data.get("nodes", []):
-		var node_data: Dictionary = node_value
-		if String(node_data.get("id", "")) == node_id:
-			return node_data.get("position", [])
-	return []
+func _item_by_id(items: Array, item_id: String) -> Dictionary:
+	for raw_item in items:
+		if raw_item is Dictionary and String(raw_item.get("id", "")) == item_id:
+			return raw_item
+	return {}

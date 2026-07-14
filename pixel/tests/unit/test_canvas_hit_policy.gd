@@ -129,7 +129,8 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 
 	var graph_data := ProjectService.get_graph_data("graph_hit")
 	assert_eq(
-		graph_data.get("edges", []), [{"from": ["objects", "subjects"], "to": ["generate", "subjects"]}]
+		graph_data.get("edges", []),
+		[{"from": ["objects", "subjects"], "to": ["generate", "subjects"]}]
 	)
 	assert_eq(String(status_events[-1]["type"]), "connect_succeeded")
 	assert_eq(
@@ -298,7 +299,8 @@ func test_stage_frame_groups_moves_and_deletes_as_explicit_membership_with_undo(
 	var moved_items: Array = canvas.export_canvas_data()["items"]
 	assert_eq(_item_by_id(moved_items, "objects_item")["position"], [140, 124])
 	assert_eq(_item_by_id(moved_items, "generate_item")["position"], [460, 144])
-	assert_eq(_node_position(ProjectService.get_graph_data("graph_stage"), "objects"), [140, 124])
+	for node in ProjectService.get_graph_data("graph_stage")["nodes"]:
+		assert_false(node.has("position"))
 	assert_true(UndoService.undo())
 	assert_eq(
 		_item_by_id(canvas.export_canvas_data()["items"], "objects_item")["position"], [100, 100]
@@ -407,15 +409,19 @@ func _set_graph(graph_id: String, nodes: Array, edges: Array = []) -> void:
 
 
 func _graph_node(node_id: String, node_type: String) -> Dictionary:
-	var params := {"rows": []} if node_type == "object_list" else {
-		"provider_id": "mock",
-		"model_id": "pixel_mock_v1",
-		"target_width": 32,
-		"target_height": 32,
-		"batch_size": 1,
-		"seed": -1,
-		"extra": {},
-	}
+	var params := (
+		{"rows": []}
+		if node_type == "object_list"
+		else {
+			"provider_id": "mock",
+			"model_id": "pixel_mock_v1",
+			"target_width": 32,
+			"target_height": 32,
+			"batch_size": 1,
+			"seed": -1,
+			"extra": {},
+		}
+	)
 	return {"id": node_id, "type": node_type, "params": params}
 
 
@@ -430,13 +436,16 @@ func _batch_node(node_id: String, asset_ids: Array) -> Dictionary:
 func _output_params(asset_ids: Array) -> Dictionary:
 	var slots := []
 	for index in range(asset_ids.size()):
-		slots.append(
-			{
-				"slot_id": "slot-%d" % index,
-				"status": "succeeded",
-				"asset_id": String(asset_ids[index]),
-				"detached": false,
-			}
+		(
+			slots
+			. append(
+				{
+					"slot_id": "slot-%d" % index,
+					"status": "succeeded",
+					"asset_id": String(asset_ids[index]),
+					"detached": false,
+				}
+			)
 		)
 	return {
 		"label": "Batch",
@@ -477,13 +486,6 @@ func _item_by_id(items: Array, item_id: String) -> Dictionary:
 		if item is Dictionary and String(item.get("id", "")) == item_id:
 			return item
 	return {}
-
-
-func _node_position(graph_data: Dictionary, node_id: String) -> Array:
-	for node in graph_data.get("nodes", []):
-		if node is Dictionary and String(node.get("id", "")) == node_id:
-			return node.get("position", [])
-	return []
 
 
 func _image(color: Color) -> Image:

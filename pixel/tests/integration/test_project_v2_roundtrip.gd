@@ -72,8 +72,11 @@ func test_output_domain_lives_only_in_graph() -> void:
 	var graph_params: Dictionary = graph["nodes"][0]["params"]
 	assert_eq(graph_params, _output_params())
 	var saved_item: Dictionary = canvas["items"][0]
-	assert_eq(_sorted_keys(saved_item), _sorted_keys(_display_item()))
-	assert_eq(saved_item, _display_item())
+	var expected_saved_item: Dictionary = FileIO.bytes_to_json(
+		FileIO.json_to_bytes(_display_item())
+	)
+	assert_eq(_sorted_keys(saved_item), _sorted_keys(expected_saved_item))
+	assert_eq(saved_item, expected_saved_item)
 	for graph_only in [
 		"role",
 		"source_node_id",
@@ -104,6 +107,40 @@ func test_canvas_keeps_only_display_fields() -> void:
 	assert_eq(saved_item["frame_id"], null)
 	for graph_only in _output_params().keys():
 		assert_false(saved_item.has(graph_only), "canvas duplicated %s" % graph_only)
+
+
+func test_save_never_writes_legacy_batch_card_or_canvas_aliases() -> void:
+	(
+		ProjectService
+		. set_canvas_data(
+			{
+				"camera": {"center": [0, 0], "zoom": 1.0},
+				"items":
+				[
+					{
+						"id": "legacy-output",
+						"type": "batch_card",
+						"asset_ids": ["legacy-asset"],
+						"review_filter": "kept",
+						"position": [0, 0],
+					},
+					{
+						"id": "sprite",
+						"type": "sprite",
+						"asset_id": "missing-but-preserved",
+						"position": [20, 20],
+						"z_index": 0,
+						"review_layout": "focus",
+					},
+				],
+			}
+		)
+	)
+	assert_eq(ProjectService.save_project(PATH_A), OK)
+	var canvas := _zip_json(PATH_A, "canvas/canvas.json")
+	assert_eq(canvas["items"].size(), 1)
+	assert_eq(canvas["items"][0]["type"], "sprite")
+	assert_false(canvas["items"][0].has("review_layout"))
 
 
 func test_generation_provenance_exact_fields() -> void:
@@ -165,6 +202,50 @@ func test_generation_provenance_exact_fields() -> void:
 	assert_false(JSON.stringify(meta).contains("Bearer secret"))
 
 
+func test_generation_provenance_invalid_shapes_fail_closed() -> void:
+	var image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	var base := _generation_snapshot_fixture()
+	var invalid_values := []
+	var unknown := base.duplicate(true)
+	unknown["raw_response"] = "forbidden"
+	invalid_values.append(unknown)
+	var bad_size := base.duplicate(true)
+	bad_size["actual_width"] = "2"
+	invalid_values.append(bad_size)
+	var bad_seed := base.duplicate(true)
+	bad_seed["requested_seed"] = 1.0
+	invalid_values.append(bad_seed)
+	var mismatched_refs := base.duplicate(true)
+	mismatched_refs["reference_asset_ids"] = ["reference-a"]
+	invalid_values.append(mismatched_refs)
+	var bad_hash := base.duplicate(true)
+	bad_hash["reference_asset_ids"] = ["reference-a"]
+	bad_hash["reference_content_sha256s"] = ["ABC"]
+	invalid_values.append(bad_hash)
+	for index in range(invalid_values.size()):
+		assert_eq(
+			(
+				AssetLibrary
+				. register_image(
+					image,
+					"invalid",
+					{
+						"id": "invalid-%d" % index,
+						"origin": "generated",
+						"provenance":
+						{
+							"graph_id": "graph-main",
+							"created_at": "2026-07-14T00:00:00Z",
+							"generation_snapshot": invalid_values[index],
+						},
+					}
+				)
+			),
+			""
+		)
+		assert_false(AssetLibrary.has_asset("invalid-%d" % index))
+
+
 func _graph_with_output() -> Dictionary:
 	return {
 		"graph_version": 2,
@@ -200,6 +281,31 @@ func _display_item() -> Dictionary:
 		"collapsed": true,
 		"locked": false,
 		"frame_id": null,
+	}
+
+
+func _generation_snapshot_fixture() -> Dictionary:
+	return {
+		"provider_id": "openai_image",
+		"model_id": "gpt-image-2",
+		"mode": "txt2img",
+		"target_width": 32,
+		"target_height": 32,
+		"provider_output_size": [1024, 1024],
+		"actual_width": 2,
+		"actual_height": 2,
+		"requested_seed": -1,
+		"actual_seed": null,
+		"run_id": "run-1",
+		"request_id": "request-1",
+		"source_node_id": "generate",
+		"source_row_id": "",
+		"prompt_preset_id": "",
+		"prompt_prefix": "",
+		"prompt": "tower",
+		"reference_asset_ids": [],
+		"reference_content_sha256s": [],
+		"extra": {"quality": "low"},
 	}
 
 

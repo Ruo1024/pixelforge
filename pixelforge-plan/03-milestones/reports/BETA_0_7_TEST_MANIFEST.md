@@ -35,6 +35,8 @@
 - 下载/export、标题、尺寸、折叠、Undo、通用 LOD、编辑入口等未退役行为必须保留或
   迁移。下表将直接 hard cut 的旧 schema 条目改由 B7-2 主责；最终 UI/协调器条目仍
   保持原 owner。
+- 台账 `B7-REQ-6-27/6-28` 的最终主责按批准执行书 §17.2 明列的 B7-3 测试清单修正为
+  B7-3；B7-2 只建立其 schema/descriptor 消费基础，不提前完成模型切换 red→green。
 
 ## 2. §5 硬切与契约门
 
@@ -211,8 +213,8 @@
 | B7-REQ-6-24 | §6.2 “不是默认演示入口” | B7-7 | integration | `test_example_builder_v2::test_object_list_only_menu_and_batch_template` | 默认示例含 object_list | 只添加菜单与批量模板包含 | `./pixel/scripts/run_tests.sh` |
 | B7-REQ-6-25 | §6.4 PromptPreset 禁止字段列表 | B7-2 | unit | `test_prompt_preset_v1::test_rejects_negative_template_and_multidomain_fields` | 旧 Style 字段可混入 | 禁止字段逐项拒绝；prefix 不解释占位符 | `./pixel/scripts/run_tests.sh` |
 | B7-REQ-6-26 | §6.4 名称/默认/2B 尺寸段 | B7-2 | i18n | `test_prompt_preset_v1::test_name_modes_default_and_canvas_contract` | 名称/默认/尺寸走旧逻辑 | name XOR、默认资源、320×280/280×220/1600×1200、Undo | `./pixel/scripts/run_tests.sh` |
-| B7-REQ-6-27 | §6.5 descriptor 默认写入规则 | B7-2 | unit | `test_graph_v2_schema::test_new_generate_writes_descriptor_defaults` | 新节点靠运行时 fallback | provider/default model/-1/全部 extra defaults 入 params | `./pixel/scripts/run_tests.sh` |
-| B7-REQ-6-28 | §6.5 provider/model 切换段 | B7-2 | unit | `test_graph_v2_schema::test_model_switch_one_undo_rebuilds_extra` | 旧 extra 串模型 | 单 Undo 整体重建，保留 target/batch/seed | `./pixel/scripts/run_tests.sh` |
+| B7-REQ-6-27 | §6.5 descriptor 默认写入规则；批准执行书 §17.2 B7-3 测试清单 | B7-3 | unit | `test_graph_v2_schema::test_new_generate_writes_descriptor_defaults` | 新节点靠运行时 fallback | provider/default model/-1/全部 extra defaults 入 params | `./pixel/scripts/run_tests.sh` |
+| B7-REQ-6-28 | §6.5 provider/model 切换段；批准执行书 §17.2 B7-3 测试清单 | B7-3 | unit | `test_graph_v2_schema::test_model_switch_one_undo_rebuilds_extra` | 旧 extra 串模型 | 单 Undo 整体重建，保留 target/batch/seed | `./pixel/scripts/run_tests.sh` |
 | B7-REQ-6-29 | §6.5 本地预检与 MAX_RESULTS=999 | B7-3 | unit | `test_generation_request_planner::test_all_local_validation_precedes_side_effects` | 坏输入仍预算/建卡/请求 | 尺寸、prompt、refs、provider/model、999 均副作用 0 | `./pixel/scripts/run_tests.sh` |
 | B7-REQ-6-30 | §6.5 rows 数量与提示词预览段 | B7-4 | smoke | `test_generation_card_v2::test_rows_hide_batch_and_preview_first_expand` | batch 可编辑/预览复制 999 条 | 数量只读，N 行/M 张，有序逐行一条 | `./pixel/scripts/run_tests.sh` |
 | B7-REQ-6-31 | §6.5 provider_output_sizes 选择段 | B7-3 | unit | `test_generation_request_planner::test_output_size_tiebreak_and_no_resample` | tie/缩放行为错误 | 比率误差最小、tie 取前、生成不缩放 | `./pixel/scripts/run_tests.sh` |

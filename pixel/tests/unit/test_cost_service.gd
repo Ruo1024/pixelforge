@@ -25,9 +25,9 @@ func test_mock_estimate_and_actual_month_ledger_are_exact() -> void:
 	var provider: PFProvider = FakeProviderScript.new()
 	var estimate := _service.estimate_with_provider(provider, {"batch": 4})
 	assert_eq(estimate, 1.0)
-	assert_true(_service.record_cost(provider.get_id(), 1.0, TEST_MONTH))
+	assert_true(_service.record_cost(FakeProviderScript.PROVIDER_ID, 1.0, TEST_MONTH))
 	assert_eq(_service.get_month_total(TEST_MONTH), 1.0)
-	assert_eq(_service.get_provider_total(provider.get_id(), TEST_MONTH), 1.0)
+	assert_eq(_service.get_provider_total(FakeProviderScript.PROVIDER_ID, TEST_MONTH), 1.0)
 
 
 func test_budget_requires_confirmation_only_for_known_overage() -> void:

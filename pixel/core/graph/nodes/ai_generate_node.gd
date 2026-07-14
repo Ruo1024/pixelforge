@@ -6,9 +6,12 @@ extends PFNode
 
 const MODEL_ID := "pixel_mock_v1"
 const PROVIDER_MOCK := "mock"
-const DEFAULT_BATCH_SIZE := 1
+const DEFAULT_PROVIDER_ID := "openai_image"
+const DEFAULT_MODEL_ID := "gpt-image-2"
+const DEFAULT_BATCH_SIZE := 4
 const DEFAULT_SEED := -1
 const DEFAULT_SIZE := 32
+const DEFAULT_EXTRA := {"quality": "low"}
 
 
 func get_type() -> String:
@@ -42,13 +45,13 @@ func get_param_schema() -> Array[Dictionary]:
 			"key": "provider_id",
 			"label_key": "GRAPH_PARAM_PROVIDER",
 			"kind": KIND_PROVIDER,
-			"default": PROVIDER_MOCK,
+			"default": DEFAULT_PROVIDER_ID,
 		},
 		{
 			"key": "model_id",
 			"label_key": "GRAPH_PARAM_MODEL",
 			"kind": KIND_TEXT,
-			"default": "",
+			"default": DEFAULT_MODEL_ID,
 		},
 		{
 			"key": "target_width",
@@ -87,12 +90,16 @@ func get_param_schema() -> Array[Dictionary]:
 
 func validate_params(params: Dictionary) -> Dictionary:
 	var validated := super(params)
-	validated["extra"] = Dictionary(params.get("extra", {})).duplicate(true) if params.get("extra", {}) is Dictionary else {}
+	validated["extra"] = (
+		Dictionary(params["extra"]).duplicate(true)
+		if params.has("extra") and params["extra"] is Dictionary
+		else DEFAULT_EXTRA.duplicate(true)
+	)
 	return validated
 
 
 func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionary:
-	if String(params.get("provider_id", PROVIDER_MOCK)) != PROVIDER_MOCK:
+	if String(params.get("provider_id", DEFAULT_PROVIDER_ID)) != PROVIDER_MOCK:
 		return {
 			"__error":
 			{
@@ -129,32 +136,27 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 				metadata
 				. append(
 					{
-						"provider": PROVIDER_MOCK,
-						"model": MODEL_ID,
-						"prompt": subject_text,
-						"seed": item_seed,
+						"actual_seed": item_seed,
 						"name": _asset_name(subject_text, item_seed),
-						"reference_asset_id":
-						reference_asset_id if not reference_asset_id.is_empty() else null,
-						"reference_content_sha256":
-						reference_hash if not reference_hash.is_empty() else null,
-						"reference_asset_ids": reference_asset_ids.duplicate(),
-						"reference_content_sha256s": reference_hashes.duplicate(),
-						"source_node_id": String(subject.get("source_node_id", "")),
-						"source_row_id": String(subject.get("id", "")),
 						"generation_snapshot":
 						{
 							"provider_id": PROVIDER_MOCK,
 							"model_id": MODEL_ID,
+							"mode": "img2img" if not reference_asset_ids.is_empty() else "txt2img",
 							"prompt": subject_text,
-							"width": width,
-							"height": height,
+							"prompt_preset_id": "",
+							"prompt_prefix": "",
+							"target_width": width,
+							"target_height": height,
+							"provider_output_size": [width, height],
 							"batch_size": int(subject.get("count", batch_size)),
-							"seed": item_seed,
+							"requested_seed": item_seed,
 							"reference_asset_ids": reference_asset_ids.duplicate(),
 							"reference_content_sha256s": reference_hashes.duplicate(),
 							"source_row_id": String(subject.get("id", "")),
 							"source_node_id": String(subject.get("source_node_id", "")),
+							"run_id": "",
+							"extra": Dictionary(params.get("extra", {})).duplicate(true),
 						},
 					}
 				)

@@ -134,7 +134,9 @@ func _coerce_param_value(value: Variant, schema: Dictionary, fallback: Variant) 
 func _coerce_string_param(value: Variant, fallback: Variant, accepts_scalar: bool) -> String:
 	if value == null:
 		return String(fallback)
-	return str(value) if accepts_scalar else String(value)
+	if accepts_scalar:
+		return str(value)
+	return value if value is String else String(fallback)
 
 
 func _clamp_number(value: int, schema: Dictionary, fallback: int) -> int:

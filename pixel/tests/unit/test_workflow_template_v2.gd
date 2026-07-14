@@ -89,6 +89,24 @@ func test_palette_requirements_are_sorted_unique_and_required() -> void:
 	assert_eq(missing.get("code", ""), "missing_template_palette")
 
 
+func test_palette_hash_mismatch_rejects_insertion_atomically() -> void:
+	var built := Service.build_from_frame(
+		"Palette cleanup", _cleanup_graph(), _cleanup_canvas(), "frame"
+	)
+	assert_true(built.get("ok", false), JSON.stringify(built))
+	var template: Dictionary = built["template"].duplicate(true)
+	template["palette_requirements"][0]["content_sha256"] = "0".repeat(64)
+	var graph := _prompt_graph()
+	var canvas := _prompt_canvas()
+	var graph_before := graph.duplicate(true)
+	var canvas_before := canvas.duplicate(true)
+	var result := Service.instantiate(template, graph, canvas, Vector2(500, 300))
+	assert_false(result.get("ok", false))
+	assert_eq(result.get("code", ""), "invalid_palette_requirements")
+	assert_eq(graph, graph_before)
+	assert_eq(canvas, canvas_before)
+
+
 func test_extra_only_template_safe() -> void:
 	var graph := _generate_graph()
 	var params: Dictionary = graph["nodes"][1]["params"]

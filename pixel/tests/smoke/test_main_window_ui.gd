@@ -381,16 +381,19 @@ func test_selected_graph_node_params_are_undoable_and_affect_rerun() -> void:
 	canvas.select_ids([object_item_id])
 
 	assert_true(
-		controller.apply_graph_node_params(
-			graph_id,
-			"objects",
-			{
-				"rows":
-				[
-					{"id": "tree", "text": "tree", "count": 2, "enabled": true},
-					{"id": "rock", "text": "rock", "count": 2, "enabled": true},
-				]
-			}
+		(
+			controller
+			. apply_graph_node_params(
+				graph_id,
+				"objects",
+				{
+					"rows":
+					[
+						{"id": "tree", "text": "tree", "count": 2, "enabled": true},
+						{"id": "rock", "text": "rock", "count": 2, "enabled": true},
+					]
+				}
+			)
 		)
 	)
 	assert_eq(object_card._summary, "2 of 2 rows selected")
@@ -424,7 +427,7 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 
 	var add_menu_texts := _menu_texts(controller._graph_add_menu)
 	for expected_text in [
-		"AI Generate", "Result Batch", "Reference Image", "Object List", "Style Prompt", "Text Prompt"
+		"AI Generate", "Output", "Reference Image", "Object List", "Style Prompt", "Text Prompt"
 	]:
 		assert_has(add_menu_texts, expected_text)
 	assert_false(add_menu_texts.has("Size Spec"))
@@ -481,7 +484,7 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	)
 	var graph_nodes: Array = ProjectService.current_project.graphs[graph_id]["nodes"]
 	var added_node_data := _node_data_for_id(graph_nodes, node_id)
-	assert_eq(added_node_data["position"], [840, 360])
+	assert_false(added_node_data.has("position"))
 	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_ADD_DONE % "Text Prompt")
 
 	assert_true(UndoService.undo())
@@ -518,8 +521,10 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	var prompt_node_data := _node_data_for_id(
 		ProjectService.current_project.graphs[graph_id]["nodes"], prompt_node_id
 	)
+	assert_false(prompt_node_data.has("position"))
+	var prompt_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], prompt_node_id)
 	assert_eq(
-		prompt_node_data["position"],
+		_item_data_for_id(canvas.export_canvas_data()["items"], prompt_item_id)["position"],
 		[int(object_position[0]) + 280, int(object_position[1])],
 	)
 
@@ -574,8 +579,13 @@ func test_quick_add_on_empty_canvas_creates_default_graph_at_requested_position_
 	var nodes: Array = ProjectService.current_project.graphs["graph_main"]["nodes"]
 	assert_eq(nodes.size(), 1)
 	assert_eq(nodes[0]["type"], "object_list")
-	assert_eq(nodes[0]["position"], [-240, 180])
+	assert_false(nodes[0].has("position"))
 	assert_eq(canvas.get_item_count(), 1)
+	var object_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], nodes[0]["id"])
+	assert_eq(
+		_item_data_for_id(canvas.export_canvas_data()["items"], object_item_id)["position"],
+		[-240, 180]
+	)
 	assert_true(UndoService.undo())
 	assert_true(ProjectService.current_project.graphs.is_empty())
 	assert_eq(canvas.get_item_count(), 0)
@@ -704,19 +714,22 @@ func test_candidate_continue_branch_is_one_undoable_canvas_action() -> void:
 	var asset_id := AssetLibrary.register_image(image, "candidate", {"origin": "generated"})
 	var graph := GraphScript.new()
 	graph.id = "graph_candidate_branch"
-	graph.add_node(
-		BatchNodeScript.new(),
-		"source_batch",
-		{
-			"label": "Source",
-			"source_node_id": "",
-			"source_run_id": "source-run",
-			"role": "standalone",
-			"input_snapshots": {},
-			"request_records": [],
-			"result_slots": [_succeeded_slot("source-slot", "source-run", asset_id)],
-		},
-		Vector2.ZERO
+	(
+		graph
+		. add_node(
+			BatchNodeScript.new(),
+			"source_batch",
+			{
+				"label": "Source",
+				"source_node_id": "",
+				"source_run_id": "source-run",
+				"role": "standalone",
+				"input_snapshots": {},
+				"request_records": [],
+				"result_slots": [_succeeded_slot("source-slot", "source-run", asset_id)],
+			},
+			Vector2.ZERO
+		)
 	)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 	var main: Control = MainScript.new()
@@ -771,9 +784,7 @@ func test_workflow_template_inserts_at_anchor_and_undoes_as_one_canvas_action() 
 	var controller: Node = main.get_node("M21UiController")
 	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var template: Dictionary = WorkflowTemplateService.builtin_templates()[0]
-	var result: Dictionary = controller._insert_workflow_template(
-		template, Vector2(500, 300)
-	)
+	var result: Dictionary = controller._insert_workflow_template(template, Vector2(500, 300))
 	var template_node_count := Array(template["nodes"]).size()
 
 	assert_true(result["ok"])
@@ -826,11 +837,7 @@ func test_selected_stage_runs_each_valid_target_without_unrelated_empty_inputs()
 	assert_false(batch_b_params.has("asset_ids"))
 	assert_eq(batch_a_params["result_slots"].size(), 4)
 	assert_eq(batch_b_params["result_slots"].size(), 4)
-	assert_true(
-		AssetLibrary.has_asset(
-			String(batch_a_params["result_slots"][0]["asset_id"])
-		)
-	)
+	assert_true(AssetLibrary.has_asset(String(batch_a_params["result_slots"][0]["asset_id"])))
 
 
 func _node_ids_from_canvas_items(items: Array) -> Array:
@@ -896,9 +903,10 @@ func _edge_uses_legacy_generation_port(raw_edge: Variant) -> bool:
 	var edge: Dictionary = raw_edge
 	var from_data: Array = edge.get("from", ["", ""])
 	var to_data: Array = edge.get("to", ["", ""])
-	return String(from_data[1]) in ["items", "spec", "image", "images", "style"] or String(
-		to_data[1]
-	) in ["items", "spec", "image", "images", "style"]
+	return (
+		String(from_data[1]) in ["items", "spec", "image", "images", "style"]
+		or String(to_data[1]) in ["items", "spec", "image", "images", "style"]
+	)
 
 
 func _succeeded_slot(slot_id: String, run_id: String, asset_id: String) -> Dictionary:

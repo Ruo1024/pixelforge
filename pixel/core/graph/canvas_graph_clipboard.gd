@@ -22,6 +22,32 @@ const RUNTIME_FIELDS := [
 	"outputs",
 	"cached_outputs",
 ]
+const PARAM_WHITELIST := {
+	"text_prompt": ["text"],
+	"object_list": ["rows"],
+	"prompt_preset": ["preset"],
+	"image_input": ["asset_id"],
+	"reference_set": ["asset_ids"],
+	"ai_generate":
+	["provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"],
+	"pixel_cleanup": ["preset_id", "settings"],
+	"batch": ["label"],
+}
+const FORBIDDEN_KEY_FRAGMENTS := [
+	"api_key",
+	"authorization",
+	"credential",
+	"header",
+	"last_error",
+	"password",
+	"progress",
+	"raw",
+	"request",
+	"response",
+	"secret",
+	"task",
+	"token",
+]
 
 
 static func capture(
@@ -30,7 +56,8 @@ static func capture(
 	selected_item_ids: Array,
 	origin_project_id: String = ""
 ) -> Dictionary:
-	if int(graph_data.get("graph_version", 0)) != 2:
+	var graph_version: Variant = graph_data.get("graph_version", null)
+	if not (graph_version is int) or graph_version != 2:
 		return _error("unsupported_graph_version")
 	if origin_project_id.is_empty():
 		return _error("missing_origin_project_id")
@@ -54,7 +81,6 @@ static func capture(
 	var captured_items: Array = []
 	var captured_nodes: Array = []
 	var selected_node_ids := {}
-	var positions_by_node := {}
 	var anchor := Vector2(INF, INF)
 	for raw_item in canvas_items:
 		if not (raw_item is Dictionary):
@@ -74,9 +100,8 @@ static func capture(
 		anchor.x = minf(anchor.x, position.x)
 		anchor.y = minf(anchor.y, position.y)
 		captured_items.append(_without_runtime_fields(item))
-		captured_nodes.append(_without_runtime_fields(graph_nodes[node_id], true))
+		captured_nodes.append(_sanitize_node(graph_nodes[node_id]))
 		selected_node_ids[node_id] = true
-		positions_by_node[node_id] = position
 
 	if captured_items.is_empty():
 		return _error("empty_selection")
@@ -85,10 +110,6 @@ static func capture(
 		var item_position := _position(item.get("position", [0, 0])) - anchor
 		item["position"] = _position_array(item_position)
 		item["frame_id"] = null
-	for node in captured_nodes:
-		var node_position: Vector2 = positions_by_node[String(node.get("id", ""))] - anchor
-		node["position"] = _position_array(node_position)
-
 	var captured_edges: Array = []
 	for raw_edge in graph_data.get("edges", []):
 		if not (raw_edge is Dictionary):
@@ -117,7 +138,8 @@ static func instantiate(
 	id_factory: Callable = Callable(),
 	target_project_id: String = ""
 ) -> Dictionary:
-	if int(payload.get("version", 0)) != PAYLOAD_VERSION:
+	var payload_version: Variant = payload.get("version", null)
+	if not (payload_version is int) or payload_version != PAYLOAD_VERSION:
 		return _error("unsupported_clipboard_version")
 	var origin_project_id := String(payload.get("origin_project_id", ""))
 	if origin_project_id.is_empty() or target_project_id.is_empty():
@@ -151,9 +173,6 @@ static func instantiate(
 		forbidden_ids[new_node_id] = true
 		node_id_map[old_node_id] = new_node_id
 		node["id"] = new_node_id
-		node["position"] = _position_array(
-			target_position + _position(node.get("position", [0, 0]))
-		)
 		nodes.append(node)
 
 	var item_id_map := {}
@@ -214,6 +233,47 @@ static func _without_runtime_fields(data: Dictionary, clean_params: bool = false
 			params.erase(field)
 		result["params"] = params
 	return result
+
+
+static func _sanitize_node(source: Dictionary) -> Dictionary:
+	var node_type := String(source.get("type", ""))
+	var result := {"id": String(source.get("id", "")), "type": node_type, "params": {}}
+	var params: Variant = source.get("params", {})
+	if not (params is Dictionary) or not PARAM_WHITELIST.has(node_type):
+		return result
+	var safe_params := {}
+	for key in PARAM_WHITELIST[node_type]:
+		if params.has(key):
+			var safe_value: Variant = _safe_value(params[key])
+			if safe_value != null or params[key] == null:
+				safe_params[key] = safe_value
+	result["params"] = safe_params
+	return result
+
+
+static func _safe_value(value: Variant) -> Variant:
+	if value is Dictionary:
+		var result := {}
+		for raw_key in value:
+			var key := String(raw_key)
+			if _forbidden_key(key):
+				continue
+			result[key] = _safe_value(value[raw_key])
+		return result
+	if value is Array:
+		var result: Array = []
+		for item in value:
+			result.append(_safe_value(item))
+		return result
+	return value
+
+
+static func _forbidden_key(key: String) -> bool:
+	var normalized := key.to_lower()
+	for fragment in FORBIDDEN_KEY_FRAGMENTS:
+		if fragment in normalized:
+			return true
+	return false
 
 
 static func _next_id(id_factory: Callable, forbidden_ids: Dictionary) -> String:

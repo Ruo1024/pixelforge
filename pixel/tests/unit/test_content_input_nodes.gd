@@ -33,7 +33,10 @@ func test_object_list_rejects_legacy_items_and_rows_are_execution_truth() -> voi
 			}
 		)
 	)
-	assert_eq(Array(node.execute({}, structured, {})["subjects"]), [structured["rows"][0]])
+	assert_eq(
+		Array(node.execute({}, structured, {})["subjects"]),
+		[{"id": "row-a", "text": "tower", "count": 4}]
+	)
 	assert_eq(structured["rows"][0]["count"], 4)
 	assert_eq(structured["rows"][1]["id"], "row-b")
 

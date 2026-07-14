@@ -736,10 +736,13 @@ func _build_generate_controls() -> void:
 
 	var target_label := Label.new()
 	target_label.name = "TargetSummary"
-	target_label.text = "%d×%d px" % [
-		int(_params_snapshot.get("target_width", 32)),
-		int(_params_snapshot.get("target_height", 32)),
-	]
+	target_label.text = (
+		"%d×%d px"
+		% [
+			int(_params_snapshot.get("target_width", 32)),
+			int(_params_snapshot.get("target_height", 32)),
+		]
+	)
 	_content_root.add_child(target_label)
 
 	var settings_row := HBoxContainer.new()
@@ -1146,10 +1149,13 @@ func _generation_input_summary() -> String:
 	var prefix_source: Dictionary = node_by_id.get(String(sources.get("prefix", "")), {})
 	if not prefix_source.is_empty():
 		prefix = _summarize_params(prefix_source.get("params", {}))
-	var target := "%d×%d px" % [
-		int(_params_snapshot.get("target_width", 32)),
-		int(_params_snapshot.get("target_height", 32)),
-	]
+	var target := (
+		"%d×%d px"
+		% [
+			int(_params_snapshot.get("target_width", 32)),
+			int(_params_snapshot.get("target_height", 32)),
+		]
+	)
 	return Strings.text("CONTENT_REQUEST_SUMMARY_FORMAT") % [prompt, prefix, target]
 
 
@@ -1162,6 +1168,7 @@ func _localized_display_name(node: PFNode) -> String:
 		"reference_set": "NODE_REFERENCE_SET",
 		"ai_generate": "NODE_AI_GENERATE",
 		"pixel_cleanup": "NODE_PIXEL_CLEANUP",
+		"batch": "NODE_BATCH",
 	}
 	var key := String(key_by_type.get(node.get_type(), ""))
 	return (

@@ -40,6 +40,10 @@ func test_all_consumers_replaced() -> void:
 		for path in _files_recursive(root):
 			if not (path.ends_with(".gd") or path.ends_with(".json")):
 				continue
+			# A previous plugin test mounts a temporary PCK under res://. Scan only source files
+			# that physically belong to this worktree, not that runtime-only virtual mount.
+			if not FileAccess.file_exists(ProjectSettings.globalize_path(path)):
+				continue
 			var normalized_path := path.to_lower()
 			var source := FileAccess.get_file_as_string(path).to_lower()
 			if path == "res://core/graph/pf_graph.gd":
@@ -67,9 +71,10 @@ func test_independent_tools_keep_existing_behaviors() -> void:
 	var white_bg := Image.create(5, 5, false, Image.FORMAT_RGBA8)
 	white_bg.fill(Color.WHITE)
 	white_bg.set_pixel(2, 2, Color.RED)
-	var matted: Image = Matting.matte(
-		white_bg, {"mode": Matting.MODE_FLOOD, "tolerance": 0.0, "feather": 0}
-	)["image"]
+	var matted: Image = (
+		Matting
+		. matte(white_bg, {"mode": Matting.MODE_FLOOD, "tolerance": 0.0, "feather": 0})["image"]
+	)
 	assert_eq(matted.get_pixel(0, 0).a, 0.0)
 	assert_eq(matted.get_pixel(2, 2).to_html(false), Color.RED.to_html(false))
 

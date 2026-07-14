@@ -26,45 +26,6 @@ static func is_graph_batch_node_data(item_data: Dictionary) -> bool:
 	return false
 
 
-static func sync_graph_node_positions(items_by_id: Dictionary, positions: Dictionary) -> void:
-	var positions_by_graph := {}
-	for item_id in positions.keys():
-		if not items_by_id.has(item_id):
-			continue
-		var item: Node = items_by_id[item_id]
-		var has_binding: bool = (
-			(item.has_method("is_graph_node") and item.is_graph_node())
-			or (item.has_method("has_graph_binding") and item.has_graph_binding())
-		)
-		if not has_binding:
-			continue
-		var graph_id := String(item.graph_id)
-		if not positions_by_graph.has(graph_id):
-			positions_by_graph[graph_id] = {}
-		positions_by_graph[graph_id][String(item.node_id)] = Vector2(positions[item_id]).round()
-
-	for graph_id_value in positions_by_graph.keys():
-		var graph_id := String(graph_id_value)
-		var graph_data := ProjectService.get_graph_data(graph_id)
-		if graph_data.is_empty():
-			continue
-		var node_positions: Dictionary = positions_by_graph[graph_id]
-		var nodes: Array = graph_data.get("nodes", []).duplicate(true)
-		var changed := false
-		for node_data in nodes:
-			if not (node_data is Dictionary):
-				continue
-			var node_id := String(node_data.get("id", ""))
-			if not node_positions.has(node_id):
-				continue
-			var position: Vector2 = node_positions[node_id]
-			node_data["position"] = [int(position.x), int(position.y)]
-			changed = true
-		if changed:
-			graph_data["nodes"] = nodes
-			ProjectService.set_graph_data(graph_id, graph_data, true)
-
-
 static func graph_deletion_snapshots_for_canvas_snapshots(canvas_snapshots: Array) -> Dictionary:
 	var graph_node_ids := _graph_node_ids_by_graph(canvas_snapshots)
 	var result := {}

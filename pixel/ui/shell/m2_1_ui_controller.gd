@@ -392,9 +392,7 @@ func handle_batch_face_action(card_id: String, action_id: String, asset_ids: Arr
 	match action_id:
 		"process", "process_all":
 			_m2_actions.batch_cleanup(
-				card_id,
-				asset_ids,
-				Pipeline.normalize_params(_cleanup_inspector.get_params())
+				card_id, asset_ids, Pipeline.normalize_params(_cleanup_inspector.get_params())
 			)
 		"export":
 			_emit_batch_export(asset_ids)
@@ -592,7 +590,10 @@ func _apply_result_branch(action_id: String, context: Dictionary) -> void:
 		return
 	var after := graph.to_json()
 	var item_specs := _result_branch_item_specs(
-		after, result.get("created_node_ids", []), String(result.get("focus_node_id", ""))
+		after,
+		result.get("created_node_ids", []),
+		String(result.get("focus_node_id", "")),
+		result.get("positions_by_node", {})
 	)
 	var apply_snapshot := func(snapshot: Dictionary, add_items: bool) -> void:
 		ProjectService.set_graph_data(graph_id, snapshot, true)
@@ -626,7 +627,10 @@ func _result_branch_anchor(batch_node_id: String) -> Vector2:
 
 
 func _result_branch_item_specs(
-	graph_data: Dictionary, node_ids: Array, focus_node_id: String
+	graph_data: Dictionary,
+	node_ids: Array,
+	focus_node_id: String,
+	positions_by_node: Dictionary = {}
 ) -> Array:
 	var specs := []
 	for raw_node in graph_data.get("nodes", []):
@@ -641,7 +645,7 @@ func _result_branch_item_specs(
 					"item_id": IdUtil.uuid_v4(),
 					"node_id": node_id,
 					"type": String(node.get("type", "")),
-					"position": node.get("position", [0, 0]),
+					"position": positions_by_node.get(node_id, [0, 0]),
 					"focus": node_id == focus_node_id,
 				}
 			)
@@ -854,19 +858,22 @@ func _prepare_run_target(
 		}
 	var batch_node_id := "batch_%s" % IdUtil.uuid_v4().left(8)
 	var position := _new_result_position(graph, generate_node_id)
-	graph.add_node(
-		BatchNodeScript.new(),
-		batch_node_id,
-		{
-			"label": Strings.text("BATCH_DEFAULT_LABEL"),
-			"source_node_id": generate_node_id,
-			"source_run_id": "",
-			"role": "standalone",
-			"input_snapshots": {},
-			"request_records": [],
-			"result_slots": [],
-		},
-		position
+	(
+		graph
+		. add_node(
+			BatchNodeScript.new(),
+			batch_node_id,
+			{
+				"label": Strings.text("BATCH_DEFAULT_LABEL"),
+				"source_node_id": generate_node_id,
+				"source_run_id": "",
+				"role": "standalone",
+				"input_snapshots": {},
+				"request_records": [],
+				"result_slots": [],
+			},
+			position
+		)
 	)
 	var edge_result := graph.add_edge(generate_node_id, "assets", batch_node_id, "in")
 	if not bool(edge_result.get("ok", false)):
@@ -1666,15 +1673,20 @@ func _route_provider_graph_run(
 			{"message": Strings.text("STATUS_GRAPH_RUN_MISSING_BATCH_CARD")}
 		)
 		return true
-	var provider: PFProvider = ProviderService.get_provider(provider_id)
-	if provider == null:
+	var generate_params := graph.get_node_params(generate_node_id)
+	var descriptor: Dictionary = ProviderService.get_model_descriptor(
+		provider_id, String(generate_params.get("model_id", ""))
+	)
+	if descriptor.is_empty():
 		_status_label.text = _graph_run_failure_status({"message": "Provider is unavailable"})
 		return true
 	var validation_state := ProviderService.get_validation_state(provider_id)
-	var safe_validation := bool(provider.get_capabilities().get("safe_validation", true))
+	var capabilities: Dictionary = descriptor.get("capabilities", {})
+	var safe_validation := bool(capabilities.get("safe_validation", true))
 	if validation_state != "verified" and (safe_validation or validation_state != "configured"):
 		_status_label.text = (
-			Strings.STATUS_PROVIDER_CREDENTIALS_REQUIRED_FORMAT % provider.get_display_name()
+			Strings.STATUS_PROVIDER_CREDENTIALS_REQUIRED_FORMAT
+			% String(descriptor.get("display_name", provider_id))
 		)
 		_provider_settings_dialog.show_settings()
 		return true

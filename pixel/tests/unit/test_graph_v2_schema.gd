@@ -2,6 +2,7 @@ extends "res://addons/gut/test.gd"
 
 const Graph := preload("res://core/graph/pf_graph.gd")
 const NodeRegistry := preload("res://core/graph/node_registry.gd")
+const Catalog := preload("res://infra/localization_catalog.gd")
 
 const MAIN_PATH_TYPES := [
 	"ai_generate",
@@ -130,7 +131,9 @@ func test_object_list_rows_only() -> void:
 	]
 	for params in invalid_params:
 		parsed = Graph.parse_v2(_graph_with_node("object_list", params))
-		assert_false(parsed.get("ok", false), "must reject invalid rows: %s" % JSON.stringify(params))
+		assert_false(
+			parsed.get("ok", false), "must reject invalid rows: %s" % JSON.stringify(params)
+		)
 
 
 func test_size_spec_removed_from_production() -> void:
@@ -171,9 +174,18 @@ func test_generate_params_roundtrip() -> void:
 	assert_true(parsed.get("ok", false), JSON.stringify(parsed))
 	if parsed.get("ok", false):
 		assert_eq(parsed["graph"].to_json(), source)
-		assert_eq(_sorted_keys(parsed["graph"].get_node_params("subject")), [
-			"batch_size", "extra", "model_id", "provider_id", "seed", "target_height", "target_width"
-		])
+		assert_eq(
+			_sorted_keys(parsed["graph"].get_node_params("subject")),
+			[
+				"batch_size",
+				"extra",
+				"model_id",
+				"provider_id",
+				"seed",
+				"target_height",
+				"target_width"
+			]
+		)
 
 	var defaults: Dictionary = NodeRegistry.new().create("ai_generate").validate_params({})
 	assert_eq(
@@ -193,9 +205,19 @@ func test_generate_params_roundtrip() -> void:
 func test_batch_display_and_output_port_have_no_alias() -> void:
 	var batch: PFNode = NodeRegistry.new().create("batch")
 	assert_eq(batch.get_display_name(), "Output")
+	assert_eq(Catalog.load_catalog("en")["NODE_BATCH"], "Output")
+	assert_eq(Catalog.load_catalog("zh_CN")["NODE_BATCH"], "结果")
 	assert_eq(batch.get_input_ports(), [{"name": "in", "type": "asset_list", "required": false}])
 	assert_eq(batch.get_output_ports(), [{"name": "assets", "type": "asset_list"}])
-	for old_param in ["asset_ids", "expected_count", "review_states", "review_filter", "review_layout", "focus_asset_id", "compare_asset_id"]:
+	for old_param in [
+		"asset_ids",
+		"expected_count",
+		"review_states",
+		"review_filter",
+		"review_layout",
+		"focus_asset_id",
+		"compare_asset_id"
+	]:
 		var params := _batch_params()
 		params[old_param] = []
 		var parsed := Graph.parse_v2(_graph_with_node("batch", params))
@@ -206,7 +228,8 @@ func test_batch_display_and_output_port_have_no_alias() -> void:
 			"graph_version": 2,
 			"id": "g",
 			"name": "Batch port gate",
-			"nodes": [
+			"nodes":
+			[
 				{"id": "batch", "type": "batch", "params": _batch_params()},
 				{"id": "cleanup", "type": "pixel_cleanup", "params": {}},
 			],
@@ -216,12 +239,64 @@ func test_batch_display_and_output_port_have_no_alias() -> void:
 		assert_false(parsed.get("ok", false), "must reject batch.%s alias" % old_output_port)
 
 
+func test_known_node_params_fail_closed_instead_of_coercing() -> void:
+	var invalid_nodes := [
+		_graph_with_node("text_prompt", {"text": 42}),
+		_graph_with_node(
+			"prompt_preset",
+			{
+				"preset":
+				{
+					"prompt_preset_version": 1,
+					"id": "prompt",
+					"name": "Prompt",
+					"prefix": "pixel art",
+					"negative_prompt": "blur",
+				}
+			}
+		),
+		_graph_with_node(
+			"pixel_cleanup", {"preset_id": "cleanup", "settings": {"detect_grid": {}}}
+		),
+		_graph_with_node("ai_generate", _generate_params().merged({"target_width": "32"}, true)),
+		_graph_with_node(
+			"ai_generate",
+			_generate_params().merged({"extra": {"quality": "low", "legacy_quality": "high"}}, true)
+		),
+	]
+	for graph_data in invalid_nodes:
+		assert_false(Graph.parse_v2(graph_data).get("ok", true), JSON.stringify(graph_data))
+
+
+func test_only_one_current_output_per_source() -> void:
+	var graph_data := _graph_with_node("batch", _batch_params())
+	graph_data["nodes"][0]["id"] = "output-a"
+	graph_data["nodes"][0]["params"]["role"] = "current"
+	graph_data["nodes"][0]["params"]["source_node_id"] = "generate"
+	graph_data["nodes"][0]["params"]["source_run_id"] = "run-a"
+	var duplicate: Dictionary = graph_data["nodes"][0].duplicate(true)
+	duplicate["id"] = "output-b"
+	duplicate["params"]["source_run_id"] = "run-b"
+	graph_data["nodes"].append(duplicate)
+	var parsed := Graph.parse_v2(graph_data)
+	assert_false(parsed.get("ok", true))
+	assert_eq(parsed["error"]["code"], "duplicate_current_output")
+
+
 func test_non_main_path_classification_keeps_tools_outside_graph_registry() -> void:
 	var registry := NodeRegistry.new()
 	for deferred_type in [
-		"matting", "slice", "outline", "palette_map", "select", "output_to_canvas", "output_to_library"
+		"matting",
+		"slice",
+		"outline",
+		"palette_map",
+		"select",
+		"output_to_canvas",
+		"output_to_library"
 	]:
-		assert_false(registry.has_type(deferred_type), "%s is not a Beta 0.7 main-path node" % deferred_type)
+		assert_false(
+			registry.has_type(deferred_type), "%s is not a Beta 0.7 main-path node" % deferred_type
+		)
 	for independent_tool in [
 		"res://core/pixel/matting.gd",
 		"res://core/pixel/segmenter.gd",
@@ -230,7 +305,10 @@ func test_non_main_path_classification_keeps_tools_outside_graph_registry() -> v
 		"res://ui/editor/pixel_editor.gd",
 		"res://ui/board/board_editor.gd",
 	]:
-		assert_true(FileAccess.file_exists(independent_tool), "%s remains an independent tool" % independent_tool)
+		assert_true(
+			FileAccess.file_exists(independent_tool),
+			"%s remains an independent tool" % independent_tool
+		)
 
 
 func _graph_with_node(type_name: String, params: Dictionary) -> Dictionary:

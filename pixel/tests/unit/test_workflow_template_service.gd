@@ -23,7 +23,18 @@ func test_capture_filters_external_edges_and_clears_assets_and_results() -> void
 	assert_eq(template["edges"].size(), 3)
 	assert_eq(template["requirements"]["reference_slots"], 1)
 	assert_eq(_node(template, "reference")["params"]["asset_id"], "")
-	assert_eq(_node(template, "batch")["params"], {"label": "Results"})
+	assert_eq(
+		_node(template, "batch")["params"],
+		{
+			"label": "Results",
+			"source_node_id": "",
+			"source_run_id": "",
+			"role": "standalone",
+			"input_snapshots": {},
+			"request_records": [],
+			"result_slots": [],
+		}
+	)
 	assert_eq(_node(template, "prompt")["display_title"], "Ideas")
 	assert_eq(_node(template, "prompt")["size"], [420, 320])
 	assert_false(JSON.stringify(template).contains("asset-reference"))
@@ -87,12 +98,12 @@ func test_template_storage_is_atomic_and_corrupt_files_do_not_block_listing() ->
 	)
 
 
-func test_builtins_validate_and_instantiate_remaps_all_ids_and_positions() -> void:
+func test_builtins_validate_and_instantiate_remaps_ids_with_layout_only_in_canvas() -> void:
 	var builtins := Service.builtin_templates()
 	assert_eq(builtins.size(), 4)
 	for template in builtins:
 		assert_true(Service.validate_template(template)["ok"])
-	var graph := {"graph_version": 1, "id": "graph-main", "name": "Main", "nodes": [], "edges": []}
+	var graph := {"graph_version": 2, "id": "graph-main", "name": "Main", "nodes": [], "edges": []}
 	var canvas := {"camera": {"center": [0, 0], "zoom": 1.0}, "items": []}
 	var first := Service.instantiate(builtins[0], graph, canvas, Vector2(500, 300))
 	var second := Service.instantiate(builtins[0], graph, canvas, Vector2(500, 300))
@@ -100,7 +111,7 @@ func test_builtins_validate_and_instantiate_remaps_all_ids_and_positions() -> vo
 	assert_true(first["ok"])
 	assert_ne(first["frame_id"], second["frame_id"])
 	assert_ne(first["node_id_map"], second["node_id_map"])
-	assert_eq(first["graph"]["nodes"][0]["position"], [540, 380])
+	assert_false(first["graph"]["nodes"][0].has("position"))
 	var first_node_id := String(first["graph"]["nodes"][0]["id"])
 	var canvas_node := _canvas_node(first["canvas"], first_node_id)
 	assert_eq(canvas_node["position"], [540, 380])
@@ -149,15 +160,15 @@ func _graph_fixture() -> Dictionary:
 				"type": "ai_generate",
 				"position": [480, 120],
 				"params":
-					{
-						"provider_id": "openai_image",
-						"model_id": "gpt-image-2",
-						"target_width": 64,
-						"target_height": 64,
-						"batch_size": 1,
-						"seed": -1,
-						"extra": {"quality": "low"},
-					}
+				{
+					"provider_id": "openai_image",
+					"model_id": "gpt-image-2",
+					"target_width": 64,
+					"target_height": 64,
+					"batch_size": 1,
+					"seed": -1,
+					"extra": {"quality": "low"},
+				}
 			},
 			{
 				"id": "batch",
@@ -171,7 +182,8 @@ func _graph_fixture() -> Dictionary:
 					"role": "current",
 					"input_snapshots": {},
 					"request_records": [],
-					"result_slots": [
+					"result_slots":
+					[
 						{
 							"status": "succeeded",
 							"detached": false,

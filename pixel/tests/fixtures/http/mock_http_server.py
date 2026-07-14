@@ -3,13 +3,33 @@
 
 import json
 import hashlib
+import base64
 import re
+import struct
 import sys
 import time
 import socket
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+
+def _solid_png_base64(width: int, height: int) -> str:
+    """Return a deterministic opaque RGBA PNG at the requested provider size."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    width = max(1, width)
+    height = max(1, height)
+    row = b"\x00" + (b"\x4f\x6f\x8f\xff" * width)
+    payload = b"\x89PNG\r\n\x1a\n"
+    payload += chunk("IHDR".encode(), struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+    payload += chunk("IDAT".encode(), zlib.compress(row * height, 9))
+    payload += chunk("IEND".encode(), b"")
+    return base64.b64encode(payload).decode()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -103,7 +123,9 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path in {"/retrodiffusion-success", "/retrodiffusion-slow"}:
             if self.path == "/retrodiffusion-slow":
                 time.sleep(0.3)
-            pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            pixel = _solid_png_base64(
+                int(request_body.get("width", 1)), int(request_body.get("height", 1))
+            )
             image_count = max(1, min(4, int(request_body.get("num_images", 1))))
             self._json(200, {
                 "created_at": 1783780000,

@@ -1,5 +1,7 @@
 extends "res://addons/gut/test.gd"
 
+const Strings := preload("res://ui/shell/strings.gd")
+
 const PluginAPI := preload("res://services/plugin_api.gd")
 const PluginService := preload("res://services/plugin_service.gd")
 const NodeRegistry := preload("res://core/graph/node_registry.gd")
@@ -83,7 +85,10 @@ func test_registration_surface_replaces_style_and_validates_split_presets() -> v
 	assert_false(api.has_method("register_style_preset"))
 	assert_true(api.has_method("register_prompt_preset"))
 	assert_true(api.has_method("register_cleanup_preset"))
-	if not api.has_method("register_prompt_preset") or not api.has_method("register_cleanup_preset"):
+	if (
+		not api.has_method("register_prompt_preset")
+		or not api.has_method("register_cleanup_preset")
+	):
 		return
 	var prompt := {
 		"prompt_preset_version": 1,
@@ -103,13 +108,18 @@ func test_registration_surface_replaces_style_and_validates_split_presets() -> v
 		{
 			"detect_grid":
 			{"enabled": true, "mode": "auto", "scale": 4.0, "offset": [0.0, 0.0], "base_size": 32},
-			"resample":
-			{"enabled": true, "mode": "mode", "scale": 4.0, "offset": [0.0, 0.0]},
+			"resample": {"enabled": true, "mode": "mode", "scale": 4.0, "offset": [0.0, 0.0]},
 			"quantize":
 			{
-				"enabled": true, "mode": "fixed_palette", "palette_id": "db32",
-				"auto_k_strategy": "median_cut", "k": 16, "dither": "none",
-				"dither_strength": 0.0, "dither_contrast": 0.0, "dither_chroma": 0.0,
+				"enabled": true,
+				"mode": "fixed_palette",
+				"palette_id": "db32",
+				"auto_k_strategy": "median_cut",
+				"k": 16,
+				"dither": "none",
+				"dither_strength": 0.0,
+				"dither_contrast": 0.0,
+				"dither_chroma": 0.0,
 				"dither_density": 1.0,
 			}
 		},
@@ -141,15 +151,18 @@ func test_v1_manifest_is_rejected_before_entry_and_v2_builtins_are_exact() -> vo
 	_write_json(
 		plugin_dir.path_join("plugin.json"),
 		{
-			"id": "legacy_plugin", "name": "V1", "version": "1.0.0", "api_version": 1,
-			"min_app_version": "0.1.0", "entry": "main.gd", "permissions": [],
+			"id": "legacy_plugin",
+			"name": "V1",
+			"version": "1.0.0",
+			"api_version": 1,
+			"min_app_version": "0.1.0",
+			"entry": "main.gd",
+			"permissions": [],
 		}
 	)
 	var rejected: Dictionary = service.load_directory_plugin(plugin_dir)
 	assert_false(bool(rejected.get("ok", false)))
-	assert_eq(
-		rejected.get("code", ""), "unsupported_plugin_api_version", JSON.stringify(rejected)
-	)
+	assert_eq(rejected.get("code", ""), "unsupported_plugin_api_version", JSON.stringify(rejected))
 	assert_true(Dictionary(rejected.get("args", {})).has("actual"))
 	assert_true(String(rejected.get("reason", "")).is_empty())
 	assert_false(rejected.has("reason"), "version errors store code+args, not rendered text")
@@ -230,3 +243,16 @@ func _remove_tree(path: String) -> void:
 	for child in directory.get_directories():
 		_remove_tree(path.path_join(child))
 	DirAccess.remove_absolute(path)
+
+
+func test_unverified_plugin_warning_survives_v2() -> void:
+	assert_true(Strings.PLUGIN_SECURITY_WARNING.contains("Install only plugins you trust"))
+	assert_true(Strings.PLUGIN_SECURITY_WARNING.contains("not a sandbox"))
+
+
+func test_signature_is_not_api_v2_gate() -> void:
+	var source := FileAccess.get_file_as_string("res://services/plugin_service.gd")
+	assert_false(source.contains("verify_signature"))
+	assert_false(source.contains("signature_valid"))
+	assert_false(source.contains("trusted_plugin"))
+	assert_true(source.contains("unsupported_plugin_api_version"))

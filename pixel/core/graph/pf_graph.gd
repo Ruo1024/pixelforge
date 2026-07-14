@@ -6,6 +6,11 @@ extends RefCounted
 
 const IdUtil := preload("res://core/util/id_util.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
+const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+const PromptPresetRegistryScript := preload("res://services/prompt_preset_registry.gd")
+const CleanupPresetRegistryScript := preload("res://services/cleanup_preset_registry.gd")
+const ProviderContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 const GRAPH_VERSION := 2
 const PARAM_KEYS := {
 	"text_prompt": ["text"],
@@ -13,11 +18,11 @@ const PARAM_KEYS := {
 	"prompt_preset": ["preset"],
 	"image_input": ["asset_id"],
 	"reference_set": ["asset_ids"],
-	"ai_generate": [
-		"provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"
-	],
+	"ai_generate":
+	["provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"],
 	"pixel_cleanup": ["preset_id", "settings"],
-	"batch": [
+	"batch":
+	[
 		"label",
 		"source_node_id",
 		"source_run_id",
@@ -64,7 +69,8 @@ static func from_json(data: Dictionary, registry: Variant = null) -> PFGraph:
 
 
 static func parse_v2(data: Dictionary, registry: Variant = null) -> Dictionary:
-	if int(data.get("graph_version", 0)) != GRAPH_VERSION:
+	var version: Variant = data.get("graph_version", null)
+	if not (version is int) or version != GRAPH_VERSION:
 		return {
 			"ok": false,
 			"error": {"code": "unsupported_graph_version", "args": {}},
@@ -83,7 +89,7 @@ static func parse_v2(data: Dictionary, registry: Variant = null) -> Dictionary:
 
 
 func add_node(
-	node: PFNode, node_id: String = "", params: Dictionary = {}, position: Vector2 = Vector2.ZERO
+	node: PFNode, node_id: String = "", params: Dictionary = {}, _position: Vector2 = Vector2.ZERO
 ) -> String:
 	var resolved_id := node_id
 	if resolved_id.is_empty():
@@ -94,7 +100,6 @@ func add_node(
 	nodes[resolved_id] = {
 		"node": node,
 		"params": node.validate_params(params),
-		"position": _position_to_array(position),
 		"raw_fields": {},
 	}
 	_node_order.append(resolved_id)
@@ -250,12 +255,11 @@ func _load_node(raw_node: Dictionary, registry: Variant) -> void:
 
 	var node_id := String(raw_node.get("id", IdUtil.uuid_v4()))
 	var raw_fields := raw_node.duplicate(true)
-	for known_key in ["id", "type", "params"]:
+	for known_key in ["id", "type", "params", "position", "display_title", "size", "collapsed"]:
 		raw_fields.erase(known_key)
 	nodes[node_id] = {
 		"node": node,
 		"params": node.validate_params(raw_node.get("params", {})),
-		"position": [0, 0],
 		"raw_fields": raw_fields,
 	}
 	_node_order.append(node_id)
@@ -288,6 +292,8 @@ static func _validate_v2_data(data: Dictionary) -> Dictionary:
 	if not (nodes_value is Array) or not (edges_value is Array):
 		return _load_error("invalid_graph_shape", "graph")
 	var node_ids := {}
+	var current_outputs_by_source := {}
+	var registry := NodeRegistryScript.new()
 	for index in range(nodes_value.size()):
 		var raw_node: Variant = nodes_value[index]
 		if not (raw_node is Dictionary):
@@ -298,7 +304,12 @@ static func _validate_v2_data(data: Dictionary) -> Dictionary:
 		var node_id := String(raw_node.get("id", ""))
 		var node_type := String(raw_node.get("type", ""))
 		var params: Variant = raw_node.get("params", null)
-		if node_id.is_empty() or node_ids.has(node_id) or node_type.is_empty() or not (params is Dictionary):
+		if (
+			node_id.is_empty()
+			or node_ids.has(node_id)
+			or node_type.is_empty()
+			or not (params is Dictionary)
+		):
 			return _load_error("invalid_graph_node", "nodes[%d]" % index)
 		node_ids[node_id] = true
 		if node_type in RETIRED_NODE_TYPES:
@@ -307,6 +318,66 @@ static func _validate_v2_data(data: Dictionary) -> Dictionary:
 			for key in params.keys():
 				if String(key) not in PARAM_KEYS[node_type]:
 					return _load_error("unknown_graph_param", "nodes[%d].params.%s" % [index, key])
+			if node_type not in ["batch", "object_list"]:
+				var known_node: PFNode = registry.create(node_type)
+				if (
+					known_node == null
+					or var_to_str(known_node.validate_params(params)) != var_to_str(params)
+				):
+					return _load_error("invalid_graph_param", "nodes[%d].params" % index)
+		if node_type == "batch":
+			var output_issue: Dictionary = BatchNodeScript.validate_v2_domain(params)
+			if not bool(output_issue.get("ok", false)):
+				return _load_error(
+					"invalid_output_domain",
+					"nodes[%d].%s" % [index, String(output_issue.get("path", "params"))]
+				)
+			if String(params.get("role", "")) == "current":
+				var source_id := String(params.get("source_node_id", ""))
+				if current_outputs_by_source.has(source_id):
+					return _load_error(
+						"duplicate_current_output", "nodes[%d].params.source_node_id" % index
+					)
+				current_outputs_by_source[source_id] = true
+		if node_type == "object_list":
+			var rows_issue: Dictionary = ObjectListNodeScript.validate_v2_rows(params)
+			if not bool(rows_issue.get("ok", false)):
+				return _load_error(
+					"invalid_object_rows",
+					"nodes[%d].%s" % [index, String(rows_issue.get("path", "params"))]
+				)
+		if node_type == "prompt_preset":
+			var preset: Variant = params.get("preset", null)
+			if (
+				not (preset is Dictionary)
+				or not bool(PromptPresetRegistryScript.validate_preset(preset).get("ok", false))
+			):
+				return _load_error("invalid_prompt_preset", "nodes[%d].params.preset" % index)
+		if node_type == "pixel_cleanup":
+			if (
+				not (params.get("preset_id", null) is String)
+				or String(params["preset_id"]).is_empty()
+			):
+				return _load_error("invalid_cleanup_preset", "nodes[%d].params.preset_id" % index)
+			var settings: Variant = params.get("settings", null)
+			if (
+				not (settings is Dictionary)
+				or not bool(
+					CleanupPresetRegistryScript._validate_settings(settings).get("ok", false)
+				)
+			):
+				return _load_error("invalid_cleanup_preset", "nodes[%d].params.settings" % index)
+		if node_type == "ai_generate":
+			var descriptor := ProviderService.get_model_descriptor(
+				String(params.get("provider_id", "")), String(params.get("model_id", ""))
+			)
+			if descriptor.is_empty():
+				return _load_error("invalid_provider_model", "nodes[%d].params.model_id" % index)
+			var extra_issue: Variant = ProviderContractV2._validate_dynamic_params(
+				params.get("extra", {}), descriptor.get("dynamic_params", [])
+			)
+			if extra_issue != null:
+				return _load_error("invalid_dynamic_param", "nodes[%d].params.extra" % index)
 	for index in range(edges_value.size()):
 		var raw_edge: Variant = edges_value[index]
 		if not (raw_edge is Dictionary) or raw_edge.keys().size() != 2:
@@ -454,15 +525,3 @@ func _edge_validation_error(
 
 func _connect_result(ok: bool, reason: String, auto_wrap: bool = false) -> Dictionary:
 	return {"ok": ok, "reason": reason, "auto_wrap": auto_wrap}
-
-
-func _position_to_array(position: Vector2) -> Array:
-	return [int(round(position.x)), int(round(position.y))]
-
-
-func _normalize_position(position: Variant) -> Array:
-	if position is Vector2:
-		return _position_to_array(position)
-	if position is Array and position.size() >= 2:
-		return [int(round(float(position[0]))), int(round(float(position[1])))]
-	return [0, 0]

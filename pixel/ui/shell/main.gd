@@ -2,6 +2,8 @@
 class_name PFMain
 extends Control
 
+const ContractErrorText := preload("res://services/contract_error_text.gd")
+
 const Strings := preload("res://ui/shell/strings.gd")
 const InfiniteCanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const ContextInspectorScript := preload("res://ui/inspector/workspace_context_inspector.gd")
@@ -645,7 +647,7 @@ func _on_custom_palettes_changed() -> void:
 	_update_window_title()
 
 
-func _sync_cleanup_inspector_with_project(project: Variant) -> void:
+func _sync_cleanup_inspector_with_project(_project: Variant) -> void:
 	if _cleanup_inspector == null:
 		return
 	_cleanup_inspector.refresh_palette_options()
@@ -965,7 +967,10 @@ func _show_project_save_failed(path: String, error: Error) -> void:
 
 
 func _show_project_open_failed(path: String, error: Error) -> void:
-	_show_status_notice(Strings.STATUS_PROJECT_OPEN_FAILED_FORMAT % [path, error_string(error)])
+	var detail := ContractErrorText.text(
+		String(ProjectService.last_load_error.get("code", "")), error_string(error)
+	)
+	_show_status_notice(Strings.STATUS_PROJECT_OPEN_FAILED_FORMAT % [path, detail])
 
 
 func _on_autosave_failed(error: Error, path: String) -> void:

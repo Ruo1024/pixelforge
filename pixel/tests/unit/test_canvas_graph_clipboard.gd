@@ -48,7 +48,10 @@ func test_capture_keeps_relative_layout_internal_edges_and_safe_asset_references
 
 func test_instantiate_remaps_ids_edges_and_places_selection_at_target() -> void:
 	var payload: Dictionary = ClipboardScript.capture(
-		_graph_fixture(), _canvas_fixture(), ["item_prompt", "item_generate", "item_reference"], "project-a"
+		_graph_fixture(),
+		_canvas_fixture(),
+		["item_prompt", "item_generate", "item_reference"],
+		"project-a"
 	)
 	var ids := SequenceIds.new(
 		[
@@ -85,7 +88,8 @@ func test_instantiate_remaps_ids_edges_and_places_selection_at_target() -> void:
 	assert_eq(_by_id(result["items"], "item-prompt-new")["position"], [1000, 540])
 	assert_eq(_by_id(result["items"], "item-generate-new")["position"], [1240, 500])
 	assert_eq(_by_id(result["items"], "item-reference-new")["position"], [1000, 720])
-	assert_eq(_by_id(result["nodes"], "node-generate-new")["position"], [1240, 500])
+	for node in result["nodes"]:
+		assert_false(node.has("position"))
 	assert_eq(
 		result["edges"],
 		[
@@ -106,11 +110,13 @@ func test_capture_rejects_empty_or_mismatched_selection() -> void:
 	var items := _canvas_fixture()
 
 	assert_eq(
-		ClipboardScript.capture(graph, items, ["missing"], "project-a")["error"]["code"], "empty_selection"
+		ClipboardScript.capture(graph, items, ["missing"], "project-a")["error"]["code"],
+		"empty_selection"
 	)
 	items[0]["graph_id"] = "another_graph"
 	assert_eq(
-		ClipboardScript.capture(graph, items, ["item_prompt"], "project-a")["error"]["code"], "empty_selection"
+		ClipboardScript.capture(graph, items, ["item_prompt"], "project-a")["error"]["code"],
+		"empty_selection"
 	)
 
 
@@ -135,15 +141,12 @@ func _graph_fixture() -> Dictionary:
 		"id": "graph_main",
 		"nodes":
 		[
-			{
-				"id": "prompt",
-				"type": "text_prompt",
-				"params": {"text": "castle"}
-			},
+			{"id": "prompt", "type": "text_prompt", "params": {"text": "castle"}},
 			{
 				"id": "generate",
 				"type": "ai_generate",
-				"params": {
+				"params":
+				{
 					"provider_id": "openai_image",
 					"model_id": "gpt-image-2",
 					"target_width": 64,

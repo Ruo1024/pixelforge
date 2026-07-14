@@ -1,7 +1,7 @@
 class_name PFResultBranchBuilder
 extends RefCounted
 
-## Builds new graph-local input branches from materialized results without mutating the source branch.
+## Builds graph-local input branches from results without mutating the source branch.
 
 const IdUtil := preload("res://core/util/id_util.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
@@ -33,6 +33,8 @@ static func _build_reference_only(
 		"ok": not reference.is_empty(),
 		"created_node_ids": [reference] if not reference.is_empty() else [],
 		"focus_node_id": reference,
+		"positions_by_node":
+		{reference: _position_array(anchor)} if not reference.is_empty() else {},
 	}
 
 
@@ -101,6 +103,14 @@ static func _build_continue_branch(
 		"created_node_ids": [reference_id, prompt_id, preset_id, generate_id, batch_id],
 		"focus_node_id": generate_id,
 		"batch_node_id": batch_id,
+		"positions_by_node":
+		{
+			reference_id: _position_array(anchor + Vector2(0, 210)),
+			prompt_id: _position_array(anchor),
+			preset_id: _position_array(anchor + Vector2(0, 420)),
+			generate_id: _position_array(anchor + Vector2(580, 180)),
+			batch_id: _position_array(anchor + Vector2(940, 180)),
+		},
 	}
 
 
@@ -130,3 +140,7 @@ static func _normalized_asset_ids(value: Array) -> Array[String]:
 		if not asset_id.is_empty() and not result.has(asset_id):
 			result.append(asset_id)
 	return result
+
+
+static func _position_array(value: Vector2) -> Array[int]:
+	return [int(round(value.x)), int(round(value.y))]

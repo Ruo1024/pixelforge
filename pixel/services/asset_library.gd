@@ -12,6 +12,39 @@ const IdUtil := preload("res://core/util/id_util.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const FileIOScript := preload("res://infra/file_io.gd")
 const Log := preload("res://core/util/log_util.gd")
+const SENSITIVE_KEY_FRAGMENTS := [
+	"api_key",
+	"authorization",
+	"credential",
+	"header",
+	"password",
+	"raw",
+	"response",
+	"secret",
+	"token"
+]
+const GENERATION_SNAPSHOT_KEYS := [
+	"provider_id",
+	"model_id",
+	"mode",
+	"target_width",
+	"target_height",
+	"provider_output_size",
+	"actual_width",
+	"actual_height",
+	"requested_seed",
+	"actual_seed",
+	"run_id",
+	"request_id",
+	"source_node_id",
+	"source_row_id",
+	"prompt_preset_id",
+	"prompt_prefix",
+	"prompt",
+	"reference_asset_ids",
+	"reference_content_sha256s",
+	"extra",
+]
 
 var _metadata := {}
 var _png_bytes := {}
@@ -60,7 +93,13 @@ func register_image(image: Image, name: String, extra_meta: Dictionary = {}) -> 
 		"anim": extra_meta.get("anim", null),
 	}
 
-	_metadata[asset_id] = meta
+	var raw_snapshot: Variant = Dictionary(meta.get("provenance", {})).get(
+		"generation_snapshot", null
+	)
+	if raw_snapshot is Dictionary and not validate_generation_snapshot(raw_snapshot):
+		return ""
+	var safe_meta := _meta_for_persistence(meta)
+	_metadata[asset_id] = safe_meta
 	_png_bytes[asset_id] = rgba.save_png_to_buffer()
 	_store_in_cache(asset_id, rgba)
 	_ref_counts[asset_id] = int(_ref_counts.get(asset_id, 0))
@@ -110,10 +149,157 @@ func load_from_zip_files(files: Dictionary) -> Error:
 func export_zip_entries() -> Dictionary:
 	var entries := {}
 	for asset_id in _metadata.keys():
-		entries["assets/%s.meta.json" % asset_id] = _metadata[asset_id]
+		entries["assets/%s.meta.json" % asset_id] = _meta_for_persistence(_metadata[asset_id])
 		if _png_bytes.has(asset_id):
 			entries["assets/%s.png" % asset_id] = _png_bytes[asset_id]
 	return entries
+
+
+func _meta_for_persistence(source: Dictionary) -> Dictionary:
+	var result := source.duplicate(true)
+	var provenance: Variant = result.get("provenance", null)
+	if not (provenance is Dictionary):
+		return result
+	var provenance_copy: Dictionary = provenance
+	var snapshot: Variant = provenance_copy.get("generation_snapshot", null)
+	if not (snapshot is Dictionary):
+		return result
+	var safe_snapshot := {}
+	for key in [
+		"provider_id",
+		"model_id",
+		"mode",
+		"target_width",
+		"target_height",
+		"provider_output_size",
+		"actual_width",
+		"actual_height",
+		"requested_seed",
+		"actual_seed",
+		"run_id",
+		"request_id",
+		"source_node_id",
+		"source_row_id",
+		"prompt_preset_id",
+		"prompt_prefix",
+		"prompt",
+		"reference_asset_ids",
+		"reference_content_sha256s",
+		"extra",
+	]:
+		if snapshot.has(key):
+			safe_snapshot[key] = _safe_persisted_value(snapshot[key])
+	provenance_copy["generation_snapshot"] = safe_snapshot
+	result["provenance"] = provenance_copy
+	return result
+
+
+func _safe_persisted_value(value: Variant) -> Variant:
+	if value is Dictionary:
+		var result := {}
+		for raw_key in value:
+			var key := String(raw_key)
+			var normalized := key.to_lower()
+			var forbidden := false
+			for fragment in SENSITIVE_KEY_FRAGMENTS:
+				if fragment in normalized:
+					forbidden = true
+					break
+			if not forbidden:
+				result[key] = _safe_persisted_value(value[raw_key])
+		return result
+	if value is Array:
+		var result: Array = []
+		for item in value:
+			result.append(_safe_persisted_value(item))
+		return result
+	return value
+
+
+static func validate_generation_snapshot(snapshot: Dictionary) -> bool:
+	if snapshot.size() != GENERATION_SNAPSHOT_KEYS.size():
+		return false
+	for key in GENERATION_SNAPSHOT_KEYS:
+		if not snapshot.has(key):
+			return false
+	for key in [
+		"provider_id",
+		"model_id",
+		"mode",
+		"run_id",
+		"request_id",
+		"source_node_id",
+		"source_row_id",
+		"prompt_preset_id",
+		"prompt_prefix",
+		"prompt",
+	]:
+		if not (snapshot[key] is String):
+			return false
+	if (
+		String(snapshot["provider_id"]).is_empty()
+		or String(snapshot["model_id"]).is_empty()
+		or String(snapshot["run_id"]).is_empty()
+		or String(snapshot["request_id"]).is_empty()
+		or String(snapshot["source_node_id"]).is_empty()
+		or String(snapshot["mode"]) not in ["txt2img", "img2img"]
+	):
+		return false
+	for key in ["target_width", "target_height", "actual_width", "actual_height"]:
+		if not (snapshot[key] is int) or int(snapshot[key]) < 1:
+			return false
+	if not _positive_int_pair(snapshot["provider_output_size"]):
+		return false
+	if (
+		not (snapshot["requested_seed"] is int)
+		or int(snapshot["requested_seed"]) < -1
+		or int(snapshot["requested_seed"]) > 2147483647
+	):
+		return false
+	if (
+		snapshot["actual_seed"] != null
+		and (
+			not (snapshot["actual_seed"] is int)
+			or int(snapshot["actual_seed"]) < 0
+			or int(snapshot["actual_seed"]) > 2147483647
+		)
+	):
+		return false
+	if (
+		not (snapshot["reference_asset_ids"] is Array)
+		or not (snapshot["reference_content_sha256s"] is Array)
+		or snapshot["reference_asset_ids"].size() != snapshot["reference_content_sha256s"].size()
+		or not (snapshot["extra"] is Dictionary)
+	):
+		return false
+	for index in range(snapshot["reference_asset_ids"].size()):
+		if (
+			not (snapshot["reference_asset_ids"][index] is String)
+			or String(snapshot["reference_asset_ids"][index]).is_empty()
+			or not _is_lower_sha256(String(snapshot["reference_content_sha256s"][index]))
+		):
+			return false
+	return true
+
+
+static func _positive_int_pair(value: Variant) -> bool:
+	return (
+		value is Array
+		and value.size() == 2
+		and value[0] is int
+		and value[1] is int
+		and int(value[0]) > 0
+		and int(value[1]) > 0
+	)
+
+
+static func _is_lower_sha256(value: String) -> bool:
+	if value.length() != 64:
+		return false
+	for character in value:
+		if character not in "0123456789abcdef":
+			return false
+	return true
 
 
 func has_asset(asset_id: String) -> bool:

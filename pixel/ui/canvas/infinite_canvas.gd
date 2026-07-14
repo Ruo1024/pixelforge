@@ -516,8 +516,10 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	return (
 		data is Dictionary
-		and String(data.get("kind", ""))
-		in ["project_asset", "prompt_preset", "cleanup_preset", "workflow_template"]
+		and (
+			String(data.get("kind", ""))
+			in ["project_asset", "prompt_preset", "cleanup_preset", "workflow_template"]
+		)
 	)
 
 
@@ -1641,7 +1643,6 @@ func _hit_at_world(world_position: Vector2) -> Dictionary:
 
 func _apply_positions(positions: Dictionary) -> void:
 	SelectionSnapshot.apply_positions(_items_by_id, positions)
-	GraphItemBridge.sync_graph_node_positions(_items_by_id, positions)
 	_sync_cleanup_grid_overlay()
 	queue_redraw()
 

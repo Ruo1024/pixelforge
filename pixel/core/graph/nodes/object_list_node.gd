@@ -37,8 +37,38 @@ func execute(_inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictiona
 	var selected_rows: Array[Dictionary] = []
 	for row in _validated_rows(params.get("rows", [])):
 		if bool(row["enabled"]):
-			selected_rows.append(row.duplicate(true))
+			selected_rows.append(
+				{"id": String(row["id"]), "text": String(row["text"]), "count": int(row["count"])}
+			)
 	return {"subjects": selected_rows}
+
+
+static func validate_v2_rows(params: Dictionary) -> Dictionary:
+	if params.size() != 1 or not params.has("rows") or not (params["rows"] is Array):
+		return {"ok": false, "path": "params"}
+	var seen_ids := {}
+	var rows: Array = params["rows"]
+	for index in range(rows.size()):
+		if not (rows[index] is Dictionary):
+			return {"ok": false, "path": "params.rows[%d]" % index}
+		var row: Dictionary = rows[index]
+		if row.size() != 4:
+			return {"ok": false, "path": "params.rows[%d]" % index}
+		for key in ["id", "text", "count", "enabled"]:
+			if not row.has(key):
+				return {"ok": false, "path": "params.rows[%d].%s" % [index, key]}
+		if not (row["id"] is String) or not (row["text"] is String):
+			return {"ok": false, "path": "params.rows[%d]" % index}
+		var row_id := String(row["id"]).strip_edges()
+		var text := String(row["text"]).strip_edges()
+		if row_id.is_empty() or text.is_empty() or seen_ids.has(row_id):
+			return {"ok": false, "path": "params.rows[%d]" % index}
+		if not (row["count"] is int) or int(row["count"]) < 1 or int(row["count"]) > 999:
+			return {"ok": false, "path": "params.rows[%d].count" % index}
+		if not (row["enabled"] is bool):
+			return {"ok": false, "path": "params.rows[%d].enabled" % index}
+		seen_ids[row_id] = true
+	return {"ok": true}
 
 
 func _validated_rows(value: Variant) -> Array[Dictionary]:

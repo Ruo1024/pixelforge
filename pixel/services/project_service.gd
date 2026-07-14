@@ -1,3 +1,4 @@
+# gdlint: disable=max-returns
 class_name PFProjectService
 extends Node
 
@@ -22,6 +23,36 @@ const AssetReferenceScanner := preload("res://services/asset_reference_scanner.g
 const Log := preload("res://core/util/log_util.gd")
 const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
 const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
+const CANVAS_NODE_KEYS := [
+	"id",
+	"type",
+	"graph_id",
+	"node_id",
+	"position",
+	"z_index",
+	"display_title",
+	"size",
+	"collapsed",
+	"locked",
+	"frame_id",
+]
+const LEGACY_CANVAS_KEYS := [
+	"asset_ids",
+	"selected_asset_ids",
+	"review_states",
+	"review_filter",
+	"review_layout",
+	"focus_asset_id",
+	"compare_asset_ids",
+	"compare_mode",
+	"graph_anchor",
+	"role",
+	"source_node_id",
+	"source_run_id",
+	"input_snapshots",
+	"request_records",
+	"result_slots",
+]
 var current_project: Variant = ProjectModel.new()
 var last_load_error: Dictionary = {}
 
@@ -172,9 +203,17 @@ func _open_project(path: String, as_recovered_copy: bool) -> Error:
 	if not (manifest is Dictionary) or not (canvas is Dictionary):
 		return ERR_PARSE_ERROR
 
-	if int(manifest.get("format_version", 0)) != AppInfo.PROJECT_FORMAT_VERSION:
+	var version: Variant = manifest.get("format_version", null)
+	if version is float and version == float(AppInfo.PROJECT_FORMAT_VERSION):
+		manifest["format_version"] = AppInfo.PROJECT_FORMAT_VERSION
+		version = manifest["format_version"]
+	if not (version is int) or version != AppInfo.PROJECT_FORMAT_VERSION:
 		last_load_error = {"code": "unsupported_project_version", "args": {}}
 		return ERR_FILE_UNRECOGNIZED
+	var boundary_error := _validate_project_v2_boundary(manifest, canvas)
+	if not boundary_error.is_empty():
+		last_load_error = boundary_error
+		return ERR_FILE_CORRUPT
 
 	_normalize_loaded_project(manifest, canvas)
 	var loaded_graphs := _load_graphs_from_files(files, manifest)
@@ -269,7 +308,7 @@ func _save_to_path(path: String) -> Error:
 	_update_manifest_before_save()
 	var entries := {
 		"manifest.json": current_project.manifest,
-		"canvas/canvas.json": current_project.canvas,
+		"canvas/canvas.json": _canvas_for_persistence(),
 	}
 	for graph_id in _sorted_graph_ids():
 		entries["graphs/%s.json" % graph_id] = current_project.graphs[graph_id]
@@ -330,25 +369,52 @@ func _scan_canvas_structure_warnings() -> Array[Dictionary]:
 
 
 func _update_manifest_before_save() -> void:
-	current_project.manifest["modified_at"] = IdUtil.utc_now_iso()
-	current_project.manifest["app_version"] = AppInfo.APP_VERSION
-	current_project.manifest["format_version"] = AppInfo.PROJECT_FORMAT_VERSION
+	var source: Dictionary = current_project.manifest
 	var entries: Dictionary = current_project.manifest.get("entries", {})
 	entries["canvases"] = ["canvas"]
 	entries["graphs"] = _sorted_graph_ids()
 	entries["boards"] = _sorted_ids(current_project.boards)
 	entries["animations"] = _sorted_ids(current_project.animations)
 	entries["asset_count"] = AssetLibrary.get_all_meta().size()
-	current_project.manifest["entries"] = entries
+	var canonical := {
+		"format_version": AppInfo.PROJECT_FORMAT_VERSION,
+		"app_version": AppInfo.APP_VERSION,
+		"id": String(source.get("id", "")),
+		"name": String(source.get("name", "Untitled")),
+		"created_at": String(source.get("created_at", IdUtil.utc_now_iso())),
+		"modified_at": IdUtil.utc_now_iso(),
+		"entries": entries,
+	}
 	var custom_palettes := PaletteRegistry.get_custom_manifest_entries()
-	if custom_palettes.is_empty():
-		current_project.manifest.erase("custom_palettes")
-	else:
-		current_project.manifest["custom_palettes"] = custom_palettes
+	canonical["custom_palettes"] = custom_palettes
+	current_project.manifest = canonical
+
+
+func _canvas_for_persistence() -> Dictionary:
+	var result: Dictionary = current_project.canvas.duplicate(true)
+	var items: Array = []
+	for raw_item in result.get("items", []):
+		if not (raw_item is Dictionary):
+			continue
+		var item: Dictionary = raw_item
+		var item_type := String(item.get("type", ""))
+		if item_type == "batch_card":
+			continue
+		if item_type != "node":
+			var clean_item := item.duplicate(true)
+			_erase_legacy_canvas_keys(clean_item)
+			items.append(clean_item)
+			continue
+		var display_item := {}
+		for key in CANVAS_NODE_KEYS:
+			if item.has(key):
+				display_item[key] = item[key]
+		items.append(display_item)
+	result["items"] = items
+	return result
 
 
 func _normalize_loaded_project(manifest: Dictionary, canvas: Dictionary) -> void:
-	manifest["format_version"] = int(manifest.get("format_version", AppInfo.PROJECT_FORMAT_VERSION))
 	var entries: Dictionary = manifest.get("entries", {})
 	entries["asset_count"] = int(entries.get("asset_count", 0))
 	if not entries.has("graphs"):
@@ -383,8 +449,6 @@ func _normalize_loaded_project(manifest: Dictionary, canvas: Dictionary) -> void
 			if item_data.has("frame_id") and item_data["frame_id"] != null:
 				item_data["frame_id"] = String(item_data["frame_id"])
 			_normalize_canvas_card_title(item_data)
-		elif item_type == "batch_card":
-			continue
 		elif item_type == "sprite":
 			_normalize_canvas_card_title(item_data)
 			if item_data.has("size"):
@@ -404,6 +468,62 @@ func _normalize_loaded_project(manifest: Dictionary, canvas: Dictionary) -> void
 			]
 		normalized_items.append(item_data)
 	canvas["items"] = normalized_items
+
+
+func _validate_project_v2_boundary(manifest: Dictionary, canvas: Dictionary) -> Dictionary:
+	if not (manifest.get("entries", null) is Dictionary):
+		return _project_load_error("invalid_project_manifest", "manifest.entries")
+	if not (canvas.get("camera", null) is Dictionary) or not (canvas.get("items", null) is Array):
+		return _project_load_error("invalid_canvas_shape", "canvas")
+	var camera: Dictionary = canvas["camera"]
+	if (
+		not _valid_number_pair(camera.get("center", null))
+		or not (camera.get("zoom", null) is int or camera.get("zoom", null) is float)
+	):
+		return _project_load_error("invalid_canvas_shape", "canvas.camera")
+	for index in range(canvas["items"].size()):
+		var raw_item: Variant = canvas["items"][index]
+		if not (raw_item is Dictionary):
+			return _project_load_error("invalid_canvas_item", "canvas.items[%d]" % index)
+		var item: Dictionary = raw_item
+		var item_type := String(item.get("type", ""))
+		if item_type == "batch_card":
+			return _project_load_error("legacy_canvas_item", "canvas.items[%d].type" % index)
+		for raw_key in item.keys():
+			var key := String(raw_key)
+			if key in LEGACY_CANVAS_KEYS or key.begins_with("compare_"):
+				return _project_load_error(
+					"legacy_canvas_field", "canvas.items[%d].%s" % [index, key]
+				)
+			if item_type == "node" and key not in CANVAS_NODE_KEYS:
+				return _project_load_error(
+					"unknown_canvas_node_field", "canvas.items[%d].%s" % [index, key]
+				)
+		if item_type not in ["node", "sprite", "frame"]:
+			return _project_load_error("invalid_canvas_item", "canvas.items[%d].type" % index)
+		if not _valid_number_pair(item.get("position", null)):
+			return _project_load_error("invalid_canvas_item", "canvas.items[%d].position" % index)
+	return {}
+
+
+func _erase_legacy_canvas_keys(item: Dictionary) -> void:
+	for key in item.keys():
+		var name := String(key)
+		if name in LEGACY_CANVAS_KEYS or name.begins_with("compare_"):
+			item.erase(key)
+
+
+func _project_load_error(code: String, path: String) -> Dictionary:
+	return {"code": code, "args": {"path": path}}
+
+
+func _valid_number_pair(value: Variant) -> bool:
+	return (
+		value is Array
+		and value.size() == 2
+		and (value[0] is int or value[0] is float)
+		and (value[1] is int or value[1] is float)
+	)
 
 
 func _normalize_canvas_card_fields(item_data: Dictionary, card_type: String) -> void:
@@ -467,12 +587,73 @@ func _load_graphs_from_files(files: Dictionary, manifest: Dictionary) -> Diction
 		var graph_data: Variant = FileIOScript.bytes_to_json(files[path])
 		if not (graph_data is Dictionary):
 			return {"ok": false, "error": ERR_PARSE_ERROR, "graphs": {}}
+		_normalize_graph_json_integer_fields(graph_data)
 		var parsed: Dictionary = GraphScript.parse_v2(graph_data)
 		if not bool(parsed.get("ok", false)):
 			last_load_error = Dictionary(parsed.get("error", {})).duplicate(true)
 			return {"ok": false, "error": ERR_FILE_UNRECOGNIZED, "graphs": {}}
 		graphs[graph_id] = _normalize_graph_data(graph_id, parsed["graph"])
 	return {"ok": true, "error": OK, "graphs": graphs}
+
+
+func _normalize_graph_json_integer_fields(graph_data: Dictionary) -> void:
+	if (
+		graph_data.get("graph_version", null) is float
+		and graph_data["graph_version"] == float(GraphScript.GRAPH_VERSION)
+	):
+		graph_data["graph_version"] = GraphScript.GRAPH_VERSION
+	for raw_node in graph_data.get("nodes", []):
+		if not (raw_node is Dictionary) or not (raw_node.get("params", null) is Dictionary):
+			continue
+		var node: Dictionary = raw_node
+		var params: Dictionary = node["params"]
+		match String(node.get("type", "")):
+			"object_list":
+				for raw_row in params.get("rows", []):
+					if (
+						raw_row is Dictionary
+						and raw_row.get("count", null) is float
+						and raw_row["count"] == floorf(raw_row["count"])
+					):
+						raw_row["count"] = int(raw_row["count"])
+			"ai_generate":
+				_normalize_known_ints(
+					params, ["target_width", "target_height", "batch_size", "seed"]
+				)
+			"batch":
+				for raw_snapshot in Dictionary(params.get("input_snapshots", {})).values():
+					if not (raw_snapshot is Dictionary):
+						continue
+					if String(raw_snapshot.get("kind", "")) == "generation":
+						_normalize_known_ints(
+							raw_snapshot, ["target_width", "target_height", "requested_seed"]
+						)
+						_normalize_size_pair(raw_snapshot, "provider_output_size")
+					elif String(raw_snapshot.get("kind", "")) == "cleanup":
+						_normalize_size_pair(raw_snapshot, "effective_target_size")
+				for raw_record in params.get("request_records", []):
+					if raw_record is Dictionary:
+						_normalize_known_ints(
+							raw_record, ["requested_count", "received_count", "attempts"]
+						)
+				for raw_slot in params.get("result_slots", []):
+					if raw_slot is Dictionary:
+						_normalize_size_pair(raw_slot, "planned_size")
+
+
+func _normalize_known_ints(data: Dictionary, keys: Array) -> void:
+	for key in keys:
+		if data.get(key, null) is float and data[key] == floorf(data[key]):
+			data[key] = int(data[key])
+
+
+func _normalize_size_pair(data: Dictionary, key: String) -> void:
+	var value: Variant = data.get(key, null)
+	if not (value is Array) or value.size() != 2:
+		return
+	for index in range(2):
+		if value[index] is float and value[index] == floorf(value[index]):
+			value[index] = int(value[index])
 
 
 func _normalize_graph_data(graph_id: String, graph: PFGraph) -> Dictionary:

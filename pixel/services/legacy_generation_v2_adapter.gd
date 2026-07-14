@@ -1,3 +1,4 @@
+# gdlint: disable=max-returns
 class_name PFLegacyGenerationV2Adapter
 extends RefCounted
 
@@ -47,18 +48,23 @@ func materialize_terminal(
 			else {}
 		)
 		var image: Image = item.get("image", null) as Image
-		var snapshot := _generation_input_snapshot(graph_id, source_node_id, metadata, image)
+		var snapshot := _generation_input_snapshot(graph_id, source_node_id, metadata)
+		if snapshot.is_empty():
+			return _command_error("invalid_generation_snapshot", {"index": index})
 		if provider_id.is_empty():
 			provider_id = String(snapshot["provider_id"])
 		elif provider_id != String(snapshot["provider_id"]):
 			return _command_error("mixed_terminal_providers")
-		prepared_items.append(
-			{
-				"image": image,
-				"metadata": metadata,
-				"snapshot": snapshot,
-				"error": item.get("error", null),
-			}
+		(
+			prepared_items
+			. append(
+				{
+					"image": image,
+					"metadata": metadata,
+					"snapshot": snapshot,
+					"error": item.get("error", null),
+				}
+			)
 		)
 
 	var run_id := IdUtil.uuid_v4()
@@ -108,23 +114,14 @@ func materialize_terminal(
 	var summary_error: Variant = null
 	for failed_item in failed_items:
 		var safe_error := _terminal_error(
-			failed_item["error"],
-			provider_id,
-			request_id,
-			terminal_items.size(),
-			succeeded_count
+			failed_item["error"], provider_id, request_id, terminal_items.size(), succeeded_count
 		)
 		result_slots[int(failed_item["index"])]["error"] = safe_error
 		if summary_error == null:
 			summary_error = safe_error.duplicate(true)
 	var request_records: Array[Dictionary] = [
 		_request_record(
-			run_id,
-			request_id,
-			result_slots,
-			provider_id,
-			succeeded_count,
-			summary_error
+			run_id, request_id, result_slots, provider_id, succeeded_count, summary_error
 		)
 	]
 
@@ -141,62 +138,60 @@ func materialize_terminal(
 
 
 func _generation_input_snapshot(
-	graph_id: String, source_node_id: String, metadata: Dictionary, image: Image
+	graph_id: String, source_node_id: String, metadata: Dictionary
 ) -> Dictionary:
-	var legacy: Dictionary = (
+	var source: Dictionary = (
 		Dictionary(metadata.get("generation_snapshot", {})).duplicate(true)
 		if metadata.get("generation_snapshot", {}) is Dictionary
 		else {}
 	)
-	var reference_ids := _string_array(
-		legacy.get("reference_asset_ids", metadata.get("reference_asset_ids", []))
-	)
-	var reference_hashes := _string_array(
-		legacy.get(
-			"reference_content_sha256s", metadata.get("reference_content_sha256s", [])
-		)
-	)
-	var width := _positive_int(
-		legacy.get("target_width", legacy.get("width", image.get_width() if image != null else 1)),
-		1
-	)
-	var height := _positive_int(
-		legacy.get(
-			"target_height", legacy.get("height", image.get_height() if image != null else 1)
-		),
-		1
-	)
-	var provider_size := _positive_size(
-		legacy.get("provider_output_size", [width, height]), [width, height]
-	)
+	for key in [
+		"provider_id",
+		"model_id",
+		"mode",
+		"prompt",
+		"prompt_preset_id",
+		"prompt_prefix",
+		"target_width",
+		"target_height",
+		"provider_output_size",
+		"requested_seed",
+		"reference_asset_ids",
+		"reference_content_sha256s",
+		"source_row_id",
+		"extra",
+	]:
+		if not source.has(key):
+			return {}
+	var reference_ids := _string_array(source["reference_asset_ids"])
+	var reference_hashes := _string_array(source["reference_content_sha256s"])
+	if reference_ids.size() != reference_hashes.size():
+		return {}
+	var width := _positive_int(source["target_width"], 0)
+	var height := _positive_int(source["target_height"], 0)
+	var provider_size := _positive_size(source["provider_output_size"], [])
+	if width <= 0 or height <= 0 or provider_size.is_empty():
+		return {}
+	if not (source["extra"] is Dictionary):
+		return {}
 	return {
 		"kind": "generation",
 		"graph_id": graph_id,
 		"source_node_id": source_node_id,
-		"provider_id": String(
-			legacy.get("provider_id", metadata.get("provider_id", metadata.get("provider", "mock")))
-		),
-		"model_id": String(
-			legacy.get("model_id", metadata.get("model_id", metadata.get("model", "pixel_mock_v1")))
-		),
-		"mode": "img2img" if not reference_ids.is_empty() else "txt2img",
-		"prompt": String(legacy.get("prompt", metadata.get("prompt", ""))),
-		"source_row_id": String(legacy.get("source_row_id", metadata.get("source_row_id", ""))),
-		"prompt_preset_id": String(legacy.get("prompt_preset_id", "")),
-		"prompt_prefix": String(legacy.get("prompt_prefix", "")),
+		"provider_id": String(source["provider_id"]),
+		"model_id": String(source["model_id"]),
+		"mode": String(source["mode"]),
+		"prompt": String(source["prompt"]),
+		"source_row_id": String(source["source_row_id"]),
+		"prompt_preset_id": String(source["prompt_preset_id"]),
+		"prompt_prefix": String(source["prompt_prefix"]),
 		"reference_asset_ids": reference_ids,
 		"reference_content_sha256s": reference_hashes,
 		"target_width": width,
 		"target_height": height,
 		"provider_output_size": provider_size,
-		"requested_seed": _valid_seed(
-			legacy.get("requested_seed", legacy.get("seed", metadata.get("seed", -1)))
-		),
-		"extra": (
-			Dictionary(legacy.get("extra", {})).duplicate(true)
-			if legacy.get("extra", {}) is Dictionary
-			else {}
-		),
+		"requested_seed": _valid_seed(source["requested_seed"]),
+		"extra": Dictionary(source["extra"]).duplicate(true),
 	}
 
 
@@ -228,15 +223,14 @@ func _asset_meta(
 		"prompt_prefix": snapshot["prompt_prefix"],
 		"prompt": snapshot["prompt"],
 		"reference_asset_ids": Array(snapshot["reference_asset_ids"]).duplicate(),
-		"reference_content_sha256s": (
-			Array(snapshot["reference_content_sha256s"]).duplicate()
-		),
+		"reference_content_sha256s": Array(snapshot["reference_content_sha256s"]).duplicate(),
 		"extra": Dictionary(snapshot["extra"]).duplicate(true),
 	}
 	return {
 		"origin": "generated",
 		"tags": [String(snapshot["provider_id"]), "graph"],
-		"provenance": {
+		"provenance":
+		{
 			"graph_id": graph_id,
 			"created_at": IdUtil.utc_now_iso(),
 			"generation_snapshot": generation_snapshot,
@@ -315,18 +309,14 @@ func _positive_size(value: Variant, fallback: Array) -> Array:
 
 
 func _positive_int(value: Variant, fallback: int) -> int:
-	if value is int or value is float:
-		var result := int(value)
-		if result > 0:
-			return result
+	if value is int and value > 0:
+		return value
 	return fallback
 
 
 func _valid_seed(value: Variant) -> int:
-	if value is int or value is float:
-		var seed := int(value)
-		if seed >= -1 and seed <= 2147483647:
-			return seed
+	if value is int and value >= -1 and value <= 2147483647:
+		return value
 	return -1
 
 

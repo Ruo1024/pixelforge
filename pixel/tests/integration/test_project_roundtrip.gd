@@ -68,7 +68,8 @@ func test_project_graphs_survive_zip_roundtrip() -> void:
 			{
 				"id": "batch_1",
 				"type": "batch",
-				"params": {
+				"params":
+				{
 					"label": "Candidates",
 					"source_node_id": "",
 					"source_run_id": "",
@@ -135,7 +136,20 @@ func test_stage_frames_and_membership_survive_roundtrip_with_unknown_fields() ->
 		"nodes":
 		[
 			{"id": "prompt_a", "type": "object_list", "params": {"rows": []}},
-			{"id": "batch_a", "type": "batch", "params": {}},
+			{
+				"id": "batch_a",
+				"type": "batch",
+				"params":
+				{
+					"label": "",
+					"source_node_id": "",
+					"source_run_id": "",
+					"role": "standalone",
+					"input_snapshots": {},
+					"request_records": [],
+					"result_slots": [],
+				},
+			},
 		],
 		"edges": [],
 	}
@@ -183,16 +197,16 @@ func test_stage_frames_and_membership_survive_roundtrip_with_unknown_fields() ->
 	var path := "user://tests/frame_roundtrip_beta_0_3.pxproj"
 
 	assert_eq(project_service.save_project(path), OK)
-	assert_eq(project_service.open_project(path), OK)
+	assert_eq(project_service.open_project(path), OK, str(project_service.last_load_error))
 
 	var items: Array = project_service.current_project.canvas["items"]
 	assert_eq(items[0]["title"], "Inputs")
 	assert_eq(items[0]["size"], [640, 360])
 	assert_eq(items[0]["future_frame_field"], {"keep": true})
 	assert_eq(items[1]["frame_id"], "frame_inputs")
-	assert_eq(items[1]["future_node_field"], "preserve-me")
+	assert_false(items[1].has("future_node_field"))
 	assert_eq(items[2]["frame_id"], "frame_inputs")
-	assert_eq(items[2]["future_batch_field"], "preserve-batch")
+	assert_false(items[2].has("future_batch_field"))
 	assert_true(project_service.get_validation_warnings().is_empty())
 
 	var canvas: Control = CanvasScript.new()
@@ -202,8 +216,8 @@ func test_stage_frames_and_membership_survive_roundtrip_with_unknown_fields() ->
 	canvas.load_canvas_data(project_service.current_project.canvas)
 	var runtime_items: Array = canvas.export_canvas_data()["items"]
 	assert_eq(_item_by_id(runtime_items, "frame_inputs")["future_frame_field"], {"keep": true})
-	assert_eq(_item_by_id(runtime_items, "prompt_item")["future_node_field"], "preserve-me")
-	assert_eq(_item_by_id(runtime_items, "batch_item")["future_batch_field"], "preserve-batch")
+	assert_false(_item_by_id(runtime_items, "prompt_item").has("future_node_field"))
+	assert_false(_item_by_id(runtime_items, "batch_item").has("future_batch_field"))
 	assert_eq(_item_by_id(runtime_items, "batch_item")["frame_id"], "frame_inputs")
 
 
@@ -278,7 +292,7 @@ func test_old_canvas_defaults_to_ungrouped_and_invalid_frame_ids_warn_without_re
 	)
 	var path := "user://tests/frame_compat_beta_0_3.pxproj"
 	assert_eq(project_service.save_project(path), OK)
-	assert_eq(project_service.open_project(path), OK)
+	assert_eq(project_service.open_project(path), OK, str(project_service.last_load_error))
 
 	var items: Array = project_service.current_project.canvas["items"]
 	assert_false(Dictionary(items[1]).has("frame_id"))
@@ -307,8 +321,10 @@ func test_simplified_chinese_project_path_name_and_prompt_roundtrip() -> void:
 					{
 						"id": "objects",
 						"type": "object_list",
-						"params": {
-							"rows": [
+						"params":
+						{
+							"rows":
+							[
 								{"id": "barrel", "text": "木桶", "count": 1, "enabled": true},
 								{"id": "fence", "text": "栅栏", "count": 1, "enabled": true},
 								{"id": "scarecrow", "text": "稻草人", "count": 1, "enabled": true},
@@ -327,7 +343,7 @@ func test_simplified_chinese_project_path_name_and_prompt_roundtrip() -> void:
 
 	assert_eq(project_service.save_project(path), OK)
 	assert_true(FileAccess.file_exists(path))
-	assert_eq(project_service.open_project(path), OK)
+	assert_eq(project_service.open_project(path), OK, str(project_service.last_load_error))
 	assert_eq(project_service.current_project.manifest["name"], "像素农场")
 	var graph: Dictionary = project_service.current_project.graphs["graph_main"]
 	assert_eq(graph["name"], "农场道具生成")
@@ -389,7 +405,20 @@ func test_project_open_rejects_malformed_graph_edge_schema_without_partial_open(
 		"nodes":
 		[
 			{"id": "objects", "type": "object_list", "params": {"rows": []}},
-			{"id": "generate", "type": "ai_generate", "params": {"provider_id": "openai_image", "model_id": "gpt-image-2", "target_width": 64, "target_height": 64, "batch_size": 1, "seed": -1, "extra": {"quality": "low"}}},
+			{
+				"id": "generate",
+				"type": "ai_generate",
+				"params":
+				{
+					"provider_id": "openai_image",
+					"model_id": "gpt-image-2",
+					"target_width": 64,
+					"target_height": 64,
+					"batch_size": 1,
+					"seed": -1,
+					"extra": {"quality": "low"}
+				}
+			},
 		],
 		"edges":
 		[

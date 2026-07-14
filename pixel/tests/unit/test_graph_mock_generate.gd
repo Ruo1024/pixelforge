@@ -6,24 +6,27 @@ const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.g
 
 func test_object_list_outputs_only_valid_enabled_subject_rows() -> void:
 	var node := ObjectListNodeScript.new()
-	var result: Dictionary = node.execute(
-		{},
-		node.validate_params(
-			{
-				"rows":
-				[
-					{"id": "barrel", "text": " barrel ", "count": 2, "enabled": true},
-					{"id": "fence", "text": "fence", "count": 1, "enabled": false},
-				]
-			}
-		),
-		{}
+	var result: Dictionary = (
+		node
+		. execute(
+			{},
+			(
+				node
+				. validate_params(
+					{
+						"rows":
+						[
+							{"id": "barrel", "text": " barrel ", "count": 2, "enabled": true},
+							{"id": "fence", "text": "fence", "count": 1, "enabled": false},
+						]
+					}
+				)
+			),
+			{}
+		)
 	)
 
-	assert_eq(
-		Array(result["subjects"]),
-		[{"id": "barrel", "text": "barrel", "count": 2, "enabled": true}]
-	)
+	assert_eq(Array(result["subjects"]), [{"id": "barrel", "text": "barrel", "count": 2}])
 
 
 func test_generate_target_and_subject_counts_are_unique_truth() -> void:
@@ -43,14 +46,17 @@ func test_generate_target_and_subject_counts_are_unique_truth() -> void:
 
 func test_ai_generate_mock_is_deterministic_and_uses_incrementing_seeds() -> void:
 	var node := AiGenerateNodeScript.new()
-	var params := node.validate_params(
-		{
-			"provider_id": "mock",
-			"target_width": 8,
-			"target_height": 8,
-			"batch_size": 2,
-			"seed": 100,
-		}
+	var params := (
+		node
+		. validate_params(
+			{
+				"provider_id": "mock",
+				"target_width": 8,
+				"target_height": 8,
+				"batch_size": 2,
+				"seed": 100,
+			}
+		)
 	)
 	var inputs := {
 		"subjects":
@@ -74,15 +80,18 @@ func test_ai_generate_mock_is_deterministic_and_uses_incrementing_seeds() -> voi
 
 func test_ai_generate_mock_rejects_non_mock_provider() -> void:
 	var node := AiGenerateNodeScript.new()
-	var result: Dictionary = node.execute(
-		{},
-		{
-			"provider_id": "real_api",
-			"target_width": 8,
-			"target_height": 8,
-			"batch_size": 1,
-		},
-		{}
+	var result: Dictionary = (
+		node
+		. execute(
+			{},
+			{
+				"provider_id": "real_api",
+				"target_width": 8,
+				"target_height": 8,
+				"batch_size": 1,
+			},
+			{}
+		)
 	)
 
 	assert_true(result.has("__error"))

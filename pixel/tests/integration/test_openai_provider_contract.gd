@@ -299,11 +299,12 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 	var asset_ids := BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_1"))
 	var meta: Dictionary = AssetLibrary.get_asset_meta(asset_ids[0])
 	var provenance: Dictionary = meta["provenance"]
-	assert_eq(provenance["provider"], "openai_image")
-	assert_eq(provenance["model"], "gpt-image-2")
-	assert_eq(provenance["prompt"], "wooden barrel")
-	assert_eq(provenance["cost"], -1.0)
-	assert_eq(provenance["provider_meta"], {})
+	var snapshot: Dictionary = provenance["generation_snapshot"]
+	assert_eq(snapshot["provider_id"], "openai_image")
+	assert_eq(snapshot["model_id"], "gpt-image-2")
+	assert_eq(snapshot["prompt"], "wooden barrel")
+	assert_false(provenance.has("cost"))
+	assert_false(provenance.has("provider_meta"))
 	assert_false(JSON.stringify(meta).contains(SECRET_SENTINEL))
 
 
