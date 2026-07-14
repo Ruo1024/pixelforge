@@ -5,7 +5,9 @@ const CommandScript := preload("res://ui/canvas/detach_output_asset_command.gd")
 
 func test_single_all_restore_and_locate() -> void:
 	var slots := _slots(3)
-	var single: Dictionary = CommandScript.detach_single(slots, "slot-1", _origin(), Vector2(900, 200))
+	var single: Dictionary = CommandScript.detach_single(
+		slots, "slot-1", _origin(), Vector2(900, 200)
+	)
 	assert_true(single["ok"])
 	assert_true(single["slots"][1]["detached"])
 	assert_eq(single["sprites"][0]["asset_id"], "asset-1")
@@ -30,7 +32,9 @@ func test_drag_threshold_identity_and_cancel_paths() -> void:
 
 func test_all_layout_confirmation_and_last_slot() -> void:
 	var thirteen := _slots(13)
-	assert_true(CommandScript.detach_all(thirteen, _origin(), Vector2.ZERO, false)["confirmation_required"])
+	assert_true(
+		CommandScript.detach_all(thirteen, _origin(), Vector2.ZERO, false)["confirmation_required"]
+	)
 	var one: Dictionary = CommandScript.detach_all(_slots(1), _origin(), Vector2.ZERO, true)
 	assert_true(one["slots"][0]["detached"])
 	assert_eq(one["sprites"].size(), 1)
@@ -39,13 +43,16 @@ func test_all_layout_confirmation_and_last_slot() -> void:
 func _slots(count: int) -> Array:
 	var slots := []
 	for index in range(count):
-		slots.append(
-			{
-				"slot_id": "slot-%d" % index,
-				"status": "succeeded",
-				"asset_id": "asset-%d" % index,
-				"detached": false,
-			}
+		(
+			slots
+			. append(
+				{
+					"slot_id": "slot-%d" % index,
+					"status": "succeeded",
+					"asset_id": "asset-%d" % index,
+					"detached": false,
+				}
+			)
 		)
 	return slots
 

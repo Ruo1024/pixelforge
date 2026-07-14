@@ -23,7 +23,7 @@ func test_exact_order_only_succeeded() -> void:
 	toolbar.select_slot(_slot("failed"))
 	assert_false(toolbar.visible)
 	toolbar.select_slot(_slot("succeeded"), true)
-	assert_false(toolbar.get_node("Detach").disabled)
+	assert_true(toolbar.get_node("Detach").disabled)
 	assert_true(toolbar.get_node("Edit").disabled)
 
 

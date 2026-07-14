@@ -54,13 +54,16 @@ func _grid(slots: Array, width: int, height: int) -> Control:
 func _slots(count: int) -> Array:
 	var result := []
 	for index in range(count):
-		result.append(
-			{
-				"slot_id": "slot-%d" % index,
-				"status": "queued",
-				"asset_id": null,
-				"detached": false,
-				"planned_size": [32, 32],
-			}
+		(
+			result
+			. append(
+				{
+					"slot_id": "slot-%d" % index,
+					"status": "queued",
+					"asset_id": null,
+					"detached": false,
+					"planned_size": [32, 32],
+				}
+			)
 		)
 	return result
