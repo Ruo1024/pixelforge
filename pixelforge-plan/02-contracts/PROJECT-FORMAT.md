@@ -1,333 +1,341 @@
-# PROJECT-FORMAT.md — .pxproj 项目文件格式契约
+# PROJECT-FORMAT.md — .pxproj v2 项目文件契约
 
-> 版本：format_version = 1。任何改动需新增迁移函数并升版本号（**预发布期例外见 §6**）。
+> `format_version = 2`。Beta 0.7 一次性硬切：v1 返回
+> `unsupported_project_version`，不部分打开、不迁移、不猜字段。
 
-## 1. 容器
+## 1. 容器与身份
 
-`.pxproj` 是标准 ZIP 文件（不加密，压缩级别 6），便于用户手动检查与 git LFS 管理。
+`.pxproj` 仍是压缩级别 6 的标准 ZIP：
 
-```
-my_project.pxproj (ZIP)
-├── manifest.json          # 清单（必须，UTF-8）
-├── canvas/
-│   └── canvas.json        # 无限画布元素布局（含节点引用，仅布局）
-├── graphs/
-│   └── {graph_id}.json    # 节点图（每图一文件，逻辑唯一事实来源，schema 见 GRAPH-SCHEMA.md）
-├── assets/
-│   ├── {asset_id}.png     # 素材位图（RGBA PNG，1:1 真像素，禁止预放大）
-│   └── {asset_id}.meta.json
-├── palettes/
-│   └── {palette_id}.json  # 用户导入的自定义调色板（可选，schema 见 STYLE-PRESETS.md §3）
-├── boards/
-│   └── {board_id}.json    # 地图拼接画板（M5 定义详细 schema）
-├── anim/
-│   └── {anim_id}.anim.json   # 动画数据（帧序列、时长；M5 定义）
-└── thumbs/                # 缩略图缓存（可丢弃，加载时可重建）
+```text
+manifest.json
+canvas/canvas.json
+graphs/{graph_id}.json
+assets/{asset_id}.png
+assets/{asset_id}.meta.json
+palettes/{palette_id}.json
+boards/{board_id}.json
+anim/{anim_id}.anim.json
+thumbs/
 ```
 
-> **逻辑/视图分离（方案 A）**：`graphs/` 存逻辑（节点类型/参数/连线 `edges`，唯一事实来源仍是 GRAPH-SCHEMA）；`canvas/canvas.json` 存布局（含 `node` 引用元素）。加载时按 `node_id` 对账，引用不上则标幽灵节点（§5 引用完整性已有兜底）。连线在画布上**从 graphs 渲染**，不写进 canvas.json。
-
-## 2. manifest.json
+`manifest.json` 必须包含：
 
 ```json
 {
-  "format_version": 1,
-  "app_version": "0.1.0",
-  "name": "My Farm Assets",
-  "created_at": "2026-06-11T10:00:00Z",
-  "modified_at": "2026-06-11T12:34:56Z",
-  "style_preset": { "...": "内嵌 StylePreset 对象，见 STYLE-PRESETS.md" },
-  "custom_palettes": [
-    {
-      "id": "custom_farm_12",
-      "name": "Farm 12",
-      "path": "palettes/custom_farm_12.json"
+  "format_version": 2,
+  "id": "lowercase-uuid-v4",
+  "app_version": "current AppInfo version",
+  "name": "My Project",
+  "created_at": "RFC3339 UTC",
+  "modified_at": "RFC3339 UTC",
+  "custom_palettes": [],
+  "entries": {"canvases":["canvas"],"graphs":[],"boards":[],"asset_count":0}
+}
+```
+
+New Project 生成新 id；Save 和 Save As 都保持同一 id。项目不保存全局
+StylePreset、PromptPreset 或 CleanupPreset；节点保存自己实际使用的完整 snapshot。
+自定义 palette 仍由 `custom_palettes` 指向 ZIP 内资源，并在 Graph/素材解析前注册。
+
+## 2. Graph 与 canvas 的唯一职责
+
+Graph 文件必须符合 `GRAPH-SCHEMA.md` 的 `graph_version=2`，保存节点类型、参数、
+端口和边。`canvas.json` 只保存 camera 和布局项。graph node 布局字段为：
+
+```json
+{
+  "id":"canvas-item-id", "type":"node",
+  "graph_id":"graph-id", "node_id":"node-id",
+  "position":[0,0], "z_index":0,
+  "display_title":"optional user text", "size":[360,300],
+  "collapsed":false, "locked":false, "frame_id":null
+}
+```
+
+Output 的 `role/source_node_id/source_run_id/input_snapshots/request_records/result_slots`
+只在 Graph 的 `batch.params`，禁止复制到 canvas。canvas 不再读写 `batch_card`、
+review/filter/focus/compare 字段或 graph_anchor；v2 遇到这些旧形态必须按版本门在
+打开项目前拒绝，不能局部兼容。
+
+`display_title` 是用户文本：换行和 Tab 转空格、trim、最多 80 个 Unicode code
+point；空白等于删除。`size` 是世界整数请求尺寸，最大 1600x1200；折叠高度 56
+不覆盖请求高度。普通节点、sprite 与 frame 继续使用 Beta 0.6 的标题、缩放、
+LOD、锁定、Undo/Redo 和整数命中规则。`prompt_preset` 继承默认 320x280、最小
+280x220；删除 `size_spec` 尺寸项。Output 尺寸与内部滚动严格见 §5。
+
+frame 仍保存固定 `id/type/graph_id/title/color/position/size/z_index`，成员唯一由
+node.frame_id 表达；不嵌套、不自动吸附、不保存 member_ids。跨 graph 成组拒绝；
+坏 frame 引用原文往返并显示结构化警告。boards 与 anim 的 v1 已有字段和校验
+原样保留：board layer 只允许 tile/free、blend 只允许 normal/add/multiply；动画
+frames 与 durations_ms 等长且非空。
+
+## 3. 素材与来源
+
+素材公共字段 `id/name/tags/size/origin/palette_ref/anim` 保留。生成素材：
+
+```json
+{
+  "id":"asset-id", "origin":"generated",
+  "provenance": {
+    "graph_id":"graph-id", "created_at":"RFC3339 UTC",
+    "generation_snapshot": {
+      "provider_id":"provider-id", "model_id":"model-id", "mode":"txt2img",
+      "target_width":32, "target_height":32,
+      "provider_output_size":[1024,1024],
+      "actual_width":1024, "actual_height":1024,
+      "requested_seed":-1, "actual_seed":null,
+      "run_id":"run-id", "request_id":"request-id",
+      "source_node_id":"generate-id", "source_row_id":"",
+      "prompt_preset_id":"preset-id-or-empty", "prompt_prefix":"actual prefix",
+      "prompt":"actual final prompt",
+      "reference_asset_ids":[], "reference_content_sha256s":[], "extra":{}
     }
-  ],
-  "entries": {
-    "canvases": ["canvas"],
-    "graphs": ["graph_main"],
-    "boards": [],
-    "asset_count": 42
   }
 }
 ```
 
-规则：
-- `style_preset` 内嵌而非引用，保证项目文件自包含、可分享。
-- `custom_palettes` 可缺省；存在时每项 `path` 必须指向 ZIP 内 `palettes/{palette_id}.json`。打开项目时先注册这些调色板，再解析清洗参数或素材 provenance 中的 `palette_ref`。
-- 所有 id 用 `crypto.generate_uuid()` 风格的 UUIDv4 字符串（小写连字符）。
-- 时间一律 UTC ISO8601。
+snapshot 从 slot input snapshot 复制安全输入再补实际结果；禁止重新读生成节点。
+provider_output_size 是远端请求尺寸，actual 是解码尺寸，target 是真像素目标。
+reference id/SHA 必须等长同序；extra 只含 descriptor 允许的规范键。项目可保存
+用户自己的 prompt，但日志、错误框和固定截图 manifest 不得保存；项目也不得保存
+negative prompt、凭据、Header、完整响应或响应图片字节。
 
-## 3. assets/{id}.meta.json
-
-```json
-{
-  "id": "a1b2c3d4-...",
-  "name": "scarecrow_01",
-  "tags": ["prop", "farm", "generated"],
-  "size": [32, 48],
-  "origin": "generated",          // generated | imported | edited | sliced
-  "provenance": {                  // 溯源（AI 合规 + 可重现）
-    "provider": "retrodiffusion",
-    "model": "rd_flux",
-    "prompt": "...",
-    "seed": 12345,
-    "parent_asset": null,          // 切分/编辑的来源素材 id
-    "graph_id": "graph_main",      // 由哪张图产出（可空；菜单处理路径下为空，见 GRAPH-SCHEMA §4.7）
-    "reference_asset_id": null,    // 执行时使用的参考素材 id（history 引用）
-    "reference_content_sha256": null, // 规范化 RGBA8 像素及尺寸的 SHA-256
-    "reference_asset_ids": [],     // 新生成写有序复数 history 引用
-    "reference_content_sha256s": [],
-    "generation_snapshot": {       // 生成当时的安全、不可变设置摘要
-      "provider_id": "retrodiffusion", "model_id": "rd_plus",
-      "prompt": "...", "negative_prompt": "", "style": {},
-      "width": 32, "height": 32, "seed": 123,
-      "reference_asset_ids": [], "reference_content_sha256s": [],
-      "source_generate_node_id": "generate", "run_id": "run_uuid"
-    },
-    "created_at": "...",
-    "cleanup": {                   // 可选；M1 清洗产物写入，旧项目可缺省
-      "source_asset": "parent-id",
-      "params": { "...": "JSON-safe PFCleanupParams" },
-      "report": { "...": "JSON-safe pipeline report" }
-    }
-  },
-  "palette_ref": "db32",          // 素材实际使用的调色板（可为内嵌色表）
-  "anim": null                     // 有动画时指向 anim/{id}.anim.json
-}
-```
-
-## 4. canvas/canvas.json
+清洗素材：
 
 ```json
 {
-  "camera": { "center": [0, 0], "zoom": 1.0 },
-  "items": [
-    {
-      "id": "uuid",
-      "type": "sprite",            // sprite | batch_card(M2.1 temp) | node | frame | note | graph_anchor(legacy)
-      "asset_id": "a1b2c3d4-...",  // type=sprite 时必填
-      "position": [128, -64],      // 画布世界坐标，整数（像素对齐）
-      "scale_factor": 1,           // 旧图片预览倍率；Beta 0.6 保留兼容，见 §4.1
-      "display_title": "Scarecrow", // 可选；独立图片卡显示标题
-      "size": [320, 380],          // 可选；独立图片卡请求的外框尺寸
-      "z_index": 0,
-      "locked": false,
-      "frame_id": null             // 所属编组框
-    },
-    {
-      "id": "batch-temp-uuid",
-      "type": "batch_card",        // M2.1 临时批次卡；M3 后升级为 type=node + graphs batch
-      "asset_ids": ["uuid-a", "uuid-b"],
-      "selected_asset_ids": [],
-      "review_states": { "uuid-a": "keep" },
-      "review_filter": "all",
-      "focus_asset_id": "uuid-a",
-      "compare_asset_ids": ["uuid-a-before", "uuid-b-before"],
-      "compare_mode": "current",     // current | previous | split
-      "review_layout": "contact",    // contact | focus
-      "label": "Batch",
-      "display_title": "Farm props", // 可选；只覆盖画布显示标题
-      "size": [600, 240],             // 可选；用户请求的展开尺寸
-      "position": [320, 64],
-      "z_index": 1,
-      "locked": false
-    },
-    {
-      "id": "uuid2",
-      "type": "node",              // 画布上的图节点引用（含 batch 批次内容节点）
-      "node_id": "n7",             // 指向 graphs/{graph_id}.json 中的节点
-      "graph_id": "graph_main",
-      "position": [256, -32],
-      "z_index": 0,
-      "display_title": "Forest props", // 可选；不进入 Graph 或执行
-      "size": [400, 520],             // 可选；画布世界整数，请求的展开尺寸
-      "review_layout": "contact",    // 仅 batch 节点使用：contact | focus
-      "collapsed": false,          // LOD/折叠态（仅显示，不影响逻辑）
-      "locked": false,             // 锁定时禁止移动、改名和缩放
-      "frame_id": null             // 所属显式阶段组；缺省表示未分组
-    },
-    {
-      "id": "frame_uuid",
-      "type": "frame",
-      "graph_id": "graph_main",   // frame 只容纳同一 graph 的节点
-      "title": "Reference pass",
-      "color": "4f6f8fff",        // 8 位 RGBA hex
-      "position": [64, -96],
-      "size": [1180, 520],         // 正整数世界尺寸
-      "z_index": -1
+  "id":"cleaned-id", "origin":"cleaned",
+  "provenance": {
+    "graph_id":"graph-id", "parent_asset":"source-id",
+    "cleanup": {
+      "source_asset":"source-id", "input_source_kind":"batch",
+      "input_source_node_id":"input-id", "source_batch_node_id":"batch-id",
+      "source_slot_id":"slot-id", "cleanup_node_id":"cleanup-id",
+      "run_id":"run-id", "request_id":"operation-id",
+      "preset_id":"cleanup-16bit-db32-or-empty",
+      "effective_target_size":[32,32], "settings":{},
+      "palette_snapshot":null, "report":{}
     }
-  ]
+  }
 }
 ```
 
-规则：
-- 画布元素 position 强制整数（像素网格对齐，体验原则1）。
-- `node` 元素是画布上一切图节点（style/prompt/generate/batch/process…）的统一引用形态：只存布局与显示状态（位置、层级、显示标题、请求尺寸、折叠），以及 batch 这类画布驻留节点的审阅视图状态；节点的类型/参数/连线全在 `graphs/`。连线在画布上从 graphs 渲染，不写进本文件。
-- `frame` 是显式阶段组。最小字段为 `id / type / graph_id / title / color / position / size / z_index`；不保存 `member_ids`。成员归属的唯一真相是 `node` 画布项的 `frame_id`。
-- `frame.title` 使用与 `display_title` 相同的单行清理和 80 code point 计数；空白时回退本地化“阶段”。`frame.size` 是实际世界边界，读取为整数并钳制到 `320×240` 至 `32768×32768`；它不是成员自动包围盒，也不使用 batch 的请求/有效双尺寸。
-- 一个 frame 只能容纳同一 `graph_id` 的节点。成组或移入组遇到跨 graph 节点时必须拒绝并返回结构化原因；空间重叠或拖过边界不会自动改变成员。
-- `frame_id` 只由“成组 / 移入组 / 移出组 / 解组”显式动作修改。旧项目缺少该字段时按 `null` 读取；引用不存在或 graph 不匹配时按未分组显示，产生 `frame_reference_not_found` 或 `frame_graph_mismatch` 结构化警告，同时原始 `frame_id` 必须在保存重开中保留。
-- frame 不嵌套、不折叠、不锁定、不自动布局。删除 frame 等同解组：保留节点和内部连线，并清除有效成员的 `frame_id`。
-- `batch` 是 `type:"node"` 的一种（其 graphs 节点 `type=batch`），渲染为容器卡（队列网格 + 边框菜单）；物化的 `asset_id` 队列存在 graphs 节点 params 中。这就是「一等节点 + 画布卡」双身份的落地方式（见 GRAPH-SCHEMA §5a）。
-- **M2.1 临时例外**：M3 前尚无正式 graph 持久化，alpha 清洗台先允许 `type:"batch_card"` 直接在 canvas.json 中保存 `asset_ids` 队列、卡片位置和卡内勾选状态。它不含端口、不含连线、不写 graphs；M3 实施正式 batch 节点时，应把该形态迁入 `type:"node"` + `graphs/{graph_id}.json` 的 `type=batch` params。
-- `graph_anchor` 标记为 **legacy**：统一画布后整张图直接长在画布上，锚点退化；保留仅为读取早期数据，不再新写。
+成功记录的 settings/report 禁止为空。settings 是三组完整规范快照；palette_snapshot
+是输入快照对象或 null。report 至少含 input_size/output_size/effective_target_size、
+detected_grid `{cell_size,offset}`、steps `{detect_grid,resample,quantize}`、
+input_color_count/output_color_count/elapsed_ms。source kind 与 batch/slot 条件字段必须
+原样复制；失败项不创建素材 provenance。
 
-### 4.1 Beta 0.6 卡片显示标题与请求尺寸
+从 Output 拆出的 sprite 除原字段外必须同时保存：
 
-`display_title` 与 `size` 适用于正式 `type:"node"`、兼容读取的旧 `type:"batch_card"` 和独立图片卡 `type:"sprite"`。它们不写入 graph params。`frame` 继续使用已有 `title / size`，不新增同义字段。
+```json
+{"origin_graph_id":"graph-id","origin_batch_node_id":"batch-id","origin_slot_id":"slot-id"}
+```
 
-#### `display_title`
+三元组不可部分存在，来源后来删除也不得改写。
 
-- 只改变画布显示，不影响节点类型、端口、执行、缓存、provenance 或模板参数；
-- 是用户数据，不随界面语言翻译；字段缺失或清除后，系统默认标题随界面语言翻译；
-- graph batch 的回退顺序为 `display_title` → `node.params.label` → 本地化“结果”；`image_input` 和 `sprite` 为 `display_title` → 可解析素材名 → 本地化“图片”；其他节点为 `display_title` → 本地化节点类型；旧 batch_card 为 `display_title` → `label` → 本地化“结果”；
-- 提交时把换行和 Tab 转为空格、去首尾空白，最多 80 个 Unicode code point；按 Godot `String.length()` 计数并在 code point 边界截断，不按 UTF-8 字节计数，组合符号分别计数；全空白等于删除字段；
-- 非字符串值按无覆盖标题渲染，保存时移除无效值；未知的其他 canvas 字段仍须原样往返。
+## 4. Output 持久化
 
-#### `size`
+`batch.params` 固定为：
 
-- 表示用户请求的**展开尺寸**，格式为 `[width, height]`，单位是画布世界整数；不乘 UI scale，也不得通过 `Node2D.scale` 拉伸文字或控件；
-- 缺失是合法旧数据，使用节点类型默认值；形态错误时使用默认值；数值读取后四舍五入，再按类型最小值与用户请求上限 `1600×1200` 钳制；下一次保存写规范化整数；
-- 折叠只把有效高度改为 56，不覆盖请求的展开高度；展开后恢复并重新计算；
-- 普通节点的有效尺寸等于规范化请求尺寸；batch 的有效高度还要容纳全部当前结果；
-- 只有请求尺寸写项目、剪贴板和模板；派生的有效高度禁止持久化。
+```json
+{
+  "label":"", "source_node_id":"source-id", "source_run_id":"run-id",
+  "role":"current", "input_snapshots":{}, "request_records":[],
+  "result_slots":[]
+}
+```
 
-| 节点 | 缺省尺寸 | 最小尺寸 |
-|---|---:|---:|
-| `text_prompt` | 360×300 | 320×240 |
-| `object_list` | 400×520 | 360×360 |
-| `style_preset` | 320×280 | 280×220 |
-| `size_spec` | 320×260 | 280×220 |
-| `image_input` | 320×380 | 280×300 |
-| `sprite` 独立图片卡 | 见下方旧数据公式；素材不可解析时 320×380 | 200×188 |
-| `reference_set` | 400×480 | 360×320 |
-| `ai_generate` | 400×520 | 360×400 |
-| graph `batch` / 旧 `batch_card` | 600×240 | 360×240 |
-| 幽灵、未知和其他轻节点 | 320×180 | 240×144 |
+不存在 `asset_ids`、`expected_count`、review/filter/focus/compare；槽数就是
+result_slots.size，数组顺序就是 UI 顺序，不存第二个 order。label="" 使用本地化
+默认，禁止保存裸 English 默认标题。role 只允许 current/history/standalone，同一
+source 最多一个 current。current/history 的 source_node_id/source_run_id 非空；
+standalone 的 source_node_id 必须空。删除来源形成的审计 standalone 保留旧 run/
+records；Clipboard 纯素材 standalone 必须同时清空 run/records/slot run+request。
 
-`sprite` 缺少 `size` 时，按旧图片尺寸得到确定默认值，再在下次保存写成显式尺寸：
+每个 slot 精确字段如下；非 succeeded 时禁止出现 asset_id，detached 仍是必填 bool
+但只能 succeeded 为 true：
+
+```json
+{
+  "slot_id":"slot-id", "run_id":"run-id", "request_id":"request-id",
+  "source_row_id":"", "source_asset_id":"", "input_snapshot_id":"snapshot-id",
+  "planned_size":[32,32], "status":"queued",
+  "detached":false, "unexpected":false, "error":null
+}
+```
+
+status 只允许 queued/running/succeeded/failed/canceled。failed 必须有安全 PFError；
+其他状态 error=null。unexpected=true 只允许 Provider 多返回追加的 succeeded 槽；
+正常预建槽 false。每个非 Clipboard 纯素材 slot 必须引用本 Output 唯一 snapshot。
+slot 当前非空 run/request 必须找到唯一 record；旧 records 可继续引用已被重试更新的槽。
+
+planned_size 为两个正整数且创建后不变：generation=实际 provider_output_size；cleanup
+在 resample enabled 且 effective target 为正时用 target，否则用来源真实尺寸；
+Clipboard=图片真实尺寸。它只稳定非成功 tile；成功图使用实际解码尺寸。
+
+generation snapshot 精确为：
+
+```json
+{
+  "kind":"generation", "graph_id":"graph-id", "source_node_id":"generate-id",
+  "provider_id":"provider-id", "model_id":"model-id", "mode":"txt2img",
+  "prompt":"final prompt", "source_row_id":"", "prompt_preset_id":"",
+  "prompt_prefix":"", "reference_asset_ids":[], "reference_content_sha256s":[],
+  "target_width":32, "target_height":32, "provider_output_size":[1024,1024],
+  "requested_seed":-1, "extra":{}
+}
+```
+
+cleanup snapshot 精确为：
+
+```json
+{
+  "kind":"cleanup", "graph_id":"graph-id", "source_node_id":"cleanup-id",
+  "input_source_kind":"batch", "input_source_node_id":"source-id",
+  "source_batch_node_id":"batch-id", "source_slot_id":"slot-id",
+  "source_asset_id":"asset-id", "effective_target_size":[32,32],
+  "preset_id":"cleanup-16bit-db32-or-empty",
+  "settings":{"detect_grid":{},"resample":{},"quantize":{}},
+  "palette_snapshot":null
+}
+```
+
+三个 settings 对象实际必须是 CLEANUP-PRESETS 的完整有效 shape。input_source_kind 只
+允许 batch/image_input/reference_set；batch 的 batch/slot 非空且匹配，另外两类两项
+同时为空。Retry 只读原 snapshot，不重读节点、提示词、参考图、settings 或 registry。
+snapshot 禁止凭据、Header、raw response、Image 字节、私有请求体和渲染文案。
+
+request record 精确字段：
+
+```json
+{
+  "kind":"provider", "provider_id":"openai_image", "run_id":"run-id",
+  "request_id":"request-id", "source_row_id":"", "slot_ids":["slot-id"],
+  "requested_count":1, "received_count":1, "attempts":1, "state":"succeeded",
+  "actual_cost_usd":null, "charge_id":"", "provider_meta":{},
+  "remote_cancel_confirmed":null, "error":null
+}
+```
+
+kind 只 provider/cleanup；cleanup 的 provider_id=""、meta={}、cost=null、charge=""。
+state 只 queued/running/succeeded/partial/failed/canceled；单 cleanup operation 禁止
+partial。requested_count 正整数；slot_ids 前 requested_count 项是预期槽，多返回成功
+追加 unexpected 槽到尾部。received_count 初始 0、终态为全部成功解码数且可大于请求。
+attempts 0..3，真正启动后至少 1。charge/meta/cost/PFError 按 PROVIDER-API 精确校验。
+remote_cancel_confirmed 只在 canceled 为 bool。succeeded=预期全成功；partial=预期有成
+有败；failed=预期无成功且有失败；partial/failed 有安全汇总 error，其他为 null。
+
+Provider 少返回把尾槽改 result_count_mismatch；多返回成功在末尾建 unexpected 槽、
+新 snapshot 和完整 provenance，多返回失败只安全记录不建槽。多返回且全部预期成功仍
+Complete，但显示非阻断 mismatch 警告。所有 Output/snapshot/record 数据禁止 body、
+prompt 日志副本、Header、raw response、用户图片字节或已渲染语言。
+
+## 5. Output 画布与历史
+
+Output 固定值：default width=600、min=360、max=960、top rail=32、horizontal/
+vertical padding=16、tile gap=8、max columns=4、max visible rows=3、tile min=96、
+tile max=176、empty height=240。`n` 是全部 detached=false 槽，不区分状态。
+
+`n>=2` 精确公式：
 
 ```text
-legacy_preview_width = image_width * max(1, scale_factor)
-legacy_preview_height = image_height * max(1, scale_factor)
-default_width = clamp(legacy_preview_width + 32, 200, 1600)
-default_height = clamp(legacy_preview_height + 60, 188, 1200)
+capacity_columns = clamp(floor((width - 2*16 + 8)/(96 + 8)), 1, 4)
+desired_columns = clamp(ceil(sqrt(n)), 1, 4)
+columns = min(capacity_columns, desired_columns)
+tile_size = min(176, floor((width - 2*16 - (columns-1)*8)/columns))
+rows = ceil(n/columns)
+natural_visible_rows = min(rows, 3)
+natural_grid_height = natural_visible_rows*tile_size + max(0,natural_visible_rows-1)*8
+natural_card_height = 32 + 2*16 + natural_grid_height
 ```
 
-宽度的 32 是左右各 16 内边距；高度的 60 是 32 标题轨 + 28 元数据栏。图片缺失/不可解码时使用 320×380。`scale_factor` 继续原样往返，只用于缺少 `size` 的旧数据推导；一旦存在 `size`，外框与预览布局以 `size` 为准，图片按比例、最近邻、居中显示，不拉伸。旧 sprite 的左上 position 保持不变，不自动重排其他元素；不得删除旧 `scale_factor`。
+默认 width=600 且 n>=10 时必须是 4 列、tile=136、三行网格=424、自然高=488；
+13/50 不继续增高。scrollbar 是右缘 overlay，视觉 4px、命中 12px，不占公式宽度。
 
-Batch 的规范计算如下：
+`n==1`：成功用解码真实宽高，其他状态用 planned_size；
+`viewport_h=clamp(round((width-32)*source_h/source_w),176,420)`，natural height=
+`32+32+viewport_h`，图片 contain 不裁切。`n==0` 固定 240，只允许 slots=[] 或全部
+succeeded 且 detached。仍有 failed/canceled/queued/running 必须显示 tile。
 
-```text
-header = 44
-padding = 16
-thumbnail = 128
-gap = 12
-action_row = 40
-focus_preview_height = clamp(round((width - 2*padding) * 9/16), 240, 480)
+用户缩短高度后同一网格可滚动并露出下一行一部分；放大也不显示第四行；双击 handle
+恢复自然尺寸。折叠只显示标题/数量/状态。普通滚轮在网格先滚，边界后交给 canvas；
+canvas zoom modifier 优先。回填/失败/Retry 不重置 scroll，新 Output 从顶部开始。
+滚动后的点击、双击、drag、hover 与命中必须映射真实 slot id。
 
-columns = max(1, floor((width - 2*padding + gap) / (thumbnail + gap)))
-rows = ceil(slot_count / columns)
-grid_height = rows*thumbnail + max(0, rows-1)*gap
-focus_active = review_layout == "focus" and focus_asset_id resolves to a visible slot
-action_y = header + padding
-preview_y = action_y + action_row + gap
-grid_y = preview_y + (focus_preview_height + gap if focus_active else 0)
-required_content_height = max(
-  240,
-  grid_y + grid_height + padding
-)
+32px 顶轨顺序固定为 title、成功/总数、状态（history 另加历史+原终态）、下载、拆出
+全部、Graph port；不得放清洗参数。Succeeded 单图工具条顺序固定 Preview/Edit/Detach/
+Download；其他状态没有图片工具条。拖出阈值为屏幕累计 8px，同 asset、不复制位图、
+完整来源三元组、一条 Undo；Esc/pointer cancel/无效 drop 完整恢复。“拆出全部”只成功
+可见槽，在右侧最多 4 列、gap 24、保序，超过 12 先确认，最后一张也允许且 Output
+保留。全部已拆出时，有任一来源 sprite 就只“定位”；全被删就只“恢复到 Output”并
+一条 Undo；混合时仍定位。
 
-effective_width = requested_width
-effective_height = max(requested_height, required_content_height)
-```
+§10.7 的 review/filter/focus/compare/current-previous-split/batch_card/直接清洗和新结果
+覆盖旧 Output 必须从实现、持久化、菜单和测试删除。标题/尺寸/Preview/Edit/Download/
+Detach/asset_list/provenance/Retry/Undo/保存重开及独立工具入口保留。
 
-- `review_filter == "all"` 时，已完成任务的 `slot_count` 等于全部实际结果数；任务未完成时为 `max(asset_ids.size, expected_count)`，不足部分显示占位格；
-- 其他筛选下，`slot_count` 等于当前筛选可见项，界面必须同时显示可见数/总数与清除筛选入口；
-- 垂直顺序固定为 `Header → 16 padding → Action row → 12 gap → Focus/Compare preview（仅有效 focus）→ 12 gap → 完整网格 → 16 padding`；不得把 Action row 放到几千像素高的网格底部；
-- Contact、Focus 与 Compare 都必须保留完整候选网格；有效 Focus/Compare 在网格上方增加同一个 `focus_preview_height` 主预览区，Compare 在区内并排显示 A/B；focus 引用失效或不在当前可见筛选时回退 Contact 并显示可修复说明；不得分页、使用卡内纵向滚动、截断尾项或只创建前 N 个 slot；
-- 用户宽度改变会改变列数与派生高度；素材减少时自动增长部分可收回，但不能低于请求高度；
-- 派生高度变化不单独进入 Undo，也不得修改 frame size 或 `frame_id`；
-- 选框、命中、剔除、小地图、端口、连线和 Fit All 一律使用有效尺寸。
+每次完整生成或清洗创建新 Output；旧 current 变 history，保留 slots 和下游边，
+新 Output 变 current。仅重试失败项复用同一 Output/slot。历史关系是灰色虚线且不进
+执行闭包。自动放置只扫描来源卡右侧（间距 80，冲突向下 `card_height+56`），不
+移动旧卡。忙状态禁止复制、删除、拆出、打开编辑器和普通 Undo。
 
-#### 编辑、复制与兼容
+拆出命令原子执行 detached false→true、创建 sprite 和来源三元组；Undo 恢复同一
+slot/sprite id，Redo 不复制位图。删除 sprite 不反向修改 detached。下游输出、下载
+和拆出全部只使用 succeeded && detached=false。
 
-- 一次标题提交或一次缩放拖拽各是一条 Undo；鼠标移动只预览，Esc 取消且不入栈；rename/resize/collapse 前后 Graph 必须不变；
-- Graph clipboard v1 对 node 原样携带 `display_title / size / collapsed`；粘贴只重映射 ID 和位置，不保存派生高度、不自动加“副本”后缀；独立 sprite 不进入 Graph clipboard，但现有 Duplicate/Undo 必须保留其 `display_title / size / scale_factor`；
-- 工作流模板的相同规则见 `WORKFLOW-TEMPLATE.md`；
-- 10%/25%/50% 等 LOD 只改变绘制详略，不改变请求尺寸、有效尺寸、世界边界、端口或连线；
-- 项目仍保持 `format_version = 1`，属于首个公开分发前已批准的可选字段补全。
+删除终态来源节点时，关联 Outputs 原子改 standalone 并清 source_node_id，保留全部
+素材/slots/records；Undo 恢复。忙来源返回 source_node_busy。删除忙 Output 拒绝；
+恢复被删 Output 时若来源已有 current，只能恢复为 history，永不产生两个 current。
 
-## 4a. boards/{board_id}.json（M5）
+## 6. Clipboard v2
 
-```json
-{
-  "id": "board_uuid", "name": "farm_scene",
-  "grid": {"tile_size": 16, "cols": 60, "rows": 40},
-  "layers": [
-    {"id": "layer_uuid", "name": "terrain", "kind": "tile", "visible": true,
-     "opacity": 1.0, "blend": "normal", "cells": {"12,7": {"asset_id": "...", "variant": 0}}},
-    {"id": "layer_uuid", "name": "props", "kind": "free", "visible": true,
-     "opacity": 1.0, "blend": "normal", "items": [
-       {"id": "item_uuid", "asset_id": "...", "anim_id": null, "pos": [192,112],
-        "z": 0, "flip_h": false, "anim_offset_ms": 0}
-     ]}
-  ]
-}
-```
+`PAYLOAD_VERSION=2`，v1 返回 unsupported_clipboard_version。顶层必须保存
+origin_project_id，且只允许粘贴到相同 manifest.id；否则 clipboard_project_mismatch。
+busy/Canceling 节点返回 clipboard_node_busy。
 
-规则：grid 的 tile_size/cols/rows 均为正整数；layer kind 仅 `tile|free`，blend 仅
-`normal|add|multiply`；tile cell key 固定为 `x,y` 且必须在边界内；free item 至少引用
-`asset_id` 或 `anim_id` 之一。未知字段往返保留，引用缺失时显示警告而不丢弃数据。
+prompt_preset 复制完整 preset；ai_generate 只复制配置；pixel_cleanup 复制
+preset_id/settings，不复制运行或 target；终态 Output 只复制 succeeded 且未 detached
+槽。粘贴 Output 必须成为新 standalone batch：清空 source/run/snapshots/records，
+槽使用新 slot id、同项目 asset id、实际图片 planned_size、空运行身份、succeeded、
+detached=false、unexpected=false、error=null，因此不可 Retry。sprite 同项目复制并
+完整保留来源三元组。payload 禁止 task/request/progress/raw detail/Header/response。
 
-## 4b. anim/{anim_id}.anim.json（M5）
+## 7. 素材引用完整性
 
-```json
-{
-  "id": "anim_uuid", "name": "torch",
-  "frames": ["asset_uuid_1", "asset_uuid_2"],
-  "durations_ms": [100, 100], "loop": true,
-  "tags": [{"name": "idle", "from": 0, "to": 1}]
-}
-```
+扫描器只识别明确字段，不递归猜 JSON：
 
-规则：frames 与 durations_ms 等长且非空，duration 最小 1ms；tags 可选且使用含首尾帧索引；帧是独立素材引用。删除被
-board/animation 引用的素材必须拒绝或先由用户解除引用。
+- live：sprite.asset_id；image_input.asset_id；reference_set.asset_ids；
+  succeeded && detached=false 的 result_slots.asset_id；board/animation 素材；
+- history：detached 成功槽 asset_id；generation input snapshot 和 provenance 的
+  reference_asset_ids；cleanup input snapshot source_asset_id；provenance parent_asset
+  与 cleanup.source_asset；
+- Undo 快照中的 Output 素材在该 Undo 项出栈前同样阻止清理。
 
-## 5. 读写规则
+live 与 history 都进入项目资源清单并阻止字节被当作 orphan。失效引用保留原文并
+产生 `{code,path,asset_id,strength}` 警告。只有两类都无引用且无运行占用的素材可删。
+palette snapshot 已内嵌 colors/hash，不依赖 palette registry 后续存在。
 
-- **原子写**：先写临时文件 `.pxproj.tmp`，成功后 rename 替换。崩溃恢复靠 `user://autosave/` 周期快照（默认 3 分钟，保留最近 5 份）。
-- **延迟加载**：打开项目只读 manifest + canvas + 视口内素材；其余素材按需加载（asset_library 负责 LRU 缓存）。
-- **坏素材降级**：单个素材 PNG 缺失或解码失败不得阻止项目打开。保留元数据；存在但损坏的 PNG 字节原样保留，缺失 PNG 不伪造空白图。项目可在保留失效引用的情况下另存修复副本。
-- **结构化警告**：ProjectService 在打开后和每次保存校验后刷新 `get_validation_warnings() -> Array[Dictionary]`。条目至少为 `{code, path, asset_id, strength}`；code 区分 `asset_reference_not_found|asset_bitmap_missing|asset_decode_failed`，strength 为 `live|history`。服务层不返回最终展示文案。
-- **node 引用**：canvas 的 `node` 元素引用不到 graph/node 时标幽灵节点并保留原文。
-- **frame 引用**：canvas 的 `node.frame_id` 引用不到同 graph frame 时以未分组方式渲染，保留原文，并通过 `get_validation_warnings()` 返回结构化警告。frame 自身不得保存成员数组。
+## 8. 加载恢复、读写与错误
 
-### 5a. 素材引用强度与完整性
+load validator 完成后、UI 观察 Graph 前，以不可 Undo 的原子事务处理全部残留：
 
-引用扫描只识别下表明确字段，不递归猜测任意 JSON 字符串：
+1. queued/running slot→failed/interrupted/retryable=true。对应 record attempts=0 时
+   stage=queue；provider attempts>0 为 provider；cleanup attempts>0 为 cleanup。复制安全
+   provider/request/count，保留其他终态、素材、detached、费用与 meta。
+2. 逐个收敛所有 queued/running record。received_count 从 slot_ids 全部成功槽重算并
+   包含 unexpected。预期槽优先级：cancel_failed→failed；否则任一 canceled→canceled
+   且 remote null→false；否则全成功→succeeded；有成有败→partial；无成有败→failed。
+   partial/failed 汇总 error 优先本次 interrupted，否则预期槽首个安全 error。
+3. 按 source 最新 source_run_id 重算卡状态：最新 run cancel_failed→Failed；否则任一
+   canceled→Canceled；否则按全部当前预期槽（排除 unexpected、包含 detached）聚合
+   Complete/Partial/Failed。禁止只信保存前文字或只看 retry 子集。
+4. 连线全部 idle；不建 PFTask、不发 HTTP、不跑 worker、不弹启动框。之后只有
+   current/history、同 id/同类型来源和完整 snapshot 同时满足时可 Retry；standalone
+   或来源缺失只保留审计。
 
-| 项目路径 | 强度 | 删除语义 |
-|---|---|---|
-| `canvas.items[type=sprite].asset_id` | live | 阻止删除 |
-| 过渡 `batch_card` 的 `asset_ids[]`、`selected_asset_ids[]`、`focus_asset_id`、`compare_asset_ids[]`、`review_states` 键 | live | 阻止删除 |
-| `graphs/*` 的 `image_input.params.asset_id` | live | 阻止删除 |
-| `graphs/*` 的 `reference_set.params.asset_ids[]` | live | 阻止删除 |
-| `graphs/*` 的 `batch.params.asset_ids[]`、`focus_asset_id`、`compare_asset_ids[]`、`review_states` 键 | live | 阻止删除 |
-| boards tile/free item 的明确 `asset_id` | live | 阻止删除 |
-| animations `frames[]` | live | 阻止删除 |
-| provenance `parent_asset`、`cleanup.source_asset`、`reference_asset_id`、`reference_asset_ids[]` | history | 只警告，不阻止删除 |
-
-`generation_snapshot.reference_asset_ids[]` 与 provenance 顶层复数字段表达同一批实际输入，扫描器只从 provenance 顶层计一次 history 引用；快照用于详情/复制设置，不作为第二套引用真相。旧单数字段继续保留和扫描，新生成同时写复数字段但不要求回填旧字段。
-
-- 保存扫描 live 与 history 引用；失效引用原文保留并产生结构化警告，成功写出的可恢复项目不因此变成保存错误。
-- 素材只要仍有 live 引用或运行时占用，显式删除返回 `ERR_BUSY`；只有 history 引用时允许删除，历史 id 与内容哈希继续保留并在后续校验中警告。
-- 引用扫描由 ProjectService/AssetLibrary 的单一服务边界实现。卡片不得维护独立真相；插件私有引用须显式注册或自行拥有删除策略。
-
-## 6. 迁移
-
-`project_service.gd` 维护 `MIGRATIONS: Array[Callable]`，索引 i 把 version i 升到 i+1。打开旧文件时依次执行，全部成功才进入内存模型。每个迁移函数配 `tests/fixtures/projects/v{i}_sample.pxproj` 回归样本。
-
-> **预发布期约定**：首个公开分发或项目所有者明确冻结项目格式之前，未发布工程候选可经项目所有者逐次批准，在 `format_version = 1` 内补全定义而不写迁移函数；受影响测试夹具随之更新。首个公开分发或格式冻结后恢复“升版 + 迁移”纪律。本次引用完整性与坏素材降级补全已获项目所有者批准。
+保存仍使用 `.pxproj.tmp` 原子 rename；autosave 默认 3 分钟、保留 5 份。打开按需
+加载素材。坏 PNG 不阻止项目打开：保留元数据与已有坏字节，缺失时不伪造空图。
+幽灵 node/frame 引用保留原文并警告。错误必须是静态 code+安全 args；v1 的本地化
+说明固定表达“预发布格式已不支持，请新建项目”，不得崩溃或显示裸 code。
