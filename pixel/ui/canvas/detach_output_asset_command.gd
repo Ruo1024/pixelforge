@@ -87,18 +87,16 @@ static func restore_all_detached(slots: Array) -> Array:
 
 
 static func empty_action(slots: Array, existing_sprite_slot_ids: Array) -> String:
-	if (
-		not slots.is_empty()
-		and slots.all(
-			func(slot: Dictionary) -> bool:
-				return (
-					String(slot.get("status", "")) == "succeeded"
-					and bool(slot.get("detached", false))
-				)
-		)
-	):
-		return "locate" if not existing_sprite_slot_ids.is_empty() else "restore"
-	return ""
+	if slots.is_empty():
+		return ""
+	for slot in slots:
+		if (
+			not (slot is Dictionary)
+			or String(slot.get("status", "")) != "succeeded"
+			or not bool(slot.get("detached", false))
+		):
+			return ""
+	return "locate" if not existing_sprite_slot_ids.is_empty() else "restore"
 
 
 static func cancel_preview(slots: Array) -> Dictionary:
