@@ -18,7 +18,7 @@ const Strings := preload("res://ui/shell/strings.gd")
 const UIFont := preload("res://ui/widgets/ui_font.gd")
 const AssetRefFieldScript := preload("res://ui/widgets/asset_ref_field.gd")
 const ObjectListEditorScript := preload("res://ui/canvas/object_list_editor.gd")
-const GenerationModelPolicyScript := preload("res://services/generation_model_policy.gd")
+const GenerationCardViewScript := preload("res://ui/canvas/generation_card_view.gd")
 const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
 const AppTheme := preload("res://ui/shell/app_theme.gd")
 
@@ -36,7 +36,6 @@ const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
 const PORT_VISIBLE_SCREEN_RADIUS := 6.0
 const PORT_HIT_SCREEN_RADIUS := 20.0
 const OBJECT_EDITOR_MIN_SIZE := Vector2(0, 116)
-const SPIN_CONTROL_MIN_SIZE := Vector2(76, 30)
 const FLEXIBLE_WIDTH := 0
 
 var item_id := ""
@@ -61,20 +60,12 @@ var _is_ghost := false
 var _has_edge_error := false
 var _status_badge := ""
 var _execution_status_key := ""
-var _execution_detail := ""
 var _font: Font = null
 var _content_root: Control = null
 var _text_prompt_edit: TextEdit = null
 var _prompt_count_label: Label = null
 var _prompt_draft_label: Label = null
-var _model_option: OptionButton = null
-var _model_capability_label: Label = null
-var _cost_estimate_label: Label = null
-var _batch_size_spin: SpinBox = null
-var _seed_spin: SpinBox = null
-var _run_button: Button = null
-var _cancel_button: Button = null
-var _execution_detail_label: Label = null
+var _generation_view: Control = null
 var _reference_field: Control = null
 var _collapse_button: Button = null
 var _title_button: Button = null
@@ -185,13 +176,16 @@ func get_content_control(control_name: String) -> Control:
 	return _content_root.find_child(control_name, true, false) as Control
 
 
-func set_execution_status(status_key: String, detail: String = "") -> void:
+func set_execution_status(status_key: String, _detail: String = "") -> void:
 	_execution_status_key = status_key
-	_execution_detail = detail
 	_status_badge = Strings.text(status_key) if not status_key.is_empty() else ""
-	_sync_execution_detail()
 	_sync_run_controls()
 	queue_redraw()
+
+
+func set_generation_run_context(context: Dictionary) -> void:
+	if _generation_view != null:
+		_generation_view.set_run_context(context)
 
 
 func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
@@ -450,7 +444,11 @@ func _card_size() -> Vector2:
 
 
 func _header_height() -> float:
-	return float(CardContract.CONTENT_RAIL_HEIGHT if _node_type == "image_input" else HEADER_HEIGHT)
+	if _node_type == "image_input":
+		return float(CardContract.CONTENT_RAIL_HEIGHT)
+	if _node_type == "ai_generate":
+		return float(GenerationCardViewScript.HEADER_HEIGHT)
+	return float(HEADER_HEIGHT)
 
 
 func _is_content_node() -> bool:
@@ -481,22 +479,19 @@ func _rebuild_content_controls() -> void:
 	_text_prompt_edit = null
 	_prompt_count_label = null
 	_prompt_draft_label = null
-	_model_option = null
-	_model_capability_label = null
-	_cost_estimate_label = null
-	_batch_size_spin = null
-	_seed_spin = null
-	_run_button = null
-	_cancel_button = null
-	_execution_detail_label = null
+	_generation_view = null
 	_reference_field = null
 	if collapsed or _is_overview() or not _is_content_node() or _is_ghost:
 		return
 
 	_content_root = VBoxContainer.new()
 	_content_root.name = "Content"
-	_content_root.position = Vector2(PADDING, _header_height() + PADDING)
-	_content_root.size = _card_size() - Vector2(PADDING * 2, _header_height() + PADDING * 2)
+	if _node_type == "ai_generate":
+		_content_root.position = Vector2(0, _header_height())
+		_content_root.size = _card_size() - Vector2(0, _header_height())
+	else:
+		_content_root.position = Vector2(PADDING, _header_height() + PADDING)
+		_content_root.size = _card_size() - Vector2(PADDING * 2, _header_height() + PADDING * 2)
 	_content_root.mouse_filter = Control.MOUSE_FILTER_PASS
 	_content_root.add_theme_constant_override("separation", 8)
 	add_child(_content_root)
@@ -694,97 +689,21 @@ func _build_cleanup_shell_controls() -> void:
 
 
 func _build_generate_controls() -> void:
-	var model_row := HBoxContainer.new()
-	var model_label := Label.new()
-	model_label.text = Strings.text("GRAPH_PARAM_MODEL")
-	model_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	model_row.add_child(model_label)
-	_model_option = OptionButton.new()
-	_model_option.name = "ProviderOption"
-	_model_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var descriptors := ProviderService.get_selectable_model_descriptors()
-	var current_provider := String(_params_snapshot.get("provider_id", ""))
-	var current_model := String(_params_snapshot.get("model_id", ""))
-	var selected_index := 0
-	for descriptor in descriptors:
-		var index := _model_option.item_count
-		_model_option.add_item(String(descriptor.get("display_name", "")))
-		_model_option.set_item_metadata(index, descriptor.duplicate(true))
-		var descriptor_provider := String(descriptor.get("provider_id", ""))
-		var descriptor_model := String(descriptor.get("model_id", ""))
-		if (
-			descriptor_provider == current_provider
-			and (
-				current_model == descriptor_model
-				or (current_model.is_empty() and bool(descriptor.get("is_default", false)))
-			)
-		):
-			selected_index = index
-	_model_option.disabled = descriptors.is_empty()
-	if not descriptors.is_empty():
-		_model_option.select(selected_index)
-	_model_option.item_selected.connect(_on_model_selected)
-	model_row.add_child(_model_option)
-	_content_root.add_child(model_row)
-
-	_model_capability_label = Label.new()
-	_model_capability_label.name = "ModelCapabilities"
-	_model_capability_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_content_root.add_child(_model_capability_label)
-	var input_summary := Label.new()
-	input_summary.name = "RequestSummary"
-	input_summary.text = _generation_input_summary()
-	input_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_content_root.add_child(input_summary)
-
-	var target_label := Label.new()
-	target_label.name = "TargetSummary"
-	target_label.text = (
-		"%d×%d px"
-		% [
-			int(_params_snapshot.get("target_width", 32)),
-			int(_params_snapshot.get("target_height", 32)),
-		]
+	_generation_view = GenerationCardViewScript.new()
+	_generation_view.name = "GenerationCardView"
+	_generation_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_generation_view.params_commit_requested.connect(
+		func(params: Dictionary) -> void:
+			_params_snapshot = params.duplicate(true)
+			params_commit_requested.emit(graph_id, node_id, params)
 	)
-	_content_root.add_child(target_label)
-
-	var settings_row := HBoxContainer.new()
-	_batch_size_spin = _make_spin("BatchSize", 1, 16, int(_params_snapshot.get("batch_size", 1)))
-	_seed_spin = _make_spin("Seed", -1, 2147483647, int(_params_snapshot.get("seed", -1)))
-	_batch_size_spin.value_changed.connect(func(_value: float) -> void: _sync_model_controls())
-	settings_row.add_child(
-		_labeled_control(Strings.text("GRAPH_PARAM_BATCH_SIZE"), _batch_size_spin)
+	_generation_view.upstream_requested.connect(
+		func(source_id: String) -> void:
+			action_requested.emit(graph_id, node_id, "focus_upstream:%s" % source_id)
 	)
-	_content_root.add_child(settings_row)
-	var advanced_toggle := Button.new()
-	advanced_toggle.name = "AdvancedToggle"
-	advanced_toggle.text = Strings.text("CONTENT_ADVANCED")
-	advanced_toggle.toggle_mode = true
-	_content_root.add_child(advanced_toggle)
-	var advanced := VBoxContainer.new()
-	advanced.name = "AdvancedSettings"
-	advanced.visible = false
-	advanced.add_child(_labeled_control(Strings.text("GRAPH_PARAM_SEED"), _seed_spin))
-	advanced_toggle.toggled.connect(func(value: bool) -> void: advanced.visible = value)
-	_content_root.add_child(advanced)
-
-	_cost_estimate_label = Label.new()
-	_cost_estimate_label.name = "CostEstimate"
-	_content_root.add_child(_cost_estimate_label)
-	_sync_model_controls()
-
-	_run_button = Button.new()
-	_run_button.name = "PrimaryActionButton"
-	_run_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_run_button.pressed.connect(_on_generation_primary_pressed)
-	_content_root.add_child(_run_button)
-	_execution_detail_label = Label.new()
-	_execution_detail_label.name = "ExecutionDetail"
-	_execution_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_execution_detail_label.custom_minimum_size.y = 36
-	_content_root.add_child(_execution_detail_label)
-	_sync_execution_detail()
-	_sync_run_controls()
+	_generation_view.action_requested.connect(_on_generation_card_action)
+	_content_root.add_child(_generation_view)
+	_generation_view.configure(_generation_card_snapshot())
 
 
 func _build_reference_controls() -> void:
@@ -995,26 +914,6 @@ func _change_reference_set_item(asset_ids: Array, index: int, action: String) ->
 	params_commit_requested.emit(graph_id, node_id, {"asset_ids": updated})
 
 
-func _make_spin(control_name: String, minimum: int, maximum: int, value: int) -> SpinBox:
-	var spin := SpinBox.new()
-	spin.name = control_name
-	spin.min_value = minimum
-	spin.max_value = maximum
-	spin.value = value
-	spin.custom_minimum_size = SPIN_CONTROL_MIN_SIZE
-	return spin
-
-
-func _labeled_control(label_text: String, control: Control) -> VBoxContainer:
-	var box := VBoxContainer.new()
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var label := Label.new()
-	label.text = label_text
-	box.add_child(label)
-	box.add_child(control)
-	return box
-
-
 func _commit_text_prompt() -> void:
 	if _text_prompt_edit == null:
 		return
@@ -1052,125 +951,68 @@ func _on_prompt_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-func _commit_generate_params() -> void:
-	if (
-		_model_option == null
-		or _model_option.item_count == 0
-		or _batch_size_spin == null
-		or _seed_spin == null
-	):
-		return
-	var descriptor: Dictionary = _model_option.get_item_metadata(_model_option.selected)
-	var transition: Dictionary = (
-		GenerationModelPolicyScript
-		. transition(
-			_params_snapshot,
-			String(descriptor.get("provider_id", "")),
-			String(descriptor.get("model_id", "")),
-			[descriptor],
-		)
-	)
-	if not bool(transition.get("ok", false)):
-		return
-	var transitioned_params: Dictionary = transition["params"]
-	transitioned_params["batch_size"] = int(_batch_size_spin.value)
-	transitioned_params["seed"] = int(_seed_spin.value)
-	_params_snapshot = transitioned_params.duplicate(true)
-	params_commit_requested.emit(graph_id, node_id, transitioned_params)
-
-
-func _on_model_selected(_index: int) -> void:
-	_sync_model_controls()
-	_commit_generate_params()
-
-
-func _sync_model_controls() -> void:
-	if _model_option == null or _model_option.item_count == 0:
-		return
-	var descriptor: Dictionary = _model_option.get_item_metadata(_model_option.selected)
-	var capabilities: Dictionary = descriptor.get("capabilities", {})
-	var max_batch := maxi(1, int(capabilities.get("max_batch", 1)))
-	_batch_size_spin.max_value = max_batch
-	_batch_size_spin.value = mini(int(_batch_size_spin.value), max_batch)
-	_seed_spin.visible = bool(capabilities.get("seed", false))
-	var references := int(capabilities.get("max_reference_images", 0))
-	var output_summary := _model_output_summary(capabilities)
-	_model_capability_label.text = (
-		Strings.text("CONTENT_MODEL_CAPABILITIES_FORMAT")
-		% [String(descriptor.get("provider_id", "")), output_summary, max_batch, references]
-	)
-	var provider_id := String(descriptor.get("provider_id", ""))
-	var estimate_micro: Variant = 0 if provider_id == "mock" else null
-	var provider: PFProvider = ProviderService.get_provider(provider_id)
-	if provider != null and provider_id != "mock":
-		estimate_micro = (
-			CostService
-			. parse_usd_to_micro(
-				(
-					provider
-					. estimate_cost(
-						{
-							"model_id": String(descriptor.get("model_id", "")),
-							"batch": int(_batch_size_spin.value),
-						}
-					)
-				)
-			)
-		)
-	_cost_estimate_label.text = (
-		(
-			Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT")
-			% (float(int(estimate_micro)) / 1000000.0)
-		)
-		if estimate_micro is int
-		else Strings.text("CONTENT_COST_UNKNOWN")
-	)
-
-
-func _model_output_summary(capabilities: Dictionary) -> String:
-	var sizes: Array = capabilities.get("output_sizes", [])
-	if not sizes.is_empty():
-		return " / ".join(sizes)
-	var constraints: Dictionary = capabilities.get("output_size_constraints", {})
-	return (
-		Strings.text("CONTENT_MODEL_TARGET_RANGE_FORMAT")
-		% [int(constraints.get("min_side", 1)), int(constraints.get("max_side", 1))]
-	)
-
-
-func _generation_input_summary() -> String:
+func _generation_card_snapshot() -> Dictionary:
 	var graph_data := ProjectService.get_graph_data(graph_id)
-	var sources := {}
-	for raw_edge in graph_data.get("edges", []):
-		if not (raw_edge is Dictionary):
+	var source_ids := {}
+	for edge_value in graph_data.get("edges", []):
+		if not (edge_value is Dictionary):
 			continue
-		var edge: Dictionary = raw_edge
-		var to_data: Array = edge.get("to", ["", ""])
-		var from_data: Array = edge.get("from", ["", ""])
-		if String(to_data[0]) == node_id:
-			sources[String(to_data[1])] = String(from_data[0])
-	var node_by_id := {}
-	for raw_node in graph_data.get("nodes", []):
-		if raw_node is Dictionary:
-			node_by_id[String(raw_node.get("id", ""))] = raw_node
-	var prompt := Strings.text("CONTENT_PROMPT_EMPTY")
-	for input_port in ["prompt", "subjects"]:
-		var source: Dictionary = node_by_id.get(String(sources.get(input_port, "")), {})
-		if not source.is_empty():
-			prompt = _summarize_params(source.get("params", {}))
-			break
+		var edge: Dictionary = edge_value
+		var target: Array = edge.get("to", ["", ""])
+		var source: Array = edge.get("from", ["", ""])
+		if String(target[0]) == node_id:
+			source_ids[String(target[1])] = String(source[0])
+	var nodes := {}
+	for node_value in graph_data.get("nodes", []):
+		if node_value is Dictionary:
+			nodes[String(node_value.get("id", ""))] = node_value
 	var prefix := ""
-	var prefix_source: Dictionary = node_by_id.get(String(sources.get("prefix", "")), {})
-	if not prefix_source.is_empty():
-		prefix = _summarize_params(prefix_source.get("params", {}))
-	var target := (
-		"%d×%d px"
-		% [
-			int(_params_snapshot.get("target_width", 32)),
-			int(_params_snapshot.get("target_height", 32)),
-		]
+	var prompt := ""
+	var rows: Array = []
+	var reference_count := 0
+	var input_sources := []
+	for port in ["prefix", "prompt", "subjects", "references"]:
+		var source_id := String(source_ids.get(port, ""))
+		var source: Dictionary = nodes.get(source_id, {})
+		if source.is_empty():
+			continue
+		var params: Dictionary = source.get("params", {})
+		input_sources.append({"id": source_id, "kind": port, "summary": _summarize_params(params)})
+		match port:
+			"prefix":
+				var preset: Dictionary = params.get("preset", {})
+				prefix = String(preset.get("prefix", params.get("prefix", "")))
+			"prompt":
+				prompt = String(params.get("text", ""))
+			"subjects":
+				rows = Array(params.get("rows", [])).duplicate(true)
+			"references":
+				if params.has("asset_ids"):
+					reference_count = Array(params.get("asset_ids", [])).size()
+				elif not String(params.get("asset_id", "")).is_empty():
+					reference_count = 1
+	var descriptor := ProviderService.get_model_descriptor(
+		String(_params_snapshot.get("provider_id", "")),
+		String(_params_snapshot.get("model_id", ""))
 	)
-	return Strings.text("CONTENT_REQUEST_SUMMARY_FORMAT") % [prompt, prefix, target]
+	return {
+		"params": _params_snapshot.duplicate(true),
+		"descriptor": descriptor,
+		"descriptors": ProviderService.get_selectable_model_descriptors(),
+		"prefix": prefix,
+		"prompt": prompt,
+		"rows": rows,
+		"reference_count": reference_count,
+		"input_sources": input_sources,
+		"run": {"state": _generation_state().capitalize(), "errors": []},
+	}
+
+
+func _on_generation_card_action(action_id: String, _route: String) -> void:
+	var canvas_action := action_id
+	if action_id in ["generate", "regenerate", "regenerate_confirm"]:
+		canvas_action = "run"
+	action_requested.emit(graph_id, node_id, canvas_action)
 
 
 func _localized_display_name(node: PFNode) -> String:
@@ -1200,50 +1042,11 @@ func _on_language_changed(_preference: String, _locale: String) -> void:
 
 
 func _sync_run_controls() -> void:
-	if _run_button == null:
-		return
-	var state := _generation_state()
-	var text_key_by_state := {
-		"INCOMPLETE": "CONTENT_ACTION_FIX_INPUT",
-		"READY": "CONTENT_ACTION_GENERATE",
-		"QUEUED": "CONTENT_ACTION_CANCEL",
-		"RUNNING": "CONTENT_ACTION_CANCEL",
-		"CANCELING": "CONTENT_ACTION_STOPPING",
-		"COMPLETE": "CONTENT_ACTION_GENERATE_AGAIN",
-		"PARTIAL": "CONTENT_ACTION_RETRY_FAILED",
-		"FAILED": "CONTENT_ACTION_RETRY",
-		"CANCELED": "CONTENT_ACTION_GENERATE_AGAIN",
-	}
-	_run_button.text = Strings.text(String(text_key_by_state.get(state, "CONTENT_ACTION_GENERATE")))
-	_run_button.disabled = state == "CANCELING"
+	if _generation_view != null:
+		_generation_view.set_run_context({"state": _generation_state().capitalize(), "errors": []})
 
 
 func _generation_state() -> String:
 	if _execution_status_key.begins_with("CONTENT_STATUS_"):
 		return _execution_status_key.trim_prefix("CONTENT_STATUS_")
 	return "READY"
-
-
-func _on_generation_primary_pressed() -> void:
-	var state := _generation_state()
-	match state:
-		"INCOMPLETE":
-			action_requested.emit(graph_id, node_id, "fix_input")
-		"QUEUED", "RUNNING":
-			action_requested.emit(graph_id, node_id, "cancel")
-		"PARTIAL":
-			action_requested.emit(graph_id, node_id, "retry_failed")
-		"FAILED":
-			action_requested.emit(graph_id, node_id, "retry")
-		"CANCELING":
-			return
-		_:
-			_commit_generate_params()
-			action_requested.emit(graph_id, node_id, "run")
-
-
-func _sync_execution_detail() -> void:
-	if _execution_detail_label == null:
-		return
-	_execution_detail_label.text = _execution_detail
-	_execution_detail_label.visible = not _execution_detail.is_empty()

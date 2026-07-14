@@ -87,7 +87,7 @@ func test_prompt_and_cleanup_preset_snapshots_are_visible_without_execution() ->
 	assert_null(cleanup["card"].get_content_control("PrimaryActionButton"))
 
 
-func test_generate_card_has_one_primary_action_for_every_frozen_state() -> void:
+func test_generate_card_has_one_primary_action_for_every_v2_state() -> void:
 	var fixture := await _card(
 		AiGenerateNodeScript.new(),
 		"generate",
@@ -102,23 +102,32 @@ func test_generate_card_has_one_primary_action_for_every_frozen_state() -> void:
 		}
 	)
 	var card: Node = fixture["card"]
-	var primary: Button = card.get_content_control("PrimaryActionButton")
-	assert_not_null(primary)
+	assert_not_null(card.get_content_control("PrimaryAction"))
 	assert_null(card.get_content_control("CancelButton"))
-	assert_false(card.get_content_control("AdvancedSettings").visible)
+	assert_false(card.get_content_control("AdvancedParams").visible)
 	var cases := [
-		["CONTENT_STATUS_INCOMPLETE", "Fix input", "fix_input", false],
-		["CONTENT_STATUS_READY", "Generate", "run", false],
-		["CONTENT_STATUS_QUEUED", "Cancel", "cancel", false],
-		["CONTENT_STATUS_RUNNING", "Cancel", "cancel", false],
-		["CONTENT_STATUS_CANCELING", "Stopping…", "", true],
-		["CONTENT_STATUS_COMPLETE", "Generate again", "run", false],
-		["CONTENT_STATUS_PARTIAL", "Retry failed items", "retry_failed", false],
-		["CONTENT_STATUS_FAILED", "Retry", "retry", false],
-		["CONTENT_STATUS_CANCELED", "Generate again", "run", false],
+		[{"state": "Ready", "errors": []}, "Generate", "run", false],
+		[{"state": "Queued", "errors": []}, "Cancel", "cancel", false],
+		[{"state": "Running", "errors": []}, "Cancel", "cancel", false],
+		[{"state": "Canceling", "errors": []}, "Canceling…", "", true],
+		[{"state": "Complete", "errors": []}, "Generate again", "run", false],
+		[{"state": "Canceled", "errors": []}, "Generate again", "run", false],
+		[
+			{"state": "Partial", "errors": [{"code": "interrupted", "retryable": true}]},
+			"Retry retryable failed items",
+			"retry_failed",
+			false,
+		],
+		[
+			{"state": "Failed", "errors": [{"code": "provider_internal", "retryable": false}]},
+			"Generate again",
+			"run",
+			false,
+		],
 	]
 	for spec in cases:
-		card.set_execution_status(spec[0])
+		card.set_generation_run_context(spec[0])
+		var primary: Button = card.get_content_control("PrimaryAction")
 		assert_eq(primary.text, spec[1])
 		assert_eq(primary.disabled, spec[3])
 		if not String(spec[2]).is_empty():

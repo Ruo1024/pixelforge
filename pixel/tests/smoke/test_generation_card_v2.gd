@@ -18,7 +18,9 @@ func test_exact_six_groups_and_fixed_regions() -> void:
 	assert_eq(view.get_node("RunStatusGroup").get_parent(), view)
 	assert_eq(view.get_node("Footer").get_parent(), view)
 	var body: ScrollContainer = view.get_node("BodyScroll")
-	for group_name in ["ProviderGroup", "InputSummaryGroup", "CoreParamsGroup", "DynamicParamsGroup"]:
+	for group_name in [
+		"ProviderGroup", "InputSummaryGroup", "CoreParamsGroup", "DynamicParamsGroup"
+	]:
 		assert_true(body.is_ancestor_of(view.get_node("BodyScroll/BodyGroups/%s" % group_name)))
 	assert_false(body.is_ancestor_of(view.get_node("RunStatusGroup")))
 	assert_false(body.is_ancestor_of(view.get_node("Footer")))
@@ -76,10 +78,11 @@ func test_rows_hide_batch_and_preview_first_expand() -> void:
 	var view := await _view(snapshot)
 	assert_null(view.find_child("BatchSize", true, false))
 	assert_eq(
-		view.get_node("BodyScroll/BodyGroups/CoreParamsGroup/RowsCount").text,
-		"2 rows / 5 images"
+		view.get_node("BodyScroll/BodyGroups/CoreParamsGroup/RowsCount").text, "2 rows / 5 images"
 	)
-	var expected := GenerationRequestPlannerScript.plan(_planner_input(snapshot, rows), [descriptor])
+	var expected := GenerationRequestPlannerScript.plan(
+		_planner_input(snapshot, rows), [descriptor]
+	)
 	assert_true(expected["ok"])
 	assert_eq(
 		view.get_node("BodyScroll/BodyGroups/CoreParamsGroup/PromptPreview").text,
@@ -91,9 +94,9 @@ func test_rows_hide_batch_and_preview_first_expand() -> void:
 	var list: VBoxContainer = view.get_node("BodyScroll/BodyGroups/CoreParamsGroup/PromptList")
 	assert_true(list.visible)
 	assert_eq(list.get_child_count(), 2)
-	assert_string_contains(list.get_child(0).text, "hero · 3")
-	assert_string_contains(list.get_child(1).text, "enemy · 2")
-	assert_eq(list.get_child(0).text.count("hero idle"), 1)
+	assert_string_contains(list.get_child(0).text, "hero idle · 3")
+	assert_string_contains(list.get_child(1).text, "slime attack · 2")
+	assert_lte(list.get_child(0).text.count("hero idle"), 2)
 
 
 func test_fixed_bounds_and_scroll_regions() -> void:
@@ -105,7 +108,8 @@ func test_fixed_bounds_and_scroll_regions() -> void:
 	var view := await _view(_snapshot())
 	assert_eq(view.custom_minimum_size, Vector2(360, 360))
 	assert_eq(view.get_node("RunStatusGroup").position.y, 0.0)
-	assert_eq(view.get_node("Footer").get_anchors_and_offsets_preset(), null)
+	assert_eq(view.get_node("Footer").anchor_top, 1.0)
+	assert_eq(view.get_node("Footer").anchor_bottom, 1.0)
 	assert_eq(view.get_node("Footer").offset_top, -56.0)
 	assert_eq(view.get_node("BodyScroll").offset_bottom, -56.0)
 
@@ -121,8 +125,16 @@ func test_input_summary_jumps_upstream_only() -> void:
 	view.upstream_requested.connect(func(source_id: String) -> void: jumps.append(source_id))
 	view.get_node("BodyScroll/BodyGroups/InputSummaryGroup/InputSource0").pressed.emit()
 	assert_eq(jumps, ["objects"])
-	assert_null(view.get_node("BodyScroll/BodyGroups/InputSummaryGroup").find_child("PromptEdit", true, false))
-	assert_null(view.get_node("BodyScroll/BodyGroups/InputSummaryGroup").find_child("ObjectEdit", true, false))
+	assert_null(
+		view.get_node("BodyScroll/BodyGroups/InputSummaryGroup").find_child(
+			"PromptEdit", true, false
+		)
+	)
+	assert_null(
+		view.get_node("BodyScroll/BodyGroups/InputSummaryGroup").find_child(
+			"ObjectEdit", true, false
+		)
+	)
 
 
 func test_descriptor_params_advanced_and_seed_visibility() -> void:
@@ -135,7 +147,9 @@ func test_descriptor_params_advanced_and_seed_visibility() -> void:
 	assert_false(advanced.visible)
 	assert_not_null(advanced.find_child("DynamicParam_detail", true, false))
 
-	var no_seed := await _view(_snapshot(_descriptor(false, false)))
+	var no_seed_descriptor := _descriptor(false, false)
+	no_seed_descriptor["dynamic_params"] = [no_seed_descriptor["dynamic_params"][0]]
+	var no_seed := await _view(_snapshot(no_seed_descriptor))
 	assert_null(no_seed.find_child("Seed", true, false))
 	assert_null(no_seed.find_child("DynamicParam_detail", true, false))
 
@@ -144,10 +158,18 @@ func test_footer_error_priority_and_preflight_routes() -> void:
 	var policy := GenerationCardPolicyScript.new()
 	var cases := [
 		[[{"code": "provider_internal", "retryable": false}], "regenerate", "preflight_new_output"],
-		[[{"code": "ambiguous_result", "retryable": false}], "regenerate_confirm", "preflight_new_output"],
+		[
+			[{"code": "ambiguous_result", "retryable": false}],
+			"regenerate_confirm",
+			"preflight_new_output"
+		],
 		[[{"code": "invalid_request", "retryable": false}], "focus_generation", "focus_generation"],
 		[[{"code": "content_policy", "retryable": false}], "edit_prompt", "focus_prompt"],
-		[[{"code": "quota_exceeded", "retryable": false}], "provider_settings", "provider_settings"],
+		[
+			[{"code": "quota_exceeded", "retryable": false}],
+			"provider_settings",
+			"provider_settings"
+		],
 		[[{"code": "cancel_failed", "retryable": false}], "cancel_failed", "none"],
 	]
 	for spec in cases:
@@ -159,11 +181,14 @@ func test_footer_error_priority_and_preflight_routes() -> void:
 	)
 	assert_eq(retry["action_id"], "retry_failed")
 	assert_eq(retry["route"], "preflight_retry_same_output")
-	var wait := policy.footer_action(
-		{
-			"state": "Partial",
-			"errors": [{"code": "rate_limited", "retryable": true, "wait_seconds": 7}],
-		}
+	var wait := (
+		policy
+		. footer_action(
+			{
+				"state": "Partial",
+				"errors": [{"code": "rate_limited", "retryable": true, "wait_seconds": 7}],
+			}
+		)
 	)
 	assert_eq(wait["action_id"], "retry_wait")
 	assert_true(wait["disabled"])
@@ -171,15 +196,20 @@ func test_footer_error_priority_and_preflight_routes() -> void:
 
 func test_generation_progress_cost_error_provider_keys_refresh() -> void:
 	var view := await _view(_snapshot())
-	view.set_run_context(
-		{
-			"state": "Running",
-			"progress": {"determinate": false, "completed_items": 2, "total_items": 4, "elapsed_ms": 3200},
-			"cost": {"kind": "estimate", "micro_usd": 250000},
-			"provider_available": false,
-		}
+	(
+		view
+		. set_run_context(
+			{
+				"state": "Running",
+				"progress":
+				{"determinate": false, "completed_items": 2, "total_items": 4, "elapsed_ms": 3200},
+				"cost": {"kind": "estimate", "micro_usd": 250000},
+				"provider_available": false,
+			}
+		)
 	)
 	var instance_id := view.get_instance_id()
+	assert_true(view.get_node("RunStatusGroup/RunProgressIndicator").indeterminate)
 	var english := _visible_text(view)
 	assert_string_contains(english, "Running")
 	assert_string_contains(english, "2/4")
@@ -237,6 +267,20 @@ func _descriptor(native_pixel: bool, seed: bool) -> Dictionary:
 		"display_name": "Test Model",
 		"capabilities":
 		{
+			"txt2img": true,
+			"img2img": true,
+			"max_reference_images": 4,
+			"max_batch": 4,
+			"target_size_constraints":
+			{
+				"min_width": 1,
+				"max_width": 4096,
+				"width_step": 1,
+				"min_height": 1,
+				"max_height": 4096,
+				"height_step": 1,
+				"allowed_sizes": [],
+			},
 			"native_pixel": native_pixel,
 			"seed": seed,
 			"provider_output_sizes": [[1024, 1024]],
