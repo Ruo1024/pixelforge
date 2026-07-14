@@ -143,6 +143,44 @@ func test_v2_storage_never_reads_legacy_float_buckets() -> void:
 	assert_false(_service.set_monthly_budget_micro_usd(0.25))
 
 
+func test_all_manual_retry_paths_preflight_without_side_effects() -> void:
+	var provider_map := {"retrodiffusion": ProviderService.get_provider("retrodiffusion")}
+	var paths := [
+		[_request("single-slot", "rd_pro", 1)],
+		[_request("failed-a", "rd_pro", 1), _request("failed-b", "rd_pro", 2)],
+		[
+			_request("full-a", "rd_pro", 4),
+			_request("full-b", "rd_pro", 4),
+			_request("full-c", "rd_pro", 1),
+		],
+	]
+	for requests in paths:
+		var before := _service.get_month_total_micro_usd(TEST_MONTH)
+		var decision: Dictionary = _service.preflight_with_providers(
+			requests, provider_map, TEST_MONTH
+		)
+		assert_eq(decision["decision"], "allowed")
+		assert_eq(decision["estimate_state"], "estimate")
+		assert_eq(_service.get_month_total_micro_usd(TEST_MONTH), before)
+	var blocked: Dictionary = _service.preflight_with_providers(
+		[_request("blocked", "missing", 1)], provider_map, TEST_MONTH
+	)
+	assert_eq(blocked["decision"], "blocked")
+	assert_eq(_service.get_month_total_micro_usd(TEST_MONTH), 0)
+
+
+func test_actual_charge_meta_and_unknown_ledger() -> void:
+	assert_true(_service.record_once("retrodiffusion:charge:charge-1", 250000, TEST_MONTH))
+	assert_false(_service.record_once("retrodiffusion:charge:charge-1", 250000, TEST_MONTH))
+	assert_true(_service.record_once("retrodiffusion:request:req-no-charge", 125000, TEST_MONTH))
+	assert_eq(_service.get_month_total_micro_usd(TEST_MONTH), 375000)
+	var before_unknown := _service.get_month_total_micro_usd(TEST_MONTH)
+	var unknown_actual: Variant = null
+	if unknown_actual != null:
+		fail_test("unknown actual must not be recorded")
+	assert_eq(_service.get_month_total_micro_usd(TEST_MONTH), before_unknown)
+
+
 func _request(request_id: String, model_id: String, batch: int) -> Dictionary:
 	return {
 		"run_id": "run-cost",

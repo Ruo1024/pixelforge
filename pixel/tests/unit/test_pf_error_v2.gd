@@ -15,7 +15,9 @@ func test_exact_safe_shape_and_retry_policy() -> void:
 		var unsafe := _error("provider_internal", false)
 		unsafe[field] = "provider text"
 		assert_eq(ContractV2.validate_pf_error(unsafe)["code"], "unknown_error_field")
-	for code in ["rate_limited", "network", "result_count_mismatch", "interrupted"]:
+	for code in [
+		"rate_limited", "network", "malformed_response", "result_count_mismatch", "interrupted"
+	]:
 		assert_null(ContractV2.validate_pf_error(_error(code, true)), code)
 	for code in [
 		"auth_failed",
@@ -29,6 +31,23 @@ func test_exact_safe_shape_and_retry_policy() -> void:
 		"cleanup_failed",
 	]:
 		assert_null(ContractV2.validate_pf_error(_error(code, false)), code)
+	var range_error := _error("rate_limited", true)
+	range_error["retry_after_seconds"] = 86400.0
+	range_error["status_code"] = 429
+	range_error["provider_code"] = "rate_limit-1"
+	assert_null(ContractV2.validate_pf_error(range_error))
+	for invalid_retry_after in [-1, 86401, INF, "30"]:
+		var invalid := range_error.duplicate(true)
+		invalid["retry_after_seconds"] = invalid_retry_after
+		assert_not_null(ContractV2.validate_pf_error(invalid))
+	for invalid_status in [99, 600, 429.0, "429"]:
+		var invalid := range_error.duplicate(true)
+		invalid["status_code"] = invalid_status
+		assert_not_null(ContractV2.validate_pf_error(invalid))
+	for invalid_provider_code in ["", "spaces forbidden", "x".repeat(65)]:
+		var invalid := range_error.duplicate(true)
+		invalid["provider_code"] = invalid_provider_code
+		assert_not_null(ContractV2.validate_pf_error(invalid))
 
 
 func test_all_stages_enforce_attempt_ranges() -> void:
