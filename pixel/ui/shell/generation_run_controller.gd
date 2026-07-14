@@ -657,7 +657,6 @@ func _on_finished(result: Variant, task_id: String) -> void:
 	if scope_done and int(scope_result.get("failed", 0)) > 0:
 		_present_terminal_error(state, graph)
 	if not batch_card_id.is_empty():
-		_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, false)
 		_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
 		return
 	var items := _add_canvas_items(graph, asset_ids, state["anchor"])

@@ -42,9 +42,5 @@ func _on_asset_saved(old_asset_id: String, new_asset_id: String, batch_id: Strin
 	if batch_id.is_empty():
 		_canvas._replace_asset_reference(old_asset_id, new_asset_id)
 	else:
-		var ids: Array = _canvas._get_batch_asset_ids(batch_id)
-		for index in range(ids.size()):
-			if String(ids[index]) == old_asset_id:
-				ids[index] = new_asset_id
-		_canvas._replace_batch_asset_ids(batch_id, ids, true)
+		_canvas._replace_output_slot_asset(batch_id, old_asset_id, new_asset_id)
 	_status.text = PFStrings.EDITOR_SAVED

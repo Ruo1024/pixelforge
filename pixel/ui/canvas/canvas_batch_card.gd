@@ -152,6 +152,10 @@ func get_selected_asset_ids() -> Array[String]:
 	return result
 
 
+func get_selected_slot_id() -> String:
+	return "" if _controller == null else _controller.selected_slot_id()
+
+
 func _set_selected_asset_ids(values: Array) -> void:
 	if _controller == null:
 		return

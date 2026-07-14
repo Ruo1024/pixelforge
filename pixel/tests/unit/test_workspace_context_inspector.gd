@@ -68,17 +68,18 @@ func test_single_candidate_maps_safe_snapshot_and_emits_safe_action_context() ->
 	assert_eq((panel.get_node("CandidateActions/CopyPromptButton") as Button).text, "复制提示词")
 
 
-func test_multiple_candidates_only_offer_reference_and_continue_actions() -> void:
+func test_output_selection_is_single_and_inspector_uses_the_selected_slot() -> void:
 	var first_id := _register_candidate("first", {"prompt": "first", "model_id": "model-a"})
 	var second_id := _register_candidate("second", {"prompt": "second", "model_id": "model-b"})
 	var fixture := await _make_inspector_with_batch([first_id, second_id], [first_id, second_id])
 	var panel: Control = fixture["inspector"].get_node("ContextRoot/CandidatePanel")
 	var actions: Control = panel.get_node("CandidateActions")
 
-	assert_eq((panel.get_node("CandidateSummary") as Label).text, "2 candidates selected")
-	assert_false((actions.get_node("CopyPromptButton") as Button).visible)
-	assert_false((actions.get_node("CopySettingsButton") as Button).visible)
-	assert_false((actions.get_node("RerunButton") as Button).visible)
+	assert_eq((panel.get_node("CandidateSummary") as Label).text, "Generation details")
+	assert_eq(_row_value(panel, "Model"), "model-a")
+	assert_true((actions.get_node("CopyPromptButton") as Button).visible)
+	assert_true((actions.get_node("CopySettingsButton") as Button).visible)
+	assert_true((actions.get_node("RerunButton") as Button).visible)
 	assert_true((actions.get_node("AsReferenceButton") as Button).visible)
 	assert_true((actions.get_node("ContinueBranchButton") as Button).visible)
 	assert_false((actions.get_node("AsReferenceButton") as Button).disabled)

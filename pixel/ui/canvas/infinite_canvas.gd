@@ -1220,6 +1220,38 @@ func _replace_asset_reference(old_asset_id: String, new_asset_id: String) -> int
 	return count
 
 
+func _replace_output_slot_asset(card_id: String, old_asset_id: String, new_asset_id: String) -> bool:
+	var item: Node = _items_by_id.get(card_id, null)
+	if item == null or item.get_script() != CanvasBatchCardScript or not item.has_graph_binding():
+		return false
+	var slot_id := String(item.get_selected_slot_id())
+	if slot_id.is_empty() or AssetLibrary.get_image(new_asset_id) == null:
+		return false
+	var graph_data: Dictionary = ProjectService.get_graph_data(item.graph_id)
+	var params := _batch_params(graph_data, item.node_id)
+	var slots: Array = params.get("result_slots", [])
+	var changed := false
+	for index in range(slots.size()):
+		var slot: Dictionary = Dictionary(slots[index]).duplicate(true)
+		if (
+			String(slot.get("slot_id", "")) == slot_id
+			and String(slot.get("asset_id", "")) == old_asset_id
+			and String(slot.get("status", "")) == "succeeded"
+			and not bool(slot.get("detached", false))
+		):
+			slot["asset_id"] = new_asset_id
+			slots[index] = slot
+			changed = true
+			break
+	if not changed or not _set_batch_slots(graph_data, item.node_id, slots):
+		return false
+	ProjectService.set_graph_data(item.graph_id, graph_data, true)
+	item._refresh_from_graph()
+	item._set_selected_asset_ids([new_asset_id])
+	_emit_canvas_changed()
+	return true
+
+
 func _handle_wheel_zoom(step_delta: int, screen_anchor: Vector2) -> void:
 	var now_msec := Time.get_ticks_msec()
 	if now_msec - _last_wheel_zoom_msec < WHEEL_ZOOM_MIN_INTERVAL_MSEC:

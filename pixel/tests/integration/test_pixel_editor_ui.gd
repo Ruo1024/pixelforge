@@ -2,6 +2,8 @@ extends "res://addons/gut/test.gd"
 
 const MainScript := preload("res://ui/shell/main.gd")
 const Drawing := preload("res://core/editor/pixel_drawing.gd")
+const GraphScript := preload("res://core/graph/pf_graph.gd")
+const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 
 
 func test_default_size_and_palette_are_module_owned_and_save_keeps_provenance() -> void:
@@ -16,19 +18,57 @@ func test_default_size_and_palette_are_module_owned_and_save_keeps_provenance() 
 	await wait_process_frames(2)
 	main._recovery_dialog.hide()
 	var canvas: PFInfiniteCanvas = main._canvas
-	var card: Node = canvas._add_batch_card(
-		[source_id], Vector2.ZERO, "Repair", "editor_batch", false
+	var graph := GraphScript.new()
+	graph.id = "graph-main"
+	graph.add_node(
+		BatchNodeScript.new(),
+		"editor-output",
+		{
+			"label": "Repair",
+			"source_node_id": "",
+			"source_run_id": "",
+			"role": "standalone",
+			"input_snapshots": {},
+			"request_records": [],
+			"result_slots": [
+				{
+					"slot_id": "slot-editor",
+					"run_id": "",
+					"request_id": "",
+					"source_row_id": "",
+					"source_asset_id": "",
+					"input_snapshot_id": "",
+					"planned_size": [8, 8],
+					"status": "succeeded",
+					"asset_id": source_id,
+					"detached": false,
+					"unexpected": false,
+					"error": null,
+				}
+			],
+		},
+		Vector2.ZERO,
 	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+	var card: Node = canvas._add_graph_node_card(
+		graph.id, "editor-output", Vector2.ZERO, "editor-card", false
+	)
+	card._set_selected_asset_ids([source_id])
 	var controller: Node = main.get_node("M21UiController")
 	controller._open_pixel_editor(source_id, card.item_id)
 	var editor: PFPixelEditor = controller._pixel_editor
 	Drawing.stroke(editor.document.get_frame(0, 0), Vector2i.ZERO, Vector2i(7, 7), Color.WHITE)
 	editor.document.dirty = true
 	editor._save(false)
-	var updated: Array = canvas._get_batch_asset_ids(card.item_id)
-	assert_eq(updated.size(), 1)
-	assert_ne(updated[0], source_id)
-	var metadata := AssetLibrary.get_asset_meta(String(updated[0]))
+	var updated_params: Dictionary = (
+		GraphScript.from_json(ProjectService.get_graph_data(graph.id)).get_node_params("editor-output")
+	)
+	var updated_slots: Array = updated_params["result_slots"]
+	assert_eq(updated_slots.size(), 1)
+	assert_eq(updated_slots[0]["slot_id"], "slot-editor")
+	assert_ne(updated_slots[0]["asset_id"], source_id)
+	assert_true(AssetLibrary.has_asset(source_id))
+	var metadata := AssetLibrary.get_asset_meta(String(updated_slots[0]["asset_id"]))
 	assert_eq(metadata["origin"], "edited")
 	assert_eq(metadata["provenance"]["parent_asset"], source_id)
 	assert_gt(Array(metadata["editor_palette"]).size(), 2)
