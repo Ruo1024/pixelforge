@@ -14,6 +14,8 @@ const GraphGenerationPlanBuilderScript := preload("res://services/graph_generati
 const MockGenerationExecutorScript := preload("res://services/mock_generation_executor.gd")
 const ProviderResultMapperScript := preload("res://services/provider_result_mapper.gd")
 const ProviderRunProgressScript := preload("res://services/provider_run_progress.gd")
+const OutputAutoPlacementScript := preload("res://services/output_auto_placement.gd")
+const CardContractScript := preload("res://ui/canvas/canvas_card_contract.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 
 var _canvas: Control = null
@@ -325,7 +327,11 @@ func _prepare_pending_output(run_states: Array) -> Dictionary:
 	)
 	if not bool(prepared.get("ok", false)):
 		return prepared
-	var position := _node_position(graph, source_node_id) + Vector2(480, 0)
+	var bounds := _canvas_item_bounds(graph, source_node_id)
+	var output_size := Vector2(CardContractScript.default_size_for_type("batch"))
+	var position: Vector2 = OutputAutoPlacementScript.find_position(
+		bounds["source"], bounds["existing"], output_size
+	)
 	var card: Node = _canvas._add_batch_card(
 		[],
 		position,
@@ -893,6 +899,26 @@ func _node_position(graph: PFGraph, node_id: String) -> Vector2:
 	var node_data: Dictionary = graph.nodes.get(node_id, {})
 	var raw_position: Variant = node_data.get("position", [0, 0])
 	return Vector2(float(raw_position[0]), float(raw_position[1])).round()
+
+
+func _canvas_item_bounds(graph: PFGraph, source_node_id: String) -> Dictionary:
+	var existing := []
+	var source := Rect2(
+		_node_position(graph, source_node_id),
+		Vector2(CardContractScript.default_size_for_type("ai_generate"))
+	)
+	for item_value in _canvas._items_by_id.values():
+		var item: Node = item_value
+		if item == null or not item.has_method("get_canvas_bounds"):
+			continue
+		var item_bounds: Rect2 = item.get_canvas_bounds()
+		existing.append(item_bounds)
+		if (
+			str(item.get("graph_id")) == graph.id
+			and str(item.get("node_id")) == source_node_id
+		):
+			source = item_bounds
+	return {"source": source, "existing": existing}
 
 
 func _latest_graph_for_state(state: Dictionary) -> PFGraph:
