@@ -561,4 +561,8 @@
 	,"CLEANUP_CARD_ACTION_START": "Start cleanup"
 	,"CLEANUP_CARD_ACTION_CANCEL": "Cancel"
 	,"CLEANUP_CARD_ACTION_RETRY_INTERRUPTED": "Retry interrupted items"
+	,"EXAMPLE_GRAPH_NAME": "Pixel art starter"
+	,"EXAMPLE_TEXT_PROMPT": "A tiny forest shrine with mossy stones and a warm lantern"
+	,"STATUS_EXAMPLE_OPENED": "Starter opened. Edit the prompt, add optional references, then generate. Connect the new Output to Pixel Cleanup before starting cleanup."
+	,"UNDO_OPEN_EXAMPLE": "Open starter example"
 }

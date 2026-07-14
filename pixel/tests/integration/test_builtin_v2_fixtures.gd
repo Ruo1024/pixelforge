@@ -50,7 +50,9 @@ func test_all_default_resources_are_v2() -> void:
 		for graph_data in fixture["graphs"].values():
 			_assert_v2_graph(graph_data, "bundled test fixture")
 
-	var offline_graph: Dictionary = OfflineExample.build("A tiny forest shrine", "Starter example").to_json()
+	var offline_graph: Dictionary = (
+		OfflineExample.build("A tiny forest shrine", "Starter example").to_json()
+	)
 	_assert_v2_graph(offline_graph, "offline example")
 	assert_eq(
 		_node_types(offline_graph),
@@ -107,14 +109,17 @@ func test_all_default_resources_are_v2() -> void:
 
 
 func test_offline_example_layout_uses_effective_bounds_and_output_reservation() -> void:
-	var positions: Dictionary = OfflineExample.layout_positions(
-		{
-			"prompt_preset": Vector2(320, 280),
-			"text_prompt": Vector2(360, 300),
-			"reference_set": Vector2(400, 480),
-			"generate": Vector2(400, 520),
-			"cleanup": Vector2(400, 520),
-		}
+	var positions: Dictionary = (
+		OfflineExample
+		. layout_positions(
+			{
+				"prompt_preset": Vector2(320, 280),
+				"text_prompt": Vector2(360, 300),
+				"reference_set": Vector2(400, 480),
+				"generate": Vector2(400, 520),
+				"cleanup": Vector2(400, 520),
+			}
+		)
 	)
 	assert_eq(positions["prompt_preset"], Vector2(0, 0))
 	assert_eq(positions["text_prompt"], Vector2(0, 360))

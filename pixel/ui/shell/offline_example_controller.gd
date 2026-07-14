@@ -1,15 +1,11 @@
 class_name PFOfflineExampleController
 extends Node
 
-## Owns the bundled reference-to-batch example as one undoable workspace action.
+## Inserts the bundled starter graph as one undoable action, without running it.
 
 const OfflineExampleGraph := preload("res://services/offline_example_graph.gd")
-const GraphGenerationPlanBuilderScript := preload("res://services/graph_generation_plan_builder.gd")
-const MockGenerationExecutorScript := preload("res://services/mock_generation_executor.gd")
-const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Strings := preload("res://ui/shell/strings.gd")
-const Log := preload("res://core/util/log_util.gd")
 
 var _canvas: Control = null
 var _status_label: Label = null
@@ -21,98 +17,48 @@ func setup(canvas: Control, status_label: Label) -> void:
 
 
 func open() -> void:
-	var reference_id := AssetLibrary.register_image(
-		OfflineExampleGraph.make_reference_image(), "offline_reference", {"origin": "imported"}
+	var graph: PFGraph = OfflineExampleGraph.build(
+		Strings.text("EXAMPLE_TEXT_PROMPT"), Strings.text("EXAMPLE_GRAPH_NAME")
 	)
-	var graph := OfflineExampleGraph.build(reference_id, Strings.text("BATCH_DEFAULT_LABEL"))
-	var plan: Dictionary = GraphGenerationPlanBuilderScript.build(
-		graph,
-		"generate",
-		"mock",
-		[GraphGenerationPlanBuilderScript.mock_descriptor()],
-		AssetLibrary
-	)
-	var result: Dictionary = MockGenerationExecutorScript.execute(
-		graph, "generate", "batch_1", plan, AssetLibrary
-	)
-	if not bool(result.get("ok", false)):
-		Log.warn("Mock graph generation failed", result.get("error", {}))
-		_status_label.text = Strings.text("STATUS_MOCK_GENERATE_FAILED")
-		return
-	var asset_ids: Array = BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_1"))
 	var anchor: Vector2 = _canvas.get_mouse_world_position()
-	var item_ids := {
-		"objects": IdUtil.uuid_v4(),
+	var item_ids: Dictionary = {
 		"prompt_preset": IdUtil.uuid_v4(),
-		"reference": IdUtil.uuid_v4(),
+		"text_prompt": IdUtil.uuid_v4(),
+		"reference_set": IdUtil.uuid_v4(),
 		"generate": IdUtil.uuid_v4(),
-		"batch_1": IdUtil.uuid_v4(),
+		"cleanup": IdUtil.uuid_v4(),
 	}
-	var before_graphs := ProjectService.get_graphs_data()
-	var after_graphs := before_graphs.duplicate(true)
+	var before_graphs: Dictionary = ProjectService.get_graphs_data()
+	var after_graphs: Dictionary = before_graphs.duplicate(true)
 	after_graphs[graph.id] = graph.to_json()
-	var items := []
+	var items: Array = []
 	var do_add := func() -> void:
 		ProjectService.set_graphs_data(after_graphs, true)
-		items = _add_canvas_items(graph, asset_ids, anchor, item_ids)
+		items = _add_canvas_items(graph, anchor, item_ids)
 	var undo_add := func() -> void:
 		for item_id in item_ids.values():
 			_canvas._remove_item_direct(String(item_id))
 		ProjectService.set_graphs_data(before_graphs, true)
 		_canvas.select_ids([])
 		_canvas._emit_canvas_changed()
-	UndoService.perform_action("Open offline example", do_add, undo_add)
+	UndoService.perform_action(Strings.text("UNDO_OPEN_EXAMPLE"), do_add, undo_add)
 	if not items.is_empty():
-		_focus_canvas_on_bounds(_bounds_for_items(items))
-	_status_label.text = Strings.text("STATUS_MOCK_GENERATE_DONE_FORMAT") % asset_ids.size()
+		_canvas._focus_item_ids(_canvas._items_by_id.keys())
+	_status_label.text = Strings.text("STATUS_EXAMPLE_OPENED")
 
 
-func _add_canvas_items(
-	graph: PFGraph, asset_ids: Array, anchor: Vector2, item_ids: Dictionary
-) -> Array:
-	var items := []
-	for node_id in ["objects", "prompt_preset", "reference", "generate"]:
+func _add_canvas_items(graph: PFGraph, anchor: Vector2, item_ids: Dictionary) -> Array:
+	var items_by_node: Dictionary = {}
+	var effective_sizes: Dictionary = {}
+	for node_id in OfflineExampleGraph.INPUT_NODE_IDS + ["generate", "cleanup"]:
 		var node_item: Node = _canvas._add_graph_node_card(
-			graph.id,
-			node_id,
-			anchor + _graph_node_position(graph, node_id),
-			String(item_ids[node_id]),
-			false
+			graph.id, node_id, anchor, String(item_ids[node_id]), false
 		)
 		if node_item != null:
-			items.append(node_item)
-	var batch_card: Node = _canvas._add_batch_card(
-		asset_ids,
-		anchor + _graph_node_position(graph, "batch_1"),
-		Strings.text("BATCH_DEFAULT_LABEL"),
-		String(item_ids["batch_1"]),
-		false,
-		graph.id,
-		"batch_1"
-	)
-	if batch_card != null:
-		items.append(batch_card)
-	return items
-
-
-func _graph_node_position(graph: PFGraph, node_id: String) -> Vector2:
-	var node_data: Dictionary = graph.nodes.get(node_id, {})
-	var raw_position: Variant = node_data.get("position", [0, 0])
-	return Vector2(float(raw_position[0]), float(raw_position[1])).round()
-
-
-func _bounds_for_items(items: Array) -> Rect2:
-	var bounds: Rect2 = items[0].get_canvas_bounds()
-	for index in range(1, items.size()):
-		bounds = bounds.merge(items[index].get_canvas_bounds())
-	return bounds
-
-
-func _focus_canvas_on_bounds(bounds: Rect2) -> void:
-	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0 or _canvas.size.is_zero_approx():
-		return
-	var target_zoom := minf(
-		_canvas.size.x * 0.62 / bounds.size.x, _canvas.size.y * 0.62 / bounds.size.y
-	)
-	_canvas.set_camera_zoom(target_zoom, _canvas.size * 0.5)
-	_canvas.pan_by_pixels(_canvas.world_to_screen(bounds.get_center()) - _canvas.size * 0.5)
+			items_by_node[node_id] = node_item
+			effective_sizes[node_id] = node_item.get_canvas_bounds().size
+	var positions: Dictionary = OfflineExampleGraph.layout_positions(effective_sizes)
+	for node_id in items_by_node:
+		items_by_node[node_id].position = (anchor + Vector2(positions[node_id])).round()
+	_canvas._emit_canvas_changed()
+	return items_by_node.values()

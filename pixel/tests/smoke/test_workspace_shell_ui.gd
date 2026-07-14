@@ -196,7 +196,9 @@ func test_offline_example_is_one_undoable_fitted_graph_without_touching_existing
 	var existing_image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
 	existing_image.fill(Color.DARK_GREEN)
 	var existing_asset_id := AssetLibrary.register_image(existing_image, "existing", {})
-	var existing: Node = canvas.add_sprite_item(existing_image, existing_asset_id, Vector2(-900, -700))
+	var existing: Node = canvas.add_sprite_item(
+		existing_image, existing_asset_id, Vector2(-900, -700)
+	)
 	var existing_position: Vector2 = existing.position
 	var controller: Node = main.get_node("M21UiController")
 	controller.generate_mock_batch()
@@ -243,9 +245,8 @@ func test_context_inspector_reuses_cleanup_for_sprite_and_batch() -> void:
 	assert_true(cleanup.visible)
 	assert_eq(context.get_node("ContextRoot/ContextTitle").text, "reference")
 
-	var controller: Node = main.get_node("M21UiController")
-	controller.generate_mock_batch()
-	await wait_process_frames(2)
+	canvas._add_batch_card([asset_id], Vector2(420, 0), "Output")
+	await wait_process_frames(1)
 	assert_true(cleanup.visible)
 	assert_eq(context.get_node("ContextRoot/GraphSummary").visible, false)
 
