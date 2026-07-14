@@ -14,7 +14,7 @@ func test_graph_card_defaults_are_contract_values_and_survive_lod() -> void:
 		"text_prompt": Vector2(360, 300),
 		"object_list": Vector2(400, 520),
 		"prompt_preset": Vector2(320, 280),
-		"pixel_cleanup": Vector2(400, 520),
+		"pixel_cleanup": Vector2(420, 680),
 		"image_input": Vector2(320, 380),
 		"reference_set": Vector2(400, 480),
 		"ai_generate": Vector2(400, 520),
