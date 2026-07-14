@@ -18,6 +18,7 @@ const Strings := preload("res://ui/shell/strings.gd")
 const UIFont := preload("res://ui/widgets/ui_font.gd")
 const AssetRefFieldScript := preload("res://ui/widgets/asset_ref_field.gd")
 const ObjectListEditorScript := preload("res://ui/canvas/object_list_editor.gd")
+const GenerationModelPolicyScript := preload("res://services/generation_model_policy.gd")
 const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
 const AppTheme := preload("res://ui/shell/app_theme.gd")
 
@@ -749,7 +750,7 @@ func _build_generate_controls() -> void:
 
 	var settings_row := HBoxContainer.new()
 	_batch_size_spin = _make_spin("BatchSize", 1, 16, int(_params_snapshot.get("batch_size", 1)))
-	_seed_spin = _make_spin("Seed", 0, 2147483647, int(_params_snapshot.get("seed", 1)))
+	_seed_spin = _make_spin("Seed", -1, 2147483647, int(_params_snapshot.get("seed", -1)))
 	_batch_size_spin.value_changed.connect(func(_value: float) -> void: _sync_model_controls())
 	settings_row.add_child(
 		_labeled_control(Strings.text("GRAPH_PARAM_BATCH_SIZE"), _batch_size_spin)
@@ -1060,22 +1061,22 @@ func _commit_generate_params() -> void:
 	):
 		return
 	var descriptor: Dictionary = _model_option.get_item_metadata(_model_option.selected)
-	(
-		params_commit_requested
-		. emit(
-			graph_id,
-			node_id,
-			{
-				"provider_id": String(descriptor.get("provider_id", "")),
-				"model_id": String(descriptor.get("model_id", "")),
-				"target_width": int(_params_snapshot.get("target_width", 32)),
-				"target_height": int(_params_snapshot.get("target_height", 32)),
-				"batch_size": int(_batch_size_spin.value),
-				"seed": int(_seed_spin.value),
-				"extra": Dictionary(_params_snapshot.get("extra", {})).duplicate(true),
-			}
+	var transition: Dictionary = (
+		GenerationModelPolicyScript
+		. transition(
+			_params_snapshot,
+			String(descriptor.get("provider_id", "")),
+			String(descriptor.get("model_id", "")),
+			[descriptor],
 		)
 	)
+	if not bool(transition.get("ok", false)):
+		return
+	var transitioned_params: Dictionary = transition["params"]
+	transitioned_params["batch_size"] = int(_batch_size_spin.value)
+	transitioned_params["seed"] = int(_seed_spin.value)
+	_params_snapshot = transitioned_params.duplicate(true)
+	params_commit_requested.emit(graph_id, node_id, transitioned_params)
 
 
 func _on_model_selected(_index: int) -> void:

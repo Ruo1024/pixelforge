@@ -16,6 +16,7 @@ const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
 const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
 const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
 const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
+const GenerationModelPolicyScript := preload("res://services/generation_model_policy.gd")
 const ImportFlowControllerScript := preload("res://ui/shell/import_flow_controller.gd")
 const MenuBuilder := preload("res://ui/shell/m2_menu_builder.gd")
 const OpenAIGenerationControllerScript := preload("res://ui/shell/openai_generation_controller.gd")
@@ -1034,6 +1035,13 @@ func add_graph_node_to_selected_graph(
 	var node_id := "%s_%s" % [type_name, IdUtil.uuid_v4().left(8)]
 	var item_id := IdUtil.uuid_v4()
 	var resolved_params := initial_params.duplicate(true)
+	if type_name == "ai_generate" and initial_params.is_empty():
+		var preferred_provider := String(
+			SettingsService.get_setting("provider", "default_id", "openai_image")
+		)
+		resolved_params = GenerationModelPolicyScript.default_params(
+			ProviderService.get_model_descriptors(), preferred_provider
+		)
 	if graph.add_node(node, node_id, resolved_params, world_position).is_empty():
 		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
 		return ""
