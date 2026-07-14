@@ -19,6 +19,7 @@ const FileIOScript := preload("res://infra/file_io.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const AppInfo := preload("res://core/util/app_info.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
+const GenerationRunCoordinatorScript := preload("res://services/generation_run_coordinator.gd")
 const AssetReferenceScanner := preload("res://services/asset_reference_scanner.gd")
 const Log := preload("res://core/util/log_util.gd")
 const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
@@ -242,6 +243,7 @@ func _open_project(path: String, as_recovered_copy: bool) -> Error:
 	current_project.project_path = "" if as_recovered_copy else path
 	current_project.recovered_from_path = path if as_recovered_copy else ""
 	current_project.dirty = false
+	var recovery: Dictionary = recover_interrupted_runs_before_ui(false)
 	_refresh_validation_warnings()
 
 	if not as_recovered_copy:
@@ -251,8 +253,37 @@ func _open_project(path: String, as_recovered_copy: bool) -> Error:
 	UndoService.clear()
 	project_loaded.emit(current_project)
 	EventBus.project_opened.emit(path)
-	_emit_dirty(as_recovered_copy)
+	_emit_dirty(as_recovered_copy or int(recovery.get("recovered_outputs", 0)) > 0)
 	return OK
+
+
+func recover_interrupted_runs_before_ui(mark_dirty: bool = true) -> Dictionary:
+	var recovered_outputs := 0
+	var recovered_graphs := 0
+	for graph_id_value in current_project.graphs.keys():
+		var graph_id := String(graph_id_value)
+		var graph: PFGraph = GraphScript.from_json(current_project.graphs[graph_id])
+		var coordinator := GenerationRunCoordinatorScript.new()
+		var result: Dictionary = coordinator.recover_interrupted(graph)
+		if not bool(result.get("ok", false)):
+			return result
+		var outputs: Dictionary = result.get("outputs", {})
+		if outputs.is_empty():
+			continue
+		current_project.graphs[graph_id] = graph.to_json()
+		recovered_outputs += outputs.size()
+		recovered_graphs += 1
+	if mark_dirty and recovered_outputs > 0:
+		_emit_dirty(true)
+	return {
+		"ok": true,
+		"recovered_outputs": recovered_outputs,
+		"recovered_graphs": recovered_graphs,
+		"dialog_count": 0,
+		"network_count": 0,
+		"worker_count": 0,
+		"undo_count": 0,
+	}
 
 
 func autosave_now() -> Error:

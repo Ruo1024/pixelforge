@@ -164,9 +164,10 @@ func test_project_runtime_recovery_finishes_before_ui_observation() -> void:
 	assert_eq(params["result_slots"][0]["error"]["code"], "interrupted")
 	assert_eq(params["request_records"][0]["state"], "failed")
 	var source := FileAccess.get_file_as_string("res://services/project_service.gd")
+	var open_start := source.find("func _open_project")
 	assert_lt(
-		source.find("recover_interrupted_runs_before_ui()"),
-		source.find("project_loaded.emit(current_project)"),
+		source.find("recover_interrupted_runs_before_ui(false)", open_start),
+		source.find("project_loaded.emit(current_project)", open_start),
 	)
 
 

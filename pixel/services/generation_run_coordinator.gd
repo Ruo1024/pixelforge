@@ -10,6 +10,8 @@ signal run_event(event: Dictionary)
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ProviderContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
+const ProviderRunProgressScript := preload("res://services/provider_run_progress.gd")
+const MonotonicClockScript := preload("res://infra/monotonic_clock.gd")
 
 const BUSY_SLOT_STATES := ["queued", "running"]
 const TERMINAL_RECORD_STATES := ["succeeded", "partial", "failed", "canceled"]
@@ -27,7 +29,10 @@ const TRANSITIONS := {
 
 var _cancel_cutoffs_msec := {}
 var _run_states := {}
-var _clock: RefCounted = null
+var _run_started_msec := {}
+var _request_progress := {}
+var _previous_run_ratios := {}
+var _clock: RefCounted = MonotonicClockScript.new()
 
 
 func configure_clock(clock: RefCounted) -> void:
@@ -67,6 +72,8 @@ func prepare_full_run(
 		_restore_graph(graph, rollback_token["graph"])
 		return _command_error("output_edge_failed")
 	_run_states[run_id] = "Queued"
+	_run_started_msec[run_id] = _now_msec()
+	_previous_run_ratios[run_id] = 0.0
 	_emit_run_state(run_id, source_node_id, output_node_id, "Queued")
 	return {
 		"ok": true,
@@ -114,6 +121,8 @@ func prepare_retry_run(graph: PFGraph, output_node_id: String, plan: Dictionary)
 		return _command_error("invalid_retry_output")
 	graph.set_node_params(output_node_id, params)
 	_run_states[run_id] = "Queued"
+	_run_started_msec[run_id] = _now_msec()
+	_previous_run_ratios[run_id] = 0.0
 	_emit_run_state(run_id, source_node_id, output_node_id, "Queued")
 	return {"ok": true, "run_id": run_id, "output_node_id": output_node_id}
 
@@ -144,6 +153,59 @@ func mark_submitting(graph: PFGraph, output_node_id: String, request_id: String)
 	return {"ok": true, "attempts": 1}
 
 
+func apply_provider_progress(
+	graph: PFGraph, output_node_id: String, request_id: String, progress: Dictionary
+) -> Dictionary:
+	if graph == null or graph.get_node(output_node_id) == null or request_id.is_empty():
+		return _command_error("invalid_progress_target")
+	var params := graph.get_node_params(output_node_id)
+	var run_id := ""
+	var matched := false
+	for record_value in params.get("request_records", []):
+		var record: Dictionary = record_value
+		if String(record.get("request_id", "")) != request_id:
+			continue
+		matched = true
+		run_id = String(record.get("run_id", ""))
+		if not accepts_business_callback(run_id, _now_msec()):
+			return {"ok": true, "ignored": true, "state": "Canceling"}
+		var updated: Dictionary = ProviderRunProgressScript.apply_provider_progress(
+			record, progress
+		)
+		if updated.has("progress_issue"):
+			return _command_error(String(updated["progress_issue"].get("code", "invalid_progress")))
+		_request_progress[_progress_key(run_id, request_id)] = Dictionary(updated["progress"])
+		updated.erase("progress")
+		record.merge(updated, true)
+		if String(record.get("state", "")) == "running":
+			for slot_value in params.get("result_slots", []):
+				var slot: Dictionary = slot_value
+				if (
+					String(slot.get("request_id", "")) == request_id
+					and String(slot.get("status", "")) == "queued"
+				):
+					slot["status"] = "running"
+		break
+	if not matched or not bool(BatchNodeScript.validate_v2_domain(params).get("ok", false)):
+		return _command_error("invalid_progress_target")
+	graph.set_node_params(output_node_id, params)
+	_run_states[run_id] = "Running"
+	_emit_run_state(run_id, String(params.get("source_node_id", "")), output_node_id, "Running")
+	(
+		run_event
+		. emit(
+			{
+				"type": "run_progress",
+				"run_id": run_id,
+				"source_node_id": String(params.get("source_node_id", "")),
+				"output_node_id": output_node_id,
+				"progress": run_progress(params, run_id),
+			}
+		)
+	)
+	return {"ok": true, "state": "Running"}
+
+
 func apply_provider_mapping(
 	graph: PFGraph,
 	output_node_id: String,
@@ -162,12 +224,26 @@ func apply_provider_mapping(
 	var params := graph.get_node_params(output_node_id)
 	var request_id := String(request.get("request_id", ""))
 	var run_id := String(request.get("run_id", ""))
-	if (
-		request_id.is_empty()
-		or run_id.is_empty()
-		or not accepts_business_callback(run_id, _now_msec())
-	):
-		return _command_error("late_provider_callback")
+	if request_id.is_empty() or run_id.is_empty():
+		return _command_error("invalid_provider_mapping")
+	if not accepts_business_callback(run_id, _now_msec()):
+		return {
+			"ok": true,
+			"ignored": true,
+			"state": "Canceling",
+			"registered_asset_ids": [],
+		}
+	for record_value in params.get("request_records", []):
+		if (
+			String(record_value.get("request_id", "")) == request_id
+			and String(record_value.get("state", "")) in TERMINAL_RECORD_STATES
+		):
+			return {
+				"ok": true,
+				"ignored": true,
+				"state": String(_run_states.get(run_id, output_terminal_state(params, run_id))),
+				"registered_asset_ids": [],
+			}
 	var registered := {}
 	var updates := []
 	for value in mapped.get("slot_updates", []):
@@ -262,23 +338,39 @@ func apply_provider_mapping(
 
 func run_progress(params: Dictionary, run_id: String) -> Dictionary:
 	var total := 0
-	var completed := 0
-	var running := false
+	var records := []
+	var phase := "submitting"
+	var phase_rank := {"submitting": 0, "provider_processing": 1, "downloading": 2, "decoding": 3}
+	var best_rank := -1
 	for record_value in params.get("request_records", []):
 		var record: Dictionary = record_value
 		if String(record.get("run_id", "")) != run_id:
 			continue
 		total += int(record.get("requested_count", 0))
-		if String(record.get("state", "")) in TERMINAL_RECORD_STATES:
-			completed += int(record.get("requested_count", 0))
-		elif String(record.get("state", "")) == "running":
-			running = true
+		var aggregate_record: Dictionary = record.duplicate(true)
+		var progress: Variant = _request_progress.get(
+			_progress_key(run_id, String(record.get("request_id", ""))), null
+		)
+		if progress is Dictionary:
+			aggregate_record["progress"] = Dictionary(progress).duplicate(true)
+			var record_phase := String(progress.get("phase", "submitting"))
+			var rank := int(phase_rank.get(record_phase, -1))
+			if rank > best_rank and String(record.get("state", "")) not in TERMINAL_RECORD_STATES:
+				best_rank = rank
+				phase = record_phase
+		records.append(aggregate_record)
+	var aggregate: Dictionary = ProviderRunProgressScript.aggregate(
+		records, total, float(_previous_run_ratios.get(run_id, 0.0))
+	)
+	if aggregate.get("ratio") != null:
+		_previous_run_ratios[run_id] = float(aggregate["ratio"])
 	return {
-		"phase": "provider_processing" if running else "queued",
-		"determinate": total > 0 and not running,
-		"ratio": float(completed) / float(total) if total > 0 and not running else null,
-		"completed_items": completed,
-		"total_items": total,
+		"phase": phase,
+		"determinate": bool(aggregate["determinate"]),
+		"ratio": aggregate["ratio"],
+		"completed_items": int(aggregate["completed_items"]),
+		"total_items": int(aggregate["total_items"]),
+		"elapsed_ms": maxi(0, _now_msec() - int(_run_started_msec.get(run_id, _now_msec()))),
 	}
 
 
@@ -343,14 +435,121 @@ func can_transition(from_state: String, to_state: String) -> bool:
 	return TRANSITIONS.has(from_state) and Array(TRANSITIONS[from_state]).has(to_state)
 
 
-func begin_cancel_cutoff(run_id: String, cutoff_msec: int) -> void:
-	_cancel_cutoffs_msec[run_id] = cutoff_msec
+func begin_cancel_cutoff(run_id: String, cutoff_msec: int = -1) -> void:
+	_cancel_cutoffs_msec[run_id] = _now_msec() if cutoff_msec < 0 else cutoff_msec
 	_run_states[run_id] = "Canceling"
 	run_event.emit({"type": "run_state", "run_id": run_id, "state": "Canceling"})
 
 
 func accepts_business_callback(run_id: String, occurred_msec: int) -> bool:
 	return not _cancel_cutoffs_msec.has(run_id) or occurred_msec < int(_cancel_cutoffs_msec[run_id])
+
+
+func resolve_cancel(
+	graph: PFGraph, output_node_id: String, request_id: String, result: Dictionary
+) -> Dictionary:
+	if (
+		graph == null
+		or graph.get_node(output_node_id) == null
+		or String(result.get("request_id", "")) != request_id
+		or ProviderContractV2.validate_cancel_result(result) != null
+	):
+		return _command_error("invalid_cancel_result")
+	var params := graph.get_node_params(output_node_id)
+	var record := _find_record(params, request_id)
+	if record.is_empty():
+		return _command_error("request_not_found")
+	if String(record.get("state", "")) in TERMINAL_RECORD_STATES:
+		return {
+			"ok": true,
+			"ignored": true,
+			"state": _cancel_terminal_state(params, String(record["run_id"]))
+		}
+	for slot_value in params.get("result_slots", []):
+		var slot: Dictionary = slot_value
+		if (
+			String(slot.get("request_id", "")) == request_id
+			and String(slot.get("status", "")) in BUSY_SLOT_STATES
+		):
+			slot["status"] = "canceled"
+			slot["error"] = null
+	record["state"] = "canceled"
+	record["remote_cancel_confirmed"] = bool(result["remote_cancel_confirmed"])
+	record["error"] = null
+	var billing: Variant = result.get("billing_update")
+	if billing is Dictionary:
+		record["actual_cost_usd"] = billing["actual_cost_usd"]
+		record["charge_id"] = String(billing["charge_id"])
+		record["provider_meta"] = Dictionary(billing["provider_meta"]).duplicate(true)
+	return _finish_cancel_update(graph, output_node_id, params, String(record["run_id"]))
+
+
+func reject_cancel(
+	graph: PFGraph, output_node_id: String, request_id: String, error: Dictionary
+) -> Dictionary:
+	if (
+		graph == null
+		or graph.get_node(output_node_id) == null
+		or String(error.get("code", "")) != "cancel_failed"
+		or String(error.get("request_id", "")) != request_id
+		or ProviderContractV2.validate_pf_error(error) != null
+	):
+		return _command_error("invalid_cancel_error")
+	var params := graph.get_node_params(output_node_id)
+	var record := _find_record(params, request_id)
+	if record.is_empty():
+		return _command_error("request_not_found")
+	if String(record.get("state", "")) in TERMINAL_RECORD_STATES:
+		return {
+			"ok": true,
+			"ignored": true,
+			"state": _cancel_terminal_state(params, String(record["run_id"]))
+		}
+	for slot_value in params.get("result_slots", []):
+		var slot: Dictionary = slot_value
+		if (
+			String(slot.get("request_id", "")) == request_id
+			and String(slot.get("status", "")) in BUSY_SLOT_STATES
+		):
+			slot["status"] = "failed"
+			slot["error"] = error.duplicate(true)
+	record["state"] = "failed"
+	record["remote_cancel_confirmed"] = null
+	record["error"] = error.duplicate(true)
+	return _finish_cancel_update(graph, output_node_id, params, String(record["run_id"]))
+
+
+func _find_record(params: Dictionary, request_id: String) -> Dictionary:
+	for record_value in params.get("request_records", []):
+		if record_value is Dictionary and String(record_value.get("request_id", "")) == request_id:
+			return record_value
+	return {}
+
+
+func _finish_cancel_update(
+	graph: PFGraph, output_node_id: String, params: Dictionary, run_id: String
+) -> Dictionary:
+	if not bool(BatchNodeScript.validate_v2_domain(params).get("ok", false)):
+		return _command_error("invalid_cancel_domain")
+	graph.set_node_params(output_node_id, params)
+	var state := _cancel_terminal_state(params, run_id)
+	_run_states[run_id] = state
+	_emit_run_state(run_id, String(params.get("source_node_id", "")), output_node_id, state)
+	return {"ok": true, "state": state}
+
+
+func _cancel_terminal_state(params: Dictionary, run_id: String) -> String:
+	for record_value in params.get("request_records", []):
+		if (
+			String(record_value.get("run_id", "")) == run_id
+			and String(record_value.get("state", "")) in ["queued", "running"]
+		):
+			return "Canceling"
+	return output_terminal_state(params, run_id)
+
+
+func _progress_key(run_id: String, request_id: String) -> String:
+	return "%s\n%s" % [run_id, request_id]
 
 
 func recover_interrupted(graph: PFGraph) -> Dictionary:
