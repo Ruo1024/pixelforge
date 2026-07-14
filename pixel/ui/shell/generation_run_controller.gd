@@ -51,7 +51,8 @@ func setup(
 	_coordinator = GenerationRunCoordinatorScript.new()
 	var clock: RefCounted = MonotonicClockScript.new()
 	_coordinator.configure_clock(clock)
-	_canvas.configure_run_edge_renderer(_coordinator, clock)
+	if _canvas.has_method("configure_run_edge_renderer"):
+		_canvas.configure_run_edge_renderer(_coordinator, clock)
 	_error_presenter = GenerationErrorDialogPresenterScript.new()
 	_error_presenter.name = "GenerationErrorDialogPresenter"
 	_error_presenter.action_requested.connect(_on_error_dialog_action)

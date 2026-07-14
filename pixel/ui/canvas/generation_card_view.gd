@@ -136,7 +136,7 @@ func _build_provider_group(parent: VBoxContainer) -> void:
 		if provider_id.is_empty() or provider_id in provider_ids:
 			continue
 		provider_ids.append(provider_id)
-		provider_option.add_item(provider_id)
+		provider_option.add_item(String(value.get("display_name", provider_id)))
 		provider_option.set_item_metadata(provider_option.item_count - 1, provider_id)
 		if provider_id == String(params.get("provider_id", "")):
 			provider_option.select(provider_option.item_count - 1)

@@ -135,7 +135,7 @@ func _make_control(schema: Dictionary, value: Variant) -> Control:
 				values = [String(value)]
 			for option in values:
 				options.add_item(String(option))
-			var selected := values.find(value)
+			var selected := values.find(String(value))
 			options.select(maxi(0, selected))
 			options.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 			return options

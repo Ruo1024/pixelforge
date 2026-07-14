@@ -229,11 +229,9 @@ func test_temporary_production_path_uses_planner_and_reference_resolver() -> voi
 	)
 	assert_lt(
 		source.find("var request_result := _requests_for_graph"),
-		source.find("CostService.preflight(requests)"),
+		source.find("_coordinator.preflight_plan("),
 	)
-	assert_lt(
-		source.find("CostService.preflight(requests)"), source.find("_prepare_pending_output")
-	)
+	assert_lt(source.find("_coordinator.preflight_plan("), source.find("_prepare_pending_output"))
 
 
 func test_all_local_validation_precedes_side_effects() -> void:
