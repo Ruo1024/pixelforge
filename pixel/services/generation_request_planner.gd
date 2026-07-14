@@ -8,7 +8,7 @@ const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
 const MAX_RESULTS_PER_RUN := 999
 const SEED_MODULUS := 2147483648
 const TECHNICAL_SUFFIX := (
-	"pixel art designed for a %dx%d true-pixel target, flat colors, crisp edges"
+	"pixel art designed for a %dx%d true-pixel target, flat colors, " + "crisp edges"
 )
 
 
@@ -80,7 +80,7 @@ static func plan(input: Dictionary, descriptors: Array) -> Dictionary:
 	for group in groups:
 		total_slots += int(group["count"])
 	if total_slots > MAX_RESULTS_PER_RUN:
-		return _failure("too_many_results", "batch_size")
+		return _failure("result_limit_exceeded", "batch_size")
 	var provider_output_size := _provider_output_size(target_width, target_height, capabilities)
 	if provider_output_size.is_empty():
 		return _failure("invalid_provider_output_size", "provider_output_size")
@@ -169,8 +169,8 @@ static func group_retry_slots(slots: Array, max_batch: int) -> Array:
 		if not (value is Dictionary):
 			continue
 		var slot: Dictionary = value
-		var seed := int(slot.get("requested_seed", -1))
 		var snapshot: Dictionary = Dictionary(slot.get("input_snapshot", {})).duplicate(true)
+		var seed := int(snapshot.get("requested_seed", -1))
 		var can_append := false
 		if not groups.is_empty() and seed >= 0:
 			var current: Dictionary = groups[-1]
@@ -205,6 +205,81 @@ static func group_retry_slots(slots: Array, max_batch: int) -> Array:
 	for group in groups:
 		group.erase("last_seed")
 	return groups
+
+
+static func plan_retry_slots(
+	slots: Array, max_batch: int, run_id: String, reference_source: Variant = null
+) -> Dictionary:
+	if slots.is_empty() or max_batch <= 0 or run_id.strip_edges().is_empty():
+		return _failure("invalid_request_field", "retry_slots")
+	for value in slots:
+		if not (value is Dictionary):
+			return _failure("invalid_request_field", "retry_slots")
+		var slot: Dictionary = value
+		var error: Variant = slot.get("error")
+		if (
+			String(slot.get("status", "")) != "failed"
+			or not (error is Dictionary)
+			or ContractV2.validate_pf_error(error) != null
+			or not bool(error.get("retryable", false))
+		):
+			return _failure("invalid_request_field", "retry_slots")
+	var groups := group_retry_slots(slots, max_batch)
+	if groups.is_empty():
+		return _failure("invalid_request_field", "retry_slots")
+	var requests: Array[Dictionary] = []
+	var planned_slots: Array[Dictionary] = []
+	for index in range(groups.size()):
+		var group: Dictionary = groups[index]
+		var snapshot: Dictionary = Dictionary(group.get("input_snapshot", {})).duplicate(true)
+		var reference_ids: Array = snapshot.get("reference_asset_ids", [])
+		var expected_hashes: Array = snapshot.get("reference_content_sha256s", [])
+		var ref_images: Array = []
+		if not reference_ids.is_empty():
+			var resolved := resolve_reference_assets(reference_ids, reference_source)
+			if (
+				not bool(resolved.get("ok", false))
+				or resolved.get("reference_content_sha256s", []) != expected_hashes
+			):
+				return _failure("invalid_reference_images", "references")
+			ref_images = Array(resolved["ref_images"]).duplicate()
+		var request_id := "%s-retry-request-%03d" % [run_id, index]
+		var request := {
+			"run_id": run_id,
+			"request_id": request_id,
+			"idempotency_key": "%s:%s" % [run_id, request_id],
+			"provider_id": String(snapshot.get("provider_id", "")),
+			"mode": String(snapshot.get("mode", "")),
+			"model_id": String(snapshot.get("model_id", "")),
+			"prompt": String(snapshot.get("prompt", "")),
+			"target_width": int(snapshot.get("target_width", 0)),
+			"target_height": int(snapshot.get("target_height", 0)),
+			"provider_output_size": Array(snapshot.get("provider_output_size", [])).duplicate(),
+			"batch": int(group["batch"]),
+			"seed": int(group["seed"]),
+			"ref_images": ref_images,
+			"extra": Dictionary(snapshot.get("extra", {})).duplicate(true),
+		}
+		if ContractV2.validate_gen_request(request) != null:
+			return _failure("invalid_request_field", "retry_slots")
+		requests.append(request)
+		for slot_id in group["slot_ids"]:
+			var original: Dictionary = {}
+			for value in slots:
+				if value is Dictionary and String(value.get("slot_id", "")) == String(slot_id):
+					original = Dictionary(value).duplicate(true)
+					break
+			if original.is_empty():
+				return _failure("invalid_request_field", "retry_slots")
+			original["request_id"] = request_id
+			planned_slots.append(original)
+	return {
+		"ok": true,
+		"issue": null,
+		"requests": requests,
+		"slots": planned_slots,
+		"total_slots": planned_slots.size(),
+	}
 
 
 static func _descriptor(descriptors: Array, input: Dictionary) -> Dictionary:
@@ -262,8 +337,9 @@ static func _reference_issue(input: Dictionary, capabilities: Dictionary) -> Dic
 		return {"code": "invalid_reference_images", "field": "ref_images"}
 	if ids.size() > int(capabilities.get("max_reference_images", 0)):
 		return {"code": "invalid_reference_count", "field": "ref_images"}
+	var sha256_pattern := RegEx.create_from_string("^[0-9a-f]{64}$")
 	for index in range(ids.size()):
-		if String(ids[index]).is_empty() or String(hashes[index]).length() != 64:
+		if String(ids[index]).is_empty() or sha256_pattern.search(String(hashes[index])) == null:
 			return {"code": "invalid_reference_image", "field": "ref_images"}
 		if not (images[index] is Image):
 			return {"code": "invalid_reference_image", "field": "ref_images"}

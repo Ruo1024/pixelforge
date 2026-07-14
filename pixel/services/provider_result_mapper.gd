@@ -25,6 +25,48 @@ static func map_contract_failure(request: Dictionary, acceptance_proof: Dictiona
 	)
 
 
+static func map_provider_failure(
+	request: Dictionary, planned_slots: Array, error: Dictionary
+) -> Dictionary:
+	if (
+		ContractV2.validate_gen_request(request) != null
+		or ContractV2.validate_pf_error(error) != null
+		or planned_slots.size() != int(request.get("batch", 0))
+		or String(error.get("provider_id", "")) != String(request.get("provider_id", ""))
+		or String(error.get("request_id", "")) != String(request.get("request_id", ""))
+		or int(error.get("expected_count", -1)) != int(request.get("batch", 0))
+	):
+		return _ambiguous(request)
+	var slot_updates: Array[Dictionary] = []
+	for value in planned_slots:
+		if not (value is Dictionary):
+			return _ambiguous(request)
+		var planned: Dictionary = Dictionary(value).duplicate(true)
+		if (
+			String(planned.get("request_id", "")) != String(request["request_id"])
+			or String(planned.get("slot_id", "")).is_empty()
+			or not (planned.get("input_snapshot", {}) is Dictionary)
+		):
+			return _ambiguous(request)
+		planned["status"] = "failed"
+		planned["image"] = null
+		planned["actual_seed"] = null
+		planned["error"] = error.duplicate(true)
+		slot_updates.append(planned)
+	return {
+		"ok": true,
+		"error": null,
+		"state": "failed",
+		"slot_updates": slot_updates,
+		"unexpected_slots": [],
+		"diagnostics": [],
+		"received_count": int(error.get("received_count", 0)),
+		"actual_cost_usd": null,
+		"charge_id": "",
+		"provider_meta": {},
+	}
+
+
 static func map_result(request: Dictionary, planned_slots: Array, result: Dictionary) -> Dictionary:
 	if ContractV2.validate_gen_request(request) != null:
 		return _ambiguous(request)
@@ -70,15 +112,19 @@ static func map_result(request: Dictionary, planned_slots: Array, result: Dictio
 	for index in range(expected_count, result["items"].size()):
 		var item: Dictionary = result["items"][index]
 		if item["image"] is Image:
+			var input_snapshot := _unexpected_snapshot(request, planned_slots, index)
 			(
 				unexpected_slots
 				. append(
 					{
+						"slot_id": "%s-unexpected-%03d" % [String(request["run_id"]), index],
+						"request_id": String(request["request_id"]),
+						"source_row_id": String(input_snapshot["source_row_id"]),
 						"unexpected": true,
 						"source_index": index,
 						"image": item["image"],
 						"actual_seed": item["actual_seed"],
-						"input_snapshot": _unexpected_snapshot(request, index),
+						"input_snapshot": input_snapshot,
 					}
 				)
 			)
@@ -116,21 +162,15 @@ static func map_result(request: Dictionary, planned_slots: Array, result: Dictio
 	}
 
 
-static func _unexpected_snapshot(request: Dictionary, index: int) -> Dictionary:
+static func _unexpected_snapshot(
+	request: Dictionary, planned_slots: Array, index: int
+) -> Dictionary:
 	var requested_seed := -1
 	if int(request["seed"]) >= 0:
 		requested_seed = int((int(request["seed"]) + index) % 2147483648)
-	return {
-		"provider_id": String(request["provider_id"]),
-		"model_id": String(request["model_id"]),
-		"mode": String(request["mode"]),
-		"prompt": String(request["prompt"]),
-		"target_width": int(request["target_width"]),
-		"target_height": int(request["target_height"]),
-		"provider_output_size": Array(request["provider_output_size"]).duplicate(),
-		"requested_seed": requested_seed,
-		"extra": Dictionary(request["extra"]).duplicate(true),
-	}
+	var snapshot: Dictionary = Dictionary(planned_slots[0]["input_snapshot"]).duplicate(true)
+	snapshot["requested_seed"] = requested_seed
+	return snapshot
 
 
 static func _ambiguous(request: Dictionary) -> Dictionary:

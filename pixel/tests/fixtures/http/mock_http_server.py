@@ -120,23 +120,44 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "interrupts": Handler.comfy_interrupts})
         elif self.path == "/upload/image":
             self._json(200, {"name": "uploaded.png", "subfolder": "", "type": "input"})
-        elif self.path in {"/retrodiffusion-success", "/retrodiffusion-slow"}:
+        elif self.path in {
+            "/retrodiffusion-success",
+            "/retrodiffusion-slow",
+            "/retrodiffusion-partial",
+        }:
             if self.path == "/retrodiffusion-slow":
                 time.sleep(0.3)
             pixel = _solid_png_base64(
                 int(request_body.get("width", 1)), int(request_body.get("height", 1))
             )
-            image_count = max(1, min(4, int(request_body.get("num_images", 1))))
+            image_count = (
+                1
+                if self.path == "/retrodiffusion-partial"
+                else max(1, min(4, int(request_body.get("num_images", 1))))
+            )
             self._json(200, {
                 "created_at": 1783780000,
-                "balance_cost": 0.25 * image_count,
+                "balance_cost": f"{0.25 * image_count:.6f}",
                 "base64_images": [pixel] * image_count,
                 "model": "rd_plus",
                 "remaining_balance": 99.75,
             })
-        elif self.path == "/openai-image-success":
-            pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-            image_count = max(1, min(4, int(request_body.get("n", 1))))
+        elif self.path in {
+            "/openai-image-success",
+            "/openai-image-partial",
+            "/openai-image-slow",
+        }:
+            if self.path == "/openai-image-slow":
+                time.sleep(0.3)
+            width, height = [
+                int(value) for value in request_body.get("size", "1024x1024").split("x")
+            ]
+            pixel = _solid_png_base64(width, height)
+            image_count = (
+                1
+                if self.path == "/openai-image-partial"
+                else max(1, min(4, int(request_body.get("n", 1))))
+            )
             self._json(200, {
                 "created": 1783770000,
                 "background": request_body.get("background", "opaque"),
@@ -152,7 +173,10 @@ class Handler(BaseHTTPRequestHandler):
                 "fields": fields,
                 "reference_sha256s": reference_hashes,
             }
-            pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            width, height = [
+                int(value) for value in fields.get("size", "1024x1024").split("x")
+            ]
+            pixel = _solid_png_base64(width, height)
             image_count = max(1, min(4, int(fields.get("n", "1"))))
             self._json(200, {
                 "created": 1783770000,

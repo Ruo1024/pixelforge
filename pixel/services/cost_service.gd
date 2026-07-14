@@ -7,6 +7,7 @@ extends Node
 signal cost_changed_v2(month_key: String, total_micro_usd: int)
 signal budget_changed_v2(limit_micro_usd: int)
 
+const UsdDecimalScript := preload("res://core/provider/pf_usd_decimal.gd")
 const BUDGET_SECTION_V2 := "provider_budget_v2"
 const LEDGER_SECTION_PREFIX_V2 := "provider_cost_v2_"
 const MONTHLY_MICRO_USD_KEY := "monthly_micro_usd"
@@ -25,28 +26,11 @@ func get_month_key(unix_time: int = -1) -> String:
 
 
 func parse_usd_to_micro(value: Variant) -> Variant:
-	if not (value is String):
-		return null
-	var amount := String(value)
-	var decimal_regex := RegEx.create_from_string(DECIMAL_PATTERN)
-	var matched := decimal_regex.search(amount)
-	if matched == null:
-		return null
-	var whole_micro := matched.get_string(1).to_int() * MICRO_USD_PER_USD
-	var fraction := matched.get_string(2)
-	var first_six := fraction.substr(0, 6).rpad(6, "0")
-	var micro_usd := whole_micro + first_six.to_int()
-	if fraction.length() > 6 and fraction.unicode_at(6) >= "5".unicode_at(0):
-		micro_usd += 1
-	if micro_usd > MAX_CANONICAL_MICRO_USD:
-		return null
-	return micro_usd
+	return UsdDecimalScript.parse_to_micro(value)
 
 
 func format_micro_usd(micro_usd: int) -> Variant:
-	if micro_usd < 0 or micro_usd > MAX_CANONICAL_MICRO_USD:
-		return null
-	return "%d.%06d" % [micro_usd / MICRO_USD_PER_USD, micro_usd % MICRO_USD_PER_USD]
+	return UsdDecimalScript.format_micro(micro_usd)
 
 
 func set_monthly_budget_micro_usd(limit: Variant) -> bool:

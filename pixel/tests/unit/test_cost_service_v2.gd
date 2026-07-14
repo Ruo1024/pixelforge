@@ -1,6 +1,8 @@
 extends "res://addons/gut/test.gd"
 
 const CostServiceScript := preload("res://services/cost_service.gd")
+const PlannerScript := preload("res://services/generation_request_planner.gd")
+const RetryPreflightScript := preload("res://services/generation_retry_preflight.gd")
 const TEST_MONTH := "2099-11"
 
 var _service: PFCostService
@@ -173,29 +175,51 @@ func test_float_cost_api_and_active_ui_paths_are_absent() -> void:
 
 
 func test_all_manual_retry_paths_preflight_without_side_effects() -> void:
-	var provider_map := {"retrodiffusion": ProviderService.get_provider("retrodiffusion")}
-	var paths := [
-		[_request("single-slot", "rd_pro", 1)],
-		[_request("failed-a", "rd_pro", 1), _request("failed-b", "rd_pro", 2)],
-		[
-			_request("full-a", "rd_pro", 4),
-			_request("full-b", "rd_pro", 4),
-			_request("full-c", "rd_pro", 1),
-		],
-	]
-	for requests in paths:
-		var before := _service.get_month_total_micro_usd(TEST_MONTH)
-		var decision: Dictionary = _service.preflight_with_providers(
-			requests, provider_map, TEST_MONTH
+	var provider: PFProvider = ProviderService.get_provider("retrodiffusion")
+	var input := _retry_planner_input()
+	var original: Dictionary = PlannerScript.plan(input, provider.get_model_descriptors())
+	assert_true(original["ok"])
+	var failed_slots: Array = original["slots"].duplicate(true)
+	for slot in failed_slots:
+		slot["status"] = "failed"
+		slot["error"] = _retryable_error(
+			String(slot["request_id"]), int(original["requests"][0]["batch"])
 		)
-		assert_eq(decision["decision"], "allowed")
-		assert_eq(decision["estimate_state"], "estimate")
-		assert_eq(_service.get_month_total_micro_usd(TEST_MONTH), before)
-	var blocked: Dictionary = _service.preflight_with_providers(
-		[_request("blocked", "missing", 1)], provider_map, TEST_MONTH
+	var single: Dictionary = RetryPreflightScript.prepare_failed_slots(
+		[failed_slots[0]], 4, "retry-single", null, _service, TEST_MONTH
 	)
-	assert_eq(blocked["decision"], "blocked")
+	var failed_batch: Dictionary = RetryPreflightScript.prepare_failed_slots(
+		failed_slots, 4, "retry-batch", null, _service, TEST_MONTH
+	)
+	input["run_id"] = "retry-full"
+	var full: Dictionary = RetryPreflightScript.prepare_full(
+		input, provider.get_model_descriptors(), _service, TEST_MONTH
+	)
+	for prepared in [single, failed_batch, full]:
+		assert_true(prepared["ok"])
+		assert_eq(prepared["preflight"]["decision"], "allowed")
+		assert_true(RetryPreflightScript.authorize(prepared)["ok"])
+	assert_eq(single["requests"][0]["batch"], 1)
+	assert_eq(failed_batch["requests"][0]["batch"], 3)
+	assert_eq(full["kind"], "full_regeneration")
+	var success_slot: Dictionary = failed_slots[0].duplicate(true)
+	success_slot["status"] = "succeeded"
+	success_slot["error"] = null
+	var rejected: Dictionary = RetryPreflightScript.prepare_failed_slots(
+		[success_slot], 4, "retry-invalid", null, _service, TEST_MONTH
+	)
+	assert_false(rejected["ok"])
+	assert_eq(rejected["requests"], [])
+	_service.set_monthly_budget_micro_usd(1)
+	var confirmation: Dictionary = RetryPreflightScript.prepare_failed_slots(
+		[failed_slots[0]], 4, "retry-confirm", null, _service, TEST_MONTH
+	)
+	assert_eq(confirmation["preflight"]["decision"], "needs_confirmation")
+	var canceled: Dictionary = RetryPreflightScript.authorize(confirmation, false)
+	assert_false(canceled["ok"])
+	assert_eq(canceled["requests"], [])
 	assert_eq(_service.get_month_total_micro_usd(TEST_MONTH), 0)
+	assert_true(TaskQueue.is_idle())
 
 
 func test_actual_charge_meta_and_unknown_ledger() -> void:
@@ -208,6 +232,52 @@ func test_actual_charge_meta_and_unknown_ledger() -> void:
 	if unknown_actual != null:
 		fail_test("unknown actual must not be recorded")
 	assert_eq(_service.get_month_total_micro_usd(TEST_MONTH), before_unknown)
+
+
+func test_budget_duplicate_unknown_threshold_and_overflow_edges() -> void:
+	var provider_map := {"retrodiffusion": ProviderService.get_provider("retrodiffusion")}
+	_service.set_monthly_budget_micro_usd(0)
+	var unlimited: Dictionary = _service.preflight_with_providers(
+		[_request("unlimited", "rd_pro", 2)], provider_map, TEST_MONTH
+	)
+	assert_eq(unlimited["decision"], "allowed")
+	assert_eq(unlimited["reason_code"], "within_budget")
+	_service.set_monthly_budget_micro_usd(500000)
+	var threshold: Dictionary = _service.preflight_with_providers(
+		[_request("threshold", "rd_pro", 2)], provider_map, TEST_MONTH
+	)
+	assert_eq(threshold["decision"], "allowed")
+	assert_eq(threshold["projected_month_total_micro_usd"], 500000)
+	var mixed: Dictionary = (
+		_service
+		. preflight_with_providers(
+			[_request("known", "rd_pro", 1), _request("unknown", "rd_plus", 1)],
+			provider_map,
+			TEST_MONTH,
+		)
+	)
+	assert_eq(mixed["decision"], "allowed")
+	assert_eq(mixed["estimate_state"], "unknown")
+	assert_null(mixed["estimated_total_micro_usd"])
+	var duplicate := _request("duplicate", "rd_pro", 1)
+	var duplicate_result: Dictionary = _service.preflight_with_providers(
+		[duplicate, duplicate.duplicate(true)], provider_map, TEST_MONTH
+	)
+	assert_eq(duplicate_result["decision"], "blocked")
+	assert_eq(duplicate_result["reason_code"], "provider_unavailable")
+	var provider := EstimateProvider.new()
+	provider.estimate = "999999999.999999"
+	var first := _request("overflow-a", "known", 1)
+	first["provider_id"] = "fixture_cost"
+	var second := first.duplicate(true)
+	second["request_id"] = "overflow-b"
+	second["idempotency_key"] = "idem-overflow-b"
+	var overflow: Dictionary = _service.preflight_with_providers(
+		[first, second], {"fixture_cost": provider}, TEST_MONTH
+	)
+	assert_eq(overflow["decision"], "blocked")
+	assert_eq(overflow["reason_code"], "amount_overflow")
+	assert_null(overflow["projected_month_total_micro_usd"])
 
 
 func _request(request_id: String, model_id: String, batch: int) -> Dictionary:
@@ -226,4 +296,38 @@ func _request(request_id: String, model_id: String, batch: int) -> Dictionary:
 		"seed": 1,
 		"ref_images": [],
 		"extra": {"remove_bg": true, "strength": 0.8},
+	}
+
+
+func _retry_planner_input() -> Dictionary:
+	return {
+		"run_id": "retry-source",
+		"provider_id": "retrodiffusion",
+		"model_id": "rd_pro",
+		"target_width": 32,
+		"target_height": 32,
+		"batch_size": 3,
+		"seed": 7,
+		"prefix": "",
+		"prompt": "barrel",
+		"rows": [],
+		"reference_asset_ids": [],
+		"reference_content_sha256s": [],
+		"ref_images": [],
+		"extra": {"remove_bg": true, "strength": 0.8},
+	}
+
+
+func _retryable_error(request_id: String, expected_count: int) -> Dictionary:
+	return {
+		"code": "result_count_mismatch",
+		"stage": "decode",
+		"provider_id": "retrodiffusion",
+		"retryable": true,
+		"retry_after_seconds": null,
+		"status_code": null,
+		"request_id": request_id,
+		"attempts": 1,
+		"expected_count": expected_count,
+		"received_count": 0,
 	}

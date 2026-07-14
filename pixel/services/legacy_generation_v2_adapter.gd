@@ -6,6 +6,7 @@ extends RefCounted
 ## It only converts already-settled items into final v2 slots; it owns no run state machine.
 
 const IdUtil := preload("res://core/util/id_util.gd")
+const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 
 const ALLOWED_ERROR_CODES := [
 	"auth_failed",
@@ -21,6 +22,150 @@ const ALLOWED_ERROR_CODES := [
 	"result_count_mismatch",
 	"interrupted",
 ]
+
+
+func materialize_provider_mapping(
+	graph_id: String,
+	source_node_id: String,
+	existing_batch_params: Dictionary,
+	request: Dictionary,
+	mapped: Dictionary,
+	asset_library: Node
+) -> Dictionary:
+	if asset_library == null or not asset_library.has_method("register_image"):
+		return _command_error("missing_asset_library")
+	if not bool(mapped.get("ok", false)):
+		return _command_error("invalid_provider_mapping")
+	var run_id := String(request.get("run_id", ""))
+	var request_id := String(request.get("request_id", ""))
+	var provider_id := String(request.get("provider_id", ""))
+	if run_id.is_empty() or request_id.is_empty() or provider_id.is_empty():
+		return _command_error("invalid_provider_mapping")
+	var append_existing := (
+		String(existing_batch_params.get("source_run_id", "")) == run_id
+		and String(existing_batch_params.get("source_node_id", "")) == source_node_id
+		and String(existing_batch_params.get("role", "")) == "current"
+	)
+	var input_snapshots: Dictionary = (
+		Dictionary(existing_batch_params.get("input_snapshots", {})).duplicate(true)
+		if append_existing
+		else {}
+	)
+	var request_records: Array = (
+		Array(existing_batch_params.get("request_records", [])).duplicate(true)
+		if append_existing
+		else []
+	)
+	var result_slots: Array = (
+		Array(existing_batch_params.get("result_slots", [])).duplicate(true)
+		if append_existing
+		else []
+	)
+	for record in request_records:
+		if String(record.get("request_id", "")) == request_id:
+			return {
+				"ok": true,
+				"batch_params": existing_batch_params.duplicate(true),
+				"result_slots": [],
+			}
+	var mapped_slots := []
+	for update_value in mapped.get("slot_updates", []):
+		var update: Dictionary = Dictionary(update_value).duplicate(true)
+		update["unexpected"] = false
+		mapped_slots.append(update)
+	for unexpected_value in mapped.get("unexpected_slots", []):
+		var unexpected: Dictionary = Dictionary(unexpected_value).duplicate(true)
+		unexpected["status"] = "succeeded"
+		unexpected["error"] = null
+		mapped_slots.append(unexpected)
+	var new_slot_ids: Array[String] = []
+	var new_result_slots: Array[Dictionary] = []
+	var summary_error: Variant = null
+	for index in range(mapped_slots.size()):
+		var mapped_slot: Dictionary = mapped_slots[index]
+		var slot_id := String(mapped_slot.get("slot_id", ""))
+		var snapshot: Dictionary = Dictionary(mapped_slot.get("input_snapshot", {})).duplicate(true)
+		if slot_id.is_empty() or snapshot.is_empty():
+			return _command_error("invalid_provider_mapping", {"index": index})
+		var snapshot_id := "%s:snapshot" % slot_id
+		input_snapshots[snapshot_id] = snapshot
+		var status := String(mapped_slot.get("status", ""))
+		var slot := {
+			"slot_id": slot_id,
+			"run_id": run_id,
+			"request_id": request_id,
+			"source_row_id": String(mapped_slot.get("source_row_id", "")),
+			"source_asset_id": "",
+			"input_snapshot_id": snapshot_id,
+			"planned_size": Array(snapshot.get("provider_output_size", [])).duplicate(),
+			"status": status,
+			"detached": false,
+			"unexpected": bool(mapped_slot.get("unexpected", false)),
+			"error": mapped_slot.get("error"),
+		}
+		if status == "succeeded":
+			var image: Image = mapped_slot.get("image") as Image
+			if image == null:
+				return _command_error("invalid_provider_mapping", {"index": index})
+			var metadata := {
+				"name": "%s_%03d" % [provider_id, index + 1],
+				"actual_seed": mapped_slot.get("actual_seed"),
+			}
+			var asset_id: String = asset_library.register_image(
+				image,
+				String(metadata["name"]),
+				_asset_meta(graph_id, source_node_id, run_id, request_id, snapshot, metadata, image)
+			)
+			if asset_id.is_empty():
+				return _command_error("asset_registration_failed", {"index": index})
+			slot["asset_id"] = asset_id
+		elif status == "failed" and summary_error == null:
+			summary_error = Dictionary(mapped_slot.get("error", {})).duplicate(true)
+		new_slot_ids.append(slot_id)
+		new_result_slots.append(slot)
+		result_slots.append(slot)
+	var source_row_id := (
+		String(mapped_slots[0].get("source_row_id", "")) if not mapped_slots.is_empty() else ""
+	)
+	var state := String(mapped.get("state", "failed"))
+	(
+		request_records
+		. append(
+			{
+				"kind": "provider",
+				"provider_id": provider_id,
+				"run_id": run_id,
+				"request_id": request_id,
+				"source_row_id": source_row_id,
+				"slot_ids": new_slot_ids,
+				"requested_count": int(request.get("batch", 0)),
+				"received_count": int(mapped.get("received_count", 0)),
+				"attempts": 1,
+				"state": state,
+				"actual_cost_usd": mapped.get("actual_cost_usd"),
+				"charge_id": String(mapped.get("charge_id", "")),
+				"provider_meta": Dictionary(mapped.get("provider_meta", {})).duplicate(true),
+				"remote_cancel_confirmed": null,
+				"error": summary_error if state in ["partial", "failed"] else null,
+			}
+		)
+	)
+	var batch_params := {
+		"label": String(existing_batch_params.get("label", "")),
+		"source_node_id": source_node_id,
+		"source_run_id": run_id,
+		"role": "current",
+		"input_snapshots": input_snapshots,
+		"request_records": request_records,
+		"result_slots": result_slots,
+	}
+	if not bool(BatchNodeScript.validate_v2_domain(batch_params).get("ok", false)):
+		return _command_error("invalid_provider_mapping")
+	return {
+		"ok": true,
+		"batch_params": batch_params,
+		"result_slots": new_result_slots,
+	}
 
 
 func materialize_terminal(

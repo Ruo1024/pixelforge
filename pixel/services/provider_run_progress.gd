@@ -40,7 +40,6 @@ static func aggregate(records: Array, total_items: int, previous_ratio: float = 
 			determinate = false
 			continue
 		var progress: Dictionary = progress_value
-		completed_items += clampi(int(progress.get("completed_items", 0)), 0, count)
 		if not bool(progress.get("determinate", false)) or progress.get("ratio") == null:
 			determinate = false
 		else:

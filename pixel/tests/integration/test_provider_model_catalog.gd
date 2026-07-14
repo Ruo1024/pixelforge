@@ -31,7 +31,10 @@ func test_service_aggregates_catalog_and_resolves_provider_defaults() -> void:
 	assert_eq(_service.resolve_model_id("retrodiffusion"), "rd_plus")
 	assert_eq(_service.resolve_model_id("retrodiffusion", "rd_pro"), "rd_pro")
 	assert_eq(_service.resolve_model_id("retrodiffusion", "missing"), "")
-	assert_eq(_service.get_model_descriptor("retrodiffusion", "rd_fast")["display_name"], "RD Fast")
+	assert_eq(
+		_service.get_model_descriptor("retrodiffusion", "rd_fast")["display_name"],
+		"Retro Diffusion Fast",
+	)
 
 
 func test_production_catalog_excludes_mock_until_explicit_automation_injection() -> void:

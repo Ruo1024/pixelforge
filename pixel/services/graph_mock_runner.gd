@@ -49,6 +49,33 @@ func materialize_provider_batch(
 	return _materialize_batch(graph, batch_node_id, images, metadata, asset_library)
 
 
+func materialize_provider_mapping(
+	graph: PFGraph,
+	batch_node_id: String,
+	request: Dictionary,
+	mapped: Dictionary,
+	asset_library: Node
+) -> Dictionary:
+	if graph == null or graph.get_node(batch_node_id) == null:
+		return _error("missing_node", "Batch node is missing")
+	var adapter_result: Dictionary = LegacyAdapterScript.new().materialize_provider_mapping(
+		graph.id,
+		_source_node_id_for_batch(graph, batch_node_id),
+		graph.get_node_params(batch_node_id),
+		request,
+		mapped,
+		asset_library
+	)
+	if not bool(adapter_result.get("ok", false)):
+		return adapter_result
+	if not graph.set_node_params(batch_node_id, adapter_result["batch_params"]):
+		return _error("missing_node", "Batch node is missing")
+	return {
+		"ok": true,
+		"result_slots": Array(adapter_result["result_slots"]).duplicate(true),
+	}
+
+
 func _validate_run_setup(graph: PFGraph, asset_library: Node) -> Dictionary:
 	if graph == null:
 		return _error("missing_graph", "Graph is required")

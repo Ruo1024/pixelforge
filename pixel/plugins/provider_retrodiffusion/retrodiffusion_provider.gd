@@ -8,6 +8,7 @@ const HttpClientScript := preload("res://infra/http_client.gd")
 const ProviderTaskV2Script := preload("res://core/provider/pf_provider_task_v2.gd")
 const CancelSettlementV2Script := preload("res://services/provider_cancel_settlement_v2.gd")
 const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
+const UsdDecimalScript := preload("res://core/provider/pf_usd_decimal.gd")
 
 const PROVIDER_ID := "retrodiffusion"
 const API_VERSION := 2
@@ -30,10 +31,16 @@ var _request_host: Node = null
 var _http: Node = null
 var _api_key := ""
 var _endpoint := DEFAULT_ENDPOINT
+var _request_timeout_seconds := REQUEST_TIMEOUT_SECONDS
 var _generation_tasks := {}
+var _generation_requests := {}
 var _transport_tasks := {}
 var _cancel_requested := {}
 var _cancel_settlement: Variant = CancelSettlementV2Script.new(PROVIDER_ID)
+
+
+func _init(request_timeout_seconds: float = REQUEST_TIMEOUT_SECONDS) -> void:
+	_request_timeout_seconds = maxf(0.01, request_timeout_seconds)
 
 
 func get_api_version() -> int:
@@ -110,6 +117,7 @@ func generate(request: Dictionary) -> PFProviderTaskV2:
 		return wrapper
 	var request_id := String(request["request_id"])
 	_generation_tasks[request_id] = wrapper
+	_generation_requests[request_id] = request_copy
 	call_deferred("_start_generation", request_copy, wrapper)
 	return wrapper
 
@@ -141,7 +149,7 @@ func _start_generation(request: Dictionary, wrapper: PFProviderTaskV2) -> void:
 			_headers(),
 			body,
 			{
-				"timeout": REQUEST_TIMEOUT_SECONDS,
+				"timeout": _request_timeout_seconds,
 				"retries": MAX_RETRIES,
 				"backoff": RETRY_BACKOFF_SECONDS,
 				"transform": _decode_generation_response.bind(request),
@@ -155,6 +163,18 @@ func _start_generation(request: Dictionary, wrapper: PFProviderTaskV2) -> void:
 	transport.failed.connect(_on_transport_failed.bind(request, request_id))
 	transport.canceled.connect(_on_transport_canceled.bind(request_id))
 	TaskQueue.submit(transport)
+	(
+		wrapper
+		. emit_progress(
+			{
+				"phase": "provider_processing",
+				"determinate": false,
+				"ratio": null,
+				"completed_items": 0,
+				"total_items": request["batch"],
+			}
+		)
+	)
 
 
 func estimate_cost(request: Dictionary) -> Variant:
@@ -248,8 +268,6 @@ func decode_success_payload(payload: Dictionary, request: Dictionary) -> Diction
 					}
 				)
 			)
-	if items.is_empty():
-		return _failure("ambiguous_result", request)
 	return {
 		"request_id": String(request.get("request_id", "")),
 		"items": items,
@@ -264,6 +282,8 @@ func map_error(
 ) -> Dictionary:
 	var code := "provider_internal"
 	var is_generation := int(request.get("batch", 0)) > 0
+	if is_generation and bool(detail.get("malformed_json", false)):
+		code = "ambiguous_result"
 	if result != HTTPRequest.RESULT_SUCCESS:
 		if result == HTTPRequest.RESULT_TIMEOUT:
 			code = "timeout"
@@ -323,6 +343,7 @@ func _on_transport_completed(result: Variant, request_id: String) -> void:
 		_cancel_settlement.confirm_local_stopped(request_id, _billing_update(result))
 		return
 	if wrapper != null and result is Dictionary:
+		_emit_decode_progress(wrapper, request_id)
 		wrapper.resolve(result)
 	_clear_active_request(request_id)
 
@@ -398,12 +419,8 @@ func _failed_item(index: int, request: Dictionary, code: String) -> Dictionary:
 
 
 func _actual_cost(value: Variant) -> Variant:
-	if value is int or value is float:
-		var amount := float(value)
-		if is_finite(amount) and amount >= 0.0:
-			var micro_usd := int(floor(amount * 1000000.0 + 0.5))
-			return "%d.%06d" % [micro_usd / 1000000, micro_usd % 1000000]
-	return null
+	var micro_usd: Variant = UsdDecimalScript.parse_to_micro(value)
+	return UsdDecimalScript.format_micro(int(micro_usd)) if micro_usd is int else null
 
 
 func _provider_meta(payload: Dictionary) -> Dictionary:
@@ -423,8 +440,31 @@ func _safe_identifier(value: Variant, allow_empty: bool) -> String:
 
 func _clear_active_request(request_id: String) -> void:
 	_generation_tasks.erase(request_id)
+	_generation_requests.erase(request_id)
 	_transport_tasks.erase(request_id)
 	_cancel_requested.erase(request_id)
+
+
+func _emit_decode_progress(wrapper: PFProviderTaskV2, request_id: String) -> void:
+	var request: Dictionary = _generation_requests.get(request_id, {})
+	var total := maxi(1, int(request.get("batch", 1)))
+	for progress in [
+		{
+			"phase": "downloading",
+			"determinate": false,
+			"ratio": null,
+			"completed_items": 0,
+			"total_items": total,
+		},
+		{
+			"phase": "decoding",
+			"determinate": true,
+			"ratio": 1.0,
+			"completed_items": total,
+			"total_items": total,
+		},
+	]:
+		wrapper.emit_progress(progress)
 
 
 func _validation_request() -> Dictionary:

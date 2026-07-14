@@ -91,24 +91,31 @@ func test_seed_capability_wrap_splitting_and_retry_groups() -> void:
 		wrapped["requests"].map(func(value: Dictionary) -> int: return value["seed"]),
 		[2147483647, 0]
 	)
-	var retry_slots := [
-		{
-			"slot_id": "s0",
-			"source_row_id": "",
-			"requested_seed": 42,
-			"input_snapshot": {"prompt": "barrel"}
-		},
-		{
-			"slot_id": "s2",
-			"source_row_id": "",
-			"requested_seed": 44,
-			"input_snapshot": {"prompt": "barrel"}
-		},
-	]
+	var retry_slots := [split["slots"][0].duplicate(true), split["slots"][2].duplicate(true)]
+	retry_slots[0]["slot_id"] = "s0"
+	retry_slots[1]["slot_id"] = "s2"
+	for slot in retry_slots:
+		slot["status"] = "failed"
+		slot["error"] = _retryable_error(String(slot["request_id"]), 4)
 	var retries: Array = planner.group_retry_slots(retry_slots, 4)
 	assert_eq(retries.size(), 2)
 	assert_eq(retries[0]["slot_ids"], ["s0"])
 	assert_eq(retries[1]["slot_ids"], ["s2"])
+	var retry_plan: Dictionary = planner.plan_retry_slots(retry_slots, 4, "retry-run")
+	assert_true(retry_plan["ok"])
+	assert_eq(retry_plan["requests"].size(), 2)
+	assert_eq(
+		retry_plan["requests"].map(func(request: Dictionary) -> int: return request["seed"]),
+		[42, 44],
+	)
+	assert_eq(
+		retry_plan["slots"].map(func(slot: Dictionary) -> String: return slot["slot_id"]),
+		["s0", "s2"],
+	)
+	var non_failed: Dictionary = retry_slots[0].duplicate(true)
+	non_failed["status"] = "succeeded"
+	non_failed["error"] = null
+	assert_false(planner.plan_retry_slots([non_failed], 4, "retry-run-bad")["ok"])
 
 
 func test_extra_exact_descriptor_shape_and_reference_boundary() -> void:
@@ -214,6 +221,65 @@ func test_temporary_production_path_uses_planner_and_reference_resolver() -> voi
 	var source := FileAccess.get_file_as_string("res://ui/shell/openai_generation_controller.gd")
 	assert_string_contains(source, "GenerationRequestPlannerScript.plan(")
 	assert_string_contains(source, "GenerationRequestPlannerScript.resolve_reference_assets(")
+	assert_lt(
+		source.find("var request_result := _requests_for_graph"),
+		source.find("var preflight: Dictionary = CostService.preflight"),
+	)
+
+
+func test_all_local_validation_precedes_side_effects() -> void:
+	var planner: Script = load(PLANNER_PATH)
+	assert_not_null(planner)
+	if planner == null:
+		return
+	var cases := []
+	var missing_provider := _planner_input()
+	missing_provider["provider_id"] = "missing"
+	cases.append([missing_provider, "invalid_provider_model"])
+	var invalid_size := _planner_input()
+	invalid_size["target_width"] = 0
+	cases.append([invalid_size, "invalid_target_size"])
+	var missing_prompt := _planner_input()
+	missing_prompt["prompt"] = ""
+	cases.append([missing_prompt, "missing_prompt_input"])
+	var invalid_references := _planner_input()
+	invalid_references["reference_asset_ids"] = ["asset-a"]
+	cases.append([invalid_references, "invalid_reference_images"])
+	var too_many := _planner_input()
+	too_many["batch_size"] = 1000
+	cases.append([too_many, "result_limit_exceeded"])
+	for item in cases:
+		var rejected: Dictionary = planner.plan(item[0], [_openai_descriptor()])
+		assert_false(rejected["ok"])
+		assert_eq(rejected["issue"]["code"], item[1])
+		assert_eq(rejected["requests"], [])
+		assert_eq(rejected["slots"], [])
+
+
+func test_output_size_matrix_and_random_seed_snapshots() -> void:
+	var planner: Script = load(PLANNER_PATH)
+	assert_not_null(planner)
+	if planner == null:
+		return
+	for dimensions in [
+		[32, 32, [1024, 1024]],
+		[32, 16, [1536, 1024]],
+		[16, 32, [1024, 1536]],
+	]:
+		var input := _planner_input()
+		input["target_width"] = dimensions[0]
+		input["target_height"] = dimensions[1]
+		input["batch_size"] = 2
+		input["seed"] = -1
+		var planned: Dictionary = planner.plan(input, [_openai_descriptor()])
+		assert_true(planned["ok"])
+		assert_eq(planned["requests"][0]["provider_output_size"], dimensions[2])
+		assert_eq(
+			planned["slots"].map(
+				func(slot: Dictionary) -> int: return slot["input_snapshot"]["requested_seed"]
+			),
+			[-1, -1],
+		)
 
 
 func _planner_input() -> Dictionary:
@@ -232,6 +298,21 @@ func _planner_input() -> Dictionary:
 		"reference_content_sha256s": [],
 		"ref_images": [],
 		"extra": {"quality": "low"},
+	}
+
+
+func _retryable_error(request_id: String, expected_count: int) -> Dictionary:
+	return {
+		"code": "result_count_mismatch",
+		"stage": "decode",
+		"provider_id": "retrodiffusion",
+		"retryable": true,
+		"retry_after_seconds": null,
+		"status_code": null,
+		"request_id": request_id,
+		"attempts": 1,
+		"expected_count": expected_count,
+		"received_count": 0,
 	}
 
 

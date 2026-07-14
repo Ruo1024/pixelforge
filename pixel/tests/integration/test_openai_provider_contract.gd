@@ -17,6 +17,21 @@ var _host: Node
 var _queue: Node
 
 
+class RecordingCanvas:
+	extends Control
+
+	var status_updates := []
+	var refreshed_batches := []
+
+	func _set_graph_node_status(
+		graph_id: String, node_id: String, status_key: String, detail: String
+	) -> void:
+		status_updates.append([graph_id, node_id, status_key, detail])
+
+	func _refresh_graph_batch_card(graph_id: String, node_id: String) -> void:
+		refreshed_batches.append([graph_id, node_id])
+
+
 func before_each() -> void:
 	_queue = get_tree().root.get_node("TaskQueue")
 	_queue.clear()
@@ -180,21 +195,30 @@ func test_targeted_request_uses_only_the_requested_generate_branch() -> void:
 	assert_true(second_plan["ok"])
 	var first: Dictionary = first_plan["requests"][0]
 	var second: Dictionary = second_plan["requests"][0]
-	assert_eq(first["prompt"], "subject_a")
-	assert_eq(second["prompt"], "subject_b")
+	assert_eq(
+		first["prompt"],
+		(
+			"subject_a, "
+			+ "pixel art designed for a 32x32 true-pixel target, flat colors, crisp edges"
+		),
+	)
+	assert_eq(
+		second["prompt"],
+		(
+			"subject_b, "
+			+ "pixel art designed for a 48x32 true-pixel target, flat colors, crisp edges"
+		),
+	)
 	assert_eq(first["target_width"], 32)
 	assert_eq(second["target_width"], 48)
 	assert_eq(first["provider_output_size"], [1024, 1024])
-	assert_eq(second["provider_output_size"], [1024, 1024])
+	assert_eq(second["provider_output_size"], [1536, 1024])
 	assert_eq(first_plan["provenance_inputs"]["reference_asset_ids"], [first_id])
 	assert_eq(second_plan["provenance_inputs"]["reference_asset_ids"], [second_id])
 	assert_eq(first_plan["provenance_inputs"]["source_node_id"], "generate_a")
-	first["run_id"] = "run-a"
 	first["api_key"] = SECRET_SENTINEL
-	var snapshot: Dictionary = controller._generation_snapshot(
-		first, "openai_image", "gpt-image-2", first_plan["provenance_inputs"]
-	)
-	assert_eq(snapshot["run_id"], "run-a")
+	var snapshot: Dictionary = first_plan["slots"][0]["input_snapshot"]
+	assert_false(snapshot.has("run_id"))
 	assert_eq(snapshot["source_node_id"], "generate_a")
 	assert_eq(snapshot["reference_asset_ids"], [first_id])
 	assert_false(JSON.stringify(snapshot).contains(SECRET_SENTINEL))
@@ -248,7 +272,20 @@ func test_structured_rows_split_at_model_limit_without_legacy_graph_fields() -> 
 	)
 	assert_eq(
 		all["requests"].map(func(request: Dictionary) -> String: return request["prompt"]),
-		["tower", "tower", "barrel"]
+		[
+			(
+				"tower, "
+				+ "pixel art designed for a 32x32 true-pixel target, flat colors, crisp edges"
+			),
+			(
+				"tower, "
+				+ "pixel art designed for a 32x32 true-pixel target, flat colors, crisp edges"
+			),
+			(
+				"barrel, "
+				+ "pixel art designed for a 32x32 true-pixel target, flat colors, crisp edges"
+			),
+		]
 	)
 	for request in all["requests"]:
 		assert_eq(request.keys().size(), 14)
@@ -259,6 +296,150 @@ func test_structured_rows_split_at_model_limit_without_legacy_graph_fields() -> 
 	assert_false(JSON.stringify(graph_data).contains('"items"'))
 	assert_false(JSON.stringify(graph_data).contains('"spec"'))
 	assert_false(JSON.stringify(graph_data).contains('"images"'))
+
+
+func test_production_planner_rejects_empty_model_and_prompt_without_defaulting() -> void:
+	var graph := GraphScript.new()
+	graph.id = "invalid-cloud-input"
+	(
+		graph
+		. add_node(
+			AiGenerateNodeScript.new(),
+			"generate",
+			{
+				"provider_id": "openai_image",
+				"model_id": "",
+				"target_width": 32,
+				"target_height": 32,
+				"batch_size": 1,
+				"seed": -1,
+				"extra": {"quality": "low"},
+			},
+			Vector2.ZERO,
+		)
+	)
+	var controller: Node = load(CLOUD_CONTROLLER_PATH).new()
+	add_child_autofree(controller)
+	var missing_model: Dictionary = controller._requests_for_graph(
+		graph, "generate", "openai_image"
+	)
+	assert_false(missing_model["ok"])
+	assert_eq(
+		missing_model["issue"], {"code": "invalid_provider_model", "field": "model_id", "args": {}}
+	)
+	assert_eq(missing_model["requests"], [])
+	var params := graph.get_node_params("generate")
+	params["model_id"] = "gpt-image-2"
+	assert_true(graph.set_node_params("generate", params))
+	var missing_prompt: Dictionary = controller._requests_for_graph(
+		graph, "generate", "openai_image"
+	)
+	assert_false(missing_prompt["ok"])
+	assert_eq(missing_prompt["issue"]["code"], "missing_prompt_input")
+	assert_eq(missing_prompt["issue"]["field"], "prompt")
+	assert_eq(missing_prompt["requests"], [])
+
+
+func test_real_queue_validates_fields_before_credentials_or_state_changes() -> void:
+	var graph := GraphScript.new()
+	graph.id = "invalid-cloud-queue"
+	(
+		graph
+		. add_node(
+			AiGenerateNodeScript.new(),
+			"generate",
+			{
+				"provider_id": "openai_image",
+				"model_id": "",
+				"target_width": 32,
+				"target_height": 32,
+				"batch_size": 1,
+				"seed": -1,
+				"extra": {"quality": "low"},
+			},
+			Vector2.ZERO,
+		)
+	)
+	graph.add_node(BatchNodeScript.new(), "batch", {}, Vector2(280, 0))
+	var controller: Node = load(CLOUD_CONTROLLER_PATH).new()
+	add_child_autofree(controller)
+	var status_label := Label.new()
+	controller.add_child(status_label)
+	controller._status_label = status_label
+	controller._queue_graph(graph, "batch", "", "generate", "openai_image")
+	assert_string_contains(status_label.text, "invalid_provider_model")
+	assert_eq(controller._pending_runs, {})
+	assert_eq(graph.get_node_params("batch")["result_slots"], [])
+	assert_eq(graph.get_node_params("batch")["request_records"], [])
+
+
+func test_real_task_failure_materializes_structured_slot_and_request_audit() -> void:
+	var graph := GraphScript.new()
+	graph.id = "structured-provider-failure"
+	(
+		graph
+		. add_node(
+			ObjectListNodeScript.new(),
+			"objects",
+			{"rows": [{"id": "row", "text": "barrel", "count": 2, "enabled": true}]},
+			Vector2.ZERO,
+		)
+	)
+	(
+		graph
+		. add_node(
+			AiGenerateNodeScript.new(),
+			"generate",
+			{
+				"provider_id": "openai_image",
+				"model_id": "gpt-image-2",
+				"target_width": 32,
+				"target_height": 32,
+				"batch_size": 1,
+				"seed": -1,
+				"extra": {"quality": "low"},
+			},
+			Vector2(280, 0),
+		)
+	)
+	graph.add_node(BatchNodeScript.new(), "batch", {}, Vector2(560, 0))
+	graph.add_edge("objects", "subjects", "generate", "subjects")
+	graph.add_edge("generate", "assets", "batch", "in")
+	var controller: Node = load(CLOUD_CONTROLLER_PATH).new()
+	add_child_autofree(controller)
+	var canvas := RecordingCanvas.new()
+	add_child_autofree(canvas)
+	var status_label := Label.new()
+	controller.add_child(status_label)
+	controller._canvas = canvas
+	controller._status_label = status_label
+	var planned: Dictionary = controller._requests_for_graph(graph, "generate", "openai_image")
+	assert_true(planned["ok"])
+	var request: Dictionary = planned["requests"][0]
+	controller._pending_runs[request["request_id"]] = {
+		"graph": graph,
+		"request": request,
+		"provider_id": "openai_image",
+		"provider_name": "GPT Image 2",
+		"batch_node_id": "batch",
+		"batch_card_id": "",
+		"generate_node_id": "generate",
+		"planned_slots": planned["slots"],
+	}
+	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+	var timeout_error: Dictionary = _provider.map_error(
+		HTTPRequest.RESULT_TIMEOUT, 0, {"attempts": 1}, request
+	)
+	controller._on_failed(timeout_error, request["request_id"])
+	var saved := GraphScript.from_json(ProjectService.get_graph_data(graph.id))
+	var params: Dictionary = saved.get_node_params("batch")
+	assert_eq(params["result_slots"].size(), 2)
+	assert_eq(
+		params["result_slots"].map(func(slot: Dictionary) -> String: return slot["status"]),
+		["failed", "failed"],
+	)
+	assert_eq(params["request_records"][0]["error"], timeout_error)
+	assert_string_contains(status_label.text, "timeout")
 
 
 func test_error_mapping_and_no_generation_retry_policy_are_stable() -> void:

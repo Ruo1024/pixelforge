@@ -769,6 +769,8 @@ func _run_bound_graph(graph: PFGraph, selected_node_id: String) -> void:
 		)
 		return
 	var batch_card_id := String(target.get("batch_card_id", ""))
+	if _route_provider_graph_run(graph, generate_node_id, batch_node_id, batch_card_id):
+		return
 	_set_batch_run_state(
 		graph,
 		batch_node_id,
@@ -776,8 +778,6 @@ func _run_bound_graph(graph: PFGraph, selected_node_id: String) -> void:
 		_expected_batch_count(graph, generate_node_id),
 		Strings.text("CONTENT_PLACEHOLDER_WAITING")
 	)
-	if _route_provider_graph_run(graph, generate_node_id, batch_node_id, batch_card_id):
-		return
 	_run_mock_graph(graph, generate_node_id, batch_node_id, batch_card_id)
 
 
@@ -1666,7 +1666,7 @@ func _graph_provider_id(graph: PFGraph, generate_node_id: String) -> String:
 	var node: PFNode = graph.get_node(generate_node_id)
 	if node != null and node.get_type() == "comfyui.run_workflow":
 		return "comfyui"
-	return String(graph.get_node_params(generate_node_id).get("provider_id", "mock"))
+	return String(graph.get_node_params(generate_node_id).get("provider_id", ""))
 
 
 func _route_provider_graph_run(
@@ -1679,23 +1679,6 @@ func _route_provider_graph_run(
 		_status_label.text = _graph_run_failure_status(
 			{"message": Strings.text("STATUS_GRAPH_RUN_MISSING_BATCH_CARD")}
 		)
-		return true
-	var generate_params := graph.get_node_params(generate_node_id)
-	var descriptor: Dictionary = ProviderService.get_model_descriptor(
-		provider_id, String(generate_params.get("model_id", ""))
-	)
-	if descriptor.is_empty():
-		_status_label.text = _graph_run_failure_status({"message": "Provider is unavailable"})
-		return true
-	var validation_state := ProviderService.get_validation_state(provider_id)
-	var capabilities: Dictionary = descriptor.get("capabilities", {})
-	var safe_validation := bool(capabilities.get("safe_validation", true))
-	if validation_state != "verified" and (safe_validation or validation_state != "configured"):
-		_status_label.text = (
-			Strings.STATUS_PROVIDER_CREDENTIALS_REQUIRED_FORMAT
-			% String(descriptor.get("display_name", provider_id))
-		)
-		_provider_settings_dialog.show_settings()
 		return true
 	_openai_flow.run_graph(graph, batch_node_id, batch_card_id, generate_node_id)
 	return true

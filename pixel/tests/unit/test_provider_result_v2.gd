@@ -1,10 +1,22 @@
 extends "res://addons/gut/test.gd"
 
 const MAPPER_PATH := "res://services/provider_result_mapper.gd"
+const ADAPTER_PATH := "res://services/legacy_generation_v2_adapter.gd"
+const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const OpenAIProviderScript := preload("res://plugins/provider_openai/openai_image_provider.gd")
 const RetroProviderScript := preload(
 	"res://plugins/provider_retrodiffusion/retrodiffusion_provider.gd"
 )
+
+
+class RecordingAssetLibrary:
+	extends Node
+
+	var registered := []
+
+	func register_image(image: Image, name: String, metadata: Dictionary = {}) -> String:
+		registered.append({"image": image, "name": name, "metadata": metadata.duplicate(true)})
+		return "asset-%d" % registered.size()
 
 
 func test_expected_unexpected_and_missing_slot_mapping() -> void:
@@ -129,6 +141,124 @@ func test_generation_transport_only_retries_when_local_dispatch_is_proven_absent
 		)
 		assert_eq(server_error["code"], "ambiguous_result")
 		assert_false(server_error["retryable"])
+
+
+func test_temporary_adapter_preserves_planner_and_mapper_domain() -> void:
+	var mapper: Script = load(MAPPER_PATH)
+	var adapter: Script = load(ADAPTER_PATH)
+	assert_not_null(mapper)
+	assert_not_null(adapter)
+	if mapper == null or adapter == null:
+		return
+	var library := RecordingAssetLibrary.new()
+	add_child_autofree(library)
+	var request := _request(2)
+	var planned := [_slot("slot-0", 0), _slot("slot-1", 1)]
+	var mapped: Dictionary = mapper.map_result(request, planned, _result([_success(0)]))
+	var materialized: Dictionary = adapter.new().materialize_provider_mapping(
+		"graph-result", "generate", {}, request, mapped, library
+	)
+	assert_true(materialized["ok"])
+	var params: Dictionary = materialized["batch_params"]
+	assert_true(BatchNodeScript.validate_v2_domain(params)["ok"])
+	assert_eq(
+		params["result_slots"].map(func(slot: Dictionary) -> String: return slot["slot_id"]),
+		["slot-0", "slot-1"],
+	)
+	assert_eq(
+		params["result_slots"].map(func(slot: Dictionary) -> String: return slot["status"]),
+		["succeeded", "failed"],
+	)
+	assert_eq(params["request_records"][0]["run_id"], request["run_id"])
+	assert_eq(params["request_records"][0]["request_id"], request["request_id"])
+	assert_eq(params["request_records"][0]["state"], "partial")
+	assert_eq(params["request_records"][0]["actual_cost_usd"], "0.250000")
+	assert_eq(params["request_records"][0]["charge_id"], "charge-1")
+	assert_eq(params["request_records"][0]["provider_meta"], {"remote_task_id": "remote-1"})
+	assert_eq(params["input_snapshots"].size(), 2)
+	assert_eq(library.registered.size(), 1)
+
+	var extra_request := _request(1)
+	var extra_mapped: Dictionary = mapper.map_result(
+		extra_request, [_slot("slot-extra-base", 0)], _result([_success(0), _success(1)])
+	)
+	var extra_materialized: Dictionary = adapter.new().materialize_provider_mapping(
+		"graph-result", "generate", {}, extra_request, extra_mapped, library
+	)
+	assert_true(extra_materialized["ok"])
+	var extra_params: Dictionary = extra_materialized["batch_params"]
+	assert_eq(extra_params["result_slots"].size(), 2)
+	assert_false(extra_params["result_slots"][0]["unexpected"])
+	assert_true(extra_params["result_slots"][1]["unexpected"])
+	assert_eq(extra_params["request_records"][0]["received_count"], 2)
+	var unexpected_snapshot_id: String = extra_params["result_slots"][1]["input_snapshot_id"]
+	assert_eq(
+		extra_params["input_snapshots"][unexpected_snapshot_id]["reference_asset_ids"],
+		["asset-a"],
+	)
+
+
+func test_provider_keeps_other_items_when_one_image_size_is_wrong() -> void:
+	var provider: PFOpenAIImageProvider = OpenAIProviderScript.new()
+	var request := _openai_request()
+	request["batch"] = 2
+	request["provider_output_size"] = [2, 2]
+	var correct := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	var wrong := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+	var result := (
+		provider
+		. decode_success_payload(
+			{
+				"data":
+				[
+					{"b64_json": Marshalls.raw_to_base64(correct.save_png_to_buffer())},
+					{"b64_json": Marshalls.raw_to_base64(wrong.save_png_to_buffer())},
+				]
+			},
+			request,
+		)
+	)
+	assert_true(result["items"][0]["image"] is Image)
+	assert_null(result["items"][0]["error"])
+	assert_null(result["items"][1]["image"])
+	assert_eq(result["items"][1]["error"]["code"], "ambiguous_result")
+	assert_false(result["items"][1]["error"]["retryable"])
+
+
+func test_whole_task_failure_keeps_planned_slots_and_request_audit() -> void:
+	var mapper: Script = load(MAPPER_PATH)
+	var adapter: Script = load(ADAPTER_PATH)
+	assert_not_null(mapper)
+	assert_not_null(adapter)
+	if mapper == null or adapter == null:
+		return
+	var request := _request(2)
+	var planned := [_slot("slot-0", 0), _slot("slot-1", 1)]
+	var provider: PFRetroDiffusionProvider = RetroProviderScript.new()
+	var timeout_error: Dictionary = provider.map_error(
+		HTTPRequest.RESULT_TIMEOUT, 0, {"attempts": 1}, request
+	)
+	var mapped: Dictionary = mapper.map_provider_failure(request, planned, timeout_error)
+	assert_true(mapped["ok"])
+	assert_eq(mapped["state"], "failed")
+	assert_eq(
+		mapped["slot_updates"].map(func(slot: Dictionary) -> String: return slot["status"]),
+		["failed", "failed"],
+	)
+	for slot in mapped["slot_updates"]:
+		assert_eq(slot["error"], timeout_error)
+	var library := RecordingAssetLibrary.new()
+	add_child_autofree(library)
+	var materialized: Dictionary = adapter.new().materialize_provider_mapping(
+		"graph-result", "generate", {}, request, mapped, library
+	)
+	assert_true(materialized["ok"])
+	var params: Dictionary = materialized["batch_params"]
+	assert_eq(params["result_slots"].size(), 2)
+	assert_eq(params["request_records"][0]["state"], "failed")
+	assert_eq(params["request_records"][0]["error"], timeout_error)
+	assert_eq(params["request_records"][0]["received_count"], 0)
+	assert_eq(library.registered, [])
 
 
 func _request(batch: int) -> Dictionary:

@@ -211,14 +211,23 @@ func _on_request_completed(
 		var json := JSON.new()
 		var parse_error := json.parse(body.get_string_from_utf8())
 		if parse_error != OK:
-			_finish_failed(
-				task_id,
-				_error(
+			var error_mapper: Callable = state["opts"]["error_mapper"]
+			var detail := {
+				"status_code": status_code,
+				"attempts": int(state["attempt"]) + 1,
+				"request_dispatched": bool(state.get("request_dispatched", false)),
+				"malformed_json": true,
+			}
+			var error: Dictionary = (
+				error_mapper.call(HTTPRequest.RESULT_SUCCESS, status_code, detail)
+				if error_mapper.is_valid()
+				else (_error(
 					"provider_internal",
 					"The service returned malformed JSON",
 					{"reason": "malformed_json", "status_code": status_code}
-				)
+				))
 			)
+			_finish_failed(task_id, error)
 			return
 		response_body = json.data
 	var response := {

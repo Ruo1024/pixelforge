@@ -5,6 +5,8 @@ const GROUP_PATH := "res://services/cancel_group_settlement_v2.gd"
 const ManualSchedulerScript := preload(
 	"res://tests/fixtures/providers/manual_deadline_scheduler.gd"
 )
+const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
+const ShellControllerScript := preload("res://ui/shell/openai_generation_controller.gd")
 
 
 func test_cancel_order_deadlines_and_dedupe() -> void:
@@ -103,6 +105,12 @@ func test_queued_and_remote_confirmed_branches() -> void:
 	scheduler.advance_ms(0)
 	assert_eq(queued_calls, {"local": 0, "remote": 0})
 	assert_eq(queued_result["remote_cancel_confirmed"], true)
+	var queued_keys := queued_result.keys()
+	queued_keys.sort()
+	assert_eq(
+		queued_keys, ["billing_update", "local_stopped", "remote_cancel_confirmed", "request_id"]
+	)
+	assert_null(ContractV2.validate_cancel_result(queued_result))
 
 	var running_generation := _generation_task("request-remote")
 	var running_controller: Variant = script.new("retrodiffusion", scheduler)
@@ -126,6 +134,7 @@ func test_queued_and_remote_confirmed_branches() -> void:
 	running_controller.confirm_remote_cancel("request-remote", true)
 	assert_eq(running_result["remote_cancel_confirmed"], true)
 	assert_eq(running_result["billing_update"]["actual_cost_usd"], "0.250000")
+	assert_null(ContractV2.validate_cancel_result(running_result))
 	scheduler.advance_ms(3000)
 	assert_eq(running_result["remote_cancel_confirmed"], true)
 
@@ -187,6 +196,47 @@ func test_built_in_providers_use_the_deadline_settlement_boundary() -> void:
 	)
 	assert_string_contains(controller_source, "cancel_task.resolved.connect")
 	assert_string_contains(controller_source, "_record_billing_update(")
+
+
+func test_cancel_billing_is_recorded_before_controller_terminalizes() -> void:
+	var month := CostService.get_month_key()
+	CostService.reset_month_for_tests(month)
+	var controller := ShellControllerScript.new()
+	add_child_autofree(controller)
+	var status_label := Label.new()
+	controller.add_child(status_label)
+	controller._status_label = status_label
+	controller._pending_runs["request-billing"] = {
+		"provider_name": "Retro Diffusion",
+		"request": {"request_id": "request-billing"},
+		"scope_id": "",
+	}
+	var observed := {"pending_when_recorded": false}
+	var observe := func(_month: String, _total: int) -> void:
+		observed["pending_when_recorded"] = controller._pending_runs.has("request-billing")
+	CostService.cost_changed_v2.connect(observe, CONNECT_ONE_SHOT)
+	(
+		controller
+		. _on_cancel_resolved(
+			{
+				"request_id": "request-billing",
+				"local_stopped": true,
+				"remote_cancel_confirmed": false,
+				"billing_update":
+				{
+					"actual_cost_usd": "0.250000",
+					"charge_id": "charge-billing",
+					"provider_meta": {"remote_task_id": "remote-billing"},
+				},
+			},
+			"retrodiffusion",
+			"request-billing",
+		)
+	)
+	assert_true(observed["pending_when_recorded"])
+	assert_false(controller._pending_runs.has("request-billing"))
+	assert_eq(CostService.get_month_total_micro_usd(month), 250000)
+	CostService.reset_month_for_tests(month)
 
 
 func _generation_task(request_id: String) -> PFProviderTaskV2:
