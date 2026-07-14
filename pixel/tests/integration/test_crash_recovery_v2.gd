@@ -26,7 +26,10 @@ func test_all_stale_slots_and_records_converge() -> void:
 	)
 	for index in [0, 1]:
 		assert_eq(params["result_slots"][index]["error"]["code"], "interrupted")
-		assert_eq(params["result_slots"][index]["error"]["stage"], "recovery")
+	assert_eq(params["result_slots"][0]["error"]["stage"], "queue")
+	assert_eq(params["result_slots"][0]["error"]["attempts"], 0)
+	assert_eq(params["result_slots"][1]["error"]["stage"], "provider")
+	assert_eq(params["result_slots"][1]["error"]["attempts"], 1)
 	assert_eq(params["request_records"][0]["state"], "failed")
 	assert_eq(params["request_records"][1]["state"], "failed")
 	assert_eq(params["request_records"][2]["state"], "succeeded")
