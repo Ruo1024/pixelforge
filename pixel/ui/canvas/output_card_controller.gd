@@ -29,6 +29,24 @@ func configure(output: Dictionary) -> void:
 	_rebuild()
 
 
+func selected_slot_id() -> String:
+	return "" if _toolbar == null else String(_toolbar.selected_slot_id)
+
+
+func selected_asset_id() -> String:
+	return String(_slot(selected_slot_id()).get("asset_id", ""))
+
+
+func select_slot(slot_id: String) -> void:
+	if _toolbar == null:
+		return
+	_toolbar.select_slot(_slot(slot_id), _is_busy())
+
+
+func visible_slots() -> Array[Dictionary]:
+	return _visible_slots()
+
+
 func tile_states() -> Array[String]:
 	var result: Array[String] = []
 	for slot in _visible_slots():
@@ -86,6 +104,7 @@ func _rebuild() -> void:
 	_grid.offset_bottom = -16
 	add_child(_grid)
 	_grid.configure(_output.get("result_slots", []))
+	_grid.slot_pressed.connect(select_slot)
 	_toolbar = ToolbarScript.new()
 	_toolbar.name = "SelectionToolbar"
 	_toolbar.position = Vector2(16, -40)

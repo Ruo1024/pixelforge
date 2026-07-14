@@ -4,7 +4,6 @@ extends RefCounted
 ## Graph 节点引用与画布卡片之间的桥接 helper。
 ## contract: 02-contracts/PROJECT-FORMAT.md §4；canvas 只存 node 引用，batch 队列回写 graph params。
 
-const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 
 
@@ -70,102 +69,6 @@ static func deletion_counts(graph_snapshots: Dictionary) -> Dictionary:
 		removed_nodes += int(versions.get("removed_nodes", 0))
 		removed_edges += int(versions.get("removed_edges", 0))
 	return {"nodes": removed_nodes, "edges": removed_edges}
-
-
-static func apply_batch_asset_ids(item: Node, asset_ids: Array, asset_library: Node) -> void:
-	for asset_id in item.asset_ids:
-		asset_library.release_ref(asset_id)
-	item.set_asset_ids(asset_ids)
-	for asset_id in item.asset_ids:
-		asset_library.add_ref(asset_id)
-
-
-static func sync_batch_node_asset_ids(_item: Node, _asset_ids: Array) -> void:
-	# The legacy visual card is read-only; GenerationRunCoordinator owns Output truth.
-	return
-
-
-static func sync_batch_node_review_states(_item: Node, _review_states: Dictionary) -> void:
-	return
-
-
-static func sync_batch_node_review_filter(_item: Node, _review_filter: String) -> void:
-	return
-
-
-static func sync_batch_node_focus_asset_id(_item: Node, _focus_asset_id: String) -> void:
-	return
-
-
-static func sync_batch_node_compare_state(
-	_item: Node, _compare_asset_ids: Array, _compare_mode: String
-) -> void:
-	return
-
-
-static func _string_array(value: Variant) -> Array[String]:
-	var result: Array[String] = []
-	if value is Array:
-		for item in Array(value):
-			var id := String(item)
-			if not id.is_empty():
-				result.append(id)
-	return result
-
-
-static func _review_state_map(value: Variant, valid_asset_ids: Variant) -> Dictionary:
-	var result := {}
-	if not (value is Dictionary):
-		return result
-	var valid_lookup := {}
-	for asset_id in _string_array(valid_asset_ids):
-		valid_lookup[asset_id] = true
-	var raw_states: Dictionary = value
-	for key in raw_states.keys():
-		var asset_id := String(key)
-		if not valid_lookup.has(asset_id):
-			continue
-		var review_state := String(raw_states[key])
-		if review_state in ["keep", "reject", "flag"]:
-			result[asset_id] = review_state
-	return result
-
-
-static func _review_filter(value: Variant) -> String:
-	var filter := String(value)
-	if (
-		filter
-		in [
-			CanvasBatchCardScript.FILTER_ALL,
-			CanvasBatchCardScript.FILTER_PENDING,
-			CanvasBatchCardScript.REVIEW_KEEP,
-			CanvasBatchCardScript.REVIEW_REJECT,
-			CanvasBatchCardScript.REVIEW_FLAG,
-		]
-	):
-		return filter
-	return CanvasBatchCardScript.FILTER_ALL
-
-
-static func _focus_asset_id(value: Variant, valid_asset_ids: Variant) -> String:
-	var asset_id := String(value)
-	return asset_id if _string_array(valid_asset_ids).has(asset_id) else ""
-
-
-static func _compare_asset_ids(value: Variant, current_asset_ids: Variant) -> Array[String]:
-	var result := _string_array(value)
-	if result.size() == _string_array(current_asset_ids).size():
-		return result
-	var empty: Array[String] = []
-	return empty
-
-
-static func _compare_mode(value: Variant, compare_asset_ids: Array) -> String:
-	if not compare_asset_ids.is_empty():
-		match String(value):
-			CanvasBatchCardScript.COMPARE_PREVIOUS, CanvasBatchCardScript.COMPARE_SPLIT:
-				return String(value)
-	return CanvasBatchCardScript.COMPARE_CURRENT
 
 
 static func _graph_node_ids_by_graph(canvas_snapshots: Array) -> Dictionary:

@@ -62,47 +62,6 @@ static func populate_batch(popup: PopupMenu, controller: Node) -> void:
 	_add_group(
 		popup,
 		[
-			["BATCH_ACTION_MARK_KEEP", controller.BATCH_MENU_MARK_KEEP],
-			["BATCH_ACTION_MARK_REJECT", controller.BATCH_MENU_MARK_REJECT],
-			["BATCH_ACTION_MARK_FLAG", controller.BATCH_MENU_MARK_FLAG],
-			["BATCH_ACTION_CLEAR_MARK", controller.BATCH_MENU_CLEAR_MARK],
-		]
-	)
-	_add_group(
-		popup,
-		[
-			["BATCH_ACTION_SHOW_ALL", controller.BATCH_MENU_FILTER_ALL],
-			["BATCH_ACTION_SHOW_KEEP", controller.BATCH_MENU_FILTER_KEEP],
-			["BATCH_ACTION_SHOW_PENDING", controller.BATCH_MENU_FILTER_PENDING],
-			["BATCH_ACTION_SHOW_REJECT", controller.BATCH_MENU_FILTER_REJECT],
-			["BATCH_ACTION_SHOW_FLAG", controller.BATCH_MENU_FILTER_FLAG],
-		]
-	)
-	_add_group(
-		popup,
-		[
-			["BATCH_ACTION_LAYOUT_CONTACT", controller.BATCH_MENU_LAYOUT_CONTACT],
-			["BATCH_ACTION_LAYOUT_FOCUS", controller.BATCH_MENU_LAYOUT_FOCUS],
-		]
-	)
-	_add_group(
-		popup,
-		[
-			["BATCH_ACTION_COMPARE_CURRENT", controller.BATCH_MENU_COMPARE_CURRENT],
-			["BATCH_ACTION_COMPARE_PREVIOUS", controller.BATCH_MENU_COMPARE_PREVIOUS],
-			["BATCH_ACTION_COMPARE_SPLIT", controller.BATCH_MENU_COMPARE_SPLIT],
-		]
-	)
-	_add_group(
-		popup,
-		[
-			["BATCH_ACTION_SPLIT_KEEP", controller.BATCH_MENU_SPLIT_KEEP],
-			["BATCH_ACTION_SPLIT", controller.BATCH_MENU_SPLIT],
-		]
-	)
-	_add_group(
-		popup,
-		[
 			["BATCH_ACTION_EXPORT", controller.BATCH_MENU_EXPORT],
 			["BATCH_ACTION_EDIT", controller.BATCH_MENU_EDIT],
 		],

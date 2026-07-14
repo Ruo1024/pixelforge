@@ -44,6 +44,7 @@ const GraphClipboard := preload("res://core/graph/canvas_graph_clipboard.gd")
 const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
 const LODCoordinator := preload("res://ui/canvas/canvas_lod_coordinator.gd")
 const BatchOps := preload("res://ui/canvas/canvas_batch_ops.gd")
+const DetachOutputCommand := preload("res://ui/canvas/detach_output_asset_command.gd")
 const CanvasCleanupPreviewScript := preload("res://ui/canvas/canvas_cleanup_preview.gd")
 const CanvasSelectionScript := preload("res://ui/canvas/canvas_selection.gd")
 const SelectionSnapshot := preload("res://ui/canvas/canvas_selection_snapshot.gd")
@@ -314,12 +315,11 @@ func _add_batch_card(
 	graph_id: String = "",
 	node_id: String = ""
 ) -> Node:
+	if graph_id.is_empty() or node_id.is_empty():
+		return null
 	var data := {
 		"id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
-		"type": "node" if not node_id.is_empty() else "batch_card",
-		"asset_ids": asset_ids.duplicate(),
-		"selected_asset_ids": [],
-		"label": label,
+		"type": "node",
 		"graph_id": graph_id,
 		"node_id": node_id,
 		"position": [int(round(world_position.x)), int(round(world_position.y))],
@@ -488,10 +488,7 @@ func delete_selected(record_undo: bool = true) -> void:
 			var data: Dictionary = snapshot["data"]
 			if String(data.get("type", "")) == "sprite":
 				_add_sprite_direct(data, snapshot["image"])
-			elif (
-				String(data.get("type", "")) == "batch_card"
-				or GraphItemBridge.is_graph_batch_node_data(data)
-			):
+			elif GraphItemBridge.is_graph_batch_node_data(data):
 				_add_batch_direct(data)
 			elif String(data.get("type", "")) == "node":
 				_add_node_direct(data)
@@ -548,8 +545,6 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 				_unrendered_items.append(Dictionary(item_data).duplicate(true))
 				continue
 			_add_sprite_direct(item_data, image)
-		elif item_type == "batch_card":
-			_add_batch_direct(item_data)
 		elif item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data):
 			_add_batch_direct(item_data)
 		elif item_type == "node":
@@ -966,78 +961,113 @@ func _get_batch_selected_asset_ids(card_id: String) -> Array:
 	return BatchOps.get_selected_asset_ids(_items_by_id, card_id)
 
 
-func _set_batch_review_filter(
-	card_id: String, review_filter: String, record_undo: bool = true
-) -> bool:
-	return BatchOps.set_review_filter(
-		_items_by_id, card_id, review_filter, record_undo, _select_only, _emit_canvas_changed
+func detach_output_slot(
+	card_id: String, slot_id: String, drop_position: Vector2, record_undo: bool = true
+) -> Dictionary:
+	return _detach_output_assets(card_id, slot_id, drop_position, true, record_undo)
+
+
+func detach_all_output_assets(
+	card_id: String, start_position: Vector2, confirmed: bool, record_undo: bool = true
+) -> Dictionary:
+	return _detach_output_assets(card_id, "", start_position, confirmed, record_undo)
+
+
+func _detach_output_assets(
+	card_id: String,
+	slot_id: String,
+	start_position: Vector2,
+	confirmed: bool,
+	record_undo: bool
+) -> Dictionary:
+	var item: Node = _items_by_id.get(card_id, null)
+	if item == null or item.get_script() != CanvasBatchCardScript or not item.has_graph_binding():
+		return {"ok": false}
+	var before_graph: Dictionary = ProjectService.get_graph_data(item.graph_id)
+	var before_params := _batch_params(before_graph, item.node_id)
+	if before_params.is_empty():
+		return {"ok": false}
+	var origin := {
+		"origin_graph_id": item.graph_id,
+		"origin_batch_node_id": item.node_id,
+	}
+	var plan: Dictionary = (
+		DetachOutputCommand.detach_all(
+			before_params.get("result_slots", []), origin, start_position, confirmed
+		)
+		if slot_id.is_empty()
+		else DetachOutputCommand.detach_single(
+			before_params.get("result_slots", []), slot_id, origin, start_position
+		)
 	)
-
-
-func _set_batch_review_layout(
-	card_id: String, review_layout: String, record_undo: bool = true
-) -> bool:
-	return BatchOps.set_review_layout(
-		_items_by_id, card_id, review_layout, record_undo, _select_only, _emit_canvas_changed
+	if not bool(plan.get("ok", false)):
+		return plan
+	var after_graph := before_graph.duplicate(true)
+	if not _set_batch_slots(after_graph, item.node_id, plan["slots"]):
+		return {"ok": false}
+	var sprite_snapshots := []
+	var memory_cost := 0
+	for raw_spec in plan["sprites"]:
+		var data: Dictionary = Dictionary(raw_spec).duplicate(true)
+		var image := AssetLibrary.get_image(String(data.get("asset_id", "")))
+		if image == null:
+			return {"ok": false, "reason": "asset_unavailable"}
+		data["id"] = IdUtil.uuid_v4()
+		data["scale_factor"] = 1
+		data["z_index"] = _items_by_id.size() + sprite_snapshots.size()
+		data["locked"] = false
+		data["frame_id"] = null
+		var image_copy: Image = ImageMath.duplicate_rgba8(image)
+		sprite_snapshots.append({"data": data, "image": image_copy})
+		memory_cost += ImageMath.estimate_rgba8_bytes(image_copy)
+	var sprite_ids := sprite_snapshots.map(
+		func(snapshot: Dictionary) -> String: return String(snapshot["data"]["id"])
 	)
+	var apply_after := func() -> void:
+		ProjectService.set_graph_data(item.graph_id, after_graph, true)
+		for snapshot in sprite_snapshots:
+			_add_sprite_direct(snapshot["data"], snapshot["image"])
+		item._refresh_from_graph()
+		_select_only(sprite_ids)
+		_emit_canvas_changed()
+	var apply_before := func() -> void:
+		for sprite_id in sprite_ids:
+			_remove_item_direct(sprite_id)
+		ProjectService.set_graph_data(item.graph_id, before_graph, true)
+		item._refresh_from_graph()
+		_select_only([card_id])
+		_emit_canvas_changed()
+	if record_undo:
+		UndoService.perform_action(
+			String(plan.get("undo_label", "Detach Output image")),
+			apply_after,
+			apply_before,
+			memory_cost
+		)
+	else:
+		apply_after.call()
+	return plan
 
 
-func _replace_batch_asset_ids(
-	card_id: String, new_asset_ids: Array, record_undo: bool = true, compare_asset_ids: Array = []
-) -> void:
-	BatchOps.replace_asset_ids(
-		_items_by_id,
-		card_id,
-		new_asset_ids,
-		record_undo,
-		compare_asset_ids,
-		_select_only,
-		_emit_canvas_changed
-	)
+func _batch_params(graph_data: Dictionary, batch_node_id: String) -> Dictionary:
+	for value in graph_data.get("nodes", []):
+		if value is Dictionary and String(value.get("id", "")) == batch_node_id:
+			return Dictionary(value.get("params", {})).duplicate(true)
+	return {}
 
 
-func _set_batch_compare_mode(
-	card_id: String, compare_mode: String, record_undo: bool = true
-) -> bool:
-	return BatchOps.set_compare_mode(
-		_items_by_id, card_id, compare_mode, record_undo, _select_only, _emit_canvas_changed
-	)
-
-
-func _set_batch_review_state(
-	card_id: String, asset_ids: Array, review_state: String, record_undo: bool = true
-) -> int:
-	return BatchOps.set_review_state(
-		_items_by_id,
-		card_id,
-		asset_ids,
-		review_state,
-		record_undo,
-		_select_only,
-		_emit_canvas_changed
-	)
-
-
-func _focus_batch_relative(card_id: String, step: int, record_undo: bool = true) -> Dictionary:
-	return BatchOps.focus_relative(
-		_items_by_id, card_id, step, record_undo, _select_only, _emit_canvas_changed
-	)
-
-
-func _split_batch_selection(card_id: String) -> Node:
-	var spec: Dictionary = BatchOps.split_selection_spec(_items_by_id, card_id)
-	if spec.is_empty():
-		return null
-	return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
-
-
-func _split_batch_marked(card_id: String, review_state: String, label_suffix: String) -> Node:
-	var spec: Dictionary = BatchOps.split_marked_spec(
-		_items_by_id, card_id, review_state, label_suffix
-	)
-	if spec.is_empty():
-		return null
-	return _add_batch_card(spec["asset_ids"], spec["position"], spec["label"], "", true)
+func _set_batch_slots(graph_data: Dictionary, batch_node_id: String, slots: Array) -> bool:
+	var nodes: Array = graph_data.get("nodes", [])
+	for index in range(nodes.size()):
+		if nodes[index] is Dictionary and String(nodes[index].get("id", "")) == batch_node_id:
+			var node: Dictionary = Dictionary(nodes[index]).duplicate(true)
+			var params: Dictionary = Dictionary(node.get("params", {})).duplicate(true)
+			params["result_slots"] = slots.duplicate(true)
+			node["params"] = params
+			nodes[index] = node
+			graph_data["nodes"] = nodes
+			return true
+	return false
 
 
 func show_cleanup_preview(
@@ -1560,7 +1590,7 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 			_select_only([item.item_id])
 			batch_run_action_requested.emit(graph_id, node_id, action_id)
 	)
-	item.face_action_requested.connect(_on_batch_face_action_requested)
+	item.output_action_requested.connect(_on_output_action_requested)
 	item.set_lod_camera_zoom(camera_zoom)
 	item_layer.add_child(item)
 	_items_by_id[item.item_id] = item
@@ -1571,27 +1601,24 @@ func _add_batch_direct(item_data: Dictionary) -> Node:
 	return item
 
 
-func _on_batch_face_action_requested(card_id: String, action_id: String, asset_ids: Array) -> void:
+func _on_output_action_requested(card_id: String, action_id: String, slot_id: String) -> void:
 	_select_only([card_id])
+	var item: Node = _items_by_id.get(card_id, null)
+	if item == null:
+		return
+	var selected_ids: Array = item.get_selected_or_all_asset_ids()
 	match action_id:
-		"filter_all":
-			_set_batch_review_filter(card_id, CanvasBatchCardScript.FILTER_ALL, true)
-		"filter_pending":
-			_set_batch_review_filter(card_id, CanvasBatchCardScript.FILTER_PENDING, true)
-		"filter_keep":
-			_set_batch_review_filter(card_id, CanvasBatchCardScript.REVIEW_KEEP, true)
-		"filter_reject":
-			_set_batch_review_filter(card_id, CanvasBatchCardScript.REVIEW_REJECT, true)
-		"filter_flag":
-			_set_batch_review_filter(card_id, CanvasBatchCardScript.REVIEW_FLAG, true)
-		"review_keep":
-			_set_batch_review_state(card_id, asset_ids, CanvasBatchCardScript.REVIEW_KEEP, true)
-		"review_reject":
-			_set_batch_review_state(card_id, asset_ids, CanvasBatchCardScript.REVIEW_REJECT, true)
-		"review_flag":
-			_set_batch_review_state(card_id, asset_ids, CanvasBatchCardScript.REVIEW_FLAG, true)
+		"edit":
+			if not selected_ids.is_empty():
+				asset_edit_requested.emit(String(selected_ids[0]), card_id)
+		"detach":
+			detach_output_slot(card_id, slot_id, item.position + Vector2(item.requested_size.x + 24, 0))
+		"detach_all":
+			detach_all_output_assets(
+				card_id, item.position + Vector2(item.requested_size.x + 24, 0), false
+			)
 		_:
-			batch_face_action_requested.emit(card_id, action_id, asset_ids)
+			batch_face_action_requested.emit(card_id, action_id, selected_ids)
 
 
 func _set_batch_collapsed(item_id: String, value: bool, record_undo: bool = true) -> bool:

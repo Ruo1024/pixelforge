@@ -3,6 +3,8 @@ extends Control
 
 ## Stable-slot viewport with internal vertical scroll and exact hit mapping.
 
+signal slot_pressed(slot_id: String)
+
 const Layout := preload("res://ui/canvas/output_layout_calculator.gd")
 
 const STATE_COLORS := {
@@ -15,6 +17,11 @@ const STATE_COLORS := {
 
 var scroll_offset := 0.0
 var _slots: Array[Dictionary] = []
+
+
+func _ready() -> void:
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	gui_input.connect(_on_gui_input)
 
 
 func configure(slots: Array) -> void:
@@ -86,6 +93,19 @@ func handle_wheel(direction: int, zoom_modifier: bool) -> bool:
 	var step := float(maxi(48, int(_layout()["tile_size"]) + Layout.TILE_GAP))
 	set_scroll_offset(scroll_offset + step * float(-direction))
 	return not is_equal_approx(before, scroll_offset)
+
+
+func _on_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			var slot_id := slot_id_at(event.position)
+			if not slot_id.is_empty():
+				slot_pressed.emit(slot_id)
+				accept_event()
+		elif event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			var direction := 1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1
+			if handle_wheel(direction, event.ctrl_pressed or event.meta_pressed):
+				accept_event()
 
 
 func _draw() -> void:

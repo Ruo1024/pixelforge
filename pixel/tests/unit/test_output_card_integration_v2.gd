@@ -30,12 +30,15 @@ func test_output_host_is_graph_bound_and_uses_the_v2_controller() -> void:
 
 func test_detach_is_one_canvas_undo_with_stable_origin_identity() -> void:
 	var canvas_source := FileAccess.get_file_as_string(PRODUCTION_SURFACES[1])
+	var detach_source := FileAccess.get_file_as_string(
+		"res://ui/canvas/detach_output_asset_command.gd"
+	)
 	assert_true(canvas_source.contains("detach_output_slot"))
 	assert_true(canvas_source.contains("detach_all_output_assets"))
 	assert_true(canvas_source.contains("UndoService.perform_action"))
-	assert_true(canvas_source.contains("origin_graph_id"))
-	assert_true(canvas_source.contains("origin_batch_node_id"))
-	assert_true(canvas_source.contains("origin_slot_id"))
+	assert_true((canvas_source + detach_source).contains("origin_graph_id"))
+	assert_true((canvas_source + detach_source).contains("origin_batch_node_id"))
+	assert_true((canvas_source + detach_source).contains("origin_slot_id"))
 
 
 func test_retired_review_and_standalone_batch_symbols_are_absent() -> void:

@@ -31,7 +31,6 @@ const Pipeline := preload("res://core/pixel/pipeline.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const OfflineExampleControllerScript := preload("res://ui/shell/offline_example_controller.gd")
-const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const ResultBranchBuilder := preload("res://services/result_branch_builder.gd")
 const WorkflowTemplateService := preload("res://services/workflow_template_service.gd")
 const FrameRunPlanner := preload("res://services/frame_run_planner.gd")
@@ -62,23 +61,7 @@ const GRAPH_ADD_MENU_ID_START := 100
 const BATCH_MENU_CLEANUP := 0
 const BATCH_MENU_MATTE := 1
 const BATCH_MENU_OUTLINE := 2
-const BATCH_MENU_SPLIT := 3
 const BATCH_MENU_EXPORT := 4
-const BATCH_MENU_MARK_KEEP := 5
-const BATCH_MENU_MARK_REJECT := 6
-const BATCH_MENU_MARK_FLAG := 7
-const BATCH_MENU_CLEAR_MARK := 8
-const BATCH_MENU_SPLIT_KEEP := 9
-const BATCH_MENU_FILTER_ALL := 10
-const BATCH_MENU_FILTER_KEEP := 11
-const BATCH_MENU_FILTER_PENDING := 12
-const BATCH_MENU_FILTER_REJECT := 13
-const BATCH_MENU_FILTER_FLAG := 14
-const BATCH_MENU_COMPARE_CURRENT := 15
-const BATCH_MENU_COMPARE_PREVIOUS := 16
-const BATCH_MENU_COMPARE_SPLIT := 17
-const BATCH_MENU_LAYOUT_CONTACT := 18
-const BATCH_MENU_LAYOUT_FOCUS := 19
 const BATCH_MENU_EDIT := 20
 const SELECTION_TOOLS_VISIBLE := false
 const RECENT_MENU_REMOVE_MISSING := 999
@@ -274,8 +257,6 @@ func handle_shortcut(event: InputEventKey) -> bool:
 	if event.keycode == KEY_ESCAPE and not _tool_manager.get_active_tool_id().is_empty():
 		_tool_manager.clear_active_tool()
 		return true
-	if _handle_batch_review_shortcut(event):
-		return true
 	if not SELECTION_TOOLS_VISIBLE:
 		return false
 	return _tool_manager.handle_shortcut(event.keycode)
@@ -310,34 +291,6 @@ func open_outline_dialog() -> void:
 		return
 	_outline_dialog.set_source_image(source)
 	_outline_dialog.popup_centered()
-
-
-func batch_selected_sprites() -> void:
-	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
-	if snapshots.size() < 2:
-		_status_label.text = Strings.STATUS_BATCH_NEEDS_SELECTION
-		return
-
-	var asset_ids: Array[String] = []
-	var min_position := Vector2(INF, INF)
-	for snapshot in snapshots:
-		var data: Dictionary = snapshot["data"]
-		var asset_id := String(data.get("asset_id", ""))
-		if asset_id.is_empty():
-			continue
-		asset_ids.append(asset_id)
-		var raw_position: Array = data.get("position", [0, 0])
-		min_position.x = minf(min_position.x, float(raw_position[0]))
-		min_position.y = minf(min_position.y, float(raw_position[1]))
-
-	if asset_ids.size() < 2:
-		_status_label.text = Strings.STATUS_BATCH_NEEDS_SELECTION
-		return
-	var card: Node = _canvas._add_batch_card(
-		asset_ids, min_position + Vector2(0, -96), Strings.BATCH_DEFAULT_LABEL
-	)
-	if card != null:
-		_focus_canvas_on_card(card)
 
 
 func generate_mock_batch() -> void:
@@ -1190,81 +1143,6 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 			_m2_actions.batch_outline(
 				_batch_menu_card_id, asset_ids, {"type": "outer", "color": Color.BLACK}
 			)
-		BATCH_MENU_MARK_KEEP:
-			_mark_batch_review_state(
-				CanvasBatchCardScript.REVIEW_KEEP, Strings.text("STATUS_BATCH_MARK_KEEP")
-			)
-		BATCH_MENU_MARK_REJECT:
-			_mark_batch_review_state(
-				CanvasBatchCardScript.REVIEW_REJECT, Strings.text("STATUS_BATCH_MARK_REJECT")
-			)
-		BATCH_MENU_MARK_FLAG:
-			_mark_batch_review_state(
-				CanvasBatchCardScript.REVIEW_FLAG, Strings.text("STATUS_BATCH_MARK_FLAG")
-			)
-		BATCH_MENU_CLEAR_MARK:
-			_mark_batch_review_state(
-				CanvasBatchCardScript.REVIEW_NONE, Strings.text("STATUS_BATCH_MARK_CLEAR")
-			)
-		BATCH_MENU_FILTER_ALL:
-			_set_batch_review_filter(
-				CanvasBatchCardScript.FILTER_ALL, Strings.text("STATUS_BATCH_SHOW_ALL")
-			)
-		BATCH_MENU_FILTER_KEEP:
-			_set_batch_review_filter(
-				CanvasBatchCardScript.REVIEW_KEEP, Strings.text("STATUS_BATCH_SHOW_KEEP")
-			)
-		BATCH_MENU_FILTER_PENDING:
-			_set_batch_review_filter(
-				CanvasBatchCardScript.FILTER_PENDING, Strings.text("STATUS_BATCH_SHOW_PENDING")
-			)
-		BATCH_MENU_FILTER_REJECT:
-			_set_batch_review_filter(
-				CanvasBatchCardScript.REVIEW_REJECT, Strings.text("STATUS_BATCH_SHOW_REJECT")
-			)
-		BATCH_MENU_FILTER_FLAG:
-			_set_batch_review_filter(
-				CanvasBatchCardScript.REVIEW_FLAG, Strings.text("STATUS_BATCH_SHOW_FLAG")
-			)
-		BATCH_MENU_LAYOUT_CONTACT:
-			_set_batch_review_layout(
-				CanvasBatchCardScript.LAYOUT_CONTACT, Strings.text("STATUS_BATCH_LAYOUT_CONTACT")
-			)
-		BATCH_MENU_LAYOUT_FOCUS:
-			_set_batch_review_layout(
-				CanvasBatchCardScript.LAYOUT_FOCUS, Strings.text("STATUS_BATCH_LAYOUT_FOCUS")
-			)
-		BATCH_MENU_COMPARE_CURRENT:
-			_set_batch_compare_mode(
-				CanvasBatchCardScript.COMPARE_CURRENT, Strings.text("STATUS_BATCH_COMPARE_CURRENT")
-			)
-		BATCH_MENU_COMPARE_PREVIOUS:
-			_set_batch_compare_mode(
-				CanvasBatchCardScript.COMPARE_PREVIOUS,
-				Strings.text("STATUS_BATCH_COMPARE_PREVIOUS")
-			)
-		BATCH_MENU_COMPARE_SPLIT:
-			_set_batch_compare_mode(
-				CanvasBatchCardScript.COMPARE_SPLIT, Strings.text("STATUS_BATCH_COMPARE_SPLIT")
-			)
-		BATCH_MENU_SPLIT_KEEP:
-			var new_keep_card: Variant = _canvas._split_batch_marked(
-				_batch_menu_card_id,
-				CanvasBatchCardScript.REVIEW_KEEP,
-				Strings.BATCH_KEEP_LABEL_SUFFIX
-			)
-			_status_label.text = (
-				Strings.text("STATUS_BATCH_SPLIT_KEEP")
-				if new_keep_card != null
-				else Strings.text("STATUS_BATCH_SPLIT_KEEP_EMPTY")
-			)
-		BATCH_MENU_SPLIT:
-			var new_card: Variant = _canvas._split_batch_selection(_batch_menu_card_id)
-			_status_label.text = (
-				Strings.text("STATUS_BATCH_SPLIT")
-				if new_card != null
-				else Strings.text("STATUS_BATCH_SPLIT_EMPTY")
-			)
 		BATCH_MENU_EXPORT:
 			_emit_batch_export(asset_ids)
 
@@ -1275,110 +1153,6 @@ func _open_selected_in_pixel_editor() -> void:
 
 func _open_pixel_editor(asset_id: String, batch_id: String) -> void:
 	_pixel_editor_flow.open_asset(asset_id, batch_id)
-
-
-func _mark_batch_review_state(review_state: String, status_format: String) -> void:
-	_mark_batch_review_state_for_card(_batch_menu_card_id, review_state, status_format)
-
-
-func _mark_batch_review_state_for_card(
-	card_id: String, review_state: String, status_format: String
-) -> bool:
-	var selected_ids: Array = _canvas._get_batch_selected_asset_ids(card_id)
-	if selected_ids.is_empty():
-		_status_label.text = Strings.text("STATUS_BATCH_MARK_NEEDS_SELECTION")
-		return false
-	var marked_count: int = _canvas._set_batch_review_state(
-		card_id, selected_ids, review_state, true
-	)
-	if marked_count <= 0:
-		_status_label.text = Strings.text("STATUS_BATCH_MARK_NEEDS_SELECTION")
-		return false
-	_status_label.text = status_format % marked_count
-	return true
-
-
-func _handle_batch_review_shortcut(event: InputEventKey) -> bool:
-	if event.is_command_or_control_pressed() or event.alt_pressed:
-		return false
-	if _handle_batch_focus_shortcut(event):
-		return true
-	var card_id := _selected_batch_card_id()
-	var review_state := ""
-	var status_format := ""
-	match event.keycode:
-		KEY_K:
-			review_state = CanvasBatchCardScript.REVIEW_KEEP
-			status_format = Strings.text("STATUS_BATCH_MARK_KEEP")
-		KEY_R:
-			review_state = CanvasBatchCardScript.REVIEW_REJECT
-			status_format = Strings.text("STATUS_BATCH_MARK_REJECT")
-		KEY_F:
-			review_state = CanvasBatchCardScript.REVIEW_FLAG
-			status_format = Strings.text("STATUS_BATCH_MARK_FLAG")
-		KEY_C:
-			review_state = CanvasBatchCardScript.REVIEW_NONE
-			status_format = Strings.text("STATUS_BATCH_MARK_CLEAR")
-		_:
-			return false
-	_mark_batch_review_state_for_card(card_id, review_state, status_format)
-	return true
-
-
-func _handle_batch_focus_shortcut(event: InputEventKey) -> bool:
-	match event.keycode:
-		KEY_RIGHT, KEY_DOWN:
-			return _focus_selected_batch_relative(1)
-		KEY_LEFT, KEY_UP:
-			return _focus_selected_batch_relative(-1)
-	return false
-
-
-func _focus_selected_batch_relative(step: int) -> bool:
-	var card_id := _selected_batch_card_id()
-	if card_id.is_empty():
-		return false
-	var focus_result: Dictionary = _canvas._focus_batch_relative(card_id, step, true)
-	if focus_result.is_empty():
-		_status_label.text = Strings.text("STATUS_BATCH_FOCUS_EMPTY")
-		return true
-	_status_label.text = (
-		Strings.text("STATUS_BATCH_FOCUS_FORMAT") % [focus_result["index"], focus_result["total"]]
-	)
-	return true
-
-
-func _selected_batch_card_id() -> String:
-	var selected_ids: Array = _canvas.get_selected_ids()
-	if selected_ids.is_empty():
-		return ""
-	for item in _canvas.export_canvas_data()["items"]:
-		var item_data: Dictionary = item
-		var item_id := String(item_data.get("id", ""))
-		if selected_ids.has(item_id) and not _canvas._get_batch_asset_ids(item_id).is_empty():
-			return item_id
-	return ""
-
-
-func _set_batch_review_filter(review_filter: String, status_text: String) -> void:
-	if not _canvas._set_batch_review_filter(_batch_menu_card_id, review_filter, true):
-		_status_label.text = Strings.text("STATUS_BATCH_FILTER_FAILED")
-		return
-	_status_label.text = status_text
-
-
-func _set_batch_review_layout(review_layout: String, status_text: String) -> void:
-	if not _canvas._set_batch_review_layout(_batch_menu_card_id, review_layout, true):
-		_status_label.text = Strings.text("STATUS_BATCH_LAYOUT_FAILED")
-		return
-	_status_label.text = status_text
-
-
-func _set_batch_compare_mode(compare_mode: String, status_text: String) -> void:
-	if not _canvas._set_batch_compare_mode(_batch_menu_card_id, compare_mode, true):
-		_status_label.text = Strings.text("STATUS_BATCH_COMPARE_EMPTY")
-		return
-	_status_label.text = status_text
 
 
 func _emit_batch_export(asset_ids: Array) -> void:
