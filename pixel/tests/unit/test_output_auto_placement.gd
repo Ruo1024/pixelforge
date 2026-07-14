@@ -27,3 +27,10 @@ func test_scan_uses_effective_bounds_and_fifty_six_gap() -> void:
 	var source := Rect2(Vector2.ZERO, Vector2(360, 400))
 	var existing := [Rect2(Vector2(440, 0), Vector2(400, 520))]
 	assert_eq(placement.find_position(source, existing, Vector2(400, 520)), Vector2(440, 576))
+
+
+func test_generation_controller_uses_effective_canvas_bounds_instead_of_fixed_offset() -> void:
+	var source := FileAccess.get_file_as_string("res://ui/shell/generation_run_controller.gd")
+	assert_true(source.contains("OutputAutoPlacementScript.find_position("))
+	assert_true(source.contains("_canvas_item_bounds("))
+	assert_false(source.contains("_node_position(graph, source_node_id) + Vector2(480, 0)"))
