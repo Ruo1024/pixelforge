@@ -169,8 +169,13 @@ func test_generation_provenance_exact_fields() -> void:
 		"extra": {"quality": "low"},
 	}
 	var unsafe_snapshot := expected_snapshot.duplicate(true)
-	unsafe_snapshot["negative_prompt"] = "private negative prompt"
-	unsafe_snapshot["authorization"] = "Bearer secret"
+	for key in ["target_width", "target_height", "actual_width", "actual_height"]:
+		unsafe_snapshot[key] = int(unsafe_snapshot[key])
+	unsafe_snapshot["provider_output_size"] = [1024, 1024]
+	unsafe_snapshot["requested_seed"] = -1
+	unsafe_snapshot["actual_seed"] = 2147483647
+	unsafe_snapshot["extra"]["raw_prompt"] = "private negative prompt"
+	unsafe_snapshot["extra"]["authorization"] = "Bearer secret"
 	var asset_id := (
 		AssetLibrary
 		. register_image(
@@ -187,6 +192,7 @@ func test_generation_provenance_exact_fields() -> void:
 			}
 		)
 	)
+	assert_false(asset_id.is_empty())
 
 	assert_eq(ProjectService.save_project(PATH_A), OK)
 	assert_eq(ProjectService.open_project(PATH_A), OK)

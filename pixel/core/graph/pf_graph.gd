@@ -371,6 +371,15 @@ static func _validate_v2_data(data: Dictionary) -> Dictionary:
 			var descriptor := ProviderService.get_model_descriptor(
 				String(params.get("provider_id", "")), String(params.get("model_id", ""))
 			)
+			if (
+				descriptor.is_empty()
+				and String(params.get("provider_id", "")) == ProviderService.AUTOMATION_PROVIDER
+				and (
+					String(params.get("model_id", ""))
+					== String(ProviderService.MOCK_MODEL_DESCRIPTOR["model_id"])
+				)
+			):
+				descriptor = ProviderService.MOCK_MODEL_DESCRIPTOR
 			if descriptor.is_empty():
 				return _load_error("invalid_provider_model", "nodes[%d].params.model_id" % index)
 			var extra_issue: Variant = ProviderContractV2._validate_dynamic_params(
