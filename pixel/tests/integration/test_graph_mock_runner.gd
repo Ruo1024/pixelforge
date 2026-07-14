@@ -5,7 +5,6 @@ const GraphScript := preload("res://core/graph/pf_graph.gd")
 const MockRunnerScript := preload("res://services/graph_mock_runner.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
-const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
 const ReferenceSetNodeScript := preload("res://core/graph/nodes/reference_set_node.gd")
 const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
@@ -24,36 +23,35 @@ func test_mock_generate_chain_materializes_images_into_batch_node() -> void:
 	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
 
 	assert_true(bool(result["ok"]))
-	assert_eq(result["asset_ids"].size(), 10)
-	assert_eq(graph.get_node_params("batch_1")["asset_ids"], result["asset_ids"])
+	assert_eq(result["result_slots"].size(), 10)
+	var batch_params := graph.get_node_params("batch_1")
+	assert_false(batch_params.has("asset_ids"))
+	assert_eq(BatchNodeScript.get_visible_asset_ids(batch_params).size(), 10)
 
-	var first_asset_id := String(result["asset_ids"][0])
+	var first_asset_id := String(result["result_slots"][0]["asset_id"])
 	assert_true(asset_library.has_asset(first_asset_id))
 	assert_eq(asset_library.get_image(first_asset_id).get_size(), Vector2i(12, 10))
 	var meta: Dictionary = asset_library.get_asset_meta(first_asset_id)
 	assert_eq(meta["origin"], "generated")
-	assert_eq(meta["provenance"]["provider"], "mock")
 	assert_eq(meta["provenance"]["graph_id"], "graph_main")
-	assert_eq(meta["provenance"]["seed"], 700)
+	assert_eq(meta["provenance"]["generation_snapshot"]["provider_id"], "mock")
+	assert_eq(meta["provenance"]["generation_snapshot"]["actual_seed"], 700)
 
 
-func test_mock_generate_chain_can_replace_existing_batch_assets() -> void:
+func test_mock_path_uses_result_slots_projection_only() -> void:
 	var graph := _make_mock_graph()
 	var asset_library := get_tree().root.get_node("AssetLibrary")
 	var runner := MockRunnerScript.new()
 
-	var first_result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
-	assert_true(bool(first_result["ok"]))
-	var first_ids: Array = graph.get_node_params("batch_1")["asset_ids"].duplicate()
-	assert_eq(first_ids.size(), 10)
-
-	var second_result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
-	assert_true(bool(second_result["ok"]))
-	var second_ids: Array = graph.get_node_params("batch_1")["asset_ids"]
-
-	assert_eq(second_result["asset_ids"].size(), 10)
-	assert_eq(second_ids.size(), 10)
-	assert_ne(second_ids, first_ids)
+	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
+	assert_true(bool(result["ok"]))
+	var params := graph.get_node_params("batch_1")
+	assert_false(params.has("asset_ids"))
+	assert_eq(params["result_slots"], result["result_slots"])
+	assert_eq(BatchNodeScript.get_visible_asset_ids(params).size(), 10)
+	var source := FileAccess.get_file_as_string("res://services/graph_mock_runner.gd")
+	assert_false("replace_batch_assets" in source)
+	assert_false("params[\"asset_ids\"]" in source)
 
 
 func test_structured_object_rows_override_batch_size_and_persist_source_provenance() -> void:
@@ -63,7 +61,6 @@ func test_structured_object_rows_override_batch_size_and_persist_source_provenan
 		. set_node_params(
 			"objects",
 			{
-				"items": "tower\nbarrel\nignored",
 				"rows":
 				[
 					{"id": "row-tower", "text": "tower", "count": 2, "enabled": true},
@@ -73,52 +70,61 @@ func test_structured_object_rows_override_batch_size_and_persist_source_provenan
 			},
 		)
 	)
-	graph.set_node_params("generate", {"provider_id": "mock", "batch_size": 7, "seed": 900})
+	graph.set_node_params(
+		"generate",
+		{
+			"provider_id": "mock",
+			"model_id": "pixel_mock_v1",
+			"target_width": 12,
+			"target_height": 10,
+			"batch_size": 7,
+			"seed": 900,
+			"extra": {},
+		}
+	)
 
 	var result: Dictionary = MockRunnerScript.new().run_to_batch(graph, AssetLibrary, "batch_1")
 
 	assert_true(result["ok"])
-	assert_eq(result["asset_ids"].size(), 5)
+	assert_eq(result["result_slots"].size(), 5)
 	var source_rows: Array[String] = []
-	for asset_id in result["asset_ids"]:
+	for slot in result["result_slots"]:
+		var asset_id := String(slot["asset_id"])
 		var provenance: Dictionary = AssetLibrary.get_asset_meta(String(asset_id))["provenance"]
-		assert_eq(provenance["source_node_id"], "objects")
-		source_rows.append(String(provenance["source_row_id"]))
+		var snapshot: Dictionary = provenance["generation_snapshot"]
+		assert_eq(snapshot["source_node_id"], "generate")
+		source_rows.append(String(snapshot["source_row_id"]))
 	assert_eq(source_rows, ["row-tower", "row-tower", "row-barrel", "row-barrel", "row-barrel"])
 
 
-func test_mock_generate_chain_rejects_missing_required_spec_input() -> void:
+func test_mock_generate_chain_uses_local_target_params_without_size_spec() -> void:
 	var graph := _make_mock_graph()
 	var asset_library := get_tree().root.get_node("AssetLibrary")
 	var runner := MockRunnerScript.new()
-	var existing_ids := ["asset_existing"]
-	graph.set_node_params("batch_1", {"label": "Mock Batch", "asset_ids": existing_ids})
-	_remove_edge(graph, "size", "spec", "generate", "spec")
 
-	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
+	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
 
-	assert_false(bool(result["ok"]))
-	assert_eq(result["error"]["code"], "missing_required_input")
-	assert_eq(graph.get_node_params("batch_1")["asset_ids"], existing_ids)
+	assert_true(bool(result["ok"]))
+	assert_null(graph.get_node("size"))
+	for slot in result["result_slots"]:
+		assert_eq(asset_library.get_image(String(slot["asset_id"])).get_size(), Vector2i(12, 10))
 
 
 func test_mock_generate_chain_rejects_loaded_invalid_edge_before_run() -> void:
 	var graph := _make_mock_graph()
 	var asset_library := get_tree().root.get_node("AssetLibrary")
 	var runner := MockRunnerScript.new()
-	var existing_ids := ["asset_existing"]
-	graph.set_node_params("batch_1", {"label": "Mock Batch", "asset_ids": existing_ids})
-	_remove_edge(graph, "generate", "images", "batch_1", "in")
-	graph.edges.append({"from": ["objects", "items"], "to": ["batch_1", "in"]})
+	_remove_edge(graph, "generate", "assets", "batch_1", "in")
+	graph.edges.append({"from": ["objects", "subjects"], "to": ["batch_1", "in"]})
 
-	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1", true)
+	var result: Dictionary = runner.run_to_batch(graph, asset_library, "batch_1")
 
 	assert_false(bool(result["ok"]))
 	assert_eq(result["error"]["code"], "invalid_edge")
 	assert_string_contains(
-		String(result["error"]["message"]), "Cannot connect text_list to image_list"
+		String(result["error"]["message"]), "Cannot connect subject_list to asset_list"
 	)
-	assert_eq(graph.get_node_params("batch_1")["asset_ids"], existing_ids)
+	assert_eq(graph.get_node_params("batch_1")["result_slots"], [])
 
 
 func test_mock_generate_chain_survives_project_roundtrip_after_materialization() -> void:
@@ -135,9 +141,12 @@ func test_mock_generate_chain_survives_project_roundtrip_after_materialization()
 
 	assert_eq(project_service.open_project(path), OK)
 	var loaded_graph: Dictionary = project_service.current_project.graphs["graph_main"]
-	var loaded_batch: Dictionary = loaded_graph["nodes"][3]
-	assert_eq(loaded_batch["params"]["asset_ids"].size(), 10)
-	assert_true(asset_library.has_asset(String(loaded_batch["params"]["asset_ids"][0])))
+	var loaded_batch: Dictionary = loaded_graph["nodes"][2]
+	assert_false(loaded_batch["params"].has("asset_ids"))
+	assert_eq(loaded_batch["params"]["result_slots"].size(), 10)
+	assert_true(
+		asset_library.has_asset(String(loaded_batch["params"]["result_slots"][0]["asset_id"]))
+	)
 
 
 func test_reference_image_changes_mock_output_and_persists_provenance() -> void:
@@ -156,14 +165,17 @@ func test_reference_image_changes_mock_output_and_persists_provenance() -> void:
 	var blue_result: Dictionary = runner.run_to_batch(blue_graph, asset_library, "batch_1")
 	assert_true(red_result["ok"])
 	assert_true(blue_result["ok"])
-	var red_output: Image = asset_library.get_image(String(red_result["asset_ids"][0]))
-	var blue_output: Image = asset_library.get_image(String(blue_result["asset_ids"][0]))
+	var red_id_out := String(red_result["result_slots"][0]["asset_id"])
+	var blue_id_out := String(blue_result["result_slots"][0]["asset_id"])
+	var red_output: Image = asset_library.get_image(red_id_out)
+	var blue_output: Image = asset_library.get_image(blue_id_out)
 	assert_ne(red_output.get_data(), blue_output.get_data())
-	var provenance: Dictionary = (
-		asset_library.get_asset_meta(String(red_result["asset_ids"][0]))["provenance"]
+	var provenance: Dictionary = asset_library.get_asset_meta(red_id_out)["provenance"]
+	var snapshot: Dictionary = provenance["generation_snapshot"]
+	assert_eq(snapshot["reference_asset_ids"], [red_id])
+	assert_eq(
+		snapshot["reference_content_sha256s"], [GraphContextScript.image_content_sha256(red)]
 	)
-	assert_eq(provenance["reference_asset_id"], red_id)
-	assert_eq(provenance["reference_content_sha256"], GraphContextScript.image_content_sha256(red))
 
 
 func test_ordered_reference_set_reaches_mock_and_persists_plural_provenance() -> void:
@@ -177,15 +189,16 @@ func test_ordered_reference_set_reaches_mock_and_persists_plural_provenance() ->
 	graph.add_node(
 		ReferenceSetNodeScript.new(), "references", {"asset_ids": [blue_id, red_id]}, Vector2.ZERO
 	)
-	assert_true(bool(graph.add_edge("references", "images", "generate", "image")["ok"]))
+	assert_true(bool(graph.add_edge("references", "assets", "generate", "references")["ok"]))
 	var result: Dictionary = MockRunnerScript.new().run_to_batch(graph, AssetLibrary, "batch_1")
 	assert_true(result["ok"])
 	var provenance: Dictionary = (
-		AssetLibrary.get_asset_meta(String(result["asset_ids"][0]))["provenance"]
+		AssetLibrary.get_asset_meta(String(result["result_slots"][0]["asset_id"]))["provenance"]
 	)
-	assert_eq(provenance["reference_asset_ids"], [blue_id, red_id])
+	var snapshot: Dictionary = provenance["generation_snapshot"]
+	assert_eq(snapshot["reference_asset_ids"], [blue_id, red_id])
 	assert_eq(
-		provenance["reference_content_sha256s"],
+		snapshot["reference_content_sha256s"],
 		[
 			GraphContextScript.image_content_sha256(blue),
 			GraphContextScript.image_content_sha256(red),
@@ -198,7 +211,7 @@ func test_unconnected_empty_reference_does_not_block_target_batch() -> void:
 	graph.add_node(ImageInputNodeScript.new(), "unused_reference", {}, Vector2.ZERO)
 	var result: Dictionary = MockRunnerScript.new().run_to_batch(graph, AssetLibrary, "batch_1")
 	assert_true(result["ok"])
-	assert_eq(result["asset_ids"].size(), 10)
+	assert_eq(result["result_slots"].size(), 10)
 
 
 func test_connected_reference_reports_missing_not_found_and_decode_errors() -> void:
@@ -239,32 +252,42 @@ func _make_mock_graph() -> PFGraph:
 	graph.add_node(
 		ObjectListNodeScript.new(),
 		"objects",
-		{"items": "barrel\nfence\nscarecrow\ncrate\nwell"},
+		{
+			"rows":
+			[
+				{"id": "row-barrel", "text": "barrel", "count": 2, "enabled": true},
+				{"id": "row-fence", "text": "fence", "count": 2, "enabled": true},
+				{"id": "row-scarecrow", "text": "scarecrow", "count": 2, "enabled": true},
+				{"id": "row-crate", "text": "crate", "count": 2, "enabled": true},
+				{"id": "row-well", "text": "well", "count": 2, "enabled": true},
+			]
+		},
 		Vector2(0, 0)
-	)
-	graph.add_node(
-		SizeSpecNodeScript.new(),
-		"size",
-		{"width": 12, "height": 10, "per_subject": 1},
-		Vector2(220, 0)
 	)
 	graph.add_node(
 		AiGenerateNodeScript.new(),
 		"generate",
-		{"provider_id": "mock", "batch_size": 2, "seed": 700},
+		{
+			"provider_id": "mock",
+			"model_id": "pixel_mock_v1",
+			"target_width": 12,
+			"target_height": 10,
+			"batch_size": 2,
+			"seed": 700,
+			"extra": {},
+		},
 		Vector2(440, 0)
 	)
 	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": "Mock Batch"}, Vector2(660, 0))
-	assert_true(bool(graph.add_edge("objects", "items", "generate", "items")["ok"]))
-	assert_true(bool(graph.add_edge("size", "spec", "generate", "spec")["ok"]))
-	assert_true(bool(graph.add_edge("generate", "images", "batch_1", "in")["ok"]))
+	assert_true(bool(graph.add_edge("objects", "subjects", "generate", "subjects")["ok"]))
+	assert_true(bool(graph.add_edge("generate", "assets", "batch_1", "in")["ok"]))
 	return graph
 
 
 func _make_mock_graph_with_reference(asset_id: String) -> PFGraph:
 	var graph := _make_mock_graph()
 	graph.add_node(ImageInputNodeScript.new(), "reference", {"asset_id": asset_id}, Vector2.ZERO)
-	assert_true(bool(graph.add_edge("reference", "image", "generate", "image")["ok"]))
+	assert_true(bool(graph.add_edge("reference", "assets", "generate", "references")["ok"]))
 	return graph
 
 
