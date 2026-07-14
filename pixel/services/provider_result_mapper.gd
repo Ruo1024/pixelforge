@@ -6,6 +6,25 @@ extends RefCounted
 const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 
 
+static func map_contract_failure(request: Dictionary, acceptance_proof: Dictionary) -> Dictionary:
+	var proof_keys := ["billing_possible", "generation_started", "provider_accepted"]
+	var exact_proof := acceptance_proof.size() == proof_keys.size()
+	for key in proof_keys:
+		exact_proof = exact_proof and acceptance_proof.has(key)
+	var definitely_unaccepted := (
+		exact_proof
+		and acceptance_proof["provider_accepted"] is bool
+		and acceptance_proof["generation_started"] is bool
+		and acceptance_proof["billing_possible"] is bool
+		and not bool(acceptance_proof["provider_accepted"])
+		and not bool(acceptance_proof["generation_started"])
+		and not bool(acceptance_proof["billing_possible"])
+	)
+	return _contract_failure(
+		request, "malformed_response" if definitely_unaccepted else "ambiguous_result"
+	)
+
+
 static func map_result(request: Dictionary, planned_slots: Array, result: Dictionary) -> Dictionary:
 	if ContractV2.validate_gen_request(request) != null:
 		return _ambiguous(request)
@@ -115,9 +134,13 @@ static func _unexpected_snapshot(request: Dictionary, index: int) -> Dictionary:
 
 
 static func _ambiguous(request: Dictionary) -> Dictionary:
+	return _contract_failure(request, "ambiguous_result")
+
+
+static func _contract_failure(request: Dictionary, code: String) -> Dictionary:
 	return {
 		"ok": false,
-		"error": _error("ambiguous_result", request, 0, false),
+		"error": _error(code, request, 0, code == "malformed_response"),
 		"state": "failed",
 		"slot_updates": [],
 		"unexpected_slots": [],

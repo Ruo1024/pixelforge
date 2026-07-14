@@ -4,9 +4,45 @@ extends RefCounted
 ## Pure B7-3 planner. It validates every input before returning requests or slots.
 
 const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
+const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
 const MAX_RESULTS_PER_RUN := 999
 const SEED_MODULUS := 2147483648
-const TECHNICAL_SUFFIX := "pixel art designed for a %dx%d true-pixel target, flat colors, crisp edges"
+const TECHNICAL_SUFFIX := (
+	"pixel art designed for a %dx%d true-pixel target, flat colors, crisp edges"
+)
+
+
+static func resolve_reference_assets(asset_ids: Array, asset_source: Variant) -> Dictionary:
+	if asset_source == null or not asset_source.has_method("get_image"):
+		return _reference_failure("missing_reference")
+	var resolved_ids: Array[String] = []
+	var content_hashes: Array[String] = []
+	var images: Array[Image] = []
+	for asset_id_value in asset_ids:
+		if not (asset_id_value is String):
+			return _reference_failure("invalid_reference")
+		var asset_id := String(asset_id_value)
+		if asset_id.is_empty():
+			return _reference_failure("invalid_reference")
+		var image_value: Variant = asset_source.get_image(asset_id)
+		if not (image_value is Image) or image_value.is_empty():
+			return _reference_failure("missing_reference")
+		var image: Image = image_value.duplicate()
+		if image.get_format() != Image.FORMAT_RGBA8:
+			image.convert(Image.FORMAT_RGBA8)
+		var content_hash := GraphContextScript.image_content_sha256(image)
+		if content_hash.length() != 64:
+			return _reference_failure("invalid_reference")
+		resolved_ids.append(asset_id)
+		content_hashes.append(content_hash)
+		images.append(image)
+	return {
+		"ok": true,
+		"issue": null,
+		"reference_asset_ids": resolved_ids,
+		"reference_content_sha256s": content_hashes,
+		"ref_images": images,
+	}
 
 
 static func plan(input: Dictionary, descriptors: Array) -> Dictionary:
@@ -339,4 +375,14 @@ static func _failure(code: String, field: String) -> Dictionary:
 		"issue": {"code": code, "field": field, "args": {}},
 		"requests": [],
 		"slots": [],
+	}
+
+
+static func _reference_failure(code: String) -> Dictionary:
+	return {
+		"ok": false,
+		"issue": {"code": code, "field": "references", "args": {}},
+		"reference_asset_ids": [],
+		"reference_content_sha256s": [],
+		"ref_images": [],
 	}
