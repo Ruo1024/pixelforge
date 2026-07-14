@@ -182,6 +182,11 @@ func test_built_in_providers_use_the_deadline_settlement_boundary() -> void:
 		assert_true(source.contains("_cancel_settlement.cancel("), path)
 		assert_true(source.contains("confirm_local_stopped"), path)
 		assert_false(source.contains("_finish_canceled"), path)
+	var controller_source := FileAccess.get_file_as_string(
+		"res://ui/shell/openai_generation_controller.gd"
+	)
+	assert_string_contains(controller_source, "cancel_task.resolved.connect")
+	assert_string_contains(controller_source, "_record_billing_update(")
 
 
 func _generation_task(request_id: String) -> PFProviderTaskV2:

@@ -39,7 +39,7 @@ func test_prompt_order_and_999_limit() -> void:
 	too_many["batch_size"] = 1000
 	var rejected: Dictionary = planner.plan(too_many, [_openai_descriptor()])
 	assert_false(rejected["ok"])
-	assert_eq(rejected["issue"]["code"], "too_many_results")
+	assert_eq(rejected["issue"]["code"], "result_limit_exceeded")
 	assert_eq(rejected["requests"], [])
 	assert_eq(rejected["slots"], [])
 
@@ -140,6 +140,12 @@ func test_extra_exact_descriptor_shape_and_reference_boundary() -> void:
 	assert_false(rejected["ok"])
 	assert_eq(rejected["issue"]["code"], "invalid_dynamic_param")
 	assert_eq(rejected["requests"], [])
+	var invalid_hash := input.duplicate(true)
+	invalid_hash["reference_content_sha256s"] = ["G".repeat(64)]
+	var bad_reference: Dictionary = planner.plan(invalid_hash, [_retro_descriptor()])
+	assert_false(bad_reference["ok"])
+	assert_eq(bad_reference["issue"]["code"], "invalid_reference_image")
+	assert_eq(bad_reference["requests"], [])
 
 
 func test_reference_assets_resolve_rgba8_ids_hashes_in_order() -> void:
@@ -202,6 +208,12 @@ func test_run_request_attempt_row_chunks_and_output_tiebreak() -> void:
 	tie_descriptor["capabilities"]["provider_output_sizes"] = [[96, 64], [32, 64]]
 	var tie_result: Dictionary = planner.plan(tie, [tie_descriptor])
 	assert_eq(tie_result["requests"][0]["provider_output_size"], [96, 64])
+
+
+func test_temporary_production_path_uses_planner_and_reference_resolver() -> void:
+	var source := FileAccess.get_file_as_string("res://ui/shell/openai_generation_controller.gd")
+	assert_string_contains(source, "GenerationRequestPlannerScript.plan(")
+	assert_string_contains(source, "GenerationRequestPlannerScript.resolve_reference_assets(")
 
 
 func _planner_input() -> Dictionary:

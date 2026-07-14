@@ -11,6 +11,7 @@ const ProviderServiceScript := preload("res://services/provider_service.gd")
 func test_openai_exact_descriptor_and_schema() -> void:
 	var provider: PFProvider = OpenAIProviderScript.new()
 	assert_eq(provider.get_api_version(), 2)
+	assert_eq(provider.get_model_descriptors(), [_openai_descriptor()])
 	assert_eq(
 		provider.get_config_schema(),
 		[
@@ -43,6 +44,14 @@ func test_openai_exact_descriptor_and_schema() -> void:
 func test_retro_exact_descriptors_and_schema() -> void:
 	var provider: PFProvider = RetroProviderScript.new()
 	assert_eq(provider.get_api_version(), 2)
+	assert_eq(
+		provider.get_model_descriptors(),
+		[
+			_retro_descriptor("rd_plus", "Retro Diffusion Plus", true, 128, false),
+			_retro_descriptor("rd_pro", "Retro Diffusion Pro", false, 256, true),
+			_retro_descriptor("rd_fast", "Retro Diffusion Fast", false, 384, false),
+		]
+	)
 	assert_eq(provider.get_config_schema().size(), 2)
 	assert_eq(provider.get_config_schema()[0]["kind"], "password")
 	assert_eq(provider.get_config_schema()[1]["kind"], "string")
@@ -169,6 +178,33 @@ func test_retro_mock_generation_returns_deferred_v2_terminal() -> void:
 	provider.clear_session_config()
 
 
+func test_malformed_generation_2xx_is_ambiguous_not_retryable() -> void:
+	var provider: PFOpenAIImageProvider = OpenAIProviderScript.new(
+		OS.get_environment("PF_HTTP_MOCK_URL") + "/malformed"
+	)
+	var host := Node.new()
+	add_child_autofree(host)
+	provider.attach_request_host(host)
+	assert_null(provider.configure({"api_key": "fixture-key"}))
+	var task := provider.generate(_openai_request())
+	var outcome := {"status": "pending", "value": null}
+	task.completed.connect(
+		func(value: Dictionary) -> void:
+			outcome["status"] = "completed"
+			outcome["value"] = value
+	)
+	task.failed.connect(
+		func(value: Dictionary) -> void:
+			outcome["status"] = "failed"
+			outcome["value"] = value
+	)
+	assert_true(await _wait_until(func() -> bool: return outcome["status"] != "pending"))
+	assert_eq(outcome["status"], "failed")
+	assert_eq(outcome["value"]["code"], "ambiguous_result")
+	assert_false(outcome["value"]["retryable"])
+	provider.clear_session_config()
+
+
 func _openai_request() -> Dictionary:
 	return {
 		"run_id": "run-openai",
@@ -215,3 +251,124 @@ func _wait_until(check: Callable, timeout_seconds: float = 2.0) -> bool:
 		await wait_seconds(0.02)
 		elapsed += 0.02
 	return false
+
+
+func _openai_descriptor() -> Dictionary:
+	return {
+		"provider_id": "openai_image",
+		"model_id": "gpt-image-2",
+		"display_name": "GPT Image 2",
+		"is_default": true,
+		"ui_scope": "main",
+		"provider_meta_keys": ["remote_task_id"],
+		"capabilities":
+		{
+			"txt2img": true,
+			"img2img": true,
+			"max_reference_images": 4,
+			"max_batch": 4,
+			"target_size_constraints":
+			{
+				"min_width": 16,
+				"max_width": 512,
+				"width_step": 1,
+				"min_height": 16,
+				"max_height": 512,
+				"height_step": 1,
+				"allowed_sizes": [],
+			},
+			"provider_output_sizes": [[1024, 1024], [1536, 1024], [1024, 1536]],
+			"native_pixel": false,
+			"native_idempotency": false,
+			"safe_validation": true,
+			"seed": false,
+			"transparent_bg": false,
+			"cost_estimate": false,
+		},
+		"dynamic_params":
+		[
+			{
+				"key": "quality",
+				"kind": "enum",
+				"default": "low",
+				"required": false,
+				"values": ["auto", "low", "medium", "high"],
+				"min": null,
+				"max": null,
+				"step": null,
+				"label_key": "GEN_PARAM_QUALITY",
+				"help_key": "GEN_PARAM_QUALITY_HELP",
+				"advanced": false,
+				"template_safe": true,
+			}
+		],
+	}
+
+
+func _retro_descriptor(
+	model_id: String, display_name: String, is_default: bool, max_side: int, cost_estimate: bool
+) -> Dictionary:
+	return {
+		"provider_id": "retrodiffusion",
+		"model_id": model_id,
+		"display_name": display_name,
+		"is_default": is_default,
+		"ui_scope": "main",
+		"provider_meta_keys": ["remote_task_id"],
+		"capabilities":
+		{
+			"txt2img": true,
+			"img2img": true,
+			"max_reference_images": 1,
+			"max_batch": 4,
+			"target_size_constraints":
+			{
+				"min_width": 16,
+				"max_width": max_side,
+				"width_step": 1,
+				"min_height": 16,
+				"max_height": max_side,
+				"height_step": 1,
+				"allowed_sizes": [],
+			},
+			"provider_output_sizes": [],
+			"native_pixel": true,
+			"native_idempotency": false,
+			"safe_validation": false,
+			"seed": true,
+			"transparent_bg": true,
+			"cost_estimate": cost_estimate,
+		},
+		"dynamic_params":
+		[
+			{
+				"key": "remove_bg",
+				"kind": "bool",
+				"default": true,
+				"required": false,
+				"values": [],
+				"min": null,
+				"max": null,
+				"step": null,
+				"label_key": "GEN_PARAM_REMOVE_BG",
+				"help_key": "GEN_PARAM_REMOVE_BG_HELP",
+				"advanced": false,
+				"template_safe": true,
+			},
+			{
+				"key": "strength",
+				"kind": "float",
+				"default": 0.8,
+				"required": false,
+				"values": [],
+				"min": 0.0,
+				"max": 1.0,
+				"step": 0.01,
+				"label_key": "GEN_PARAM_STRENGTH",
+				"help_key": "GEN_PARAM_STRENGTH_HELP",
+				"advanced": false,
+				"template_safe": true,
+				"visible_when": {"mode": "img2img"},
+			},
+		],
+	}

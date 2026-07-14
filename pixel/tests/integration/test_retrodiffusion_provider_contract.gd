@@ -95,7 +95,8 @@ func test_request_uses_current_official_fields_and_style_hints() -> void:
 func test_recorded_four_image_fixture_decodes_raw_pixels_cost_and_seeds() -> void:
 	var request := _request("decode", "rd_plus", 4, [1, 1])
 	request["seed"] = 50
-	var result := _provider.decode_success_payload(_load_fixture(), request)
+	var fixture := _load_fixture()
+	var result := _provider.decode_success_payload(fixture, request)
 
 	assert_eq(result["request_id"], "decode")
 	assert_eq(result["items"].size(), 4)
@@ -110,6 +111,9 @@ func test_recorded_four_image_fixture_decodes_raw_pixels_cost_and_seeds() -> voi
 		assert_null(item["error"])
 		var image: Image = item["image"]
 		assert_eq(image.get_format(), Image.FORMAT_RGBA8)
+	var numeric_cost := fixture.duplicate(true)
+	numeric_cost["balance_cost"] = 1.0
+	assert_null(_provider.decode_success_payload(numeric_cost, request)["actual_cost_usd"])
 
 
 func test_error_mapping_covers_auth_quota_rate_limit_and_internal() -> void:

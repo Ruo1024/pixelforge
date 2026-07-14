@@ -36,7 +36,22 @@ func test_expected_unexpected_and_missing_slot_mapping() -> void:
 	assert_eq(extra["slot_updates"].size(), 1)
 	assert_eq(extra["unexpected_slots"].size(), 1)
 	assert_true(extra["unexpected_slots"][0]["unexpected"])
+	assert_eq(
+		extra["unexpected_slots"][0]["input_snapshot"].keys().size(),
+		slots[0]["input_snapshot"].keys().size(),
+	)
+	assert_eq(extra["unexpected_slots"][0]["input_snapshot"]["graph_id"], "graph-result")
+	assert_eq(extra["unexpected_slots"][0]["input_snapshot"]["reference_asset_ids"], ["asset-a"])
 	assert_eq(extra["diagnostics"].size(), 1)
+
+	var empty: Dictionary = mapper.map_result(_request(2), slots, _result([]))
+	assert_true(empty["ok"])
+	assert_eq(empty["state"], "failed")
+	assert_eq(empty["received_count"], 0)
+	assert_eq(
+		empty["slot_updates"].map(func(slot: Dictionary) -> String: return slot["error"]["code"]),
+		["result_count_mismatch", "result_count_mismatch"],
+	)
 
 
 func test_discontinuous_index_is_ambiguous_and_never_retryable() -> void:
@@ -149,8 +164,28 @@ func _slot(slot_id: String, index: int) -> Dictionary:
 	return {
 		"slot_id": slot_id,
 		"request_id": "request-result",
+		"source_row_id": "row-a",
 		"logical_index": index,
-		"input_snapshot": {"requested_seed": 1 + index},
+		"input_snapshot":
+		{
+			"kind": "generation",
+			"graph_id": "graph-result",
+			"source_node_id": "generate",
+			"provider_id": "retrodiffusion",
+			"model_id": "rd_pro",
+			"mode": "txt2img",
+			"prompt": "barrel",
+			"source_row_id": "row-a",
+			"prompt_preset_id": "preset-a",
+			"prompt_prefix": "pixel art",
+			"reference_asset_ids": ["asset-a"],
+			"reference_content_sha256s": ["a".repeat(64)],
+			"target_width": 2,
+			"target_height": 2,
+			"provider_output_size": [2, 2],
+			"requested_seed": 1 + index,
+			"extra": {"remove_bg": true, "strength": 0.8},
+		},
 	}
 
 
