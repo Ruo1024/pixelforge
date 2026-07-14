@@ -4,7 +4,6 @@ extends RefCounted
 ## Builds the bundled self-contained Beta workspace graph and deterministic reference asset.
 
 const GraphScript := preload("res://core/graph/pf_graph.gd")
-const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
@@ -12,7 +11,7 @@ const PromptPresetNodeScript := preload("res://core/graph/nodes/prompt_preset_no
 const IdUtil := preload("res://core/util/id_util.gd")
 
 
-static func build(reference_asset_id: String, batch_label: String) -> PFGraph:
+static func build(reference_asset_id: String, _batch_label: String) -> PFGraph:
 	var graph := GraphScript.new()
 	graph.id = "graph_mock_%s" % IdUtil.uuid_v4().left(8)
 	graph.name = "Mock Generate Batch"
@@ -60,11 +59,9 @@ static func build(reference_asset_id: String, batch_label: String) -> PFGraph:
 			Vector2(280, 75)
 		)
 	)
-	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": batch_label}, Vector2(560, 29))
 	graph.add_edge("objects", "subjects", "generate", "subjects")
 	graph.add_edge("prompt_preset", "prefix", "generate", "prefix")
 	graph.add_edge("reference", "assets", "generate", "references")
-	graph.add_edge("generate", "assets", "batch_1", "in")
 	return graph
 
 

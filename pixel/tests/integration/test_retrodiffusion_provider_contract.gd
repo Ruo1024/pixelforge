@@ -7,6 +7,8 @@ const GraphScript := preload("res://core/graph/pf_graph.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const GraphRunnerScript := preload("res://services/graph_mock_runner.gd")
+const GenerationRunCoordinatorScript := preload("res://services/generation_run_coordinator.gd")
+const ProviderResultMapperScript := preload("res://services/provider_result_mapper.gd")
 
 const FIXTURE_PATH := "res://tests/fixtures/providers/retrodiffusion_success.json"
 const TEST_SECRET := "rdpk-fixture-secret"
@@ -176,8 +178,6 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 			}
 		)
 	)
-	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": "Retro"}, Vector2.ZERO)
-	assert_true(graph.add_edge("generate", "assets", "batch_1", "in")["ok"])
 	var metadata := []
 	for index in range(decoded["items"].size()):
 		(
@@ -206,9 +206,34 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 				}
 			)
 		)
-	var result := GraphRunnerScript.new().materialize_provider_batch(
-		graph, "batch_1", _successful_images(decoded), metadata, AssetLibrary
-	)
+	var planned_slots := []
+	for index in range(int(request["batch"])):
+		var snapshot: Dictionary = metadata[index]["generation_snapshot"].duplicate(true)
+		snapshot["kind"] = "generation"
+		snapshot["graph_id"] = graph.id
+		snapshot["source_node_id"] = "generate"
+		(
+			planned_slots
+			. append(
+				{
+					"slot_id": "slot-retro-%d" % index,
+					"request_id": request["request_id"],
+					"source_row_id": "",
+					"input_snapshot": snapshot,
+				}
+			)
+		)
+	var plan := {
+		"ok": true,
+		"requests": [request],
+		"slots": planned_slots,
+		"total_slots": planned_slots.size(),
+	}
+	var coordinator := GenerationRunCoordinatorScript.new()
+	var result: Dictionary = coordinator.prepare_full_run(graph, "generate", "batch_1", plan)
+	assert_true(result["ok"])
+	var mapped: Dictionary = ProviderResultMapperScript.map_result(request, planned_slots, decoded)
+	result = coordinator.apply_provider_mapping(graph, "batch_1", request, mapped, AssetLibrary)
 	assert_true(result["ok"])
 	var asset_ids := BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_1"))
 	var provenance: Dictionary = AssetLibrary.get_asset_meta(asset_ids[0])["provenance"]
@@ -265,7 +290,7 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	var generate_item_id := _item_id_for_node(canvas_items, "generate")
 	canvas.select_ids([batch_item_id])
 	controller.run_selected_mock_graph()
-	var budget_dialog: ConfirmationDialog = controller._openai_flow.get_budget_dialog()
+	var budget_dialog: ConfirmationDialog = controller._generation_flow.get_budget_dialog()
 	assert_true(await _wait_until(func() -> bool: return budget_dialog.visible, 1.0))
 	assert_string_contains(budget_dialog.dialog_text, "$0.50")
 	assert_eq(

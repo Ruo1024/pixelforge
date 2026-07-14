@@ -4,7 +4,8 @@ extends Node
 ## Owns the bundled reference-to-batch example as one undoable workspace action.
 
 const OfflineExampleGraph := preload("res://services/offline_example_graph.gd")
-const GraphMockRunnerScript := preload("res://services/graph_mock_runner.gd")
+const GraphGenerationPlanBuilderScript := preload("res://services/graph_generation_plan_builder.gd")
+const MockGenerationExecutorScript := preload("res://services/mock_generation_executor.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Strings := preload("res://ui/shell/strings.gd")
@@ -24,8 +25,15 @@ func open() -> void:
 		OfflineExampleGraph.make_reference_image(), "offline_reference", {"origin": "imported"}
 	)
 	var graph := OfflineExampleGraph.build(reference_id, Strings.text("BATCH_DEFAULT_LABEL"))
-	var result: Dictionary = GraphMockRunnerScript.new().run_to_batch(
-		graph, AssetLibrary, "batch_1"
+	var plan: Dictionary = GraphGenerationPlanBuilderScript.build(
+		graph,
+		"generate",
+		"mock",
+		[GraphGenerationPlanBuilderScript.mock_descriptor()],
+		AssetLibrary
+	)
+	var result: Dictionary = MockGenerationExecutorScript.execute(
+		graph, "generate", "batch_1", plan, AssetLibrary
 	)
 	if not bool(result.get("ok", false)):
 		Log.warn("Mock graph generation failed", result.get("error", {}))

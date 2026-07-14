@@ -40,7 +40,7 @@ func test_is_only_run_slot_output_writer() -> void:
 	if coordinator == null:
 		return
 	var forbidden: Dictionary = {
-		"res://ui/shell/m2_1_ui_controller.gd": ["_set_batch_run_state", "result_slots"],
+		"res://ui/shell/m2_1_ui_controller.gd": ["_set_batch_run_state"],
 		"res://services/graph_mock_runner.gd": ["set_node_params", "register_image"],
 		"res://ui/canvas/canvas_graph_edge_renderer.gd": ["set_node_params", "result_slots"],
 	}

@@ -1,12 +1,9 @@
 class_name PFGraphMockRunner
 extends RefCounted
 
-## B7-2 本地 mock 节点链运行器。
-## 旧执行器只产生单次终态；唯一临时 adapter 把该终态写成 v2 result_slots。
+## Pure local mock graph executor. It returns terminal items and never writes Output or assets.
 
-const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
-const LegacyAdapterScript := preload("res://services/legacy_generation_v2_adapter.gd")
 
 
 func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "") -> Dictionary:
@@ -20,66 +17,27 @@ func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "
 
 	var inputs_by_node := {}
 	var outputs_by_node := {}
-	var materialized_slots: Array[Dictionary] = []
+	var terminal_items: Array[Dictionary] = []
 	var context := GraphContextScript.new(asset_library)
 	for node_id in order_result["order"]:
 		var run_result := _run_node(
-			graph,
-			String(node_id),
-			inputs_by_node,
-			outputs_by_node,
-			asset_library,
-			context,
-			batch_node_id
+			graph, String(node_id), inputs_by_node, outputs_by_node, context, batch_node_id
 		)
 		if not bool(run_result["ok"]):
 			return run_result
-		for slot in run_result.get("result_slots", []):
-			if slot is Dictionary:
-				materialized_slots.append(Dictionary(slot).duplicate(true))
+		for item in run_result.get("terminal_items", []):
+			if item is Dictionary:
+				terminal_items.append(Dictionary(item).duplicate(true))
 
-	if materialized_slots.is_empty():
+	if terminal_items.is_empty():
 		return _error("empty_batch", "No generated images reached a batch node")
-	return {"ok": true, "result_slots": materialized_slots, "graph": graph.to_json()}
-
-
-func materialize_provider_batch(
-	graph: PFGraph, batch_node_id: String, images: Array, metadata: Array, asset_library: Node
-) -> Dictionary:
-	return _materialize_batch(graph, batch_node_id, images, metadata, asset_library)
-
-
-func materialize_provider_mapping(
-	graph: PFGraph,
-	batch_node_id: String,
-	request: Dictionary,
-	mapped: Dictionary,
-	asset_library: Node
-) -> Dictionary:
-	if graph == null or graph.get_node(batch_node_id) == null:
-		return _error("missing_node", "Batch node is missing")
-	var adapter_result: Dictionary = LegacyAdapterScript.new().materialize_provider_mapping(
-		graph.id,
-		_source_node_id_for_batch(graph, batch_node_id),
-		graph.get_node_params(batch_node_id),
-		request,
-		mapped,
-		asset_library
-	)
-	if not bool(adapter_result.get("ok", false)):
-		return adapter_result
-	if not graph.set_node_params(batch_node_id, adapter_result["batch_params"]):
-		return _error("missing_node", "Batch node is missing")
-	return {
-		"ok": true,
-		"result_slots": Array(adapter_result["result_slots"]).duplicate(true),
-	}
+	return {"ok": true, "terminal_items": terminal_items, "graph": graph.to_json()}
 
 
 func _validate_run_setup(graph: PFGraph, asset_library: Node) -> Dictionary:
 	if graph == null:
 		return _error("missing_graph", "Graph is required")
-	if asset_library == null or not asset_library.has_method("register_image"):
+	if asset_library == null or not asset_library.has_method("get_image"):
 		return _error("missing_asset_library", "AssetLibrary-compatible object is required")
 
 	var edge_errors := graph.validate_edges()
@@ -93,7 +51,6 @@ func _run_node(
 	node_id: String,
 	inputs_by_node: Dictionary,
 	outputs_by_node: Dictionary,
-	asset_library: Node,
 	context: PFGraphContext,
 	batch_node_id: String
 ) -> Dictionary:
@@ -108,18 +65,18 @@ func _run_node(
 	if not bool(required_inputs["ok"]):
 		return required_inputs
 	var outputs := {}
-	var result_slots: Array[Dictionary] = []
+	var terminal_items: Array[Dictionary] = []
 	if node.get_type() == "batch":
 		if batch_node_id.is_empty() or batch_node_id == node_id:
-			var materialized := _materialize_batch(
-				graph, node_id, inputs.get("in", []), inputs.get("__metadata", []), asset_library
+			terminal_items.assign(
+				_terminal_items(
+					_image_array(inputs.get("in", [])),
+					_metadata_array(inputs.get("__metadata", []))
+				)
 			)
-			if not bool(materialized["ok"]):
-				return materialized
-			result_slots.assign(materialized["result_slots"])
-			outputs = {
-				"assets": BatchNodeScript.get_visible_asset_ids(graph.get_node_params(node_id))
-			}
+			if terminal_items.is_empty():
+				return _error("empty_images", "Batch node received no images")
+			outputs = {"assets": []}
 	else:
 		outputs = node.execute(inputs, graph.get_node_params(node_id), context)
 		if outputs.has("__error"):
@@ -127,33 +84,7 @@ func _run_node(
 
 	outputs_by_node[node_id] = outputs
 	_propagate_outputs(graph, node_id, inputs_by_node, outputs_by_node)
-	return {"ok": true, "result_slots": result_slots}
-
-
-func _materialize_batch(
-	graph: PFGraph, node_id: String, value: Variant, metadata: Variant, asset_library: Node
-) -> Dictionary:
-	var images := _image_array(value)
-	var metas := _metadata_array(metadata)
-	var terminal_items := _terminal_items(images, metas)
-	if terminal_items.is_empty():
-		return _error("empty_images", "Batch node received no images")
-
-	var adapter_result: Dictionary = LegacyAdapterScript.new().materialize_terminal(
-		graph.id,
-		_source_node_id_for_batch(graph, node_id),
-		graph.get_node_params(node_id),
-		terminal_items,
-		asset_library
-	)
-	if not bool(adapter_result.get("ok", false)):
-		return adapter_result
-	if not graph.set_node_params(node_id, adapter_result["batch_params"]):
-		return _error("missing_node", "Batch node is missing")
-	return {
-		"ok": true,
-		"result_slots": Array(adapter_result["result_slots"]).duplicate(true),
-	}
+	return {"ok": true, "terminal_items": terminal_items}
 
 
 func _propagate_outputs(
@@ -274,16 +205,6 @@ func _upstream_node_ids(graph: PFGraph, target_node_id: String) -> Dictionary:
 				included[source] = true
 				pending.append(source)
 	return included
-
-
-func _source_node_id_for_batch(graph: PFGraph, batch_node_id: String) -> String:
-	for edge in graph.edges:
-		if _edge_node(edge, "to") != batch_node_id:
-			continue
-		var to_data: Array = edge.get("to", ["", ""])
-		if String(to_data[1]) == "in":
-			return _edge_node(edge, "from")
-	return ""
 
 
 func _terminal_items(images: Array, metadata: Array) -> Array[Dictionary]:

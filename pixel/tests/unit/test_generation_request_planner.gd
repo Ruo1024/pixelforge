@@ -218,12 +218,21 @@ func test_run_request_attempt_row_chunks_and_output_tiebreak() -> void:
 
 
 func test_temporary_production_path_uses_planner_and_reference_resolver() -> void:
-	var source := FileAccess.get_file_as_string("res://ui/shell/openai_generation_controller.gd")
-	assert_string_contains(source, "GenerationRequestPlannerScript.plan(")
-	assert_string_contains(source, "GenerationRequestPlannerScript.resolve_reference_assets(")
+	var source := FileAccess.get_file_as_string("res://ui/shell/generation_run_controller.gd")
+	var builder_source := FileAccess.get_file_as_string(
+		"res://services/graph_generation_plan_builder.gd"
+	)
+	assert_string_contains(source, "GraphGenerationPlanBuilderScript.build(")
+	assert_string_contains(builder_source, "GenerationRequestPlannerScript.plan(")
+	assert_string_contains(
+		builder_source, "GenerationRequestPlannerScript.resolve_reference_assets("
+	)
 	assert_lt(
 		source.find("var request_result := _requests_for_graph"),
-		source.find("var preflight: Dictionary = CostService.preflight"),
+		source.find("CostService.preflight(requests)"),
+	)
+	assert_lt(
+		source.find("CostService.preflight(requests)"), source.find("_prepare_pending_output")
 	)
 
 

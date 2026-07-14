@@ -2,7 +2,7 @@ extends "res://addons/gut/test.gd"
 
 const Fixture := preload("res://tests/fixtures/generators/beta_large_workspace_fixture.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
-const RunnerScript := preload("res://services/graph_mock_runner.gd")
+const MockHarness := preload("res://tests/fixtures/generators/mock_generation_harness.gd")
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 
@@ -41,9 +41,12 @@ func test_two_hundred_module_workspace_is_deterministic_runnable_and_roundtrips(
 	assert_lte(canvas.camera_zoom, 0.25)
 
 	var graph := GraphScript.from_json(graph_data)
-	var run := RunnerScript.new().run_to_batch(graph, AssetLibrary, "batch_00")
+	var run := MockHarness.run(graph, AssetLibrary, "generate_00", "output_run_00")
 	assert_true(run["ok"])
-	assert_eq(BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_00")).size(), 2)
+	assert_eq(BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_00")), [])
+	assert_eq(
+		BatchNodeScript.get_visible_asset_ids(graph.get_node_params("output_run_00")).size(), 2
+	)
 	assert_eq(BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_01")), [])
 	ProjectService.set_graphs_data({Fixture.GRAPH_ID: graph.to_json()})
 	ProjectService.set_canvas_data(canvas.export_canvas_data())
@@ -54,7 +57,7 @@ func test_two_hundred_module_workspace_is_deterministic_runnable_and_roundtrips(
 	started = Time.get_ticks_msec()
 	assert_eq(ProjectService.open_project(PROJECT_PATH), OK)
 	var reopen_msec := Time.get_ticks_msec() - started
-	assert_eq(ProjectService.get_graph_data(Fixture.GRAPH_ID)["nodes"].size(), 200)
+	assert_eq(ProjectService.get_graph_data(Fixture.GRAPH_ID)["nodes"].size(), 201)
 	assert_eq(ProjectService.current_project.canvas["items"].size(), 208)
 	assert_lt(build_msec, STEP_BUDGET_MSEC)
 	assert_lt(load_msec, STEP_BUDGET_MSEC)

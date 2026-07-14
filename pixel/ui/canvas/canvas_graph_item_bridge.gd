@@ -81,8 +81,7 @@ static func apply_batch_asset_ids(item: Node, asset_ids: Array, asset_library: N
 
 
 static func sync_batch_node_asset_ids(_item: Node, _asset_ids: Array) -> void:
-	# B7-2 hard cut: the legacy card may display slots, but it cannot write Output truth.
-	# legacy_generation_v2_adapter is the only temporary writer until B7-4 removes it.
+	# The legacy visual card is read-only; GenerationRunCoordinator owns Output truth.
 	return
 
 

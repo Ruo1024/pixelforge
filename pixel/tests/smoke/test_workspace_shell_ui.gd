@@ -154,10 +154,15 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 	controller.run_selected_mock_graph()
 	await wait_process_frames(2)
 
-	var result_asset_ids: Array = canvas._get_batch_asset_ids(batch_item_id)
-	assert_eq(result_asset_ids.size(), 9)
 	var saved_graph: Dictionary = ProjectService.get_graph_data(graph_id)
-	var saved_batch_params: Dictionary = _node_data(saved_graph, batch_node_id)["params"]
+	var old_batch_params: Dictionary = _node_data(saved_graph, batch_node_id)["params"]
+	var output_node: Dictionary = _current_output_for_source(saved_graph, generate_node_id)
+	var output_node_id := String(output_node["id"])
+	var output_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], output_node_id)
+	var result_asset_ids: Array = canvas._get_batch_asset_ids(output_item_id)
+	assert_eq(result_asset_ids.size(), 9)
+	var saved_batch_params: Dictionary = output_node["params"]
+	assert_eq(old_batch_params["result_slots"], [])
 	assert_false(saved_batch_params.has("asset_ids"))
 	assert_false(saved_batch_params.has("review_states"))
 	assert_eq(saved_batch_params["result_slots"].size(), 9)
@@ -170,18 +175,18 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 		canvas.export_canvas_data()["items"], generate_node_id
 	)
 	assert_true(canvas._set_graph_node_collapsed(generate_item_id, true, false))
-	assert_true(canvas._set_batch_collapsed(batch_item_id, true, false))
+	assert_true(canvas._set_batch_collapsed(output_item_id, true, false))
 	var roundtrip_path := "user://tests/beta02_blank_chain_roundtrip.pxproj"
 	assert_eq(ProjectService.save_project(roundtrip_path), OK)
 	assert_eq(ProjectService.open_project(roundtrip_path), OK)
 	var loaded_graph: Dictionary = ProjectService.get_graph_data(graph_id)
-	var loaded_batch_params: Dictionary = _node_data(loaded_graph, batch_node_id)["params"]
+	var loaded_batch_params: Dictionary = _node_data(loaded_graph, output_node_id)["params"]
 	assert_false(loaded_batch_params.has("asset_ids"))
 	assert_false(loaded_batch_params.has("review_states"))
 	assert_eq(_visible_asset_ids(loaded_batch_params), result_asset_ids)
 	var loaded_canvas_items: Array = ProjectService.current_project.canvas["items"]
 	assert_true(_item_data_for_node(loaded_canvas_items, generate_node_id)["collapsed"])
-	assert_true(_item_data_for_node(loaded_canvas_items, batch_node_id)["collapsed"])
+	assert_true(_item_data_for_node(loaded_canvas_items, output_node_id)["collapsed"])
 
 
 func test_offline_example_is_one_undoable_reference_to_batch_workspace() -> void:
@@ -390,6 +395,22 @@ func _node_data(graph: Dictionary, node_id: String) -> Dictionary:
 
 func _node_type(graph: Dictionary, node_id: String) -> String:
 	return String(_node_data(graph, node_id).get("type", ""))
+
+
+func _current_output_for_source(graph: Dictionary, source_node_id: String) -> Dictionary:
+	for node_value in graph.get("nodes", []):
+		if not (node_value is Dictionary):
+			continue
+		var node: Dictionary = node_value
+		if String(node.get("type", "")) != "batch":
+			continue
+		var params: Dictionary = node.get("params", {})
+		if (
+			String(params.get("source_node_id", "")) == source_node_id
+			and String(params.get("role", "")) == "current"
+		):
+			return node
+	return {}
 
 
 func _item_id_for_node(items: Array, node_id: String) -> String:

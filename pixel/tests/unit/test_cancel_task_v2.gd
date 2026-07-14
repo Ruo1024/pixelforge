@@ -6,7 +6,7 @@ const ManualSchedulerScript := preload(
 	"res://tests/fixtures/providers/manual_deadline_scheduler.gd"
 )
 const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
-const ShellControllerScript := preload("res://ui/shell/openai_generation_controller.gd")
+const ShellControllerScript := preload("res://ui/shell/generation_run_controller.gd")
 
 
 func test_cancel_order_deadlines_and_dedupe() -> void:
@@ -192,7 +192,7 @@ func test_built_in_providers_use_the_deadline_settlement_boundary() -> void:
 		assert_true(source.contains("confirm_local_stopped"), path)
 		assert_false(source.contains("_finish_canceled"), path)
 	var controller_source := FileAccess.get_file_as_string(
-		"res://ui/shell/openai_generation_controller.gd"
+		"res://ui/shell/generation_run_controller.gd"
 	)
 	assert_string_contains(controller_source, "cancel_task.resolved.connect")
 	assert_string_contains(controller_source, "_record_billing_update(")

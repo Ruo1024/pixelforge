@@ -3,7 +3,7 @@ extends "res://addons/gut/test.gd"
 const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 const PlannerScript := preload("res://services/generation_request_planner.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
-const AdapterScript := preload("res://services/legacy_generation_v2_adapter.gd")
+const CoordinatorScript := preload("res://services/generation_run_coordinator.gd")
 
 
 func test_exact_safe_shape_and_retry_policy() -> void:
@@ -67,9 +67,7 @@ func test_nonexecution_errors_have_no_attempts_or_message() -> void:
 	var validation: Dictionary = PlannerScript.plan({}, [])["issue"]
 	var load_error: Dictionary = GraphScript._load_error("invalid_graph_shape", "graph")
 	var command_error: Dictionary = (
-		AdapterScript
-		. new()
-		. materialize_provider_mapping("graph", "generate", {}, {}, {}, null)["error"]
+		CoordinatorScript.new().prepare_full_run(null, "generate", "output", {})["error"]
 	)
 	var issues := [validation, load_error, command_error]
 	for issue_value in issues:

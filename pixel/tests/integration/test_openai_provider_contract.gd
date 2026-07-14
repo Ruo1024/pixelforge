@@ -4,7 +4,9 @@ const ProviderScript := preload("res://plugins/provider_openai/openai_image_prov
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const GraphRunnerScript := preload("res://services/graph_mock_runner.gd")
-const CLOUD_CONTROLLER_PATH := "res://ui/shell/openai_generation_controller.gd"
+const GenerationRunCoordinatorScript := preload("res://services/generation_run_coordinator.gd")
+const ProviderResultMapperScript := preload("res://services/provider_result_mapper.gd")
+const CLOUD_CONTROLLER_PATH := "res://ui/shell/generation_run_controller.gd"
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
@@ -402,9 +404,7 @@ func test_real_task_failure_materializes_structured_slot_and_request_audit() -> 
 			Vector2(280, 0),
 		)
 	)
-	graph.add_node(BatchNodeScript.new(), "batch", {}, Vector2(560, 0))
 	graph.add_edge("objects", "subjects", "generate", "subjects")
-	graph.add_edge("generate", "assets", "batch", "in")
 	var controller: Node = load(CLOUD_CONTROLLER_PATH).new()
 	add_child_autofree(controller)
 	var canvas := RecordingCanvas.new()
@@ -416,6 +416,10 @@ func test_real_task_failure_materializes_structured_slot_and_request_audit() -> 
 	var planned: Dictionary = controller._requests_for_graph(graph, "generate", "openai_image")
 	assert_true(planned["ok"])
 	var request: Dictionary = planned["requests"][0]
+	var coordinator := GenerationRunCoordinatorScript.new()
+	assert_true(coordinator.prepare_full_run(graph, "generate", "batch", planned)["ok"])
+	assert_true(coordinator.mark_submitting(graph, "batch", request["request_id"])["ok"])
+	controller._coordinator = coordinator
 	controller._pending_runs[request["request_id"]] = {
 		"graph": graph,
 		"request": request,
@@ -484,8 +488,6 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 			}
 		)
 	)
-	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": "OpenAI"}, Vector2.ZERO)
-	assert_true(graph.add_edge("generate", "assets", "batch_1", "in")["ok"])
 	var metadata := [
 		{
 			"name": "openai_001",
@@ -509,18 +511,42 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 			},
 		}
 	]
-	var result := GraphRunnerScript.new().materialize_provider_batch(
-		graph, "batch_1", _successful_images(decoded), metadata, AssetLibrary
+	var snapshot: Dictionary = metadata[0]["generation_snapshot"].duplicate(true)
+	snapshot["kind"] = "generation"
+	snapshot["graph_id"] = graph.id
+	snapshot["source_node_id"] = "generate"
+	var planned_slots := [
+		{
+			"slot_id": "slot-openai",
+			"request_id": decoded["request_id"],
+			"source_row_id": "",
+			"input_snapshot": snapshot,
+		}
+	]
+	var plan := {
+		"ok": true,
+		"requests": [_request("materialize", 1, [1, 1])],
+		"slots": planned_slots,
+		"total_slots": 1,
+	}
+	var coordinator := GenerationRunCoordinatorScript.new()
+	var result: Dictionary = coordinator.prepare_full_run(graph, "generate", "batch_1", plan)
+	assert_true(result["ok"])
+	var mapped: Dictionary = ProviderResultMapperScript.map_result(
+		plan["requests"][0], planned_slots, decoded
+	)
+	result = coordinator.apply_provider_mapping(
+		graph, "batch_1", plan["requests"][0], mapped, AssetLibrary
 	)
 	assert_true(result["ok"])
 	var asset_ids := BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_1"))
 	var meta: Dictionary = AssetLibrary.get_asset_meta(asset_ids[0])
 	var provenance: Dictionary = meta["provenance"]
-	var snapshot: Dictionary = provenance["generation_snapshot"]
-	assert_eq(snapshot["provider_id"], "openai_image")
-	assert_eq(snapshot["model_id"], "gpt-image-2")
-	assert_eq(snapshot["prompt"], "wooden barrel")
-	assert_eq(snapshot["source_node_id"], "generate")
+	var provenance_snapshot: Dictionary = provenance["generation_snapshot"]
+	assert_eq(provenance_snapshot["provider_id"], "openai_image")
+	assert_eq(provenance_snapshot["model_id"], "gpt-image-2")
+	assert_eq(provenance_snapshot["prompt"], "wooden barrel")
+	assert_eq(provenance_snapshot["source_node_id"], "generate")
 	assert_false(provenance.has("cost"))
 	assert_false(provenance.has("provider_meta"))
 	assert_false(JSON.stringify(meta).contains(SECRET_SENTINEL))

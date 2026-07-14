@@ -833,11 +833,15 @@ func test_selected_stage_runs_each_valid_target_without_unrelated_empty_inputs()
 	var completed: Dictionary = ProjectService.get_graph_data(BetaWorkspaceFixture.GRAPH_ID)
 	var batch_a_params: Dictionary = _node_data_for_id(completed["nodes"], "batch_a")["params"]
 	var batch_b_params: Dictionary = _node_data_for_id(completed["nodes"], "batch_b")["params"]
+	var output_a: Dictionary = _current_output_for_source(completed["nodes"], "generate_a")
+	var output_b: Dictionary = _current_output_for_source(completed["nodes"], "generate_b")
 	assert_false(batch_a_params.has("asset_ids"))
 	assert_false(batch_b_params.has("asset_ids"))
-	assert_eq(batch_a_params["result_slots"].size(), 4)
-	assert_eq(batch_b_params["result_slots"].size(), 4)
-	assert_true(AssetLibrary.has_asset(String(batch_a_params["result_slots"][0]["asset_id"])))
+	assert_eq(batch_a_params["result_slots"], [])
+	assert_eq(batch_b_params["result_slots"], [])
+	assert_eq(output_a["params"]["result_slots"].size(), 4)
+	assert_eq(output_b["params"]["result_slots"].size(), 4)
+	assert_true(AssetLibrary.has_asset(String(output_a["params"]["result_slots"][0]["asset_id"])))
 
 
 func _node_ids_from_canvas_items(items: Array) -> Array:
@@ -881,6 +885,20 @@ func _newest_batch_node_except(nodes: Array, excluded_ids: Array) -> Dictionary:
 			continue
 		result = node
 	return result
+
+
+func _current_output_for_source(nodes: Array, source_node_id: String) -> Dictionary:
+	for raw_node in nodes:
+		var node: Dictionary = raw_node
+		if String(node.get("type", "")) != "batch":
+			continue
+		var params: Dictionary = node.get("params", {})
+		if (
+			String(params.get("source_node_id", "")) == source_node_id
+			and String(params.get("role", "")) == "current"
+		):
+			return node
+	return {}
 
 
 func _visible_asset_ids(batch_params: Dictionary) -> Array:
