@@ -18,7 +18,7 @@ func get_category() -> String:
 
 
 func get_output_ports() -> Array[Dictionary]:
-	return [{"name": "text", "type": "text"}]
+	return [{"name": "prompt", "type": "text"}]
 
 
 func get_param_schema() -> Array[Dictionary]:
@@ -33,4 +33,4 @@ func get_param_schema() -> Array[Dictionary]:
 
 
 func execute(_inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionary:
-	return {"text": String(params.get("text", ""))}
+	return {"prompt": String(params.get("text", ""))}

@@ -5,6 +5,7 @@ extends ConfirmationDialog
 ## contract: 02-contracts/PROVIDER-API.md §1, §3。
 
 const Strings := preload("res://ui/shell/strings.gd")
+const SchemaTextResolverScript := preload("res://services/schema_text_resolver.gd")
 
 const DIALOG_WIDTH := 560
 const DIALOG_HEIGHT := 560
@@ -129,8 +130,8 @@ func _refresh_provider_list() -> void:
 	var previous := _provider_id
 	_provider_options.clear()
 	for provider_id in ProviderService.get_provider_ids():
-		var provider: PFProvider = ProviderService.get_provider(String(provider_id))
-		_provider_options.add_item(provider.get_display_name())
+		var descriptor: Dictionary = ProviderService.get_model_descriptor(String(provider_id))
+		_provider_options.add_item(String(descriptor.get("display_name", provider_id)))
 		_provider_options.set_item_metadata(_provider_options.item_count - 1, provider_id)
 	if _provider_options.item_count == 0:
 		_provider_id = ""
@@ -162,8 +163,10 @@ func _render_provider(provider_id: String) -> void:
 	var provider: PFProvider = ProviderService.get_provider(provider_id)
 	if provider == null:
 		return
-	_capabilities_label.text = _capabilities_text(provider.get_capabilities())
-	_validate_button.visible = bool(provider.get_capabilities().get("safe_validation", true))
+	var descriptor: Dictionary = ProviderService.get_model_descriptor(provider_id)
+	var capabilities: Dictionary = descriptor.get("capabilities", {})
+	_capabilities_label.text = _capabilities_text(capabilities)
+	_validate_button.visible = bool(capabilities.get("safe_validation", true))
 	var values := ProviderService.get_provider_config(provider_id)
 	for field in provider.get_config_schema():
 		_add_field(field, values)
@@ -175,7 +178,7 @@ func _add_field(schema: Dictionary, values: Dictionary) -> void:
 	if key.is_empty():
 		return
 	var label := Label.new()
-	label.text = String(schema.get("label", key.capitalize()))
+	label.text = SchemaTextResolverScript.resolve(schema, "label_key")
 	_form.add_child(label)
 	var control := _make_control(schema, values.get(key, schema.get("default")))
 	_form.add_child(control)

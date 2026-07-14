@@ -4,7 +4,7 @@ const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 
-const PORT_TYPES := ["style", "text", "text_list", "spec", "image", "image_list", "asset_list"]
+const PORT_TYPES := ["text", "prompt_prefix", "subject_list", "asset_list"]
 
 
 class PortNode:
@@ -38,46 +38,28 @@ func test_node_registry_registers_batch_and_rejects_duplicate_type() -> void:
 
 	assert_true(registry.has_type("batch"))
 	assert_false(registry.register("batch", BatchNodeScript))
-	assert_eq(
-		registry.get_registered_types(),
-		[
-			"ai_generate",
-			"batch",
-			"comfyui.run_workflow",
-			"image_input",
-			"object_list",
-			"reference_set",
-			"size_spec",
-			"style_preset",
-			"text_prompt",
-		]
-	)
+	assert_eq(NodeRegistryScript.BUILTIN_TYPES, registry.get_registered_types().filter(
+		func(type_name: String) -> bool: return type_name in NodeRegistryScript.BUILTIN_TYPES
+	))
+	assert_false(registry.has_type("size_spec"))
+	assert_false(registry.has_type("style_preset"))
 
 
-func test_image_input_asset_ref_and_unknown_params_roundtrip() -> void:
-	var graph := (
-		GraphScript
-		. from_json(
-			{
-				"graph_version": 1,
-				"id": "reference_graph",
-				"nodes":
-				[
-					{
-						"id": "reference",
-						"type": "image_input",
-						"position": [0, 0],
-						"params": {"asset_id": 1234, "file_path": "/legacy/path.png"},
-					}
-				],
-				"edges": [],
-			}
-		)
-	)
-	assert_false(graph.get_node("reference").is_ghost())
-	assert_eq(graph.get_node_params("reference")["asset_id"], "1234")
-	assert_eq(graph.to_json()["nodes"][0]["params"]["file_path"], "/legacy/path.png")
-	assert_eq(graph.get_node("reference").get_param_schema()[0]["kind"], PFNode.KIND_ASSET_REF)
+func test_image_input_rejects_unknown_params_and_roundtrips_v2_shape() -> void:
+	var source := {
+		"graph_version": 2,
+		"id": "reference_graph",
+		"name": "Reference",
+		"nodes": [{"id": "reference", "type": "image_input", "params": {"asset_id": "a"}}],
+		"edges": [],
+	}
+	var parsed := GraphScript.parse_v2(source, NodeRegistryScript.new())
+	assert_true(parsed["ok"])
+	assert_eq(parsed["graph"].to_json(), source)
+	source["nodes"][0]["params"]["file_path"] = "/legacy/path.png"
+	parsed = GraphScript.parse_v2(source, NodeRegistryScript.new())
+	assert_false(parsed["ok"])
+	assert_eq(parsed["error"]["code"], "unknown_graph_param")
 
 
 func test_connection_matrix_follows_graph_schema_port_rules() -> void:
@@ -88,10 +70,7 @@ func test_connection_matrix_follows_graph_schema_port_rules() -> void:
 			graph.add_node(PortNode.new("target_%s" % target_type, target_type, ""), "to")
 
 			var result: Dictionary = graph.can_connect("from", "out", "to", "in")
-			var expected_ok: bool = (
-				source_type == target_type
-				or (source_type == "image" and target_type == "image_list")
-			)
+			var expected_ok: bool = source_type == target_type
 			assert_eq(
 				bool(result["ok"]),
 				expected_ok,
@@ -99,7 +78,7 @@ func test_connection_matrix_follows_graph_schema_port_rules() -> void:
 			)
 			assert_eq(
 				bool(result["auto_wrap"]),
-				source_type == "image" and target_type == "image_list",
+				false,
 				"%s -> %s auto_wrap flag" % [source_type, target_type]
 			)
 
@@ -198,12 +177,18 @@ func test_loaded_edge_schema_is_normalized_before_validation() -> void:
 	assert_eq(String(errors[1]["code"]), "missing_endpoint")
 
 
-func test_batch_node_asset_ids_roundtrip_through_graph_json() -> void:
+func test_batch_node_result_slots_roundtrip_through_graph_json() -> void:
 	var graph := GraphScript.new()
 	var node_id := graph.add_node(
 		BatchNodeScript.new(),
 		"batch_1",
-		{"asset_ids": ["asset-a", "asset-b"], "label": "Candidates"},
+		{
+			"label": "Candidates",
+			"result_slots": [
+				{"status": "succeeded", "asset_id": "asset-a", "detached": false},
+				{"status": "succeeded", "asset_id": "asset-b", "detached": true},
+			],
+		},
 		Vector2(128, -32)
 	)
 
@@ -211,14 +196,15 @@ func test_batch_node_asset_ids_roundtrip_through_graph_json() -> void:
 	assert_true(graph.get_node("batch_1").is_canvas_resident())
 
 	var parsed: PFGraph = GraphScript.from_json(graph.to_json(), NodeRegistryScript.new())
-	assert_eq(parsed.get_node_params("batch_1")["asset_ids"], ["asset-a", "asset-b"])
+	assert_eq(BatchNodeScript.get_visible_asset_ids(parsed.get_node_params("batch_1")), ["asset-a"])
+	assert_false(parsed.get_node_params("batch_1").has("asset_ids"))
 	assert_eq(parsed.get_node_params("batch_1")["label"], "Candidates")
 	assert_eq(parsed.to_json(), graph.to_json())
 
 
 func test_unknown_node_becomes_ghost_and_keeps_raw_fields() -> void:
 	var source_graph := {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "graph_main",
 		"name": "Ghost Test",
 		"nodes":
@@ -226,23 +212,23 @@ func test_unknown_node_becomes_ghost_and_keeps_raw_fields() -> void:
 			{
 				"id": "plugin_1",
 				"type": "missing.plugin_node",
-				"position": [4, 8],
-				"params": {"seed": 42},
-				"plugin_payload": {"kept": true},
+				"params": {"seed": 42, "plugin_payload": {"kept": true}},
 			},
 		],
 		"edges": [],
 	}
 
-	var graph: PFGraph = GraphScript.from_json(source_graph, NodeRegistryScript.new())
+	var parsed := GraphScript.parse_v2(source_graph, NodeRegistryScript.new())
+	assert_true(parsed["ok"])
+	var graph: PFGraph = parsed["graph"]
 	assert_true(graph.get_node("plugin_1").is_ghost())
-	assert_eq(graph.to_json()["nodes"][0]["plugin_payload"], {"kept": true})
+	assert_eq(graph.to_json()["nodes"][0]["params"]["plugin_payload"], {"kept": true})
 	assert_eq(graph.to_json(), source_graph)
 
 
-func test_known_graph_node_and_edge_unknown_fields_survive_roundtrip() -> void:
+func test_known_graph_node_and_edge_unknown_fields_are_rejected() -> void:
 	var source_graph := {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "future_graph",
 		"name": "Forward Compatible",
 		"future_graph_field": {"mode": "keep"},
@@ -251,29 +237,25 @@ func test_known_graph_node_and_edge_unknown_fields_survive_roundtrip() -> void:
 			{
 				"id": "objects",
 				"type": "object_list",
-				"position": [0, 0],
-				"params": {"items": "barrel"},
+				"params": {"rows": []},
 				"future_node_field": [1, 2, 3],
 			},
 			{
 				"id": "generate",
 				"type": "ai_generate",
-				"position": [200, 0],
-				"params": {},
+				"params": {"provider_id": "p", "model_id": "m", "target_width": 32, "target_height": 32, "batch_size": 1, "seed": -1, "extra": {}},
 			},
 		],
 		"edges":
 		[
 			{
-				"from": ["objects", "items"],
-				"to": ["generate", "items"],
+				"from": ["objects", "subjects"],
+				"to": ["generate", "subjects"],
 				"future_edge_field": {"label": "keep"},
 			}
 		],
 	}
 
-	var graph: PFGraph = GraphScript.from_json(source_graph, NodeRegistryScript.new())
-	var saved: Dictionary = graph.to_json()
-	assert_eq(saved["future_graph_field"], {"mode": "keep"})
-	assert_eq(saved["nodes"][0]["future_node_field"], [1, 2, 3])
-	assert_eq(saved["edges"][0]["future_edge_field"], {"label": "keep"})
+	var parsed := GraphScript.parse_v2(source_graph, NodeRegistryScript.new())
+	assert_false(parsed["ok"])
+	assert_eq(parsed["error"]["code"], "unknown_graph_field")

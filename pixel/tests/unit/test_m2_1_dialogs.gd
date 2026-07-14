@@ -9,8 +9,6 @@ const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_setting
 const OpenAIGenerationControllerScript := preload(
 	"res://ui/shell/openai_generation_controller.gd"
 )
-const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
-const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
 const Matting := preload("res://core/pixel/matting.gd")
@@ -64,26 +62,27 @@ func test_graph_node_params_dialog_builds_controls_from_node_schema() -> void:
 	await wait_process_frames(1)
 
 	dialog.configure_for_node(
-		"graph_test", "objects", ObjectListNodeScript.new(), {"items": "barrel\nfence"}
-	)
-	assert_eq(dialog.get_param_value("items"), "barrel\nfence")
-	assert_true(dialog.set_param_value("items", "tree\nrock\nwell"))
-	assert_eq(dialog.get_params()["items"], "tree\nrock\nwell")
-
-	dialog.configure_for_node(
 		"graph_test",
-		"size",
-		SizeSpecNodeScript.new(),
-		{"width": 32, "height": 24, "per_subject": 2}
+		"generate",
+		AiGenerateNodeScript.new(),
+		{
+			"provider_id": "mock",
+			"model_id": "pixel_mock_v1",
+			"target_width": 32,
+			"target_height": 24,
+			"batch_size": 2,
+			"seed": -1,
+			"extra": {},
+		}
 	)
-	assert_true(dialog.set_param_value("width", 48))
-	assert_eq(dialog.get_params()["width"], 48)
-	assert_eq(dialog.get_params()["height"], 24)
+	assert_true(dialog.set_param_value("target_width", 48))
+	assert_eq(dialog.get_params()["target_width"], 48)
+	assert_eq(dialog.get_params()["target_height"], 24)
 
 	var original_language: String = LocalizationService.current_preference
 	LocalizationService.set_language("zh_CN")
-	assert_eq(dialog.title, "编辑尺寸设置")
-	assert_eq(dialog._root.get_child(0).get_child(0).text, "宽度")
+	assert_eq(dialog.title, Strings.text("DIALOG_GRAPH_NODE_PARAMS_TITLE_FORMAT") % Strings.text("NODE_AI_GENERATE"))
+	assert_eq(dialog._root.get_child(2).get_child(0).text, Strings.text("GRAPH_PARAM_TARGET_WIDTH"))
 	assert_eq(dialog.get_ok_button().text, Strings.text("ACTION_APPLY"))
 	LocalizationService.set_language(original_language)
 

@@ -90,9 +90,7 @@ static func _generate_issue(graph: PFGraph, target_id: String) -> String:
 	for edge in graph.edges:
 		if _to_id(edge) == target_id:
 			connected_ports[String(edge.get("to", ["", ""])[1])] = true
-	if not connected_ports.has("spec"):
-		return "missing_spec"
-	if not connected_ports.has("text") and not connected_ports.has("items"):
+	if not connected_ports.has("prompt") and not connected_ports.has("subjects"):
 		return "missing_prompt"
 	return ""
 
@@ -120,32 +118,23 @@ static func _target_counts(graph: PFGraph, target_id: String) -> Dictionary:
 	var max_batch := maxi(1, int(descriptor.get("capabilities", {}).get("max_batch", 1)))
 	var results := maxi(1, int(params.get("batch_size", 1)))
 	for edge in graph.edges:
-		if _to_id(edge) != target_id or String(edge.get("to", ["", ""])[1]) != "items":
+		if _to_id(edge) != target_id or String(edge.get("to", ["", ""])[1]) != "subjects":
 			continue
 		var source_params := graph.get_node_params(_from_id(edge))
-		var rows_value: Variant = source_params.get("rows", null)
+		var rows_value: Variant = source_params.get("rows", [])
 		if rows_value is Array:
 			results = 0
 			for row in rows_value:
 				if row is Dictionary and bool(row.get("enabled", true)):
 					results += maxi(1, int(row.get("count", 1)))
-		else:
-			var subject_count := 0
-			for raw_line in String(source_params.get("items", "")).split("\n", false):
-				if not String(raw_line).strip_edges().is_empty():
-					subject_count += 1
-			results *= maxi(1, subject_count)
 	var requests := ceili(float(results) / float(max_batch))
 	if provider_id == "mock":
 		return {"requests": requests, "results": results, "cost": 0.0, "cost_known": true}
-	var estimate := CostService.estimate_request(
-		provider_id, {"model_id": model_id, "batch": mini(results, max_batch)}
-	)
 	return {
 		"requests": requests,
 		"results": results,
-		"cost": estimate * requests,
-		"cost_known": estimate >= 0.0,
+		"cost": -1.0,
+		"cost_known": false,
 	}
 
 

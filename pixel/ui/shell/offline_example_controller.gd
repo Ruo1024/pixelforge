@@ -5,6 +5,7 @@ extends Node
 
 const OfflineExampleGraph := preload("res://services/offline_example_graph.gd")
 const GraphMockRunnerScript := preload("res://services/graph_mock_runner.gd")
+const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const Log := preload("res://core/util/log_util.gd")
@@ -30,11 +31,13 @@ func open() -> void:
 		Log.warn("Mock graph generation failed", result.get("error", {}))
 		_status_label.text = Strings.text("STATUS_MOCK_GENERATE_FAILED")
 		return
-	var asset_ids: Array = result["asset_ids"]
+	var asset_ids: Array = BatchNodeScript.get_visible_asset_ids(
+		graph.get_node_params("batch_1")
+	)
 	var anchor: Vector2 = _canvas.get_mouse_world_position()
 	var item_ids := {
 		"objects": IdUtil.uuid_v4(),
-		"size": IdUtil.uuid_v4(),
+		"prompt_preset": IdUtil.uuid_v4(),
 		"reference": IdUtil.uuid_v4(),
 		"generate": IdUtil.uuid_v4(),
 		"batch_1": IdUtil.uuid_v4(),
@@ -62,7 +65,7 @@ func _add_canvas_items(
 	graph: PFGraph, asset_ids: Array, anchor: Vector2, item_ids: Dictionary
 ) -> Array:
 	var items := []
-	for node_id in ["objects", "size", "reference", "generate"]:
+	for node_id in ["objects", "prompt_preset", "reference", "generate"]:
 		var node_item: Node = _canvas._add_graph_node_card(
 			graph.id,
 			node_id,

@@ -172,7 +172,8 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 		graph, "batch_1", decoded["images"], metadata, AssetLibrary
 	)
 	assert_true(result["ok"])
-	var provenance: Dictionary = AssetLibrary.get_asset_meta(result["asset_ids"][0])["provenance"]
+	var asset_ids := BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_1"))
+	var provenance: Dictionary = AssetLibrary.get_asset_meta(asset_ids[0])["provenance"]
 	assert_eq(provenance["provider"], "retrodiffusion")
 	assert_eq(provenance["provider_meta"], {})
 	assert_false(JSON.stringify(provenance).contains(TEST_SECRET))

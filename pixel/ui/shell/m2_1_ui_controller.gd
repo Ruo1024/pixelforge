@@ -36,7 +36,7 @@ const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ResultBranchBuilder := preload("res://services/result_branch_builder.gd")
 const WorkflowTemplateService := preload("res://services/workflow_template_service.gd")
 const FrameRunPlanner := preload("res://services/frame_run_planner.gd")
-const StylePresetNodeScript := preload("res://core/graph/nodes/style_preset_node.gd")
+const PromptPresetNodeScript := preload("res://core/graph/nodes/prompt_preset_node.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Log := preload("res://core/util/log_util.gd")
 
@@ -394,7 +394,7 @@ func handle_batch_face_action(card_id: String, action_id: String, asset_ids: Arr
 			_m2_actions.batch_cleanup(
 				card_id,
 				asset_ids,
-				Pipeline.normalize_params(_cleanup_inspector.get_params(), _project_style_preset())
+				Pipeline.normalize_params(_cleanup_inspector.get_params())
 			)
 		"export":
 			_emit_batch_export(asset_ids)
@@ -443,8 +443,8 @@ func _handle_project_resource_drop(resource: Dictionary, world_position: Vector2
 			add_graph_node_to_selected_graph(
 				"image_input", world_position, {"asset_id": String(resource.get("asset_id", ""))}
 			)
-		"style_preset":
-			_drop_style_resource(resource.get("preset", {}), world_position)
+		"prompt_preset":
+			_drop_prompt_resource(resource.get("preset", {}), world_position)
 		"workflow_template":
 			_insert_workflow_template(resource.get("template", {}), world_position)
 
@@ -529,7 +529,7 @@ func _insert_workflow_template(template_value: Variant, world_position: Vector2)
 	return instance
 
 
-func _drop_style_resource(preset_value: Variant, world_position: Vector2) -> void:
+func _drop_prompt_resource(preset_value: Variant, world_position: Vector2) -> void:
 	if not (preset_value is Dictionary):
 		_status_label.text = Strings.text("STATUS_RESOURCE_UNAVAILABLE")
 		return
@@ -539,11 +539,11 @@ func _drop_style_resource(preset_value: Variant, world_position: Vector2) -> voi
 	var before: Dictionary = before_graphs.get(graph_id, {})
 	var graph := GraphScript.from_json(before) if not before.is_empty() else GraphScript.new()
 	graph.id = graph_id
-	var node_id := "style_%s" % IdUtil.uuid_v4().left(8)
+	var node_id := "prompt_preset_%s" % IdUtil.uuid_v4().left(8)
 	graph.add_node(
-		StylePresetNodeScript.new(),
+		PromptPresetNodeScript.new(),
 		node_id,
-		{"preset_ref": "embedded", "preset": Dictionary(preset_value).duplicate(true)},
+		{"preset": Dictionary(preset_value).duplicate(true)},
 		world_position
 	)
 	var target_generate_id := _target_generate_node_id(graph, String(binding.get("node_id", "")))
@@ -551,11 +551,11 @@ func _drop_style_resource(preset_value: Variant, world_position: Vector2) -> voi
 		var kept_edges: Array[Dictionary] = []
 		for edge in graph.edges:
 			var to_data: Array = edge.get("to", ["", ""])
-			if String(to_data[0]) == target_generate_id and String(to_data[1]) == "style":
+			if String(to_data[0]) == target_generate_id and String(to_data[1]) == "prefix":
 				continue
 			kept_edges.append(edge)
 		graph.edges = kept_edges
-		graph.add_edge(node_id, "style", target_generate_id, "style")
+		graph.add_edge(node_id, "prefix", target_generate_id, "prefix")
 	var after := graph.to_json()
 	var item_id := IdUtil.uuid_v4()
 	var do_add := func() -> void:
@@ -571,7 +571,7 @@ func _drop_style_resource(preset_value: Variant, world_position: Vector2) -> voi
 		else:
 			ProjectService.set_graph_data(graph_id, before, true)
 		_canvas._emit_canvas_changed()
-	UndoService.perform_action("Add style resource", do_add, undo_add)
+	UndoService.perform_action("Add prompt preset resource", do_add, undo_add)
 	_status_label.text = Strings.text("STATUS_STYLE_RESOURCE_ADDED")
 
 
@@ -794,7 +794,7 @@ func _run_mock_graph(
 		Strings.text("CONTENT_DETAIL_MOCK_RUNNING")
 	)
 	var runner := GraphMockRunnerScript.new()
-	var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, batch_node_id, true)
+	var result: Dictionary = runner.run_to_batch(graph, AssetLibrary, batch_node_id)
 	if not bool(result.get("ok", false)):
 		var error: Dictionary = result.get("error", {})
 		var message := _graph_error_message(error)
@@ -821,7 +821,9 @@ func _run_mock_graph(
 		)
 		return
 
-	var asset_ids: Array = result["asset_ids"]
+	var asset_ids: Array = BatchNodeScript.get_visible_asset_ids(
+		graph.get_node_params(batch_node_id)
+	)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if batch_card_id.is_empty():
 		var message := Strings.text("STATUS_GRAPH_RUN_MISSING_BATCH_CARD")
@@ -846,9 +848,6 @@ func _prepare_run_target(
 		return {"error": Strings.text("STATUS_GRAPH_RUN_NEEDS_SELECTION")}
 	var reusable_batch_id := _reusable_batch_node_id(graph, generate_node_id, selected_node_id)
 	if not reusable_batch_id.is_empty():
-		var state: Dictionary = graph.get_node_params(reusable_batch_id).get("run_state", {})
-		if String(state.get("status", "")) in ["waiting", "running"]:
-			return {"error": Strings.text("CONTENT_RUN_ALREADY_ACTIVE")}
 		return {
 			"batch_node_id": reusable_batch_id,
 			"batch_card_id": _ensure_batch_card(graph, reusable_batch_id),
@@ -858,10 +857,18 @@ func _prepare_run_target(
 	graph.add_node(
 		BatchNodeScript.new(),
 		batch_node_id,
-		{"label": Strings.text("BATCH_DEFAULT_LABEL"), "asset_ids": []},
+		{
+			"label": Strings.text("BATCH_DEFAULT_LABEL"),
+			"source_node_id": generate_node_id,
+			"source_run_id": "",
+			"role": "standalone",
+			"input_snapshots": {},
+			"request_records": [],
+			"result_slots": [],
+		},
 		position
 	)
-	var edge_result := graph.add_edge(generate_node_id, "images", batch_node_id, "in")
+	var edge_result := graph.add_edge(generate_node_id, "assets", batch_node_id, "in")
 	if not bool(edge_result.get("ok", false)):
 		graph.remove_node(batch_node_id)
 		return {"error": String(edge_result.get("reason", ""))}
@@ -887,7 +894,7 @@ func _reusable_batch_node_id(
 	var selected: PFNode = graph.get_node(selected_node_id)
 	if selected != null and selected.get_type() == "batch":
 		var selected_params := graph.get_node_params(selected_node_id)
-		if selected_params.get("asset_ids", []).is_empty():
+		if Array(selected_params.get("result_slots", [])).is_empty():
 			return selected_node_id
 	for edge in graph.edges:
 		var from_data: Array = edge.get("from", ["", ""])
@@ -897,7 +904,7 @@ func _reusable_batch_node_id(
 		var target_id := String(to_data[0])
 		var target: PFNode = graph.get_node(target_id)
 		if target != null and target.get_type() == "batch":
-			if graph.get_node_params(target_id).get("asset_ids", []).is_empty():
+			if Array(graph.get_node_params(target_id).get("result_slots", [])).is_empty():
 				return target_id
 	return ""
 
@@ -941,16 +948,8 @@ func _expected_batch_count(graph: PFGraph, generate_node_id: String) -> int:
 
 
 func _set_batch_run_state(
-	graph: PFGraph, batch_node_id: String, status: String, expected_count: int, detail: String
+	graph: PFGraph, batch_node_id: String, _status: String, _expected_count: int, _detail: String
 ) -> void:
-	var params := graph.get_node_params(batch_node_id)
-	params["run_state"] = {
-		"status": status,
-		"expected_count": maxi(0, expected_count),
-		"detail": detail,
-	}
-	graph.set_node_params(batch_node_id, params)
-	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	_canvas._refresh_graph_batch_card(graph.id, batch_node_id)
 
 
@@ -1029,12 +1028,6 @@ func add_graph_node_to_selected_graph(
 	var node_id := "%s_%s" % [type_name, IdUtil.uuid_v4().left(8)]
 	var item_id := IdUtil.uuid_v4()
 	var resolved_params := initial_params.duplicate(true)
-	if type_name == "style_preset" and resolved_params.is_empty():
-		var project_style: Variant = ProjectService.current_project.manifest.get("style_preset", {})
-		resolved_params = {
-			"preset_ref": "embedded",
-			"preset": project_style.duplicate(true) if project_style is Dictionary else {},
-		}
 	if graph.add_node(node, node_id, resolved_params, world_position).is_empty():
 		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
 		return ""
@@ -1241,9 +1234,9 @@ func _localized_node_display_name(node: PFNode) -> String:
 	var key_by_type := {
 		"text_prompt": "NODE_TEXT_PROMPT",
 		"object_list": "NODE_OBJECT_LIST",
-		"style_preset": "NODE_STYLE_PRESET",
+		"prompt_preset": "NODE_PROMPT_PRESET",
 		"image_input": "NODE_IMAGE_INPUT",
-		"size_spec": "NODE_SIZE_SPEC",
+		"pixel_cleanup": "NODE_PIXEL_CLEANUP",
 		"ai_generate": "NODE_AI_GENERATE",
 		"batch": "NODE_BATCH",
 	}
@@ -1358,7 +1351,7 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 			_m2_actions.batch_cleanup(
 				_batch_menu_card_id,
 				asset_ids,
-				Pipeline.normalize_params(_cleanup_inspector.get_params(), _project_style_preset())
+				Pipeline.normalize_params(_cleanup_inspector.get_params())
 			)
 		BATCH_MENU_MATTE:
 			_m2_actions.batch_matte(
@@ -1728,11 +1721,6 @@ func _target_batch_node_id(
 		):
 			return String(to_data[0])
 	return ""
-
-
-func _project_style_preset() -> Dictionary:
-	var style_data: Variant = ProjectService.current_project.manifest.get("style_preset", {})
-	return style_data if style_data is Dictionary else {}
 
 
 func _first_batch_node_id(graph: PFGraph) -> String:

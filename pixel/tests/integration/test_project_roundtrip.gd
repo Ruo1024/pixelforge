@@ -44,7 +44,7 @@ func test_project_save_open_roundtrip_matches_manifest_canvas_and_assets() -> vo
 	assert_true(unpacked["files"].has("canvas/canvas.json"))
 
 	var manifest: Dictionary = FileIOScript.bytes_to_json(unpacked["files"]["manifest.json"])
-	assert_eq(int(manifest["format_version"]), 1)
+	assert_eq(int(manifest["format_version"]), 2)
 	assert_eq(int(manifest["entries"]["asset_count"]), 3)
 
 	assert_eq(project_service.open_project(path), OK)
@@ -60,7 +60,7 @@ func test_project_save_open_roundtrip_matches_manifest_canvas_and_assets() -> vo
 func test_project_graphs_survive_zip_roundtrip() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var graph_data := {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "graph_main",
 		"name": "M3 Foundation",
 		"nodes":
@@ -68,8 +68,15 @@ func test_project_graphs_survive_zip_roundtrip() -> void:
 			{
 				"id": "batch_1",
 				"type": "batch",
-				"position": [32, 64],
-				"params": {"asset_ids": ["asset-a", "asset-b"], "label": "Candidates"},
+				"params": {
+					"label": "Candidates",
+					"source_node_id": "",
+					"source_run_id": "",
+					"role": "standalone",
+					"input_snapshots": {},
+					"request_records": [],
+					"result_slots": [],
+				},
 			},
 		],
 		"edges": [],
@@ -112,7 +119,7 @@ func test_project_graphs_survive_zip_roundtrip() -> void:
 	var expected_node: Dictionary = graph_data["nodes"][0]
 	assert_eq(String(loaded_node["id"]), String(expected_node["id"]))
 	assert_eq(String(loaded_node["type"]), String(expected_node["type"]))
-	assert_eq(_int_pair(loaded_node["position"]), _int_pair(expected_node["position"]))
+	assert_false(loaded_node.has("position"))
 	assert_eq(loaded_node["params"], expected_node["params"])
 	assert_eq(loaded_graph["edges"], graph_data["edges"])
 	assert_eq(project_service.current_project.canvas["items"][0]["type"], "node")
@@ -122,13 +129,13 @@ func test_project_graphs_survive_zip_roundtrip() -> void:
 func test_stage_frames_and_membership_survive_roundtrip_with_unknown_fields() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var graph_data := {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "graph_main",
 		"name": "Two branches",
 		"nodes":
 		[
-			{"id": "prompt_a", "type": "object_list", "position": [0, 0], "params": {}},
-			{"id": "batch_a", "type": "batch", "position": [320, 0], "params": {}},
+			{"id": "prompt_a", "type": "object_list", "params": {"rows": []}},
+			{"id": "batch_a", "type": "batch", "params": {}},
 		],
 		"edges": [],
 	}
@@ -208,13 +215,14 @@ func test_old_canvas_defaults_to_ungrouped_and_invalid_frame_ids_warn_without_re
 			{
 				"graph_main":
 				{
-					"graph_version": 1,
+					"graph_version": 2,
 					"id": "graph_main",
+					"name": "Frame warnings",
 					"nodes":
 					[
-						{"id": "old", "type": "object_list", "position": [0, 0], "params": {}},
-						{"id": "missing", "type": "object_list", "position": [1, 0], "params": {}},
-						{"id": "wrong", "type": "object_list", "position": [2, 0], "params": {}},
+						{"id": "old", "type": "object_list", "params": {"rows": []}},
+						{"id": "missing", "type": "object_list", "params": {"rows": []}},
+						{"id": "wrong", "type": "object_list", "params": {"rows": []}},
 					],
 					"edges": [],
 				}
@@ -291,7 +299,7 @@ func test_simplified_chinese_project_path_name_and_prompt_roundtrip() -> void:
 		. set_graph_data(
 			"graph_main",
 			{
-				"graph_version": 1,
+				"graph_version": 2,
 				"id": "graph_main",
 				"name": "农场道具生成",
 				"nodes":
@@ -299,8 +307,13 @@ func test_simplified_chinese_project_path_name_and_prompt_roundtrip() -> void:
 					{
 						"id": "objects",
 						"type": "object_list",
-						"position": [0, 0],
-						"params": {"items": "木桶\n栅栏\n稻草人"},
+						"params": {
+							"rows": [
+								{"id": "barrel", "text": "木桶", "count": 1, "enabled": true},
+								{"id": "fence", "text": "栅栏", "count": 1, "enabled": true},
+								{"id": "scarecrow", "text": "稻草人", "count": 1, "enabled": true},
+							]
+						},
 					}
 				],
 				"edges": [],
@@ -318,7 +331,7 @@ func test_simplified_chinese_project_path_name_and_prompt_roundtrip() -> void:
 	assert_eq(project_service.current_project.manifest["name"], "像素农场")
 	var graph: Dictionary = project_service.current_project.graphs["graph_main"]
 	assert_eq(graph["name"], "农场道具生成")
-	assert_eq(graph["nodes"][0]["params"]["items"], "木桶\n栅栏\n稻草人")
+	assert_eq(graph["nodes"][0]["params"]["rows"].size(), 3)
 
 
 func test_board_and_animation_documents_survive_zip_roundtrip() -> void:
@@ -367,16 +380,16 @@ func test_board_and_animation_documents_survive_zip_roundtrip() -> void:
 	)
 
 
-func test_project_open_normalizes_graph_edge_schema() -> void:
+func test_project_open_rejects_malformed_graph_edge_schema_without_partial_open() -> void:
 	var project_service := get_tree().root.get_node("ProjectService")
 	var graph_data := {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "graph_dirty_edges",
 		"name": "Dirty Edges",
 		"nodes":
 		[
-			{"id": "objects", "type": "object_list", "position": [0, 0], "params": {}},
-			{"id": "generate", "type": "ai_generate", "position": [100, 0], "params": {}},
+			{"id": "objects", "type": "object_list", "params": {"rows": []}},
+			{"id": "generate", "type": "ai_generate", "params": {"provider_id": "openai_image", "model_id": "gpt-image-2", "target_width": 64, "target_height": 64, "batch_size": 1, "seed": -1, "extra": {"quality": "low"}}},
 		],
 		"edges":
 		[
@@ -391,16 +404,10 @@ func test_project_open_normalizes_graph_edge_schema() -> void:
 
 	var path := "user://tests/graph_dirty_edges_m3.pxproj"
 	assert_eq(project_service.save_project(path), OK)
-	assert_eq(project_service.open_project(path), OK)
-
-	var loaded_graph: Dictionary = project_service.current_project.graphs["graph_dirty_edges"]
-	assert_eq(
-		loaded_graph["edges"],
-		[
-			{"from": ["objects", ""], "to": ["generate", "items"]},
-			{"from": ["objects", "items"], "to": ["generate", "items"]},
-		]
-	)
+	var original_id: String = project_service.current_project.get_id()
+	assert_eq(project_service.open_project(path), ERR_FILE_UNRECOGNIZED)
+	assert_eq(project_service.last_load_error.get("code", ""), "invalid_graph_edge")
+	assert_eq(project_service.current_project.get_id(), original_id)
 
 
 func test_project_open_rejects_future_format_version() -> void:

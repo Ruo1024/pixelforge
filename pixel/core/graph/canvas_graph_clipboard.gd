@@ -5,7 +5,7 @@ extends RefCounted
 ## Canvas layout and graph logic stay separate per PROJECT-FORMAT.md §4.
 
 const IdUtil := preload("res://core/util/id_util.gd")
-const PAYLOAD_VERSION := 1
+const PAYLOAD_VERSION := 2
 const RUNTIME_FIELDS := [
 	"execution_status",
 	"execution_detail",
@@ -25,8 +25,15 @@ const RUNTIME_FIELDS := [
 
 
 static func capture(
-	graph_data: Dictionary, canvas_items: Array, selected_item_ids: Array
+	graph_data: Dictionary,
+	canvas_items: Array,
+	selected_item_ids: Array,
+	origin_project_id: String = ""
 ) -> Dictionary:
+	if int(graph_data.get("graph_version", 0)) != 2:
+		return _error("unsupported_graph_version")
+	if origin_project_id.is_empty():
+		return _error("missing_origin_project_id")
 	var graph_id := String(graph_data.get("id", ""))
 	if graph_id.is_empty():
 		return _error("missing_graph_id")
@@ -95,6 +102,7 @@ static func capture(
 	return {
 		"ok": true,
 		"version": PAYLOAD_VERSION,
+		"origin_project_id": origin_project_id,
 		"graph_id": graph_id,
 		"anchor": _position_array(anchor),
 		"items": captured_items,
@@ -104,10 +112,18 @@ static func capture(
 
 
 static func instantiate(
-	payload: Dictionary, target_position: Vector2, id_factory: Callable = Callable()
+	payload: Dictionary,
+	target_position: Vector2,
+	id_factory: Callable = Callable(),
+	target_project_id: String = ""
 ) -> Dictionary:
 	if int(payload.get("version", 0)) != PAYLOAD_VERSION:
-		return _error("unsupported_payload_version")
+		return _error("unsupported_clipboard_version")
+	var origin_project_id := String(payload.get("origin_project_id", ""))
+	if origin_project_id.is_empty() or target_project_id.is_empty():
+		return _error("missing_origin_project_id")
+	if origin_project_id != target_project_id:
+		return _error("clipboard_project_mismatch")
 	var graph_id := String(payload.get("graph_id", ""))
 	var source_items: Array = payload.get("items", [])
 	var source_nodes: Array = payload.get("nodes", [])

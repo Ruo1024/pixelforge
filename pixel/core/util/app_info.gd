@@ -6,4 +6,4 @@ extends RefCounted
 
 const APP_NAME := "PixelForge"
 const APP_VERSION := "0.2.0-beta.1"
-const PROJECT_FORMAT_VERSION := 1
+const PROJECT_FORMAT_VERSION := 2

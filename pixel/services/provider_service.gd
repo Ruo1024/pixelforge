@@ -12,7 +12,7 @@ signal provider_validation_changed(provider_id: String, state: String, message: 
 const PluginAPIScript := preload("res://services/plugin_api.gd")
 const CredentialStoreScript := preload("res://services/credential_store.gd")
 const ProviderContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
-const SCHEMA_TEXT_RESOLVER_PATH := "res://services/schema_text_resolver.gd"
+const SchemaTextResolverScript := preload("res://services/schema_text_resolver.gd")
 const BUILTIN_PROVIDER_PLUGINS := [
 	"res://plugins/provider_openai/main.gd",
 	"res://plugins/provider_retrodiffusion/main.gd",
@@ -511,18 +511,8 @@ func _config_schema_is_valid(schema: Array[Dictionary]) -> bool:
 
 
 func _schema_text_is_valid(schema: Array[Dictionary]) -> bool:
-	if not ResourceLoader.exists(SCHEMA_TEXT_RESOLVER_PATH):
-		return true
-	var script: Script = load(SCHEMA_TEXT_RESOLVER_PATH)
-	if script == null:
-		return false
-	var resolver: Variant = script.new()
-	if resolver == null or not resolver.has_method("validate_schema"):
-		return false
-	var result: Variant = resolver.validate_schema(schema)
-	return (
-		result == null or result == true or (result is Dictionary and bool(result.get("ok", false)))
-	)
+	var result: Dictionary = SchemaTextResolverScript.validate_schema(schema)
+	return bool(result.get("ok", false))
 
 
 func _provider_settings_section(provider_id: String) -> String:

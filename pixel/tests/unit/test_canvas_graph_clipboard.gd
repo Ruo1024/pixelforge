@@ -20,7 +20,10 @@ func test_capture_keeps_relative_layout_internal_edges_and_safe_asset_references
 	var canvas_items := _canvas_fixture()
 
 	var payload: Dictionary = ClipboardScript.capture(
-		graph, canvas_items, ["item_prompt", "item_generate", "item_reference", "sprite_ignored"]
+		graph,
+		canvas_items,
+		["item_prompt", "item_generate", "item_reference", "sprite_ignored"],
+		"project-a"
 	)
 
 	assert_true(payload["ok"])
@@ -29,10 +32,9 @@ func test_capture_keeps_relative_layout_internal_edges_and_safe_asset_references
 	assert_eq(_by_id(payload["items"], "item_prompt")["position"], [0, 40])
 	assert_eq(_by_id(payload["items"], "item_generate")["position"], [240, 0])
 	assert_eq(_by_id(payload["items"], "item_reference")["position"], [0, 220])
-	assert_eq(payload["edges"], [{"from": ["prompt", "text"], "to": ["generate", "text"]}])
+	assert_eq(payload["edges"], [{"from": ["prompt", "text"], "to": ["generate", "prompt"]}])
 	assert_eq(_by_id(payload["nodes"], "reference")["params"]["asset_id"], "asset-safe")
-	assert_eq(_by_id(payload["nodes"], "generate")["params"]["asset_ids"], ["a", "b"])
-	assert_eq(_by_id(payload["nodes"], "generate")["custom"], "preserved")
+	assert_eq(_by_id(payload["nodes"], "generate")["params"]["extra"], {"quality": "low"})
 	assert_false(_by_id(payload["nodes"], "generate").has("execution_status"))
 	assert_false(_by_id(payload["nodes"], "generate")["params"].has("task_id"))
 	assert_false(_by_id(payload["items"], "item_generate").has("progress"))
@@ -46,7 +48,7 @@ func test_capture_keeps_relative_layout_internal_edges_and_safe_asset_references
 
 func test_instantiate_remaps_ids_edges_and_places_selection_at_target() -> void:
 	var payload: Dictionary = ClipboardScript.capture(
-		_graph_fixture(), _canvas_fixture(), ["item_prompt", "item_generate", "item_reference"]
+		_graph_fixture(), _canvas_fixture(), ["item_prompt", "item_generate", "item_reference"], "project-a"
 	)
 	var ids := SequenceIds.new(
 		[
@@ -60,7 +62,7 @@ func test_instantiate_remaps_ids_edges_and_places_selection_at_target() -> void:
 	)
 
 	var result: Dictionary = ClipboardScript.instantiate(
-		payload, Vector2(1000, 500), Callable(ids, "next")
+		payload, Vector2(1000, 500), Callable(ids, "next"), "project-a"
 	)
 
 	assert_true(result["ok"])
@@ -89,7 +91,7 @@ func test_instantiate_remaps_ids_edges_and_places_selection_at_target() -> void:
 		[
 			{
 				"from": ["node-prompt-new", "text"],
-				"to": ["node-generate-new", "text"],
+				"to": ["node-generate-new", "prompt"],
 			}
 		]
 	)
@@ -104,23 +106,23 @@ func test_capture_rejects_empty_or_mismatched_selection() -> void:
 	var items := _canvas_fixture()
 
 	assert_eq(
-		ClipboardScript.capture(graph, items, ["missing"])["error"]["code"], "empty_selection"
+		ClipboardScript.capture(graph, items, ["missing"], "project-a")["error"]["code"], "empty_selection"
 	)
 	items[0]["graph_id"] = "another_graph"
 	assert_eq(
-		ClipboardScript.capture(graph, items, ["item_prompt"])["error"]["code"], "empty_selection"
+		ClipboardScript.capture(graph, items, ["item_prompt"], "project-a")["error"]["code"], "empty_selection"
 	)
 
 
 func test_instantiate_does_not_mutate_reusable_payload() -> void:
 	var payload: Dictionary = ClipboardScript.capture(
-		_graph_fixture(), _canvas_fixture(), ["item_prompt", "item_generate"]
+		_graph_fixture(), _canvas_fixture(), ["item_prompt", "item_generate"], "project-a"
 	)
 	var original := payload.duplicate(true)
 	var ids := SequenceIds.new(["n1", "n2", "i1", "i2"])
 
 	var result: Dictionary = ClipboardScript.instantiate(
-		payload, Vector2(10, 20), Callable(ids, "next")
+		payload, Vector2(10, 20), Callable(ids, "next"), "project-a"
 	)
 
 	assert_true(result["ok"])
@@ -129,37 +131,41 @@ func test_instantiate_does_not_mutate_reusable_payload() -> void:
 
 func _graph_fixture() -> Dictionary:
 	return {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "graph_main",
 		"nodes":
 		[
 			{
 				"id": "prompt",
 				"type": "text_prompt",
-				"position": [100, 120],
 				"params": {"text": "castle"}
 			},
 			{
 				"id": "generate",
 				"type": "ai_generate",
-				"position": [340, 80],
-				"params": {"provider_id": "mock", "asset_ids": ["a", "b"], "task_id": "live-task"},
+				"params": {
+					"provider_id": "openai_image",
+					"model_id": "gpt-image-2",
+					"target_width": 64,
+					"target_height": 64,
+					"batch_size": 1,
+					"seed": -1,
+					"extra": {"quality": "low"},
+					"task_id": "live-task",
+				},
 				"execution_status": "running",
-				"custom": "preserved",
 			},
 			{
 				"id": "reference",
 				"type": "image_input",
-				"position": [100, 300],
 				"params": {"asset_id": "asset-safe"},
 			},
-			{"id": "external", "type": "size_spec", "position": [600, 80], "params": {}},
+			{"id": "external", "type": "text_prompt", "params": {"text": "outside"}},
 		],
 		"edges":
 		[
-			{"from": ["prompt", "text"], "to": ["generate", "text"]},
-			{"from": ["external", "spec"], "to": ["generate", "spec"]},
-			{"from": ["generate", "images"], "to": ["external", "in"]},
+			{"from": ["prompt", "text"], "to": ["generate", "prompt"]},
+			{"from": ["external", "text"], "to": ["generate", "prompt"]},
 		],
 	}
 

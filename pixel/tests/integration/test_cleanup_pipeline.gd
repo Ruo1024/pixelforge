@@ -124,8 +124,8 @@ func test_fixed_palette_cleanup_uses_registered_custom_palette() -> void:
 	assert_eq(result["report"]["quantize"]["palette_id"], registered.id)
 
 
-func test_style_preset_base_size_flows_into_detect_params() -> void:
-	var normalized := Pipeline.normalize_params({}, {"base_size": 32})
+func test_independent_cleanup_uses_fixed_detect_prior_without_project_style() -> void:
+	var normalized := Pipeline.normalize_params({})
 	var detect: Dictionary = normalized[Pipeline.STEP_DETECT_GRID]
 
 	assert_eq(int(detect["base_size"]), 32)

@@ -648,10 +648,7 @@ func _on_custom_palettes_changed() -> void:
 func _sync_cleanup_inspector_with_project(project: Variant) -> void:
 	if _cleanup_inspector == null:
 		return
-	var style_data: Variant = project.manifest.get("style_preset", {})
-	var style_preset: Dictionary = style_data if style_data is Dictionary else {}
 	_cleanup_inspector.refresh_palette_options()
-	_cleanup_inspector.set_style_preset(style_preset)
 
 
 func _on_canvas_changed() -> void:
@@ -935,9 +932,7 @@ static func _fit_preview_to_source(preview: Image, source_size: Vector2i) -> Ima
 
 
 func _cleanup_params_with_project_style(params: Dictionary) -> Dictionary:
-	var style_data: Variant = ProjectService.current_project.manifest.get("style_preset", {})
-	var style_preset: Dictionary = style_data if style_data is Dictionary else {}
-	return Pipeline.normalize_params(params, style_preset)
+	return Pipeline.normalize_params(params)
 
 
 func _export_selected_png() -> void:

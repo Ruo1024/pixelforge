@@ -7,8 +7,7 @@ const IdUtil := preload("res://core/util/id_util.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
 const ReferenceSetNodeScript := preload("res://core/graph/nodes/reference_set_node.gd")
 const TextPromptNodeScript := preload("res://core/graph/nodes/text_prompt_node.gd")
-const StylePresetNodeScript := preload("res://core/graph/nodes/style_preset_node.gd")
-const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+const PromptPresetNodeScript := preload("res://core/graph/nodes/prompt_preset_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 
@@ -48,25 +47,15 @@ static func _build_continue_branch(
 		{"text": String(snapshot.get("prompt", ""))},
 		anchor
 	)
-	var style_value: Variant = snapshot.get("style", {})
-	var style: Dictionary = style_value.duplicate(true) if style_value is Dictionary else {}
-	var style_id := _add_node(
+	var prompt_preset := PromptPresetNodeScript.DEFAULT_PRESET.duplicate(true)
+	prompt_preset["id"] = String(snapshot.get("prompt_preset_id", prompt_preset["id"]))
+	prompt_preset["prefix"] = String(snapshot.get("prompt_prefix", prompt_preset["prefix"]))
+	var preset_id := _add_node(
 		graph,
-		StylePresetNodeScript.new(),
-		"style",
-		{"preset_ref": "embedded", "preset": style},
+		PromptPresetNodeScript.new(),
+		"prompt_preset",
+		{"preset": prompt_preset},
 		anchor + Vector2(0, 420)
-	)
-	var size_id := _add_node(
-		graph,
-		SizeSpecNodeScript.new(),
-		"size",
-		{
-			"width": maxi(1, int(snapshot.get("width", 32))),
-			"height": maxi(1, int(snapshot.get("height", 32))),
-			"per_subject": 1,
-		},
-		anchor + Vector2(280, 420)
 	)
 	var generate_id := _add_node(
 		graph,
@@ -75,8 +64,11 @@ static func _build_continue_branch(
 		{
 			"provider_id": String(snapshot.get("provider_id", "mock")),
 			"model_id": String(snapshot.get("model_id", "")),
+			"target_width": maxi(1, int(snapshot.get("target_width", 32))),
+			"target_height": maxi(1, int(snapshot.get("target_height", 32))),
 			"batch_size": maxi(1, int(snapshot.get("batch_size", 1))),
-			"seed": maxi(0, int(snapshot.get("seed", 1))),
+			"seed": int(snapshot.get("requested_seed", -1)),
+			"extra": Dictionary(snapshot.get("extra", {})).duplicate(true),
 		},
 		anchor + Vector2(580, 180)
 	)
@@ -84,22 +76,29 @@ static func _build_continue_branch(
 		graph,
 		BatchNodeScript.new(),
 		"batch",
-		{"label": "Batch", "asset_ids": []},
+		{
+			"label": "Batch",
+			"source_node_id": generate_id,
+			"source_run_id": "",
+			"role": "standalone",
+			"input_snapshots": {},
+			"request_records": [],
+			"result_slots": [],
+		},
 		anchor + Vector2(940, 180)
 	)
 	for edge in [
-		[prompt_id, "text", generate_id, "text"],
-		[style_id, "style", generate_id, "style"],
-		[size_id, "spec", generate_id, "spec"],
-		[reference_id, "image" if asset_ids.size() == 1 else "images", generate_id, "image"],
-		[generate_id, "images", batch_id, "in"],
+		[prompt_id, "prompt", generate_id, "prompt"],
+		[preset_id, "prefix", generate_id, "prefix"],
+		[reference_id, "assets", generate_id, "references"],
+		[generate_id, "assets", batch_id, "in"],
 	]:
 		var result := graph.add_edge(edge[0], edge[1], edge[2], edge[3])
 		if not bool(result.get("ok", false)):
 			return {"ok": false, "error": String(result.get("reason", "invalid_edge"))}
 	return {
 		"ok": true,
-		"created_node_ids": [reference_id, prompt_id, style_id, size_id, generate_id, batch_id],
+		"created_node_ids": [reference_id, prompt_id, preset_id, generate_id, batch_id],
 		"focus_node_id": generate_id,
 		"batch_node_id": batch_id,
 	}

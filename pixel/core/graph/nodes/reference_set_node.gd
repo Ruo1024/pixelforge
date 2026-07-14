@@ -19,7 +19,7 @@ func get_category() -> String:
 
 
 func get_output_ports() -> Array[Dictionary]:
-	return [{"name": "images", "type": "image_list"}]
+	return [{"name": "assets", "type": "asset_list"}]
 
 
 func get_param_schema() -> Array[Dictionary]:
@@ -52,7 +52,8 @@ func execute(_inputs: Dictionary, params: Dictionary, ctx: Variant) -> Dictionar
 		content_sha256s.append(GraphContextScript.image_content_sha256(image))
 
 	return {
-		"images": images,
+		"assets": asset_ids.duplicate(),
+		"__reference_images": images,
 		"__reference_asset_ids": asset_ids.duplicate(),
 		"__reference_content_sha256s": content_sha256s,
 	}
@@ -68,12 +69,4 @@ func _string_array(value: Variant) -> Array[String]:
 
 
 func _error(code: String, index: int, asset_id: String = "") -> Dictionary:
-	return {
-		"__error":
-		{
-			"code": code,
-			"message": code,
-			"asset_id": asset_id,
-			"index": index,
-		}
-	}
+	return {"__error": {"code": code, "args": {"asset_id": asset_id, "index": index}}}

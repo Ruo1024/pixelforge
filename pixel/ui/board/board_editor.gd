@@ -157,9 +157,7 @@ func _build_ui() -> void:
 func _load_or_create_board() -> void:
 	var boards := ProjectService.get_document_data("boards")
 	if boards.is_empty():
-		var style: Dictionary = ProjectService.current_project.manifest.get("style_preset", {})
-		var tile_size := maxi(1, int(style.get("tile_size", 16)))
-		_board = BoardScript.new("Farm Scene", 60, 40, tile_size)
+		_board = BoardScript.new("Farm Scene", 60, 40, 16)
 		_board.add_layer("Terrain", PFBoard.LAYER_TILE)
 		_board.add_layer("Props", PFBoard.LAYER_FREE)
 		_board.add_layer("VFX", PFBoard.LAYER_FREE)

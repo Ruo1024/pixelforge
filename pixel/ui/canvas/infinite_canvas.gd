@@ -498,8 +498,6 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 				_unrendered_items.append(Dictionary(item_data).duplicate(true))
 				continue
 			_add_sprite_direct(item_data, image)
-		elif item_type == "batch_card":
-			_add_batch_direct(item_data)
 		elif item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data):
 			_add_batch_direct(item_data)
 		elif item_type == "node":
@@ -516,7 +514,8 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 	return (
 		data is Dictionary
-		and String(data.get("kind", "")) in ["project_asset", "style_preset", "workflow_template"]
+		and String(data.get("kind", ""))
+		in ["project_asset", "prompt_preset", "cleanup_preset", "workflow_template"]
 	)
 
 
@@ -537,7 +536,8 @@ func export_canvas_data() -> Dictionary:
 		if node.get_script() == CanvasItemSpriteScript:
 			items.append(node.to_canvas_data())
 		elif node.get_script() == CanvasBatchCardScript:
-			items.append(node.to_canvas_data())
+			if node.has_graph_binding():
+				items.append(node.to_canvas_data())
 		elif node.get_script() == CanvasNodeCardScript:
 			items.append(node.to_canvas_data())
 		elif node.get_script() == CanvasItemFrameScript:
@@ -687,7 +687,10 @@ func _copy_selected_graph_nodes() -> bool:
 	if graph_id.is_empty():
 		return false
 	var payload: Dictionary = GraphClipboard.capture(
-		ProjectService.get_graph_data(graph_id), canvas_items, selected_ids
+		ProjectService.get_graph_data(graph_id),
+		canvas_items,
+		selected_ids,
+		ProjectService.current_project.get_id()
 	)
 	if not bool(payload.get("ok", false)):
 		return false
@@ -704,7 +707,12 @@ func _paste_graph_clipboard_at(target_position: Vector2) -> bool:
 	if before.is_empty():
 		graph_status.emit({"type": "clipboard_failed", "reason": "source_graph_unavailable"})
 		return false
-	var instance: Dictionary = GraphClipboard.instantiate(_graph_clipboard, target_position.round())
+	var instance: Dictionary = GraphClipboard.instantiate(
+		_graph_clipboard,
+		target_position.round(),
+		Callable(),
+		ProjectService.current_project.get_id()
+	)
 	if not bool(instance.get("ok", false)):
 		return false
 	var after := before.duplicate(true)

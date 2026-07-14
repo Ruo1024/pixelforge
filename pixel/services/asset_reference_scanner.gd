@@ -26,8 +26,6 @@ static func _scan_canvas(canvas: Dictionary, references: Array[Dictionary]) -> v
 		match String(item.get("type", "")):
 			"sprite":
 				_add(references, item.get("asset_id", ""), "%s/asset_id" % base, "live")
-			"batch_card":
-				_scan_batch_fields(item, base, references)
 
 
 static func _scan_graphs(graphs: Dictionary, references: Array[Dictionary]) -> void:
@@ -52,15 +50,41 @@ static func _scan_graphs(graphs: Dictionary, references: Array[Dictionary]) -> v
 static func _scan_batch_fields(
 	data: Dictionary, base: String, references: Array[Dictionary]
 ) -> void:
-	for key in ["asset_ids", "selected_asset_ids", "compare_asset_ids"]:
-		for index in range(Array(data.get(key, [])).size()):
-			_add(
-				references, Array(data.get(key, []))[index], "%s/%s/%d" % [base, key, index], "live"
+	var slots: Variant = data.get("result_slots", [])
+	if slots is Array:
+		for index in range(slots.size()):
+			var raw_slot: Variant = slots[index]
+			if not (raw_slot is Dictionary):
+				continue
+			var slot: Dictionary = raw_slot
+			var asset_id := String(slot.get("asset_id", ""))
+			if asset_id.is_empty():
+				continue
+			var strength := (
+				"live"
+				if String(slot.get("status", "")) == "succeeded" and not bool(slot.get("detached", false))
+				else "history"
 			)
-	_add(references, data.get("focus_asset_id", ""), "%s/focus_asset_id" % base, "live")
-	var review_states: Dictionary = data.get("review_states", {})
-	for asset_id in review_states.keys():
-		_add(references, asset_id, "%s/review_states/%s" % [base, asset_id], "live")
+			_add(references, asset_id, "%s/result_slots/%d/asset_id" % [base, index], strength)
+	var snapshots: Variant = data.get("input_snapshots", {})
+	if snapshots is Dictionary:
+		for snapshot_id_value in snapshots:
+			var raw_snapshot: Variant = snapshots[snapshot_id_value]
+			if not (raw_snapshot is Dictionary):
+				continue
+			var snapshot: Dictionary = raw_snapshot
+			var snapshot_base := "%s/input_snapshots/%s" % [base, String(snapshot_id_value)]
+			if String(snapshot.get("kind", "")) == "generation":
+				_scan_array_field(
+					snapshot, "reference_asset_ids", snapshot_base, "history", references
+				)
+			elif String(snapshot.get("kind", "")) == "cleanup":
+				_add(
+					references,
+					snapshot.get("source_asset_id", ""),
+					"%s/source_asset_id" % snapshot_base,
+					"history"
+				)
 
 
 static func _scan_boards(boards: Dictionary, references: Array[Dictionary]) -> void:
@@ -114,13 +138,14 @@ static func _scan_history(asset_library: Node, references: Array[Dictionary]) ->
 		var provenance: Dictionary = meta.get("provenance", {})
 		var base := "assets/%s/meta/provenance" % owner_id
 		_add(references, provenance.get("parent_asset", ""), "%s/parent_asset" % base, "history")
-		_add(
-			references,
-			provenance.get("reference_asset_id", ""),
-			"%s/reference_asset_id" % base,
-			"history"
+		var generation_snapshot: Dictionary = provenance.get("generation_snapshot", {})
+		_scan_array_field(
+			generation_snapshot,
+			"reference_asset_ids",
+			"%s/generation_snapshot" % base,
+			"history",
+			references
 		)
-		_scan_array_field(provenance, "reference_asset_ids", base, "history", references)
 		var cleanup: Dictionary = provenance.get("cleanup", {})
 		_add(
 			references, cleanup.get("source_asset", ""), "%s/cleanup/source_asset" % base, "history"

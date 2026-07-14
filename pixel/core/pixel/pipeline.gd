@@ -23,12 +23,7 @@ const STEP_QUANTIZE := "quantize"
 const DEFAULT_STEP_ORDER := [STEP_DETECT_GRID, STEP_RESAMPLE, STEP_QUANTIZE]
 
 
-static func default_params(style_preset: Dictionary = {}) -> Dictionary:
-	var palette_ref := "db32"
-	var palette_data: Variant = style_preset.get("palette", {})
-	if palette_data is Dictionary:
-		palette_ref = String(palette_data.get("ref", palette_ref))
-
+static func default_params() -> Dictionary:
 	return {
 		"steps": DEFAULT_STEP_ORDER.duplicate(),
 		STEP_DETECT_GRID:
@@ -37,7 +32,7 @@ static func default_params(style_preset: Dictionary = {}) -> Dictionary:
 			"mode": DETECT_AUTO,
 			"scale": 4.0,
 			"offset": Vector2.ZERO,
-			"base_size": int(style_preset.get("base_size", 0)),
+			"base_size": 32,
 			"prior_scale": 0.0,
 		},
 		STEP_RESAMPLE:
@@ -54,21 +49,18 @@ static func default_params(style_preset: Dictionary = {}) -> Dictionary:
 		{
 			"enabled": true,
 			"mode": Quantizer.MODE_AUTO_K,
-			"palette_id": palette_ref,
+			"palette_id": "db32",
 			"palette_name": "Custom",
 			"palette_colors": [],
 			"palette_path": "",
-			"auto_k_strategy":
-			Quantizer.normalize_auto_k_strategy(
-				style_preset.get("auto_k_strategy", Quantizer.AUTO_K_STRATEGY_MEDIAN_CUT)
-			),
-			"k": int(style_preset.get("max_colors_per_sprite", Quantizer.DEFAULT_MAX_COLORS)),
-			"dither": String(style_preset.get("dither", Ditherer.MODE_NONE)),
+			"auto_k_strategy": Quantizer.AUTO_K_STRATEGY_MEDIAN_CUT,
+			"k": Quantizer.DEFAULT_MAX_COLORS,
+			"dither": Ditherer.MODE_NONE,
 			"dither_matrix": Ditherer.MODE_BAYER4,
-			"dither_strength": float(style_preset.get("dither_strength", 0.0)),
+			"dither_strength": 0.0,
 			# Chromatic dithering perturbs OKLab lightness and chroma before nearest-color
 			# mapping: contrast controls lightness, chroma controls a/b drift, density gates pixels.
-			"dither_contrast": float(style_preset.get("dither_strength", 0.0)),
+			"dither_contrast": 0.0,
 			"dither_chroma": 0.0,
 			"dither_density": 1.0,
 			"distance": PaletteScript.DISTANCE_OKLAB,
@@ -76,8 +68,8 @@ static func default_params(style_preset: Dictionary = {}) -> Dictionary:
 	}
 
 
-static func normalize_params(params: Dictionary = {}, style_preset: Dictionary = {}) -> Dictionary:
-	var normalized := default_params(style_preset)
+static func normalize_params(params: Dictionary = {}) -> Dictionary:
+	var normalized := default_params()
 	_apply_flat_compatibility(normalized, params)
 	_merge_step_params(normalized, params)
 	_apply_step_controls(normalized, params)

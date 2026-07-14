@@ -427,12 +427,7 @@ func _summarize_params(params: Variant) -> String:
 	elif source.has("preset"):
 		var preset_value: Variant = source.get("preset", {})
 		var preset: Dictionary = preset_value if preset_value is Dictionary else {}
-		result = String(preset.get("name", Strings.text("CONTENT_STYLE_DEFAULT")))
-	elif source.has("width") and source.has("height"):
-		result = (
-			Strings.text("CONTENT_SIZE_SUMMARY_FORMAT")
-			% [int(source["width"]), int(source["height"])]
-		)
+		result = String(preset.get("name", preset.get("name_key", preset.get("prefix", ""))))
 	elif source.has("provider_id"):
 		var model_label := String(source.get("model_id", ""))
 		if model_label.is_empty():
@@ -463,9 +458,9 @@ func _is_content_node() -> bool:
 		in [
 			"text_prompt",
 			"object_list",
-			"style_preset",
+			"prompt_preset",
 			"ai_generate",
-			"size_spec",
+			"pixel_cleanup",
 			"image_input",
 			"reference_set",
 		]
@@ -511,14 +506,14 @@ func _rebuild_content_controls() -> void:
 			_build_object_list_controls()
 		"ai_generate":
 			_build_generate_controls()
-		"size_spec":
-			_build_size_controls()
 		"image_input":
 			_build_reference_controls()
 		"reference_set":
 			_build_reference_set_controls()
-		"style_preset":
-			_build_style_controls()
+		"prompt_preset":
+			_build_prompt_preset_controls()
+		"pixel_cleanup":
+			_build_cleanup_shell_controls()
 
 
 func _rebuild_header_controls() -> void:
@@ -670,31 +665,31 @@ func _build_text_prompt_controls() -> void:
 	_sync_prompt_draft()
 
 
-func _build_style_controls() -> void:
+func _build_prompt_preset_controls() -> void:
 	var preset_value: Variant = _params_snapshot.get("preset", {})
 	var preset: Dictionary = preset_value if preset_value is Dictionary else {}
 	var name_label := Label.new()
-	name_label.name = "StyleName"
-	name_label.text = String(preset.get("name", Strings.text("CONTENT_STYLE_DEFAULT")))
+	name_label.name = "PresetName"
+	name_label.text = String(preset.get("name", preset.get("name_key", "")))
 	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_content_root.add_child(name_label)
-	var palette_strip := HBoxContainer.new()
-	palette_strip.name = "PaletteStrip"
-	var palette_value: Variant = preset.get("palette", {})
-	var colors: Array = (
-		Dictionary(palette_value).get("colors", []) if palette_value is Dictionary else []
-	)
-	for raw_color in colors.slice(0, mini(12, colors.size())):
-		var swatch := ColorRect.new()
-		swatch.custom_minimum_size = Vector2.ONE * AppTheme.PALETTE_SWATCH_SIZE
-		swatch.color = Color.from_string(String(raw_color), Color.TRANSPARENT)
-		palette_strip.add_child(swatch)
-	_content_root.add_child(palette_strip)
-	var summary_label := Label.new()
-	summary_label.name = "StyleDetail"
-	summary_label.text = _style_summary(preset)
-	summary_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_content_root.add_child(summary_label)
+	var prefix_label := Label.new()
+	prefix_label.name = "PresetPrefix"
+	prefix_label.text = String(preset.get("prefix", ""))
+	prefix_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_content_root.add_child(prefix_label)
+
+
+func _build_cleanup_shell_controls() -> void:
+	var preset_label := Label.new()
+	preset_label.name = "CleanupPresetId"
+	preset_label.text = String(_params_snapshot.get("preset_id", ""))
+	_content_root.add_child(preset_label)
+	var settings_label := Label.new()
+	settings_label.name = "CleanupSettingsSnapshot"
+	settings_label.text = JSON.stringify(_params_snapshot.get("settings", {}))
+	settings_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_content_root.add_child(settings_label)
 
 
 func _build_generate_controls() -> void:
@@ -739,11 +734,13 @@ func _build_generate_controls() -> void:
 	input_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_content_root.add_child(input_summary)
 
-	var style_label := Label.new()
-	style_label.name = "StyleSummary"
-	style_label.text = _project_style_summary()
-	style_label.tooltip_text = Strings.text("CONTENT_STYLE_SOURCE_HINT")
-	_content_root.add_child(style_label)
+	var target_label := Label.new()
+	target_label.name = "TargetSummary"
+	target_label.text = "%d×%d px" % [
+		int(_params_snapshot.get("target_width", 32)),
+		int(_params_snapshot.get("target_height", 32)),
+	]
+	_content_root.add_child(target_label)
 
 	var settings_row := HBoxContainer.new()
 	_batch_size_spin = _make_spin("BatchSize", 1, 16, int(_params_snapshot.get("batch_size", 1)))
@@ -782,44 +779,6 @@ func _build_generate_controls() -> void:
 	_content_root.add_child(_execution_detail_label)
 	_sync_execution_detail()
 	_sync_run_controls()
-
-
-func _build_size_controls() -> void:
-	var hero := Label.new()
-	hero.name = "SizeHero"
-	hero.text = (
-		"%d × %d px"
-		% [int(_params_snapshot.get("width", 32)), int(_params_snapshot.get("height", 32))]
-	)
-	hero.add_theme_font_size_override("font_size", AppTheme.STRUCTURED_HERO_FONT_SIZE)
-	hero.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_content_root.add_child(hero)
-	var row := HBoxContainer.new()
-	var width := _make_spin("Width", 1, 512, int(_params_snapshot.get("width", 32)))
-	var height := _make_spin("Height", 1, 512, int(_params_snapshot.get("height", 32)))
-	var count := _make_spin("PerSubject", 1, 16, int(_params_snapshot.get("per_subject", 1)))
-	row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_WIDTH"), width))
-	row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_HEIGHT"), height))
-	row.add_child(_labeled_control(Strings.text("GRAPH_PARAM_PER_SUBJECT"), count))
-	_content_root.add_child(row)
-	var presets := HBoxContainer.new()
-	presets.name = "SizePresets"
-	for value in [16, 24, 32, 48, 64]:
-		var button := Button.new()
-		button.name = "SizePreset%d" % value
-		button.text = str(value)
-		button.pressed.connect(_commit_size_params.bind(width, height, count, value))
-		presets.add_child(button)
-	_content_root.add_child(presets)
-	width.get_line_edit().text_submitted.connect(
-		func(_value: String) -> void: _commit_size_params(width, height, count)
-	)
-	height.get_line_edit().text_submitted.connect(
-		func(_value: String) -> void: _commit_size_params(width, height, count)
-	)
-	count.get_line_edit().text_submitted.connect(
-		func(_value: String) -> void: _commit_size_params(width, height, count)
-	)
 
 
 func _build_reference_controls() -> void:
@@ -1087,24 +1046,6 @@ func _on_prompt_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-func _commit_size_params(width: SpinBox, height: SpinBox, count: SpinBox, preset: int = -1) -> void:
-	if preset > 0:
-		width.value = preset
-		height.value = preset
-	(
-		params_commit_requested
-		. emit(
-			graph_id,
-			node_id,
-			{
-				"width": int(width.value),
-				"height": int(height.value),
-				"per_subject": int(count.value),
-			}
-		)
-	)
-
-
 func _commit_generate_params() -> void:
 	if _model_option == null or _batch_size_spin == null or _seed_spin == null:
 		return
@@ -1117,8 +1058,11 @@ func _commit_generate_params() -> void:
 			{
 				"provider_id": String(descriptor.get("provider_id", "mock")),
 				"model_id": String(descriptor.get("model_id", "")),
+				"target_width": int(_params_snapshot.get("target_width", 32)),
+				"target_height": int(_params_snapshot.get("target_height", 32)),
 				"batch_size": int(_batch_size_spin.value),
 				"seed": int(_seed_spin.value),
+				"extra": Dictionary(_params_snapshot.get("extra", {})).duplicate(true),
 			}
 		)
 	)
@@ -1193,67 +1137,31 @@ func _generation_input_summary() -> String:
 		if raw_node is Dictionary:
 			node_by_id[String(raw_node.get("id", ""))] = raw_node
 	var prompt := Strings.text("CONTENT_PROMPT_EMPTY")
-	for input_port in ["text", "items"]:
+	for input_port in ["prompt", "subjects"]:
 		var source: Dictionary = node_by_id.get(String(sources.get(input_port, "")), {})
 		if not source.is_empty():
 			prompt = _summarize_params(source.get("params", {}))
 			break
-	var style := Strings.text("CONTENT_STYLE_PROJECT")
-	var style_source: Dictionary = node_by_id.get(String(sources.get("style", "")), {})
-	if not style_source.is_empty():
-		style = _summarize_params(style_source.get("params", {}))
-	var target := Strings.text("CONTENT_TARGET_SIZE_UNKNOWN")
-	var spec_source: Dictionary = node_by_id.get(String(sources.get("spec", "")), {})
-	if not spec_source.is_empty():
-		var spec_params: Dictionary = spec_source.get("params", {})
-		target = "%d×%d px" % [int(spec_params.get("width", 0)), int(spec_params.get("height", 0))]
-	return Strings.text("CONTENT_REQUEST_SUMMARY_FORMAT") % [prompt, style, target]
-
-
-func _project_style_summary() -> String:
-	var style_value: Variant = ProjectService.current_project.manifest.get("style_preset", {})
-	if not (style_value is Dictionary) or Dictionary(style_value).is_empty():
-		return Strings.text("CONTENT_STYLE_DEFAULT")
-	var style: Dictionary = style_value
-	var base_size := int(style.get("base_size", 0))
-	var palette_value: Variant = style.get("palette", {})
-	var palette_ref := ""
-	if palette_value is Dictionary:
-		palette_ref = String(Dictionary(palette_value).get("ref", ""))
-	var detail_parts: Array[String] = []
-	if base_size > 0:
-		detail_parts.append("%d px" % base_size)
-	if not palette_ref.is_empty():
-		detail_parts.append(palette_ref)
-	if detail_parts.is_empty():
-		detail_parts.append(String(style.get("name", Strings.text("CONTENT_STYLE_PROJECT"))))
-	return Strings.text("CONTENT_STYLE_SUMMARY_FORMAT") % " · ".join(detail_parts)
-
-
-func _style_summary(style: Dictionary) -> String:
-	var parts: Array[String] = []
-	var base_size := int(style.get("base_size", 0))
-	if base_size > 0:
-		parts.append(Strings.text("CONTENT_STYLE_BASE_SIZE_FORMAT") % base_size)
-	var palette_value: Variant = style.get("palette", {})
-	if palette_value is Dictionary:
-		var palette_ref := String(Dictionary(palette_value).get("ref", ""))
-		if not palette_ref.is_empty():
-			parts.append(Strings.text("CONTENT_STYLE_PALETTE_FORMAT") % palette_ref)
-	if parts.is_empty():
-		return Strings.text("CONTENT_STYLE_NO_DETAILS")
-	return " · ".join(parts)
+	var prefix := ""
+	var prefix_source: Dictionary = node_by_id.get(String(sources.get("prefix", "")), {})
+	if not prefix_source.is_empty():
+		prefix = _summarize_params(prefix_source.get("params", {}))
+	var target := "%d×%d px" % [
+		int(_params_snapshot.get("target_width", 32)),
+		int(_params_snapshot.get("target_height", 32)),
+	]
+	return Strings.text("CONTENT_REQUEST_SUMMARY_FORMAT") % [prompt, prefix, target]
 
 
 func _localized_display_name(node: PFNode) -> String:
 	var key_by_type := {
 		"text_prompt": "NODE_TEXT_PROMPT",
 		"object_list": "NODE_OBJECT_LIST",
-		"style_preset": "NODE_STYLE_PRESET",
+		"prompt_preset": "NODE_PROMPT_PRESET",
 		"image_input": "NODE_IMAGE_INPUT",
 		"reference_set": "NODE_REFERENCE_SET",
-		"size_spec": "NODE_SIZE_SPEC",
 		"ai_generate": "NODE_AI_GENERATE",
+		"pixel_cleanup": "NODE_PIXEL_CLEANUP",
 	}
 	var key := String(key_by_type.get(node.get_type(), ""))
 	return (

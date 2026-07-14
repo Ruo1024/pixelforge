@@ -281,7 +281,8 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 		graph, "batch_1", decoded["images"], metadata, AssetLibrary
 	)
 	assert_true(result["ok"])
-	var meta: Dictionary = AssetLibrary.get_asset_meta(result["asset_ids"][0])
+	var asset_ids := BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_1"))
+	var meta: Dictionary = AssetLibrary.get_asset_meta(asset_ids[0])
 	var provenance: Dictionary = meta["provenance"]
 	assert_eq(provenance["provider"], "openai_image")
 	assert_eq(provenance["model"], "gpt-image-2")

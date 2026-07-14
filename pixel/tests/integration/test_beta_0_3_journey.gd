@@ -4,6 +4,7 @@ const Fixture := preload("res://tests/fixtures/generators/beta_workspace_fixture
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const GraphRunnerScript := preload("res://services/graph_mock_runner.gd")
+const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 
 
 func before_all() -> void:
@@ -36,20 +37,20 @@ func test_two_branch_stage_workspace_runs_saves_and_reopens_with_results() -> vo
 	var first_run: Dictionary = runner.run_to_batch(
 		GraphScript.from_json(ProjectService.get_graph_data(Fixture.GRAPH_ID)),
 		AssetLibrary,
-		"batch_a",
-		false
+		"batch_a"
 	)
 	assert_true(first_run["ok"])
-	assert_eq(first_run["asset_ids"].size(), 4)
+	var first_graph := GraphScript.from_json(first_run["graph"])
+	assert_eq(BatchNodeScript.get_visible_asset_ids(first_graph.get_node_params("batch_a")).size(), 4)
 	ProjectService.set_graph_data(Fixture.GRAPH_ID, first_run["graph"], true)
 	var second_run: Dictionary = runner.run_to_batch(
 		GraphScript.from_json(ProjectService.get_graph_data(Fixture.GRAPH_ID)),
 		AssetLibrary,
-		"batch_b",
-		false
+		"batch_b"
 	)
 	assert_true(second_run["ok"])
-	assert_eq(second_run["asset_ids"].size(), 4)
+	var second_graph := GraphScript.from_json(second_run["graph"])
+	assert_eq(BatchNodeScript.get_visible_asset_ids(second_graph.get_node_params("batch_b")).size(), 4)
 	ProjectService.set_graph_data(Fixture.GRAPH_ID, second_run["graph"], true)
 
 	var canvas: Control = CanvasScript.new()
@@ -69,8 +70,8 @@ func test_two_branch_stage_workspace_runs_saves_and_reopens_with_results() -> vo
 	assert_eq(ProjectService.current_project.canvas["camera"]["zoom"], 0.1)
 	assert_eq(ProjectService.current_project.canvas["items"].filter(_is_frame).size(), 2)
 	var reopened: PFGraph = GraphScript.from_json(ProjectService.get_graph_data(Fixture.GRAPH_ID))
-	assert_eq(reopened.get_node_params("batch_a")["asset_ids"].size(), 4)
-	assert_eq(reopened.get_node_params("batch_b")["asset_ids"].size(), 4)
+	assert_eq(BatchNodeScript.get_visible_asset_ids(reopened.get_node_params("batch_a")).size(), 4)
+	assert_eq(BatchNodeScript.get_visible_asset_ids(reopened.get_node_params("batch_b")).size(), 4)
 
 
 func _reference_image(color: Color) -> Image:

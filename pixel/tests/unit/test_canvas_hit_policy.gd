@@ -76,11 +76,11 @@ func test_canvas_hit_policy_reports_node_output_port_on_card_edge() -> void:
 		_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
 	)
 
-	var hit := _hit(canvas, node.get_graph_port_anchor("items", false))
+	var hit := _hit(canvas, node.get_graph_port_anchor("subjects", false))
 
 	assert_eq(hit["kind"], HitPolicy.KIND_GRAPH_PORT)
 	assert_eq(hit["item_id"], "objects_item")
-	assert_eq(hit["port_name"], "items")
+	assert_eq(hit["port_name"], "subjects")
 	assert_false(hit["is_input"])
 	assert_eq(hit["port_index"], 0)
 
@@ -93,7 +93,7 @@ func test_canvas_left_click_on_graph_port_selects_without_dragging_card() -> voi
 	)
 
 	canvas._begin_left_interaction(
-		canvas.world_to_screen(node.get_graph_port_anchor("items", false)), false
+		canvas.world_to_screen(node.get_graph_port_anchor("subjects", false)), false
 	)
 
 	assert_eq(canvas.get_selected_ids(), ["objects_item"])
@@ -113,11 +113,11 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 	var generate: Node = canvas._add_node_direct(
 		_node_item("generate_item", "graph_hit", "generate", Vector2(700, 100))
 	)
-	var target_anchor: Vector2 = generate.get_graph_port_anchor("items", true)
+	var target_anchor: Vector2 = generate.get_graph_port_anchor("subjects", true)
 	var hot_zone_world := target_anchor + Vector2(24, 28)
 
 	canvas._begin_left_interaction(
-		canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
+		canvas.world_to_screen(objects.get_graph_port_anchor("subjects", false)), false
 	)
 	canvas._handle_mouse_motion(_mouse_motion_event(canvas.world_to_screen(hot_zone_world)))
 
@@ -129,17 +129,17 @@ func test_canvas_drag_to_compatible_graph_port_hot_zone_adds_edge() -> void:
 
 	var graph_data := ProjectService.get_graph_data("graph_hit")
 	assert_eq(
-		graph_data.get("edges", []), [{"from": ["objects", "items"], "to": ["generate", "items"]}]
+		graph_data.get("edges", []), [{"from": ["objects", "subjects"], "to": ["generate", "subjects"]}]
 	)
 	assert_eq(String(status_events[-1]["type"]), "connect_succeeded")
 	assert_eq(
-		status_events[-1]["edge"], {"from": ["objects", "items"], "to": ["generate", "items"]}
+		status_events[-1]["edge"], {"from": ["objects", "subjects"], "to": ["generate", "subjects"]}
 	)
 
 
 func test_hidden_graph_edges_are_not_drawn_or_selectable_and_graph_truth_is_unchanged() -> void:
 	var canvas: Control = _canvas()
-	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
+	var edge := {"from": ["objects", "subjects"], "to": ["generate", "subjects"]}
 	_set_graph(
 		"graph_hit",
 		[_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")],
@@ -153,8 +153,8 @@ func test_hidden_graph_edges_are_not_drawn_or_selectable_and_graph_truth_is_unch
 	)
 	var midpoint: Vector2 = (
 		(
-			objects.get_graph_port_anchor("items", false)
-			+ generate.get_graph_port_anchor("items", true)
+			objects.get_graph_port_anchor("subjects", false)
+			+ generate.get_graph_port_anchor("subjects", true)
 		)
 		* 0.5
 	)
@@ -188,20 +188,20 @@ func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> vo
 	)
 
 	canvas._begin_left_interaction(
-		canvas.world_to_screen(objects.get_graph_port_anchor("items", false)), false
+		canvas.world_to_screen(objects.get_graph_port_anchor("subjects", false)), false
 	)
 	canvas._handle_mouse_motion(
 		_mouse_motion_event(canvas.world_to_screen(batch.get_graph_port_anchor("in", true)))
 	)
 	assert_eq(status_events[0]["type"], "connect_preview")
 	assert_eq(status_events[0]["state"], "invalid")
-	assert_eq(status_events[0]["reason"], "Cannot connect text_list to image_list")
+	assert_eq(status_events[0]["reason"], "Cannot connect subject_list to asset_list")
 	canvas._finish_left_interaction(canvas.world_to_screen(batch.get_graph_port_anchor("in", true)))
 
 	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
 	assert_eq(
 		status_messages,
-		[Strings.STATUS_GRAPH_CONNECT_FAILED % "Cannot connect text_list to image_list"]
+		[Strings.STATUS_GRAPH_CONNECT_FAILED % "Cannot connect subject_list to asset_list"]
 	)
 
 
@@ -209,7 +209,7 @@ func test_canvas_delete_key_removes_selected_graph_edge() -> void:
 	var canvas: Control = _canvas()
 	var status_events := []
 	canvas.graph_status.connect(func(event: Dictionary) -> void: status_events.append(event))
-	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
+	var edge := {"from": ["objects", "subjects"], "to": ["generate", "subjects"]}
 	_set_graph(
 		"graph_hit",
 		[_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")],
@@ -221,8 +221,8 @@ func test_canvas_delete_key_removes_selected_graph_edge() -> void:
 	var generate: Node = canvas._add_node_direct(
 		_node_item("generate_item", "graph_hit", "generate", Vector2(700, 100))
 	)
-	var edge_midpoint: Vector2 = objects.get_graph_port_anchor("items", false).lerp(
-		generate.get_graph_port_anchor("items", true), 0.5
+	var edge_midpoint: Vector2 = objects.get_graph_port_anchor("subjects", false).lerp(
+		generate.get_graph_port_anchor("subjects", true), 0.5
 	)
 
 	canvas._begin_left_interaction(canvas.world_to_screen(edge_midpoint), false)
@@ -241,7 +241,7 @@ func test_canvas_deleting_graph_node_removes_incident_edges_and_undo_restores() 
 	var canvas: Control = _canvas()
 	var status_events := []
 	canvas.graph_status.connect(func(event: Dictionary) -> void: status_events.append(event))
-	var edge := {"from": ["objects", "items"], "to": ["generate", "items"]}
+	var edge := {"from": ["objects", "subjects"], "to": ["generate", "subjects"]}
 	_set_graph(
 		"graph_hit",
 		[_graph_node("objects", "object_list"), _graph_node("generate", "ai_generate")],
@@ -402,20 +402,50 @@ func _register_asset(color: Color, name: String) -> String:
 func _set_graph(graph_id: String, nodes: Array, edges: Array = []) -> void:
 	ProjectService.set_graph_data(
 		graph_id,
-		{"graph_version": 1, "id": graph_id, "name": "Hit Policy", "nodes": nodes, "edges": edges}
+		{"graph_version": 2, "id": graph_id, "name": "Hit Policy", "nodes": nodes, "edges": edges}
 	)
 
 
 func _graph_node(node_id: String, node_type: String) -> Dictionary:
-	return {"id": node_id, "type": node_type, "params": {}, "position": [0, 0]}
+	var params := {"rows": []} if node_type == "object_list" else {
+		"provider_id": "mock",
+		"model_id": "pixel_mock_v1",
+		"target_width": 32,
+		"target_height": 32,
+		"batch_size": 1,
+		"seed": -1,
+		"extra": {},
+	}
+	return {"id": node_id, "type": node_type, "params": params}
 
 
 func _batch_node(node_id: String, asset_ids: Array) -> Dictionary:
 	return {
 		"id": node_id,
 		"type": "batch",
-		"params": {"asset_ids": asset_ids.duplicate(), "label": "Batch"},
-		"position": [0, 0],
+		"params": _output_params(asset_ids),
+	}
+
+
+func _output_params(asset_ids: Array) -> Dictionary:
+	var slots := []
+	for index in range(asset_ids.size()):
+		slots.append(
+			{
+				"slot_id": "slot-%d" % index,
+				"status": "succeeded",
+				"asset_id": String(asset_ids[index]),
+				"detached": false,
+			}
+		)
+	return {
+		"label": "Batch",
+		"source_node_id": "",
+		"source_run_id": "",
+		"role": "standalone",
+		"input_snapshots": {},
+		"request_records": [],
+		"result_slots": slots,
 	}
 
 

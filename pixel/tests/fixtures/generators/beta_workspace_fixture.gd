@@ -15,61 +15,48 @@ static func build() -> Dictionary:
 		var base_x := branch_index * 920
 		var prompt_id := "prompt_%s" % suffix
 		var reference_id := "reference_%s" % suffix
-		var size_id := "size_%s" % suffix
+		var preset_id := "preset_%s" % suffix
 		var generate_id := "generate_%s" % suffix
 		var batch_id := "batch_%s" % suffix
-		(
-			nodes
-			. append_array(
-				[
-					{
-						"id": prompt_id,
-						"type": "object_list",
-						"position": [base_x, 0],
-						"params":
-						{"items": "barrel\nfence" if branch_index == 0 else "well\nlantern"},
-					},
-					{
-						"id": reference_id,
-						"type": "image_input",
-						"position": [base_x, 280],
-						"params": {"asset_id": ""},
-					},
-					{
-						"id": size_id,
-						"type": "size_spec",
-						"position": [base_x + 280, 0],
-						"params": {"width": 32, "height": 32, "per_subject": 2},
-					},
-					{
-						"id": generate_id,
-						"type": "ai_generate",
-						"position": [base_x + 560, 0],
-						"params":
-						{"provider_id": "mock", "batch_size": 2, "seed": 100 + branch_index},
-					},
-					{
-						"id": batch_id,
-						"type": "batch",
-						"position": [base_x + 860, 0],
-						"params":
-						{"asset_ids": [], "label": "Branch %s results" % suffix.to_upper()},
-					},
-				]
-			)
-		)
+		var branch_nodes := [
+			_node(
+				prompt_id,
+				"object_list",
+				{
+					"rows": _rows(
+						["barrel", "fence"] if branch_index == 0 else ["well", "lantern"], 2
+					)
+				}
+			),
+			_node(reference_id, "image_input", {"asset_id": ""}),
+			_node(
+				preset_id,
+				"prompt_preset",
+				{"preset": _prompt_preset("prompt-fixture-%s" % suffix)}
+			),
+			_node(generate_id, "ai_generate", _generate_params(100 + branch_index)),
+			_node(batch_id, "batch", _output_params("Branch %s results" % suffix.to_upper())),
+		]
+		nodes.append_array(branch_nodes)
+		var positions := {
+			prompt_id: [base_x, 0],
+			reference_id: [base_x, 280],
+			preset_id: [base_x + 280, 280],
+			generate_id: [base_x + 560, 0],
+			batch_id: [base_x + 860, 0],
+		}
 		(
 			edges
 			. append_array(
 				[
-					{"from": [prompt_id, "items"], "to": [generate_id, "items"]},
-					{"from": [size_id, "spec"], "to": [generate_id, "spec"]},
-					{"from": [reference_id, "image"], "to": [generate_id, "image"]},
-					{"from": [generate_id, "images"], "to": [batch_id, "in"]},
+					{"from": [prompt_id, "subjects"], "to": [generate_id, "subjects"]},
+					{"from": [preset_id, "prefix"], "to": [generate_id, "prefix"]},
+					{"from": [reference_id, "assets"], "to": [generate_id, "references"]},
+					{"from": [generate_id, "assets"], "to": [batch_id, "in"]},
 				]
 			)
 		)
-		for node in nodes.slice(branch_index * 5, branch_index * 5 + 5):
+		for node in branch_nodes:
 			var node_id := String(node["id"])
 			(
 				items
@@ -79,7 +66,7 @@ static func build() -> Dictionary:
 						"type": "node",
 						"graph_id": GRAPH_ID,
 						"node_id": node_id,
-						"position": node["position"].duplicate(),
+						"position": positions[node_id].duplicate(),
 						"z_index": items.size() + 1,
 						"collapsed": false,
 						"frame_id": "stage_%s" % suffix,
@@ -95,7 +82,7 @@ static func build() -> Dictionary:
 		{
 			GRAPH_ID:
 			{
-				"graph_version": 1,
+				"graph_version": 2,
 				"id": GRAPH_ID,
 				"name": "Two branch workspace",
 				"nodes": nodes,
@@ -103,6 +90,57 @@ static func build() -> Dictionary:
 			}
 		},
 		"canvas": {"camera": {"center": [720, 180], "zoom": 0.5}, "items": items},
+	}
+
+
+static func _node(id: String, type: String, params: Dictionary) -> Dictionary:
+	return {"id": id, "type": type, "params": params}
+
+
+static func _rows(texts: Array, count: int) -> Array:
+	var rows := []
+	for index in range(texts.size()):
+		rows.append(
+			{
+				"id": "row-%d" % index,
+				"text": String(texts[index]),
+				"count": count,
+				"enabled": true,
+			}
+		)
+	return rows
+
+
+static func _prompt_preset(id: String) -> Dictionary:
+	return {
+		"prompt_preset_version": 1,
+		"id": id,
+		"name": "Fixture prompt",
+		"prefix": "clean 16-bit pixel art",
+	}
+
+
+static func _generate_params(seed: int) -> Dictionary:
+	return {
+		"provider_id": "mock",
+		"model_id": "pixel_mock_v1",
+		"target_width": 32,
+		"target_height": 32,
+		"batch_size": 1,
+		"seed": seed,
+		"extra": {},
+	}
+
+
+static func _output_params(label: String) -> Dictionary:
+	return {
+		"label": label,
+		"source_node_id": "",
+		"source_run_id": "",
+		"role": "standalone",
+		"input_snapshots": {},
+		"request_records": [],
+		"result_slots": [],
 	}
 
 

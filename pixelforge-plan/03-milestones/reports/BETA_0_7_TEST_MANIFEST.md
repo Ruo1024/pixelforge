@@ -16,6 +16,26 @@
 - 禁止 skip/xfail、降低断言、改基线数字来消除红灯。真实付费 API、Computer Use 和
   未许可图片不属于测试手段。
 
+### 1.1 B7-DEC-OWNER-01：混合旧测试的 owner 拆分
+
+项目所有者于 2026-07-14 裁定采用 owner 拆分，不改变批准的 Beta 0.7 执行书、卡片
+顺序或产品含义：
+
+- 执行书的 B7-2 hard cut 优先；本卡必须删除 `batch.params.asset_ids`、
+  `review_states`、`review_filter`、`review_layout`、`focus_asset_id`、`compare_*` 和旧
+  overwrite 语义，不保留 alias/兼容字段。旧 UI 与下游只允许读取 `result_slots` 中
+  `succeeded && !detached` 的唯一可见投影。
+- 本 manifest 的 owner 表示“独立可违反行为的最终主责”，不禁止前卡清除已被 hard
+  cut 直接废止的 schema 断言。混合旧测试必须按断言职责拆分，不能整文件删除。
+- B7-2 是 legacy schema retirement owner：移除上述旧字段断言，并补
+  `result_slots`、`get_visible_asset_ids()`、无旧字段和无 alias 的最小 v2 等价断言。
+- B7-4 仍独占最终 `GenerationRunCoordinator`、新 Output/history、禁止覆盖与 mock run
+  行为；B7-5 仍独占最终 Output 卡、选择、滚动、拆出、预览以及旧 review/focus/compare
+  符号移除守护。B7-2 的 schema 迁移不能提前勾销后两卡 red→green 或完成门。
+- 下载/export、标题、尺寸、折叠、Undo、通用 LOD、编辑入口等未退役行为必须保留或
+  迁移。下表将直接 hard cut 的旧 schema 条目改由 B7-2 主责；最终 UI/协调器条目仍
+  保持原 owner。
+
 ## 2. §5 硬切与契约门
 
 | ID | 原文引用 | Owner | 类型 | 测试文件 / 测试名 | 真实红灯原因 | 绿色断言 | 命令 |
@@ -330,12 +350,14 @@
 | 同文件 `test_canvas_batch_card_switches_review_layout_for_focus_view` | §10.7 删除 Contact/Focus | B7-5 | 删除 | `test_output_legacy_removal::test_no_review_layout_symbols` |
 | 同文件 `test_canvas_batch_card_switches_semantic_lod_profiles` | §10.7 保留通用 LOD | B7-5 | 迁移 | `test_output_card_controller::test_output_lod_does_not_change_geometry` |
 | 同文件 `test_canvas_batch_card_keeps_previous_version_for_compare` | §10.7 删除 Previous/Compare | B7-5 | 删除 | `test_output_legacy_removal::test_no_compare_symbols` |
-| 同文件 `test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement` | §7 新 Output/history；禁止覆盖 | B7-4 | 改写 | `test_generation_run_coordinator::test_new_run_preserves_old_output` |
-| 同文件 `test_graph_batch_card_persists_review_state_in_graph_params` | §10.7 删除 review_states | B7-5 | 删除 | `test_output_legacy_removal::test_graph_has_no_review_states` |
-| 同文件 `test_graph_batch_card_persists_review_filter_in_graph_params` | §10.7 删除 review_filter | B7-5 | 删除 | `test_output_legacy_removal::test_graph_has_no_review_filter` |
-| 同文件 `test_graph_batch_card_persists_focus_asset_id_in_graph_params` | §10.7 删除 focus_asset_id | B7-5 | 删除 | `test_output_legacy_removal::test_graph_has_no_focus_asset_id` |
-| 同文件 `test_graph_batch_card_persists_review_layout_in_canvas_data` | §10.7 删除 review_layout | B7-5 | 删除 | `test_output_legacy_removal::test_canvas_has_no_review_layout` |
-| 同文件 `test_graph_batch_card_persists_compare_state_in_graph_params` | §10.7 删除 compare_* | B7-5 | 删除 | `test_output_legacy_removal::test_graph_has_no_compare_state` |
+| 同文件 `test_graph_batch_card_exports_node_reference_and_syncs_asset_replacement` 中 `asset_ids`/覆盖写入断言 | §7.1/§7.2 hard cut 旧真相与 overwrite | B7-2 | 拆除旧 schema 断言，保留下载/引用等未退役行为 | `test_output_slots_v2::test_visible_projection_and_no_legacy_aliases` |
+| 同测试的新运行保留旧 Output/history 行为 | §7.2 新 Output/history；禁止覆盖 | B7-4 | 在协调器测试中最终替代 | `test_generation_run_coordinator::test_new_run_preserves_old_output` |
+| 同文件 `test_graph_batch_card_persists_review_state_in_graph_params` | §7.1/§10.7 hard cut `review_states` | B7-2 | 改写为字段不存在与 slots 往返 | `test_output_slots_v2::test_graph_has_no_review_states_alias` |
+| 同文件 `test_graph_batch_card_persists_review_filter_in_graph_params` | §7.1/§10.7 hard cut `review_filter` | B7-2 | 改写为字段不存在 | `test_output_slots_v2::test_graph_has_no_review_filter_alias` |
+| 同文件 `test_graph_batch_card_persists_focus_asset_id_in_graph_params` | §7.1/§10.7 hard cut `focus_asset_id` | B7-2 | 改写为字段不存在 | `test_output_slots_v2::test_graph_has_no_focus_asset_id_alias` |
+| 同文件 `test_graph_batch_card_persists_review_layout_in_canvas_data` | §7.1/§10.7 hard cut `review_layout` | B7-2 | 改写为 Graph/Canvas 均不持久化该字段 | `test_output_slots_v2::test_canvas_has_no_review_layout_alias` |
+| 同文件 `test_graph_batch_card_persists_compare_state_in_graph_params` | §7.1/§10.7 hard cut `compare_*` | B7-2 | 改写为字段不存在 | `test_output_slots_v2::test_graph_has_no_compare_aliases` |
+| 上述 review/focus/compare 的最终生产符号移除守护 | §10.7 Output UI 退役 | B7-5 | 最终静态守护，不由 B7-2 提前完成 | `test_output_legacy_removal::test_review_filter_compare_symbols_are_absent` |
 | 同文件 `test_failed_batch_placeholder_keeps_expected_slots_and_routes_retry_remove` | §7.1 slots；§8.5 Retry 前置 | B7-5 | 改写 | `test_output_card_controller::test_failed_slot_actions_follow_safe_error` |
 | `test_main_window_ui.gd::test_batch_review_shortcuts_mark_selected_mock_thumbnail` | §10.7 删除 review shortcut | B7-5 | 改写 | `test_output_selection_toolbar::test_selection_shortcuts_do_not_persist_review` |
 | 同文件 `test_batch_review_focus_shortcuts_step_selected_mock_thumbnail` | §10.7 删除 Focus | B7-5 | 改写 | `test_output_selection_toolbar::test_keyboard_selection_tracks_visible_slot` |
@@ -346,7 +368,8 @@
 | 同文件 `test_context_inspector_reuses_cleanup_for_sprite_and_batch` | §9.2 删除检查器直接清洗 | B7-6 | 改写 | `test_cleanup_card_ui::test_image_and_batch_sources_use_cleanup_node` |
 | `test_asset_reference_contract.gd::test_graph_batch_board_animation_and_transition_batch_are_live` | §7.4 删除 batch_card/asset_ids | B7-2 | 改写 | `test_asset_reference_contract_v2::test_output_slots_board_animation_are_live` |
 | 同文件 `test_live_references_block_delete_but_history_only_allows_it` | §7.4 history 也阻止 orphan 字节清理 | B7-2 | 改写 | `test_asset_reference_contract_v2::test_live_and_history_both_preserve_bytes` |
-| `test_graph_mock_runner.gd::test_mock_generate_chain_can_replace_existing_batch_assets` | §7.2 禁止覆盖旧 Output | B7-4 | 改写 | `test_generation_run_coordinator::test_second_run_creates_history_and_current` |
+| `test_graph_mock_runner.gd::test_mock_generate_chain_can_replace_existing_batch_assets` 中 `asset_ids` 替换断言 | §7.1/§7.2 hard cut 旧真相与 overwrite | B7-2 | 删除旧字段/覆盖断言并补 slots 无 alias 断言 | `test_output_slots_v2::test_mock_path_uses_result_slots_projection_only` |
+| 同测试的第二次运行建立 history/current 行为 | §7.2 最终协调器运行语义 | B7-4 | 在新协调器中最终替代 | `test_generation_run_coordinator::test_second_run_creates_history_and_current` |
 | 同文件 `test_mock_generate_chain_rejects_missing_required_spec_input` | §6.3 删除 size_spec | B7-2 | 改写 | `test_graph_v2_schema::test_generate_requires_local_target_params` |
 | `test_pixel_editor_ui.gd::test_canvas_editor_entry_save_as_updates_batch_and_provenance` | §10.6 打开编辑器保留；Output slot 真相 | B7-5 | 改写 | `test_output_card_controller::test_open_editor_updates_asset_without_replacing_slot_identity` |
 | `test_canvas_card_editing.gd::test_graph_card_defaults_are_contract_values_and_survive_lod` 的 batch_card 分支 | §10.7 删除 batch_card，保留 graph Output | B7-5 | 删除 legacy case、保留通用 case | `test_output_card_controller::test_output_defaults_and_lod` |

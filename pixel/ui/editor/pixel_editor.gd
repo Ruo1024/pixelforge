@@ -666,9 +666,7 @@ func _project_palette() -> Array[Color]:
 
 
 func _project_palette_id() -> String:
-	var style: Dictionary = ProjectService.current_project.manifest.get("style_preset", {})
-	var palette: Dictionary = style.get("palette", {})
-	return String(palette.get("ref", "db32"))
+	return "db32"
 
 
 func _palette_hex_values() -> Array:

@@ -183,19 +183,35 @@ func _build_card_families_project(locale: String) -> bool:
 			"id": "objects",
 			"type": "object_list",
 			"position": [-700, 30],
-			"params": {"items": "tower\nbarrel\nlantern"}
+			"params":
+			{
+				"rows": [
+					{"id": "tower", "text": "tower", "count": 1, "enabled": true},
+					{"id": "barrel", "text": "barrel", "count": 1, "enabled": true},
+					{"id": "lantern", "text": "lantern", "count": 1, "enabled": true},
+				]
+			}
 		},
 		{
-			"id": "style",
-			"type": "style_preset",
+			"id": "prompt_preset",
+			"type": "prompt_preset",
 			"position": [0, -380],
-			"params": {"preset_id": "gameboy"}
+			"params":
+			{
+				"preset":
+				{
+					"prompt_preset_version": 1,
+					"id": "prompt-gb",
+					"name_key": "PROMPT_PRESET_GB",
+					"prefix": "Game Boy pixel art, four color palette, monochrome handheld sprite",
+				}
+			}
 		},
 		{
-			"id": "size",
-			"type": "size_spec",
+			"id": "cleanup",
+			"type": "pixel_cleanup",
 			"position": [290, -380],
-			"params": {"width": 32, "height": 32, "per_subject": 2}
+			"params": {"preset_id": "cleanup-16bit-db32", "settings": {}}
 		},
 		{
 			"id": "image",
@@ -213,7 +229,16 @@ func _build_card_families_project(locale: String) -> bool:
 			"id": "generate",
 			"type": "ai_generate",
 			"position": [-700, -380],
-			"params": {"provider_id": "mock", "model_id": "offline", "batch_size": 4, "seed": 606}
+			"params":
+			{
+				"provider_id": "mock",
+				"model_id": "pixel_mock_v1",
+				"target_width": 32,
+				"target_height": 32,
+				"batch_size": 4,
+				"seed": 606,
+				"extra": {},
+			}
 		},
 		{
 			"id": "results",
@@ -221,23 +246,26 @@ func _build_card_families_project(locale: String) -> bool:
 			"position": [330, 30],
 			"params":
 			{
-				"asset_ids": asset_ids.slice(0, 4),
 				"label": "候选结果" if locale == "zh_CN" else "Candidates",
-				"review_states":
-				{asset_ids[0]: "keep", asset_ids[1]: "reject", asset_ids[2]: "flag"}
+				"source_node_id": "generate",
+				"source_run_id": "capture-run",
+				"role": "current",
+				"input_snapshots": {},
+				"request_records": [],
+				"result_slots": _result_slots(asset_ids.slice(0, 4), "capture-run"),
 			}
 		},
 	]
 	ProjectService.set_graph_data(
 		graph_id,
-		{"graph_version": 1, "id": graph_id, "name": "Card families", "nodes": nodes, "edges": []},
+		{"graph_version": 2, "id": graph_id, "name": "Card families", "nodes": nodes, "edges": []},
 		false
 	)
 	var min_sizes := {
 		"prompt": [320, 240],
 		"objects": [360, 360],
-		"style": [280, 220],
-		"size": [280, 220],
+		"prompt_preset": [280, 220],
+		"cleanup": [280, 220],
 		"image": [280, 300],
 		"references": [360, 320],
 		"generate": [360, 400],
@@ -296,18 +324,18 @@ func _build_batch_boundary_project() -> bool:
 			"id": "twelve",
 			"type": "batch",
 			"position": [0, 0],
-			"params": {"asset_ids": asset_ids.slice(0, 12), "label": "12 results"}
+			"params": _batch_params("12 results", asset_ids.slice(0, 12), "capture-12")
 		},
 		{
 			"id": "thirteen",
 			"type": "batch",
 			"position": [620, 0],
-			"params": {"asset_ids": asset_ids, "label": "13 results"}
+			"params": _batch_params("13 results", asset_ids, "capture-13")
 		},
 	]
 	ProjectService.set_graph_data(
 		graph_id,
-		{"graph_version": 1, "id": graph_id, "name": "Boundary", "nodes": nodes, "edges": []},
+		{"graph_version": 2, "id": graph_id, "name": "Boundary", "nodes": nodes, "edges": []},
 		false
 	)
 	(
@@ -350,7 +378,7 @@ func _build_batch_fifty_project() -> bool:
 		. set_graph_data(
 			graph_id,
 			{
-				"graph_version": 1,
+				"graph_version": 2,
 				"id": graph_id,
 				"name": "Fifty results",
 				"nodes":
@@ -359,12 +387,7 @@ func _build_batch_fifty_project() -> bool:
 						"id": "results",
 						"type": "batch",
 						"position": [0, 0],
-						"params":
-						{
-							"asset_ids": asset_ids,
-							"label": "All 50 results",
-							"review_states": {asset_ids[0]: "keep", asset_ids[49]: "flag"}
-						}
+						"params": _batch_params("All 50 results", asset_ids, "capture-50")
 					}
 				],
 				"edges": [],
@@ -398,6 +421,24 @@ func _build_batch_fifty_project() -> bool:
 func _build_inspect_project() -> bool:
 	ProjectService.new_project("400% pixel inspect")
 	var asset_ids := _register_assets(4, "inspect")
+	var graph_id := "beta06_inspect"
+	ProjectService.set_graph_data(
+		graph_id,
+		{
+			"graph_version": 2,
+			"id": graph_id,
+			"name": "Inspect",
+			"nodes": [
+				{
+					"id": "results",
+					"type": "batch",
+					"params": _batch_params("Pixel candidates", asset_ids, "capture-inspect"),
+				}
+			],
+			"edges": [],
+		},
+		false
+	)
 	(
 		ProjectService
 		. set_canvas_data(
@@ -415,12 +456,11 @@ func _build_inspect_project() -> bool:
 					},
 					{
 						"id": "inspect_batch",
-						"type": "batch_card",
-						"asset_ids": asset_ids,
+						"type": "node",
+						"graph_id": graph_id,
+						"node_id": "results",
 						"position": [210, 0],
 						"size": [360, 240],
-						"label": "Pixel candidates",
-						"selected_asset_ids": [asset_ids[0]]
 					},
 				],
 			},
@@ -616,6 +656,40 @@ func _physical_size(logical_size: Vector2i, interface_scale: float) -> Vector2i:
 	)
 
 
+func _batch_params(label: String, asset_ids: Array, run_id: String) -> Dictionary:
+	return {
+		"label": label,
+		"source_node_id": "capture",
+		"source_run_id": run_id,
+		"role": "current",
+		"input_snapshots": {},
+		"request_records": [],
+		"result_slots": _result_slots(asset_ids, run_id),
+	}
+
+
+func _result_slots(asset_ids: Array, run_id: String) -> Array[Dictionary]:
+	var slots: Array[Dictionary] = []
+	for index in range(asset_ids.size()):
+		slots.append(
+			{
+				"slot_id": "%s-slot-%d" % [run_id, index],
+				"run_id": run_id,
+				"request_id": "%s-request" % run_id,
+				"source_row_id": "",
+				"source_asset_id": "",
+				"input_snapshot_id": "",
+				"planned_size": [16, 16],
+				"status": "succeeded",
+				"detached": false,
+				"unexpected": false,
+				"error": null,
+				"asset_id": String(asset_ids[index]),
+			}
+		)
+	return slots
+
+
 func _register_assets(count: int, prefix: String) -> Array[String]:
 	var result: Array[String] = []
 	for index in range(count):
@@ -666,7 +740,7 @@ func _build_legacy_project() -> bool:
 	var runner := GraphRunnerScript.new()
 	for batch_id in ["batch_a", "batch_b"]:
 		var result: Dictionary = runner.run_to_batch(
-			GraphScript.from_json(graph_data), AssetLibrary, batch_id, false
+			GraphScript.from_json(graph_data), AssetLibrary, batch_id
 		)
 		if not bool(result.get("ok", false)):
 			_fail("Fixture generation failed", result)

@@ -17,8 +17,8 @@ const TITLE_LIMIT := 80
 const DEFAULT_SIZES := {
 	"text_prompt": Vector2i(360, 300),
 	"object_list": Vector2i(400, 520),
-	"style_preset": Vector2i(320, 280),
-	"size_spec": Vector2i(320, 260),
+	"prompt_preset": Vector2i(320, 280),
+	"pixel_cleanup": Vector2i(400, 520),
 	"image_input": Vector2i(320, 380),
 	"reference_set": Vector2i(400, 480),
 	"ai_generate": Vector2i(400, 520),
@@ -30,8 +30,8 @@ const DEFAULT_SIZES := {
 const MIN_SIZES := {
 	"text_prompt": Vector2i(320, 240),
 	"object_list": Vector2i(360, 360),
-	"style_preset": Vector2i(280, 220),
-	"size_spec": Vector2i(280, 220),
+	"prompt_preset": Vector2i(280, 220),
+	"pixel_cleanup": Vector2i(360, 400),
 	"image_input": Vector2i(280, 300),
 	"reference_set": Vector2i(360, 320),
 	"ai_generate": Vector2i(360, 400),

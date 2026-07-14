@@ -60,6 +60,10 @@ func execute(_inputs: Dictionary, _params: Dictionary, _ctx: Variant) -> Diction
 	return {}
 
 
+func get_execution_policy() -> String:
+	return "automatic"
+
+
 func is_async() -> bool:
 	return false
 

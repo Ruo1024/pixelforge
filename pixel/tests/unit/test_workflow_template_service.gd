@@ -20,7 +20,7 @@ func test_capture_filters_external_edges_and_clears_assets_and_results() -> void
 	assert_true(result.get("ok", false), JSON.stringify(result))
 	assert_eq(result["external_edge_count"], 1)
 	var template: Dictionary = result["template"]
-	assert_eq(template["edges"].size(), 4)
+	assert_eq(template["edges"].size(), 3)
 	assert_eq(template["requirements"]["reference_slots"], 1)
 	assert_eq(_node(template, "reference")["params"]["asset_id"], "")
 	assert_eq(_node(template, "batch")["params"], {"label": "Results"})
@@ -89,7 +89,7 @@ func test_template_storage_is_atomic_and_corrupt_files_do_not_block_listing() ->
 
 func test_builtins_validate_and_instantiate_remaps_all_ids_and_positions() -> void:
 	var builtins := Service.builtin_templates()
-	assert_eq(builtins.size(), 3)
+	assert_eq(builtins.size(), 4)
 	for template in builtins:
 		assert_true(Service.validate_template(template)["ok"])
 	var graph := {"graph_version": 1, "id": "graph-main", "name": "Main", "nodes": [], "edges": []}
@@ -107,7 +107,7 @@ func test_builtins_validate_and_instantiate_remaps_all_ids_and_positions() -> vo
 	assert_eq(canvas_node["frame_id"], first["frame_id"])
 	assert_eq(canvas_node["size"], builtins[0]["nodes"][0]["size"])
 	assert_eq(first["graph"]["edges"][0]["from"][0], first_node_id)
-	assert_eq(builtins[0]["nodes"][0]["id"], "objects")
+	assert_eq(builtins[0]["nodes"][0]["id"], "prompt")
 
 
 func test_invalid_edge_port_and_future_version_fail_closed() -> void:
@@ -115,13 +115,13 @@ func test_invalid_edge_port_and_future_version_fail_closed() -> void:
 	template["edges"][0]["from"][1] = "unknown"
 	assert_eq(Service.validate_template(template)["code"], "invalid_template_edge")
 	template = Service.builtin_templates()[0].duplicate(true)
-	template["version"] = 2
+	template["version"] = 3
 	assert_eq(Service.validate_template(template)["code"], "unsupported_template_version")
 
 
 func _graph_fixture() -> Dictionary:
 	return {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "graph-main",
 		"name": "Main",
 		"nodes":
@@ -145,22 +145,24 @@ func _graph_fixture() -> Dictionary:
 				"params": {"asset_id": "asset-reference"}
 			},
 			{
-				"id": "size",
-				"type": "size_spec",
-				"position": [380, 120],
-				"params": {"width": 64, "height": 64, "per_subject": 1}
-			},
-			{
 				"id": "generate",
 				"type": "ai_generate",
-				"position": [660, 120],
+				"position": [480, 120],
 				"params":
-				{"provider_id": "mock", "model_id": "mock-image-v1", "batch_size": 1, "seed": 5}
+					{
+						"provider_id": "openai_image",
+						"model_id": "gpt-image-2",
+						"target_width": 64,
+						"target_height": 64,
+						"batch_size": 1,
+						"seed": -1,
+						"extra": {"quality": "low"},
+					}
 			},
 			{
 				"id": "batch",
 				"type": "batch",
-				"position": [940, 120],
+				"position": [820, 120],
 				"params":
 				{
 					"label": "Results",
@@ -171,11 +173,10 @@ func _graph_fixture() -> Dictionary:
 		],
 		"edges":
 		[
-			{"from": ["prompt", "text"], "to": ["generate", "text"]},
-			{"from": ["reference", "image"], "to": ["generate", "image"]},
-			{"from": ["size", "spec"], "to": ["generate", "spec"]},
-			{"from": ["generate", "images"], "to": ["batch", "in"]},
-			{"from": ["outside", "text"], "to": ["generate", "text"]},
+			{"from": ["prompt", "text"], "to": ["generate", "prompt"]},
+			{"from": ["reference", "assets"], "to": ["generate", "references"]},
+			{"from": ["generate", "assets"], "to": ["batch", "in"]},
+			{"from": ["outside", "text"], "to": ["generate", "prompt"]},
 		],
 	}
 
@@ -200,7 +201,7 @@ func _canvas_fixture() -> Dictionary:
 			"frame_id": null
 		},
 	]
-	for node_id in ["prompt", "reference", "size", "generate", "batch"]:
+	for node_id in ["prompt", "reference", "generate", "batch"]:
 		var node := _node(_graph_fixture(), node_id)
 		items.append(
 			{

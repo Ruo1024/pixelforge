@@ -4,8 +4,8 @@ const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const TextPromptNodeScript := preload("res://core/graph/nodes/text_prompt_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
-const StylePresetNodeScript := preload("res://core/graph/nodes/style_preset_node.gd")
-const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+const PromptPresetNodeScript := preload("res://core/graph/nodes/prompt_preset_node.gd")
+const PixelCleanupNodeScript := preload("res://core/graph/nodes/pixel_cleanup_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 
 
@@ -56,33 +56,48 @@ func test_object_list_keeps_fifty_real_rows_inside_its_scroll_region() -> void:
 	assert_false(card.get_content_control("ObjectEdit").visible)
 
 
-func test_style_palette_and_size_presets_are_visible_without_apply_buttons() -> void:
-	var style := await _card(
-		StylePresetNodeScript.new(),
-		"style",
+func test_prompt_and_cleanup_preset_snapshots_are_visible_without_execution() -> void:
+	var prompt := await _card(
+		PromptPresetNodeScript.new(),
+		"prompt_preset",
 		{
 			"preset":
 			{
+				"prompt_preset_version": 1,
+				"id": "prompt-user-original",
 				"name": "Original",
-				"base_size": 32,
-				"palette": {"colors": ["#111111", "#ffffff", "#6fa8ff"]},
+				"prefix": "clean 16-bit pixel art",
 			}
 		}
 	)
-	assert_eq(style["card"].get_content_control("PaletteStrip").get_child_count(), 3)
-	var size := await _card(
-		SizeSpecNodeScript.new(), "size", {"width": 32, "height": 24, "per_subject": 1}
+	assert_eq(prompt["card"].get_content_control("PresetName").text, "Original")
+	assert_eq(prompt["card"].get_content_control("PresetPrefix").text, "clean 16-bit pixel art")
+	var cleanup := await _card(
+		PixelCleanupNodeScript.new(),
+		"cleanup",
+		{
+			"preset_id": "cleanup-user-original",
+			"settings": PixelCleanupNodeScript.DEFAULT_SETTINGS.duplicate(true),
+		}
 	)
-	var size_card: Node = size["card"]
-	assert_eq(size_card.get_content_control("SizeHero").text, "32 × 24 px")
-	(size_card.get_content_control("SizePreset64") as Button).pressed.emit()
-	assert_eq(size["commits"][-1][2], {"width": 64, "height": 64, "per_subject": 1})
-	assert_null(size_card.get_content_control("ApplyButton"))
+	assert_eq(cleanup["card"].get_content_control("CleanupPresetId").text, "cleanup-user-original")
+	assert_true(cleanup["card"].get_content_control("CleanupSettingsSnapshot").text.contains("quantize"))
+	assert_null(cleanup["card"].get_content_control("PrimaryActionButton"))
 
 
 func test_generate_card_has_one_primary_action_for_every_frozen_state() -> void:
 	var fixture := await _card(
-		AiGenerateNodeScript.new(), "generate", {"provider_id": "mock", "batch_size": 2, "seed": 1}
+		AiGenerateNodeScript.new(),
+		"generate",
+		{
+			"provider_id": "mock",
+			"model_id": "pixel_mock_v1",
+			"target_width": 32,
+			"target_height": 32,
+			"batch_size": 2,
+			"seed": 1,
+			"extra": {},
+		}
 	)
 	var card: Node = fixture["card"]
 	var primary: Button = card.get_content_control("PrimaryActionButton")

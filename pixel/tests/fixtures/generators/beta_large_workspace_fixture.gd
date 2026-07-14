@@ -18,8 +18,8 @@ static func build() -> Dictionary:
 		var suffix := "%02d" % branch_index
 		var ids := {
 			"objects": "objects_%s" % suffix,
-			"style": "style_%s" % suffix,
-			"size": "size_%s" % suffix,
+			"prompt": "prompt_%s" % suffix,
+			"preset": "preset_%s" % suffix,
 			"generate": "generate_%s" % suffix,
 			"batch": "batch_%s" % suffix,
 		}
@@ -28,19 +28,33 @@ static func build() -> Dictionary:
 				ids["objects"],
 				"object_list",
 				base,
-				{"items": "tower %s\ncrate %s" % [suffix, suffix]}
+				{
+					"rows":
+					[
+						{"id": "tower", "text": "tower %s" % suffix, "count": 1, "enabled": true},
+						{"id": "crate", "text": "crate %s" % suffix, "count": 1, "enabled": true},
+					]
+				}
 			),
 			_node(
-				ids["style"],
-				"style_preset",
+				ids["prompt"],
+				"text_prompt",
 				base + Vector2(0, 300),
-				{"preset_ref": "embedded", "preset": {}}
+				{"text": "game asset"}
 			),
 			_node(
-				ids["size"],
-				"size_spec",
+				ids["preset"],
+				"prompt_preset",
 				base + Vector2(300, 0),
-				{"width": 32, "height": 32, "per_subject": 1}
+				{
+					"preset":
+					{
+						"prompt_preset_version": 1,
+						"id": "prompt-fixture-%s" % suffix,
+						"name": "Fixture prompt %s" % suffix,
+						"prefix": "clean 16-bit pixel art",
+					}
+				}
 			),
 			_node(
 				ids["generate"],
@@ -49,26 +63,32 @@ static func build() -> Dictionary:
 				{
 					"provider_id": "mock",
 					"model_id": "pixel_mock_v1",
+					"target_width": 32,
+					"target_height": 32,
 					"batch_size": 1,
-					"seed": 1000 + branch_index
+					"seed": 1000 + branch_index,
+					"extra": {},
 				}
 			),
 			_node(
 				ids["batch"],
 				"batch",
 				base + Vector2(960, 0),
-				{"label": "Branch %s" % suffix, "asset_ids": []}
+				_output_params("Branch %s" % suffix)
 			),
 		]
-		nodes.append_array(branch_nodes)
+		for node in branch_nodes:
+			var graph_node: Dictionary = node.duplicate(true)
+			graph_node.erase("position")
+			nodes.append(graph_node)
 		(
 			edges
 			. append_array(
 				[
-					{"from": [ids["objects"], "items"], "to": [ids["generate"], "items"]},
-					{"from": [ids["style"], "style"], "to": [ids["generate"], "style"]},
-					{"from": [ids["size"], "spec"], "to": [ids["generate"], "spec"]},
-					{"from": [ids["generate"], "images"], "to": [ids["batch"], "in"]},
+					{"from": [ids["objects"], "subjects"], "to": [ids["generate"], "subjects"]},
+					{"from": [ids["prompt"], "prompt"], "to": [ids["generate"], "prompt"]},
+					{"from": [ids["preset"], "prefix"], "to": [ids["generate"], "prefix"]},
+					{"from": [ids["generate"], "assets"], "to": [ids["batch"], "in"]},
 				]
 			)
 		)
@@ -111,7 +131,7 @@ static func build() -> Dictionary:
 		{
 			GRAPH_ID:
 			{
-				"graph_version": 1,
+				"graph_version": 2,
 				"id": GRAPH_ID,
 				"name": "Beta 0.5 large workspace",
 				"nodes": nodes,
@@ -128,4 +148,16 @@ static func _node(id: String, type: String, position: Vector2, params: Dictionar
 		"type": type,
 		"position": [int(position.x), int(position.y)],
 		"params": params,
+	}
+
+
+static func _output_params(label: String) -> Dictionary:
+	return {
+		"label": label,
+		"source_node_id": "",
+		"source_run_id": "",
+		"role": "standalone",
+		"input_snapshots": {},
+		"request_records": [],
+		"result_slots": [],
 	}

@@ -317,9 +317,7 @@ func _warn_palette_mismatch(asset_id: String) -> void:
 	if asset_id.is_empty():
 		return
 	var asset_palette := String(AssetLibrary.get_asset_meta(asset_id).get("palette_ref", ""))
-	var style: Dictionary = ProjectService.current_project.manifest.get("style_preset", {})
-	var palette: Dictionary = style.get("palette", {})
-	var project_palette := String(palette.get("ref", ""))
+	var project_palette := "db32"
 	if (
 		not asset_palette.is_empty()
 		and not project_palette.is_empty()

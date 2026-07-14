@@ -1,14 +1,11 @@
 class_name PFV1OnboardingDialog
 extends ConfirmationDialog
 
-## First-launch v1 setup for style choice, optional Provider setup, and sample content.
+## First-launch setup for optional Provider configuration and sample content.
 
 signal setup_completed(open_provider_settings: bool, create_sample: bool)
 
 const Strings := preload("res://ui/shell/strings.gd")
-const ResourceCatalog := preload("res://services/project_resource_catalog.gd")
-
-var _preset: OptionButton = null
 var _provider_setup: CheckButton = null
 var _sample: CheckButton = null
 
@@ -35,16 +32,6 @@ func _build_ui() -> void:
 	intro.name = "Intro"
 	intro.text = Strings.V1_ONBOARDING_INTRO
 	root.add_child(intro)
-	var preset_label := Label.new()
-	preset_label.name = "PresetLabel"
-	preset_label.text = Strings.V1_ONBOARDING_STYLE
-	root.add_child(preset_label)
-	_preset = OptionButton.new()
-	_preset.name = "Preset"
-	for style in ResourceCatalog.search_styles():
-		_preset.add_item(String(style["name"]))
-		_preset.set_item_metadata(_preset.item_count - 1, style["path"])
-	root.add_child(_preset)
 	_provider_setup = CheckButton.new()
 	_provider_setup.name = "ProviderSetup"
 	_provider_setup.text = Strings.V1_ONBOARDING_PROVIDER
@@ -57,11 +44,6 @@ func _build_ui() -> void:
 
 
 func _apply() -> void:
-	var path := String(_preset.get_item_metadata(_preset.selected))
-	var preset: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
-	if preset is Dictionary:
-		ProjectService.current_project.manifest["style_preset"] = preset
-		ProjectService.mark_dirty()
 	SettingsService.set_setting("onboarding", "v1_complete", true)
 	setup_completed.emit(_provider_setup.button_pressed, _sample.button_pressed)
 
@@ -71,6 +53,5 @@ func _refresh_text(_preference: String, _locale: String) -> void:
 	ok_button_text = Strings.text("ONBOARDING_START")
 	cancel_button_text = Strings.text("ACTION_CANCEL")
 	get_node("Content/Intro").text = Strings.text("ONBOARDING_INTRO")
-	get_node("Content/PresetLabel").text = Strings.text("ONBOARDING_STYLE")
 	_provider_setup.text = Strings.text("ONBOARDING_PROVIDER")
 	_sample.text = Strings.text("ONBOARDING_SAMPLE")

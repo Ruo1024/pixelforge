@@ -2,7 +2,7 @@ class_name PFProjectService
 extends Node
 
 ## 项目服务。
-## contract: 02-contracts/PROJECT-FORMAT.md；负责新建、保存、打开、自动保存和版本迁移框架。
+## contract: 02-contracts/PROJECT-FORMAT.md；负责 v2 新建、保存、打开和自动保存。
 
 signal project_loaded(project: Variant)
 signal project_saved(path: String)
@@ -22,9 +22,8 @@ const AssetReferenceScanner := preload("res://services/asset_reference_scanner.g
 const Log := preload("res://core/util/log_util.gd")
 const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
 const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
-const MIGRATIONS: Array = []
-
 var current_project: Variant = ProjectModel.new()
+var last_load_error: Dictionary = {}
 
 var _autosave_timer: Timer = null
 var _pending_recovery_autosaves: Array = []
@@ -159,6 +158,7 @@ func recover_project(path: String) -> Error:
 
 
 func _open_project(path: String, as_recovered_copy: bool) -> Error:
+	last_load_error = {}
 	var unpacked: Dictionary = FileIOScript.zip_unpack(path)
 	if not bool(unpacked.get("ok", false)):
 		return int(unpacked.get("error", ERR_FILE_CANT_OPEN))
@@ -172,9 +172,9 @@ func _open_project(path: String, as_recovered_copy: bool) -> Error:
 	if not (manifest is Dictionary) or not (canvas is Dictionary):
 		return ERR_PARSE_ERROR
 
-	var migration_error := _migrate_manifest(manifest)
-	if migration_error != OK:
-		return migration_error
+	if int(manifest.get("format_version", 0)) != AppInfo.PROJECT_FORMAT_VERSION:
+		last_load_error = {"code": "unsupported_project_version", "args": {}}
+		return ERR_FILE_UNRECOGNIZED
 
 	_normalize_loaded_project(manifest, canvas)
 	var loaded_graphs := _load_graphs_from_files(files, manifest)
@@ -347,24 +347,6 @@ func _update_manifest_before_save() -> void:
 		current_project.manifest["custom_palettes"] = custom_palettes
 
 
-func _migrate_manifest(manifest: Dictionary) -> Error:
-	var version := int(manifest.get("format_version", 0))
-	if version <= 0:
-		return ERR_FILE_CORRUPT
-	if version > AppInfo.PROJECT_FORMAT_VERSION:
-		return ERR_FILE_UNRECOGNIZED
-
-	while version < AppInfo.PROJECT_FORMAT_VERSION:
-		var migration_index := version - 1
-		if migration_index < 0 or migration_index >= MIGRATIONS.size():
-			return ERR_UNAVAILABLE
-		var migration: Callable = MIGRATIONS[migration_index]
-		manifest = migration.call(manifest)
-		version = int(manifest.get("format_version", version + 1))
-
-	return OK
-
-
 func _normalize_loaded_project(manifest: Dictionary, canvas: Dictionary) -> void:
 	manifest["format_version"] = int(manifest.get("format_version", AppInfo.PROJECT_FORMAT_VERSION))
 	var entries: Dictionary = manifest.get("entries", {})
@@ -402,8 +384,7 @@ func _normalize_loaded_project(manifest: Dictionary, canvas: Dictionary) -> void
 				item_data["frame_id"] = String(item_data["frame_id"])
 			_normalize_canvas_card_title(item_data)
 		elif item_type == "batch_card":
-			item_data["collapsed"] = bool(item_data.get("collapsed", false))
-			_normalize_canvas_card_fields(item_data, "batch_card")
+			continue
 		elif item_type == "sprite":
 			_normalize_canvas_card_title(item_data)
 			if item_data.has("size"):
@@ -486,13 +467,16 @@ func _load_graphs_from_files(files: Dictionary, manifest: Dictionary) -> Diction
 		var graph_data: Variant = FileIOScript.bytes_to_json(files[path])
 		if not (graph_data is Dictionary):
 			return {"ok": false, "error": ERR_PARSE_ERROR, "graphs": {}}
-		graphs[graph_id] = _normalize_graph_data(graph_id, graph_data)
+		var parsed: Dictionary = GraphScript.parse_v2(graph_data)
+		if not bool(parsed.get("ok", false)):
+			last_load_error = Dictionary(parsed.get("error", {})).duplicate(true)
+			return {"ok": false, "error": ERR_FILE_UNRECOGNIZED, "graphs": {}}
+		graphs[graph_id] = _normalize_graph_data(graph_id, parsed["graph"])
 	return {"ok": true, "error": OK, "graphs": graphs}
 
 
-func _normalize_graph_data(graph_id: String, graph_data: Dictionary) -> Dictionary:
-	var graph: PFGraph = GraphScript.from_json(graph_data)
-	if not graph_data.has("id") or graph.id.is_empty():
+func _normalize_graph_data(graph_id: String, graph: PFGraph) -> Dictionary:
+	if graph.id.is_empty():
 		graph.id = graph_id
 	return graph.to_json()
 

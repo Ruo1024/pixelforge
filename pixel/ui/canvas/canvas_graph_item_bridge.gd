@@ -119,168 +119,28 @@ static func apply_batch_asset_ids(item: Node, asset_ids: Array, asset_library: N
 		asset_library.add_ref(asset_id)
 
 
-static func sync_batch_node_asset_ids(item: Node, asset_ids: Array) -> void:
-	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-		return
-
-	var graph_data := ProjectService.get_graph_data(item.graph_id)
-	if graph_data.is_empty():
-		return
-
-	var nodes := []
-	var changed := false
-	for raw_node in graph_data.get("nodes", []):
-		if not (raw_node is Dictionary):
-			nodes.append(raw_node)
-			continue
-		var node_data: Dictionary = raw_node
-		if (
-			String(node_data.get("id", "")) == item.node_id
-			and String(node_data.get("type", "")) == "batch"
-		):
-			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-			params["asset_ids"] = _string_array(asset_ids)
-			params["review_states"] = _review_state_map(params.get("review_states", {}), asset_ids)
-			params["review_filter"] = _review_filter(params.get("review_filter", "all"))
-			params["focus_asset_id"] = _focus_asset_id(params.get("focus_asset_id", ""), asset_ids)
-			params["compare_asset_ids"] = _compare_asset_ids(
-				params.get("compare_asset_ids", []), asset_ids
-			)
-			params["compare_mode"] = _compare_mode(
-				params.get("compare_mode", "current"), params["compare_asset_ids"]
-			)
-			node_data["params"] = params
-			changed = true
-		nodes.append(node_data)
-
-	if changed:
-		graph_data["nodes"] = nodes
-		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+static func sync_batch_node_asset_ids(_item: Node, _asset_ids: Array) -> void:
+	# B7-2 hard cut: the legacy card may display slots, but it cannot write Output truth.
+	# legacy_generation_v2_adapter is the only temporary writer until B7-4 removes it.
+	return
 
 
-static func sync_batch_node_review_states(item: Node, review_states: Dictionary) -> void:
-	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-		return
-
-	var graph_data := ProjectService.get_graph_data(item.graph_id)
-	if graph_data.is_empty():
-		return
-
-	var nodes := []
-	var changed := false
-	for raw_node in graph_data.get("nodes", []):
-		if not (raw_node is Dictionary):
-			nodes.append(raw_node)
-			continue
-		var node_data: Dictionary = raw_node
-		if (
-			String(node_data.get("id", "")) == item.node_id
-			and String(node_data.get("type", "")) == "batch"
-		):
-			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-			params["review_states"] = _review_state_map(review_states, params.get("asset_ids", []))
-			node_data["params"] = params
-			changed = true
-		nodes.append(node_data)
-
-	if changed:
-		graph_data["nodes"] = nodes
-		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+static func sync_batch_node_review_states(_item: Node, _review_states: Dictionary) -> void:
+	return
 
 
-static func sync_batch_node_review_filter(item: Node, review_filter: String) -> void:
-	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-		return
-
-	var graph_data := ProjectService.get_graph_data(item.graph_id)
-	if graph_data.is_empty():
-		return
-
-	var nodes := []
-	var changed := false
-	for raw_node in graph_data.get("nodes", []):
-		if not (raw_node is Dictionary):
-			nodes.append(raw_node)
-			continue
-		var node_data: Dictionary = raw_node
-		if (
-			String(node_data.get("id", "")) == item.node_id
-			and String(node_data.get("type", "")) == "batch"
-		):
-			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-			params["review_filter"] = _review_filter(review_filter)
-			node_data["params"] = params
-			changed = true
-		nodes.append(node_data)
-
-	if changed:
-		graph_data["nodes"] = nodes
-		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+static func sync_batch_node_review_filter(_item: Node, _review_filter: String) -> void:
+	return
 
 
-static func sync_batch_node_focus_asset_id(item: Node, focus_asset_id: String) -> void:
-	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-		return
-
-	var graph_data := ProjectService.get_graph_data(item.graph_id)
-	if graph_data.is_empty():
-		return
-
-	var nodes := []
-	var changed := false
-	for raw_node in graph_data.get("nodes", []):
-		if not (raw_node is Dictionary):
-			nodes.append(raw_node)
-			continue
-		var node_data: Dictionary = raw_node
-		if (
-			String(node_data.get("id", "")) == item.node_id
-			and String(node_data.get("type", "")) == "batch"
-		):
-			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-			params["focus_asset_id"] = _focus_asset_id(focus_asset_id, params.get("asset_ids", []))
-			node_data["params"] = params
-			changed = true
-		nodes.append(node_data)
-
-	if changed:
-		graph_data["nodes"] = nodes
-		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+static func sync_batch_node_focus_asset_id(_item: Node, _focus_asset_id: String) -> void:
+	return
 
 
 static func sync_batch_node_compare_state(
-	item: Node, compare_asset_ids: Array, compare_mode: String
+	_item: Node, _compare_asset_ids: Array, _compare_mode: String
 ) -> void:
-	if not item.has_method("has_graph_binding") or not item.has_graph_binding():
-		return
-
-	var graph_data := ProjectService.get_graph_data(item.graph_id)
-	if graph_data.is_empty():
-		return
-
-	var nodes := []
-	var changed := false
-	for raw_node in graph_data.get("nodes", []):
-		if not (raw_node is Dictionary):
-			nodes.append(raw_node)
-			continue
-		var node_data: Dictionary = raw_node
-		if (
-			String(node_data.get("id", "")) == item.node_id
-			and String(node_data.get("type", "")) == "batch"
-		):
-			var params: Dictionary = Dictionary(node_data.get("params", {})).duplicate(true)
-			params["compare_asset_ids"] = _compare_asset_ids(
-				compare_asset_ids, params.get("asset_ids", [])
-			)
-			params["compare_mode"] = _compare_mode(compare_mode, params["compare_asset_ids"])
-			node_data["params"] = params
-			changed = true
-		nodes.append(node_data)
-
-	if changed:
-		graph_data["nodes"] = nodes
-		ProjectService.set_graph_data(item.graph_id, graph_data, true)
+	return
 
 
 static func _string_array(value: Variant) -> Array[String]:

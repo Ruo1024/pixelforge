@@ -13,6 +13,7 @@ signal face_action_requested(item_id: String, action_id: String, asset_ids: Arra
 
 const IdUtil := preload("res://core/util/id_util.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
+const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const UIFont := preload("res://ui/widgets/ui_font.gd")
@@ -49,7 +50,7 @@ const FLAG_MARK := Color(1.0, 0.78, 0.18, 1.0)
 const FOCUS_BORDER := Color(0.96, 0.96, 0.9, 1.0)
 const COMPARE_DIVIDER := Color(0.96, 0.96, 0.9, 0.85)
 const INPUT_PORTS: Array[String] = ["in"]
-const OUTPUT_PORTS: Array[String] = ["images", "assets"]
+const OUTPUT_PORTS: Array[String] = ["assets"]
 const PORT_VISIBLE_SCREEN_RADIUS := 6.0
 const PORT_HIT_SCREEN_RADIUS := 20.0
 const CHECKER_SIZE := 8
@@ -108,25 +109,19 @@ func setup_from_data(data: Dictionary) -> void:
 	requested_size = CardContract.normalize_requested_size(
 		"batch" if not graph_id.is_empty() else "batch_card", data.get("size", null)
 	)
-	asset_ids = _string_array(graph_params.get("asset_ids", data.get("asset_ids", [])))
-	run_state = graph_params.get("run_state", data.get("run_state", {})).duplicate(true)
-	selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
-	review_states = _review_state_map(
-		graph_params.get("review_states", data.get("review_states", {})), asset_ids
+	asset_ids = (
+		BatchNodeScript.get_visible_asset_ids(graph_params)
+		if not graph_node_data.is_empty()
+		else _string_array(data.get("asset_ids", []))
 	)
-	review_filter = _normalize_review_filter(
-		String(graph_params.get("review_filter", data.get("review_filter", FILTER_ALL)))
-	)
-	focus_asset_id = _normalize_focus_asset_id(
-		String(graph_params.get("focus_asset_id", data.get("focus_asset_id", "")))
-	)
-	compare_asset_ids = _aligned_compare_asset_ids(
-		graph_params.get("compare_asset_ids", data.get("compare_asset_ids", []))
-	)
-	compare_mode = _normalize_compare_mode(
-		String(graph_params.get("compare_mode", data.get("compare_mode", COMPARE_CURRENT)))
-	)
-	review_layout = _normalize_review_layout(String(data.get("review_layout", LAYOUT_CONTACT)))
+	run_state = _display_state_from_slots(graph_params.get("result_slots", []))
+	selected_asset_ids = []
+	review_states = {}
+	review_filter = FILTER_ALL
+	focus_asset_id = ""
+	compare_asset_ids = []
+	compare_mode = COMPARE_CURRENT
+	review_layout = LAYOUT_CONTACT
 	collapsed = bool(data.get("collapsed", false))
 	frame_id = data.get("frame_id", null)
 	_prune_selected_to_visible()
@@ -146,6 +141,33 @@ func _refresh_from_graph() -> void:
 	setup_from_data(to_canvas_data())
 
 
+func _display_state_from_slots(value: Variant) -> Dictionary:
+	if not (value is Array) or value.is_empty():
+		return {}
+	var statuses := []
+	var detail := ""
+	for raw_slot in value:
+		if not (raw_slot is Dictionary):
+			continue
+		var status := String(raw_slot.get("status", ""))
+		if not status.is_empty():
+			statuses.append(status)
+		if detail.is_empty() and raw_slot.get("error", {}) is Dictionary:
+			detail = String(raw_slot.get("error", {}).get("code", ""))
+	if statuses.is_empty():
+		return {}
+	var display_status := "complete"
+	if statuses.any(func(status: String) -> bool: return status in ["queued", "running"]):
+		display_status = "running"
+	elif statuses.all(func(status: String) -> bool: return status == "failed"):
+		display_status = "failed"
+	elif statuses.all(func(status: String) -> bool: return status == "canceled"):
+		display_status = "canceled"
+	elif statuses.any(func(status: String) -> bool: return status in ["failed", "canceled"]):
+		display_status = "partial"
+	return {"status": display_status, "expected_count": statuses.size(), "detail": detail}
+
+
 func to_canvas_data() -> Dictionary:
 	var result := _raw_data.duplicate(true)
 	if has_graph_binding():
@@ -156,7 +178,7 @@ func to_canvas_data() -> Dictionary:
 		result["position"] = [int(round(position.x)), int(round(position.y))]
 		result["z_index"] = z_index
 		result["collapsed"] = collapsed
-		result["review_layout"] = review_layout
+		result.erase("review_layout")
 		result["locked"] = locked
 		result["frame_id"] = frame_id
 		result["size"] = CardContract.size_array(requested_size)

@@ -6,9 +6,28 @@ extends RefCounted
 
 const IdUtil := preload("res://core/util/id_util.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
-const GRAPH_VERSION := 1
-const PORT_IMAGE := "image"
-const PORT_IMAGE_LIST := "image_list"
+const GRAPH_VERSION := 2
+const PARAM_KEYS := {
+	"text_prompt": ["text"],
+	"object_list": ["rows"],
+	"prompt_preset": ["preset"],
+	"image_input": ["asset_id"],
+	"reference_set": ["asset_ids"],
+	"ai_generate": [
+		"provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"
+	],
+	"pixel_cleanup": ["preset_id", "settings"],
+	"batch": [
+		"label",
+		"source_node_id",
+		"source_run_id",
+		"role",
+		"input_snapshots",
+		"request_records",
+		"result_slots",
+	],
+}
+const RETIRED_NODE_TYPES := ["size_spec", "style_preset"]
 
 var graph_version := GRAPH_VERSION
 var id := "graph_main"
@@ -42,6 +61,25 @@ static func from_json(data: Dictionary, registry: Variant = null) -> PFGraph:
 			graph.edges.append(graph._normalize_edge(raw_edge))
 
 	return graph
+
+
+static func parse_v2(data: Dictionary, registry: Variant = null) -> Dictionary:
+	if int(data.get("graph_version", 0)) != GRAPH_VERSION:
+		return {
+			"ok": false,
+			"error": {"code": "unsupported_graph_version", "args": {}},
+		}
+	var issue := _validate_v2_data(data)
+	if not issue.is_empty():
+		return {"ok": false, "error": issue}
+	var graph := from_json(data, registry)
+	var edge_errors := graph.validate_edges()
+	if not edge_errors.is_empty():
+		return {
+			"ok": false,
+			"error": {"code": "invalid_graph_edge", "args": {"index": edge_errors[0]["index"]}},
+		}
+	return {"ok": true, "graph": graph}
 
 
 func add_node(
@@ -212,12 +250,12 @@ func _load_node(raw_node: Dictionary, registry: Variant) -> void:
 
 	var node_id := String(raw_node.get("id", IdUtil.uuid_v4()))
 	var raw_fields := raw_node.duplicate(true)
-	for known_key in ["id", "type", "position", "params"]:
+	for known_key in ["id", "type", "params"]:
 		raw_fields.erase(known_key)
 	nodes[node_id] = {
 		"node": node,
 		"params": node.validate_params(raw_node.get("params", {})),
-		"position": _normalize_position(raw_node.get("position", [0, 0])),
+		"position": [0, 0],
 		"raw_fields": raw_fields,
 	}
 	_node_order.append(node_id)
@@ -230,15 +268,60 @@ func _node_to_json(node_id: String) -> Dictionary:
 		var ghost_json := node.get_ghost_json()
 		ghost_json["id"] = node_id
 		ghost_json["type"] = node.get_type()
-		ghost_json["position"] = entry["position"]
 		ghost_json["params"] = entry["params"]
 		return ghost_json
 	var result: Dictionary = Dictionary(entry.get("raw_fields", {})).duplicate(true)
 	result["id"] = node_id
 	result["type"] = node.get_type()
-	result["position"] = entry["position"]
 	result["params"] = entry["params"]
 	return result
+
+
+static func _validate_v2_data(data: Dictionary) -> Dictionary:
+	for key in data.keys():
+		if String(key) not in ["graph_version", "id", "name", "nodes", "edges"]:
+			return _load_error("unknown_graph_field", "graph.%s" % String(key))
+	if String(data.get("id", "")).is_empty() or not (data.get("name", null) is String):
+		return _load_error("invalid_graph_identity", "graph")
+	var nodes_value: Variant = data.get("nodes", null)
+	var edges_value: Variant = data.get("edges", null)
+	if not (nodes_value is Array) or not (edges_value is Array):
+		return _load_error("invalid_graph_shape", "graph")
+	var node_ids := {}
+	for index in range(nodes_value.size()):
+		var raw_node: Variant = nodes_value[index]
+		if not (raw_node is Dictionary):
+			return _load_error("invalid_graph_node", "nodes[%d]" % index)
+		for key in raw_node.keys():
+			if String(key) not in ["id", "type", "params"]:
+				return _load_error("unknown_graph_node_field", "nodes[%d].%s" % [index, key])
+		var node_id := String(raw_node.get("id", ""))
+		var node_type := String(raw_node.get("type", ""))
+		var params: Variant = raw_node.get("params", null)
+		if node_id.is_empty() or node_ids.has(node_id) or node_type.is_empty() or not (params is Dictionary):
+			return _load_error("invalid_graph_node", "nodes[%d]" % index)
+		node_ids[node_id] = true
+		if node_type in RETIRED_NODE_TYPES:
+			return _load_error("retired_graph_node", "nodes[%d].type" % index)
+		if PARAM_KEYS.has(node_type):
+			for key in params.keys():
+				if String(key) not in PARAM_KEYS[node_type]:
+					return _load_error("unknown_graph_param", "nodes[%d].params.%s" % [index, key])
+	for index in range(edges_value.size()):
+		var raw_edge: Variant = edges_value[index]
+		if not (raw_edge is Dictionary) or raw_edge.keys().size() != 2:
+			return _load_error("invalid_graph_edge", "edges[%d]" % index)
+		if not raw_edge.has("from") or not raw_edge.has("to"):
+			return _load_error("invalid_graph_edge", "edges[%d]" % index)
+		for endpoint_key in ["from", "to"]:
+			var endpoint: Variant = raw_edge[endpoint_key]
+			if not (endpoint is Array) or endpoint.size() != 2:
+				return _load_error("invalid_graph_edge", "edges[%d].%s" % [index, endpoint_key])
+	return {}
+
+
+static func _load_error(code: String, path: String) -> Dictionary:
+	return {"code": code, "args": {"path": path}}
 
 
 func _normalize_edge(edge: Dictionary) -> Dictionary:
@@ -284,8 +367,6 @@ func _validate_connect_ports(
 	var target_type := String(target_port.get("type", ""))
 	if source_type == target_type:
 		return _connect_result(true, "")
-	if source_type == PORT_IMAGE and target_type == PORT_IMAGE_LIST:
-		return _connect_result(true, "", true)
 	return _connect_result(false, "Cannot connect %s to %s" % [source_type, target_type])
 
 

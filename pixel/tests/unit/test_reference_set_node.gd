@@ -24,14 +24,15 @@ func test_reference_set_resolves_ordered_images_ids_and_content_hashes() -> void
 
 	assert_eq(params, original)
 	assert_eq(result["__reference_asset_ids"], [blue_id, red_id])
-	assert_eq(result["images"].size(), 2)
-	assert_eq(result["images"][0].get_pixel(0, 0), Color.BLUE)
-	assert_eq(result["images"][1].get_pixel(0, 0), Color.RED)
+	assert_eq(result["assets"], [blue_id, red_id])
+	assert_eq(result["__reference_images"].size(), 2)
+	assert_eq(result["__reference_images"][0].get_pixel(0, 0), Color.BLUE)
+	assert_eq(result["__reference_images"][1].get_pixel(0, 0), Color.RED)
 	assert_eq(
 		result["__reference_content_sha256s"],
 		[
-			GraphContextScript.image_content_sha256(result["images"][0]),
-			GraphContextScript.image_content_sha256(result["images"][1]),
+			GraphContextScript.image_content_sha256(result["__reference_images"][0]),
+			GraphContextScript.image_content_sha256(result["__reference_images"][1]),
 		]
 	)
 
@@ -46,9 +47,9 @@ func test_reference_set_preserves_empty_missing_and_damaged_entries_on_error() -
 	var missing_result: Dictionary = node.execute({}, missing_params, context)
 
 	assert_eq(empty_result["__error"]["code"], "asset_not_found")
-	assert_eq(empty_result["__error"]["index"], 0)
+	assert_eq(empty_result["__error"]["args"]["index"], 0)
 	assert_eq(missing_result["__error"]["code"], "asset_not_found")
-	assert_eq(missing_result["__error"]["asset_id"], "not-registered")
+	assert_eq(missing_result["__error"]["args"]["asset_id"], "not-registered")
 	assert_eq(empty_params["asset_ids"], ["first", "", "last"])
 	assert_eq(missing_params["asset_ids"], ["not-registered", "later"])
 
@@ -68,8 +69,8 @@ func test_reference_set_preserves_empty_missing_and_damaged_entries_on_error() -
 	var damaged_params := {"asset_ids": ["broken", "later"]}
 	var damaged_result: Dictionary = node.execute({}, damaged_params, context)
 	assert_eq(damaged_result["__error"]["code"], "asset_decode_failed")
-	assert_eq(damaged_result["__error"]["index"], 0)
-	assert_eq(damaged_result["__error"]["asset_id"], "broken")
+	assert_eq(damaged_result["__error"]["args"]["index"], 0)
+	assert_eq(damaged_result["__error"]["args"]["asset_id"], "broken")
 	assert_eq(damaged_params["asset_ids"], ["broken", "later"])
 
 
@@ -84,16 +85,16 @@ func test_reference_set_empty_slot_reports_its_original_index_and_value() -> voi
 	)
 
 	assert_eq(no_references["__error"]["code"], "missing_asset_reference")
-	assert_eq(no_references["__error"]["index"], -1)
+	assert_eq(no_references["__error"]["args"]["index"], -1)
 	assert_eq(result["__error"]["code"], "missing_asset_reference")
-	assert_eq(result["__error"]["index"], 1)
-	assert_eq(result["__error"]["asset_id"], "  ")
+	assert_eq(result["__error"]["args"]["index"], 1)
+	assert_eq(result["__error"]["args"]["asset_id"], "  ")
 	assert_eq(params["asset_ids"], [valid_id, "  ", "later"])
 
 
-func test_reference_set_is_registered_and_roundtrips_unknown_params() -> void:
+func test_reference_set_is_registered_and_roundtrips_exact_v2_params() -> void:
 	var source := {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "reference_graph",
 		"name": "Reference Graph",
 		"nodes":
@@ -101,20 +102,20 @@ func test_reference_set_is_registered_and_roundtrips_unknown_params() -> void:
 			{
 				"id": "references",
 				"type": "reference_set",
-				"position": [10, 20],
-				"params": {"asset_ids": ["b", "a"], "future_field": true},
+				"params": {"asset_ids": ["b", "a"]},
 			}
 		],
 		"edges": [],
 	}
-	var graph: PFGraph = GraphScript.from_json(source, NodeRegistryScript.new())
+	var parsed := GraphScript.parse_v2(source, NodeRegistryScript.new())
+	assert_true(parsed["ok"])
+	var graph: PFGraph = parsed["graph"]
 
 	assert_false(graph.get_node("references").is_ghost())
 	assert_eq(
-		graph.get_node("references").get_output_ports(), [{"name": "images", "type": "image_list"}]
+		graph.get_node("references").get_output_ports(), [{"name": "assets", "type": "asset_list"}]
 	)
 	assert_eq(graph.get_node_params("references")["asset_ids"], ["b", "a"])
-	assert_eq(graph.get_node_params("references")["future_field"], true)
 	assert_eq(graph.to_json(), source)
 
 

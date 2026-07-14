@@ -19,7 +19,7 @@ func get_category() -> String:
 
 
 func get_output_ports() -> Array[Dictionary]:
-	return [{"name": "image", "type": "image"}]
+	return [{"name": "assets", "type": "asset_list"}]
 
 
 func get_param_schema() -> Array[Dictionary]:
@@ -43,7 +43,8 @@ func execute(_inputs: Dictionary, params: Dictionary, ctx: Variant) -> Dictionar
 	if image == null:
 		return _error("asset_decode_failed", asset_id)
 	return {
-		"image": image,
+		"assets": [asset_id],
+		"__reference_images": [image],
 		"__reference_asset_id": asset_id,
 		"__reference_content_sha256": GraphContextScript.image_content_sha256(image),
 	}

@@ -26,7 +26,6 @@ func reset(name: String = "Untitled") -> void:
 		"name": name,
 		"created_at": now,
 		"modified_at": now,
-		"style_preset": {},
 		"entries":
 		{
 			"canvases": ["canvas"],

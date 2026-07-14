@@ -8,7 +8,7 @@ const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
-const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+const PromptPresetNodeScript := preload("res://core/graph/nodes/prompt_preset_node.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 
 
@@ -19,13 +19,21 @@ static func build(reference_asset_id: String, batch_label: String) -> PFGraph:
 	graph.add_node(
 		ObjectListNodeScript.new(),
 		"objects",
-		{"items": "barrel\nfence\nscarecrow\ncrate\nwell"},
+		{
+			"rows": [
+				{"id": "barrel", "text": "barrel", "count": 2, "enabled": true},
+				{"id": "fence", "text": "fence", "count": 2, "enabled": true},
+				{"id": "scarecrow", "text": "scarecrow", "count": 2, "enabled": true},
+				{"id": "crate", "text": "crate", "count": 2, "enabled": true},
+				{"id": "well", "text": "well", "count": 2, "enabled": true},
+			]
+		},
 		Vector2(0, 0)
 	)
 	graph.add_node(
-		SizeSpecNodeScript.new(),
-		"size",
-		{"width": 32, "height": 32, "per_subject": 1},
+		PromptPresetNodeScript.new(),
+		"prompt_preset",
+		{"preset": PromptPresetNodeScript.DEFAULT_PRESET.duplicate(true)},
 		Vector2(0, 150)
 	)
 	graph.add_node(
@@ -34,14 +42,22 @@ static func build(reference_asset_id: String, batch_label: String) -> PFGraph:
 	graph.add_node(
 		AiGenerateNodeScript.new(),
 		"generate",
-		{"provider_id": "mock", "batch_size": 2, "seed": 1000},
+		{
+			"provider_id": "mock",
+			"model_id": "pixel_mock_v1",
+			"target_width": 32,
+			"target_height": 32,
+			"batch_size": 2,
+			"seed": 1000,
+			"extra": {},
+		},
 		Vector2(280, 75)
 	)
 	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": batch_label}, Vector2(560, 29))
-	graph.add_edge("objects", "items", "generate", "items")
-	graph.add_edge("size", "spec", "generate", "spec")
-	graph.add_edge("reference", "image", "generate", "image")
-	graph.add_edge("generate", "images", "batch_1", "in")
+	graph.add_edge("objects", "subjects", "generate", "subjects")
+	graph.add_edge("prompt_preset", "prefix", "generate", "prefix")
+	graph.add_edge("reference", "assets", "generate", "references")
+	graph.add_edge("generate", "assets", "batch_1", "in")
 	return graph
 
 

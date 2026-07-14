@@ -63,7 +63,6 @@ const PALETTE_PREVIEW_WIDTH := 192
 const PALETTE_PREVIEW_HEIGHT := 18
 const TITLE_FONT_SIZE := 16
 const LABEL_FONT_SIZE := 13
-const PRIOR_FONT_SIZE := 12
 const ROOT_SEPARATION := 8
 const ROW_SEPARATION := 2
 const FLEXIBLE_WIDTH := 0
@@ -93,12 +92,10 @@ var _cancel_button: Button = null
 var _preview_timer: Timer = null
 var _palette_import_dialog: FileDialog = null
 var _palette_error_dialog: AcceptDialog = null
-var _style_prior_label: Label = null
 var _palette_ids := []
 var _last_palette_id := "db32"
 var _suppress_param_signal := false
 var _selection_count := 0
-var _style_prior_base_size := 0
 var _last_report := {}
 var _localized_options: Array[OptionButton] = []
 
@@ -173,34 +170,6 @@ func set_manual_grid_from_overlay(scale: float, offset: Vector2) -> void:
 	_offset_y_spin.value = offset.y
 	_suppress_param_signal = false
 	_schedule_preview()
-
-
-func set_style_preset(style_preset: Dictionary) -> void:
-	if _style_prior_label == null:
-		return
-
-	var base_size := int(style_preset.get("base_size", 0))
-	_style_prior_base_size = base_size
-	_style_prior_label.visible = base_size > 0
-	_style_prior_label.text = Strings.text("CLEANUP_PRESET_PRIOR_FORMAT") % base_size
-
-	var quantize: Dictionary = get_params().get(Pipeline.STEP_QUANTIZE, {})
-	var palette_data: Variant = style_preset.get("palette", {})
-	if palette_data is Dictionary:
-		var palette_ref := String(Dictionary(palette_data).get("ref", ""))
-		if not palette_ref.is_empty():
-			refresh_palette_options(palette_ref)
-	if style_preset.has("max_colors_per_sprite"):
-		_k_spin.value = int(style_preset["max_colors_per_sprite"])
-	if style_preset.has("auto_k_strategy"):
-		_select_option_value(
-			_auto_k_strategy_options,
-			AUTO_K_STRATEGY_VALUES,
-			Quantizer.normalize_auto_k_strategy(style_preset["auto_k_strategy"])
-		)
-	_update_quantize_visibility()
-	if not quantize.is_empty():
-		_schedule_preview()
 
 
 func refresh_palette_options(preferred_id: String = "") -> void:
@@ -290,11 +259,6 @@ func _build_ui() -> void:
 	_auto_detect_check = _make_check("CLEANUP_AUTO_DETECT", true)
 	_auto_detect_check.name = "AutoDetectCheck"
 	controls.add_child(_auto_detect_check)
-
-	_style_prior_label = Label.new()
-	_style_prior_label.add_theme_font_size_override("font_size", PRIOR_FONT_SIZE)
-	_style_prior_label.visible = false
-	controls.add_child(_style_prior_label)
 
 	_resample_check = _make_check("CLEANUP_RUN_RESAMPLE", true)
 	controls.add_child(_resample_check)
@@ -606,10 +570,6 @@ func _on_language_changed(_preference: String, _locale: String) -> void:
 			options.set_item_text(index, Strings.text(String(label_keys[index])))
 	_auto_k_strategy_options.tooltip_text = Strings.text("CLEANUP_AUTO_K_TOOLTIP")
 	_selection_label.text = Strings.text("CLEANUP_SELECTED_FORMAT") % _selection_count
-	if _style_prior_base_size > 0:
-		_style_prior_label.text = (
-			Strings.text("CLEANUP_PRESET_PRIOR_FORMAT") % _style_prior_base_size
-		)
 	refresh_palette_options(_selected_palette_id())
 	if _last_report.is_empty():
 		_report_label.text = Strings.text("CLEANUP_NO_REPORT")

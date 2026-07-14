@@ -7,7 +7,7 @@ extends PFNode
 const MODEL_ID := "pixel_mock_v1"
 const PROVIDER_MOCK := "mock"
 const DEFAULT_BATCH_SIZE := 1
-const DEFAULT_SEED := 1
+const DEFAULT_SEED := -1
 const DEFAULT_SIZE := 32
 
 
@@ -25,16 +25,15 @@ func get_category() -> String:
 
 func get_input_ports() -> Array[Dictionary]:
 	return [
-		{"name": "style", "type": "style", "required": false},
-		{"name": "text", "type": "text", "required": false},
-		{"name": "items", "type": "text_list", "required": false},
-		{"name": "spec", "type": "spec", "required": true},
-		{"name": "image", "type": "image_list", "required": false},
+		{"name": "prefix", "type": "prompt_prefix", "required": false},
+		{"name": "prompt", "type": "text", "required": false},
+		{"name": "subjects", "type": "subject_list", "required": false},
+		{"name": "references", "type": "asset_list", "required": false},
 	]
 
 
 func get_output_ports() -> Array[Dictionary]:
-	return [{"name": "images", "type": "image_list"}]
+	return [{"name": "assets", "type": "asset_list"}]
 
 
 func get_param_schema() -> Array[Dictionary]:
@@ -52,22 +51,44 @@ func get_param_schema() -> Array[Dictionary]:
 			"default": "",
 		},
 		{
+			"key": "target_width",
+			"label_key": "GRAPH_PARAM_TARGET_WIDTH",
+			"kind": KIND_INT,
+			"default": DEFAULT_SIZE,
+			"min": 1,
+			"max": 16384,
+		},
+		{
+			"key": "target_height",
+			"label_key": "GRAPH_PARAM_TARGET_HEIGHT",
+			"kind": KIND_INT,
+			"default": DEFAULT_SIZE,
+			"min": 1,
+			"max": 16384,
+		},
+		{
 			"key": "batch_size",
 			"label_key": "GRAPH_PARAM_BATCH_SIZE",
 			"kind": KIND_INT,
 			"default": DEFAULT_BATCH_SIZE,
 			"min": 1,
-			"max": 16,
+			"max": 999,
 		},
 		{
 			"key": "seed",
 			"label_key": "GRAPH_PARAM_SEED",
 			"kind": KIND_SEED,
 			"default": DEFAULT_SEED,
-			"min": 0,
+			"min": -1,
 			"max": 2147483647,
 		},
 	]
+
+
+func validate_params(params: Dictionary) -> Dictionary:
+	var validated := super(params)
+	validated["extra"] = Dictionary(params.get("extra", {})).duplicate(true) if params.get("extra", {}) is Dictionary else {}
+	return validated
 
 
 func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionary:
@@ -80,10 +101,9 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 			},
 		}
 
-	var spec: Dictionary = inputs.get("spec", {})
-	var width := maxi(1, int(spec.get("width", DEFAULT_SIZE)))
-	var height := maxi(1, int(spec.get("height", DEFAULT_SIZE)))
-	var batch_size := maxi(1, int(params.get("batch_size", spec.get("per_subject", 1))))
+	var width := maxi(1, int(params.get("target_width", DEFAULT_SIZE)))
+	var height := maxi(1, int(params.get("target_height", DEFAULT_SIZE)))
+	var batch_size := maxi(1, int(params.get("batch_size", 1)))
 	var seed := int(params.get("seed", DEFAULT_SEED))
 	var subjects := _subject_rows_from_inputs(inputs, batch_size)
 	var reference_hash := String(inputs.get("__reference_content_sha256", ""))
@@ -140,7 +160,7 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 				)
 			)
 
-	return {"images": images, "metadata": metadata}
+	return {"assets": images, "metadata": metadata}
 
 
 func _string_array(value: Variant) -> Array[String]:
@@ -153,7 +173,7 @@ func _string_array(value: Variant) -> Array[String]:
 
 func _subject_rows_from_inputs(inputs: Dictionary, default_count: int) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	var structured: Variant = inputs.get("__source_rows", null)
+	var structured: Variant = inputs.get("subjects", null)
 	if structured is Array:
 		for row in structured:
 			if row is Dictionary:
@@ -169,13 +189,8 @@ func _subject_rows_from_inputs(inputs: Dictionary, default_count: int) -> Array[
 					)
 				)
 		return result
-	if inputs.has("items"):
-		for item in inputs["items"]:
-			var text := String(item).strip_edges()
-			if not text.is_empty():
-				result.append({"text": text, "count": default_count})
-	if result.is_empty() and inputs.has("text"):
-		var prompt := String(inputs["text"]).strip_edges()
+	if result.is_empty() and inputs.has("prompt"):
+		var prompt := String(inputs["prompt"]).strip_edges()
 		if not prompt.is_empty():
 			result.append({"text": prompt, "count": default_count})
 	if result.is_empty():

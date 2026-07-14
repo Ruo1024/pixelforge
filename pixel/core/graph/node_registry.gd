@@ -9,10 +9,21 @@ const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.g
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ImageInputNodeScript := preload("res://core/graph/nodes/image_input_node.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
+const PixelCleanupNodeScript := preload("res://core/graph/nodes/pixel_cleanup_node.gd")
+const PromptPresetNodeScript := preload("res://core/graph/nodes/prompt_preset_node.gd")
 const ReferenceSetNodeScript := preload("res://core/graph/nodes/reference_set_node.gd")
-const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
-const StylePresetNodeScript := preload("res://core/graph/nodes/style_preset_node.gd")
 const TextPromptNodeScript := preload("res://core/graph/nodes/text_prompt_node.gd")
+
+const BUILTIN_TYPES := [
+	"ai_generate",
+	"batch",
+	"image_input",
+	"object_list",
+	"pixel_cleanup",
+	"prompt_preset",
+	"reference_set",
+	"text_prompt",
+]
 
 static var _plugin_scripts := {}
 var _scripts := {}
@@ -22,11 +33,11 @@ func _init(register_builtins: bool = true) -> void:
 	if register_builtins:
 		register("text_prompt", TextPromptNodeScript)
 		register("object_list", ObjectListNodeScript)
-		register("style_preset", StylePresetNodeScript)
-		register("size_spec", SizeSpecNodeScript)
+		register("prompt_preset", PromptPresetNodeScript)
 		register("image_input", ImageInputNodeScript)
 		register("reference_set", ReferenceSetNodeScript)
 		register("ai_generate", AiGenerateNodeScript)
+		register("pixel_cleanup", PixelCleanupNodeScript)
 		register("batch", BatchNodeScript)
 	for type_name in _plugin_scripts:
 		register(String(type_name), _plugin_scripts[type_name])

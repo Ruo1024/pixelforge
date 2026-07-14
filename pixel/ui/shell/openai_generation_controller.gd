@@ -6,7 +6,7 @@ extends Node
 const Strings := preload("res://ui/shell/strings.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
-const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
+const PromptPresetNodeScript := preload("res://core/graph/nodes/prompt_preset_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const GraphRunnerScript := preload("res://services/graph_mock_runner.gd")
@@ -72,8 +72,9 @@ func run_graph(
 
 func cancel_graph(graph_id: String, generate_node_id: String = "") -> bool:
 	var canceled := false
-	for task_id in _pending_runs.keys():
-		var state: Dictionary = _pending_runs[task_id]
+	for request_id_value in _pending_runs.keys():
+		var request_id := String(request_id_value)
+		var state: Dictionary = _pending_runs[request_id]
 		var graph: PFGraph = state.get("graph")
 		if (
 			graph != null
@@ -83,8 +84,9 @@ func cancel_graph(graph_id: String, generate_node_id: String = "") -> bool:
 				or String(state.get("generate_node_id", "")) == generate_node_id
 			)
 		):
-			TaskQueue.cancel(String(task_id))
-			canceled = true
+			var provider: PFProvider = ProviderService.get_provider(String(state.get("provider_id", "")))
+			if provider != null and provider.cancel(request_id) != null:
+				canceled = true
 	return canceled
 
 
@@ -111,7 +113,11 @@ func _queue_graph(
 		_set_batch_run_state(target_state, "failed", unavailable)
 		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % unavailable
 		return
-	var display_name := provider.get_display_name()
+	var generate_params: Dictionary = graph.get_node_params(generate_node_id)
+	var descriptor: Dictionary = ProviderService.get_model_descriptor(
+		provider_id, String(generate_params.get("model_id", ""))
+	)
+	var display_name: String = String(descriptor.get("display_name", provider_id))
 	if not ProviderService.has_session_credentials(provider_id):
 		if provider_id == "openai_image":
 			_status_label.text = Strings.STATUS_OPENAI_SESSION_REQUIRED
@@ -123,9 +129,7 @@ func _queue_graph(
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", _status_label.text)
 		_set_batch_run_state(target_state, "failed", _status_label.text)
 		return
-	var previous_run_state: Dictionary = graph.get_node_params(batch_node_id).get("run_state", {})
-	var retry_row_ids: Array = previous_run_state.get("failed_row_ids", [])
-	var request_result := _requests_for_graph(graph, generate_node_id, provider_id, retry_row_ids)
+	var request_result := _requests_for_graph(graph, generate_node_id, provider_id)
 	if not bool(request_result.get("ok", false)):
 		var reference_error := String(request_result.get("error", ""))
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", reference_error)
@@ -137,7 +141,7 @@ func _queue_graph(
 	var estimate_known := true
 	for request in requests:
 		var validation_message := _cloud_request_validation_message(
-			provider_id, provider, request, display_name
+			provider_id, request, display_name
 		)
 		if not validation_message.is_empty():
 			_set_graph_status(target_state, "CONTENT_STATUS_FAILED", validation_message)
@@ -171,13 +175,13 @@ func _queue_graph(
 					"scope_id": scope_id,
 					"scope_expected_count": expected_count,
 					"estimate": CostService.estimate_request(provider_id, request),
+					"provenance_inputs": request_result.get("provenance_inputs", {}),
 				}
 			)
 		)
 	_run_scopes[scope_id] = {
 		"pending": run_states.size(),
 		"failed": 0,
-		"asset_ids": [],
 		"failed_row_ids": [],
 	}
 	_set_batch_run_state(run_states[0], "waiting", "")
@@ -201,15 +205,18 @@ func _submit_provider_runs(run_states: Array) -> void:
 
 
 func _cloud_request_validation_message(
-	provider_id: String, provider: PFProvider, request: Dictionary, display_name: String
+	provider_id: String, request: Dictionary, display_name: String
 ) -> String:
+	var descriptor: Dictionary = ProviderService.get_model_descriptor(
+		provider_id, String(request.get("model_id", ""))
+	)
 	if (
 		not _request_reference_images(request).is_empty()
-		and not bool(provider.get_capabilities().get("img2img", false))
+		and not bool(descriptor.get("capabilities", {}).get("img2img", false))
 	):
 		return Strings.text("CONTENT_DETAIL_REFERENCE_UNSUPPORTED_FORMAT") % display_name
 	var error: Variant = ProviderService.validate_generation_request(provider_id, request)
-	return String(error.get("message", "")) if error is Dictionary else ""
+	return String(error.get("code", "")) if error is Dictionary else ""
 
 
 func _submit_provider_run(run_state: Dictionary) -> void:
@@ -217,7 +224,7 @@ func _submit_provider_run(run_state: Dictionary) -> void:
 	var display_name := String(run_state["provider_name"])
 	var request: Dictionary = run_state["request"]
 	var task: Variant = ProviderService.generate(provider_id, request)
-	if task == null:
+	if task == null or task is Dictionary:
 		var unavailable := Strings.text("CONTENT_DETAIL_PROVIDER_UNAVAILABLE")
 		_status_label.text = (
 			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, unavailable]
@@ -225,18 +232,18 @@ func _submit_provider_run(run_state: Dictionary) -> void:
 		_set_graph_status(run_state, "CONTENT_STATUS_FAILED", unavailable)
 		_set_batch_run_state(run_state, "failed", unavailable)
 		return
-	_pending_runs[task.id] = run_state
+	var request_id := String(request["request_id"])
+	_pending_runs[request_id] = run_state
 	var estimate := float(run_state.get("estimate", -1.0))
 	var detail := (
 		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % estimate if estimate >= 0.0 else ""
 	)
 	_set_graph_status(run_state, "CONTENT_STATUS_RUNNING", detail)
 	_set_batch_run_state(run_state, "running", detail)
-	task.progress_reported.connect(_on_progress)
-	task.finished.connect(_on_finished.bind(task.id))
-	task.failed.connect(_on_failed.bind(task.id))
-	task.canceled.connect(_on_canceled.bind(task.id))
-	TaskQueue.submit(task)
+	task.progress.connect(_on_progress.bind(request_id))
+	task.completed.connect(_on_finished.bind(request_id))
+	task.failed.connect(_on_failed.bind(request_id))
+	task.canceled.connect(_on_canceled)
 	_status_label.text = Strings.STATUS_PROVIDER_GENERATE_QUEUED_FORMAT % display_name
 
 
@@ -252,10 +259,12 @@ func _confirm_budget_run() -> void:
 	_submit_provider_runs(pending.get("runs", []))
 
 
-func _on_progress(_task_id: String, ratio: float, message: String) -> void:
-	var state: Dictionary = _pending_runs.get(_task_id, {})
+func _on_progress(value: Dictionary, request_id: String) -> void:
+	var state: Dictionary = _pending_runs.get(request_id, {})
 	var display_name := String(state.get("provider_name", "Provider"))
-	var percent := roundi(ratio * 100.0)
+	var ratio: Variant = value.get("ratio", null)
+	var percent := roundi(float(ratio) * 100.0) if ratio != null else 0
+	var message := String(value.get("phase", ""))
 	_set_graph_status(
 		state,
 		"CONTENT_STATUS_RUNNING",
@@ -284,18 +293,19 @@ func _on_finished(result: Variant, task_id: String) -> void:
 	var display_name := String(state["provider_name"])
 	var batch_node_id := String(state["batch_node_id"])
 	var batch_card_id := String(state["batch_card_id"])
-	var images: Array = result.get("images", [])
-	CostService.record_cost(provider_id, float(result.get("cost", -1.0)))
+	var images: Array = []
+	for raw_item in result.get("items", []):
+		if raw_item is Dictionary and raw_item.get("image") is Image:
+			images.append(raw_item["image"])
+	var actual_cost: Variant = result.get("actual_cost_usd", null)
+	CostService.record_cost(provider_id, float(actual_cost) if actual_cost != null else -1.0)
 	var runner := GraphRunnerScript.new()
-	var scope: Dictionary = _run_scopes.get(String(state.get("scope_id", "")), {})
-	var replace_existing := Array(scope.get("asset_ids", [])).is_empty()
 	var materialized := runner.materialize_provider_batch(
 		graph,
 		batch_node_id,
 		images,
-		_metadata(result, request, images.size(), provider_id),
-		AssetLibrary,
-		replace_existing
+		_metadata(result, request, images.size(), provider_id, state.get("provenance_inputs", {})),
+		AssetLibrary
 	)
 	if not bool(materialized.get("ok", false)):
 		var invalid_response := Strings.text("CONTENT_DETAIL_INVALID_RESPONSE")
@@ -305,20 +315,17 @@ func _on_finished(result: Variant, task_id: String) -> void:
 			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, invalid_response]
 		)
 		return
-	var asset_ids: Array = materialized["asset_ids"]
+	var asset_ids: Array = BatchNodeScript.get_visible_asset_ids(
+		graph.get_node_params(batch_node_id)
+	)
 	var scope_result := _finish_scope_task(state, false)
-	var scope_asset_ids: Array = scope_result.get("asset_ids", [])
-	for asset_id in asset_ids:
-		scope_asset_ids.append(asset_id)
-	if _run_scopes.has(String(state.get("scope_id", ""))):
-		_run_scopes[String(state.get("scope_id", ""))]["asset_ids"] = scope_asset_ids
 	var scope_done := bool(scope_result.get("done", true))
 	if scope_done:
 		if int(scope_result.get("failed", 0)) > 0:
 			state["failed_row_ids"] = scope_result.get("failed_row_ids", [])
 			var partial_detail := (
 				Strings.text("CONTENT_DETAIL_PARTIAL_FAILURE_FORMAT")
-				% [scope_asset_ids.size(), int(scope_result["failed"])]
+				% [asset_ids.size(), int(scope_result["failed"])]
 			)
 			_set_graph_status(state, "CONTENT_STATUS_FAILED", partial_detail)
 			_set_batch_run_state(state, "failed", partial_detail)
@@ -326,15 +333,15 @@ func _on_finished(result: Variant, task_id: String) -> void:
 			_set_graph_status(
 				state,
 				"CONTENT_STATUS_COMPLETE",
-				Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % scope_asset_ids.size()
+				Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % asset_ids.size()
 			)
-			_set_batch_run_state(state, "complete", "", scope_asset_ids.size())
+			_set_batch_run_state(state, "complete", "", asset_ids.size())
 	else:
 		_set_batch_run_state(state, "running", "")
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if not batch_card_id.is_empty():
-		_canvas._replace_batch_asset_ids(batch_card_id, scope_asset_ids, false)
-		_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % scope_asset_ids.size()
+		_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, false)
+		_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
 		return
 	var items := _add_canvas_items(graph, asset_ids, state["anchor"])
 	if not items.is_empty():
@@ -377,7 +384,7 @@ func _on_canceled(task_id: String) -> void:
 func _finish_scope_task(state: Dictionary, failed: bool) -> Dictionary:
 	var scope_id := String(state.get("scope_id", ""))
 	if scope_id.is_empty() or not _run_scopes.has(scope_id):
-		return {"done": true, "asset_ids": []}
+		return {"done": true}
 	var scope: Dictionary = _run_scopes[scope_id]
 	scope["pending"] = maxi(0, int(scope.get("pending", 1)) - 1)
 	if failed:
@@ -389,7 +396,6 @@ func _finish_scope_task(state: Dictionary, failed: bool) -> Dictionary:
 	var result := {
 		"done": int(scope["pending"]) == 0,
 		"failed": int(scope["failed"]),
-		"asset_ids": Array(scope.get("asset_ids", [])).duplicate(),
 		"failed_row_ids": Array(scope.get("failed_row_ids", [])).duplicate(),
 	}
 	if bool(result["done"]):
@@ -406,33 +412,12 @@ func _set_graph_status(state: Dictionary, status_key: String, detail: String = "
 
 
 func _set_batch_run_state(
-	state: Dictionary, status: String, detail: String, completed_count: int = -1
+	state: Dictionary, _status: String, _detail: String, _completed_count: int = -1
 ) -> void:
 	var graph: PFGraph = state.get("graph")
 	var batch_node_id := String(state.get("batch_node_id", ""))
 	if graph == null or batch_node_id.is_empty():
 		return
-	var params := graph.get_node_params(batch_node_id)
-	var request: Dictionary = state.get("request", {})
-	var previous_state: Dictionary = params.get("run_state", {})
-	var expected_count := int(state.get("scope_expected_count", -1))
-	if expected_count < 0:
-		expected_count = (
-			completed_count
-			if completed_count >= 0
-			else maxi(1, int(request.get("batch", previous_state.get("expected_count", 1))))
-		)
-	params["run_state"] = {
-		"status": status,
-		"expected_count": expected_count,
-		"detail": detail,
-		"run_id": String(state.get("run_id", "")),
-	}
-	var failed_row_ids: Array = state.get("failed_row_ids", [])
-	if not failed_row_ids.is_empty():
-		params["run_state"]["failed_row_ids"] = failed_row_ids.duplicate()
-	graph.set_node_params(batch_node_id, params)
-	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	_canvas._refresh_graph_batch_card(graph.id, batch_node_id)
 
 
@@ -447,15 +432,23 @@ func _refresh_cost_label(estimate: float = -1.0) -> void:
 	)
 
 
-func _metadata(result: Dictionary, request: Dictionary, count: int, provider_id: String) -> Array:
+func _metadata(
+	result: Dictionary,
+	request: Dictionary,
+	count: int,
+	provider_id: String,
+	provenance_inputs: Dictionary
+) -> Array:
 	var metadata := []
-	var seeds: Array = result.get("seeds", [])
+	var items: Array = result.get("items", [])
 	var provider_meta: Dictionary = result.get("provider_meta", {})
-	var total_cost := float(result.get("cost", -1.0))
+	var raw_cost: Variant = result.get("actual_cost_usd", null)
+	var total_cost := float(raw_cost) if raw_cost != null else -1.0
 	var model_id := ProviderService.resolve_model_id(
 		provider_id, String(request.get("model_id", ""))
 	)
 	for index in range(count):
+		var item: Dictionary = items[index] if index < items.size() else {}
 		(
 			metadata
 			. append(
@@ -463,22 +456,21 @@ func _metadata(result: Dictionary, request: Dictionary, count: int, provider_id:
 					"provider": provider_id,
 					"model": model_id,
 					"prompt": request.get("prompt", ""),
-					"seed": seeds[index] if index < seeds.size() else null,
+					"actual_seed": item.get("actual_seed", null),
 					"cost": total_cost / count if total_cost >= 0.0 and count > 0 else -1.0,
 					"provider_meta": provider_meta,
-					"reference_asset_id": request.get("reference_asset_id", null),
-					"reference_content_sha256": request.get("reference_content_sha256", null),
-					"reference_asset_ids": request.get("reference_asset_ids", []),
-					"reference_content_sha256s": request.get("reference_content_sha256s", []),
-					"source_node_id": String(request.get("source_node_id", "")),
-					"source_row_id": String(request.get("source_row_id", "")),
+					"reference_asset_ids": provenance_inputs.get("reference_asset_ids", []),
+					"reference_content_sha256s": provenance_inputs.get(
+						"reference_content_sha256s", []
+					),
+					"source_node_id": String(provenance_inputs.get("source_node_id", "")),
+					"source_row_id": "",
 					"generation_snapshot":
 					_generation_snapshot(
 						request,
 						provider_id,
 						model_id,
-						seeds[index] if index < seeds.size() else null,
-						total_cost / count if total_cost >= 0.0 and count > 0 else -1.0
+						provenance_inputs
 					),
 					"name": "%s_%03d" % [provider_id, index + 1],
 				}
@@ -488,25 +480,27 @@ func _metadata(result: Dictionary, request: Dictionary, count: int, provider_id:
 
 
 func _generation_snapshot(
-	request: Dictionary, provider_id: String, model_id: String, seed: Variant, cost: float
+	request: Dictionary, provider_id: String, model_id: String, provenance_inputs: Dictionary
 ) -> Dictionary:
 	return {
 		"provider_id": provider_id,
 		"model_id": model_id,
+		"mode": String(request.get("mode", "txt2img")),
 		"prompt": String(request.get("prompt", "")),
-		"negative_prompt": String(request.get("negative_prompt", "")),
-		"style": Dictionary(request.get("style", {})).duplicate(true),
-		"width": int(request.get("width", 0)),
-		"height": int(request.get("height", 0)),
+		"prompt_preset_id": String(provenance_inputs.get("prompt_preset_id", "")),
+		"prompt_prefix": String(provenance_inputs.get("prompt_prefix", "")),
+		"target_width": int(request.get("target_width", 0)),
+		"target_height": int(request.get("target_height", 0)),
+		"provider_output_size": Array(request.get("provider_output_size", [])).duplicate(),
 		"batch_size": int(request.get("batch", 1)),
-		"seed": seed,
-		"reference_asset_ids": Array(request.get("reference_asset_ids", [])).duplicate(),
+		"requested_seed": int(request.get("seed", -1)),
+		"reference_asset_ids": Array(provenance_inputs.get("reference_asset_ids", [])).duplicate(),
 		"reference_content_sha256s":
-		Array(request.get("reference_content_sha256s", [])).duplicate(),
-		"source_generate_node_id": String(request.get("source_generate_node_id", "")),
-		"source_row_id": String(request.get("source_row_id", "")),
+		Array(provenance_inputs.get("reference_content_sha256s", [])).duplicate(),
+		"source_node_id": String(provenance_inputs.get("source_node_id", "")),
+		"source_row_id": "",
 		"run_id": String(request.get("run_id", "")),
-		"cost": cost,
+		"extra": Dictionary(request.get("extra", {})).duplicate(true),
 	}
 
 
@@ -517,41 +511,78 @@ func _make_graph() -> PFGraph:
 	graph.add_node(
 		ObjectListNodeScript.new(),
 		"objects",
-		{"items": Strings.OPENAI_V1_FIXED_PROMPT},
+		{
+			"rows": [
+				{
+					"id": "default",
+					"text": Strings.OPENAI_V1_FIXED_PROMPT,
+					"count": 2,
+					"enabled": true,
+				}
+			]
+		},
 		Vector2(0, 0)
 	)
 	graph.add_node(
-		SizeSpecNodeScript.new(),
-		"size",
-		{"width": 32, "height": 32, "per_subject": 2},
+		PromptPresetNodeScript.new(),
+		"prompt_preset",
+		{"preset": PromptPresetNodeScript.DEFAULT_PRESET.duplicate(true)},
 		Vector2(0, 150)
 	)
 	graph.add_node(
 		AiGenerateNodeScript.new(),
 		"generate",
-		{"provider_id": "openai_image", "batch_size": 2, "seed": 1},
+		{
+			"provider_id": "openai_image",
+			"model_id": "",
+			"target_width": 32,
+			"target_height": 32,
+			"batch_size": 2,
+			"seed": 1,
+			"extra": {},
+		},
 		Vector2(280, 75)
 	)
 	graph.add_node(
 		BatchNodeScript.new(), "batch_1", {"label": Strings.OPENAI_BATCH_LABEL}, Vector2(560, 29)
 	)
-	graph.add_edge("objects", "items", "generate", "items")
-	graph.add_edge("size", "spec", "generate", "spec")
-	graph.add_edge("generate", "images", "batch_1", "in")
+	graph.add_edge("objects", "subjects", "generate", "subjects")
+	graph.add_edge("prompt_preset", "prefix", "generate", "prefix")
+	graph.add_edge("generate", "assets", "batch_1", "in")
 	return graph
 
 
-func _request_for_graph(graph: PFGraph, generate_node_id: String) -> Dictionary:
+func _request_for_graph(graph: PFGraph, generate_node_id: String, provider_id: String) -> Dictionary:
+	var generate_params := graph.get_node_params(generate_node_id)
+	var model_id := ProviderService.resolve_model_id(
+		provider_id, String(generate_params.get("model_id", ""))
+	)
+	var descriptor := ProviderService.get_model_descriptor(provider_id, model_id)
+	var target_width := int(generate_params.get("target_width", 32))
+	var target_height := int(generate_params.get("target_height", 32))
+	var request_id := IdUtil.uuid_v4()
 	var request := {
+		"run_id": IdUtil.uuid_v4(),
+		"request_id": request_id,
+		"idempotency_key": request_id,
+		"provider_id": provider_id,
 		"mode": "txt2img",
-		"model_id": "",
+		"model_id": model_id,
 		"prompt": Strings.OPENAI_V1_FIXED_PROMPT,
-		"style": _project_style_preset(),
-		"width": 32,
-		"height": 32,
-		"batch": 2,
-		"seed": -1,
-		"extra": {},
+		"ref_images": [],
+		"target_width": target_width,
+		"target_height": target_height,
+		"provider_output_size": _provider_output_size(
+			descriptor, target_width, target_height
+		),
+		"batch": int(generate_params.get("batch_size", 1)),
+		"seed": int(generate_params.get("seed", -1)),
+		"extra": Dictionary(generate_params.get("extra", {})).duplicate(true),
+		"__prompt_prefix": "",
+		"__prompt_preset_id": "",
+		"__source_node_id": generate_node_id,
+		"__reference_asset_ids": [],
+		"__reference_content_sha256s": [],
 	}
 	for node_id in _direct_source_node_ids(graph, generate_node_id):
 		var node: PFNode = graph.get_node(node_id)
@@ -560,38 +591,41 @@ func _request_for_graph(graph: PFGraph, generate_node_id: String) -> Dictionary:
 		var params := graph.get_node_params(node_id)
 		match node.get_type():
 			"object_list":
-				var rows_value: Variant = params.get("rows", null)
-				if rows_value is Array:
-					request["__source_rows"] = rows_value.duplicate(true)
-					request["source_node_id"] = node_id
-				else:
-					request["prompt"] = String(params.get("items", request["prompt"]))
+				request["__source_rows"] = Array(params.get("rows", [])).duplicate(true)
 			"text_prompt":
 				request["prompt"] = String(params.get("text", request["prompt"]))
-			"size_spec":
-				request["width"] = int(params.get("width", request["width"]))
-				request["height"] = int(params.get("height", request["height"]))
-	var generate_params := graph.get_node_params(generate_node_id)
-	request["batch"] = int(generate_params.get("batch_size", request["batch"]))
-	request["seed"] = int(generate_params.get("seed", request["seed"]))
-	request["model_id"] = String(generate_params.get("model_id", ""))
-	request["source_generate_node_id"] = generate_node_id
+			"prompt_preset":
+				var preset: Dictionary = params.get("preset", {})
+				request["__prompt_prefix"] = String(preset.get("prefix", ""))
+				request["__prompt_preset_id"] = String(preset.get("id", ""))
 	_add_reference_inputs(request, graph, generate_node_id)
 	return request
 
 
-func _requests_for_graph(
-	graph: PFGraph, generate_node_id: String, provider_id: String, retry_row_ids: Array = []
-) -> Dictionary:
-	var base := _request_for_graph(graph, generate_node_id)
+func _requests_for_graph(graph: PFGraph, generate_node_id: String, provider_id: String) -> Dictionary:
+	var base := _request_for_graph(graph, generate_node_id, provider_id)
 	if base.has("__error"):
 		return {"ok": false, "error": String(base["__error"]), "requests": []}
+	var provenance_inputs := {
+		"source_node_id": String(base.get("__source_node_id", "")),
+		"prompt_preset_id": String(base.get("__prompt_preset_id", "")),
+		"prompt_prefix": String(base.get("__prompt_prefix", "")),
+		"reference_asset_ids": Array(base.get("__reference_asset_ids", [])).duplicate(),
+		"reference_content_sha256s": (
+			Array(base.get("__reference_content_sha256s", [])).duplicate()
+		),
+	}
 	var rows_value: Variant = base.get("__source_rows", null)
 	if not (rows_value is Array):
+		base["prompt"] = _prefixed_prompt(
+			String(base.get("__prompt_prefix", "")), String(base["prompt"])
+		)
+		_erase_internal_request_fields(base)
 		return {
 			"ok": true,
 			"requests": [base],
 			"result_count": maxi(1, int(base.get("batch", 1))),
+			"provenance_inputs": provenance_inputs,
 		}
 	var descriptor: Dictionary = ProviderService.get_model_descriptor(
 		provider_id, String(base.get("model_id", ""))
@@ -602,21 +636,27 @@ func _requests_for_graph(
 	for raw_row in rows_value:
 		if not (raw_row is Dictionary) or not bool(raw_row.get("enabled", true)):
 			continue
-		if not retry_row_ids.is_empty() and not retry_row_ids.has(String(raw_row.get("id", ""))):
-			continue
 		var remaining := maxi(1, int(raw_row.get("count", 1)))
 		result_count += remaining
 		while remaining > 0:
 			var request: Dictionary = base.duplicate(true)
-			request.erase("__source_rows")
-			request["prompt"] = String(raw_row.get("text", ""))
+			request["prompt"] = _prefixed_prompt(
+				String(base.get("__prompt_prefix", "")), String(raw_row.get("text", ""))
+			)
 			request["batch"] = mini(remaining, max_batch)
-			request["source_row_id"] = String(raw_row.get("id", ""))
+			request["request_id"] = IdUtil.uuid_v4()
+			request["idempotency_key"] = request["request_id"]
+			_erase_internal_request_fields(request)
 			requests.append(request)
 			remaining -= int(request["batch"])
 	if requests.is_empty():
 		return {"ok": false, "error": Strings.text("STATUS_OBJECT_ROWS_EMPTY"), "requests": []}
-	return {"ok": true, "requests": requests, "result_count": result_count}
+	return {
+		"ok": true,
+		"requests": requests,
+		"result_count": result_count,
+		"provenance_inputs": provenance_inputs,
+	}
 
 
 func _add_reference_inputs(request: Dictionary, graph: PFGraph, generate_node_id: String) -> void:
@@ -624,7 +664,7 @@ func _add_reference_inputs(request: Dictionary, graph: PFGraph, generate_node_id
 	for edge in graph.edges:
 		var from_data: Array = edge.get("from", ["", ""])
 		var to_data: Array = edge.get("to", ["", ""])
-		if String(to_data[0]) != generate_node_id or String(to_data[1]) != "image":
+		if String(to_data[0]) != generate_node_id or String(to_data[1]) != "references":
 			continue
 		var source: PFNode = graph.get_node(String(from_data[0]))
 		if source == null:
@@ -657,11 +697,8 @@ func _add_reference_inputs(request: Dictionary, graph: PFGraph, generate_node_id
 	if not images.is_empty():
 		request["mode"] = "img2img"
 		request["ref_images"] = images
-		request["reference_asset_ids"] = asset_ids
-		request["reference_content_sha256s"] = hashes
-		request["ref_image"] = images[0]
-		request["reference_asset_id"] = asset_ids[0]
-		request["reference_content_sha256"] = hashes[0]
+		request["__reference_asset_ids"] = asset_ids
+		request["__reference_content_sha256s"] = hashes
 
 
 func _provider_id_for_graph(graph: PFGraph, generate_node_id: String) -> String:
@@ -698,14 +735,32 @@ func _direct_source_node_ids(graph: PFGraph, target_node_id: String) -> Array[St
 
 func _request_reference_images(request: Dictionary) -> Array:
 	var value: Variant = request.get("ref_images", [])
-	if value is Array:
-		return value
-	return [request["ref_image"]] if request.get("ref_image") is Image else []
+	return value if value is Array else []
+
+
+func _provider_output_size(descriptor: Dictionary, target_width: int, target_height: int) -> Array:
+	var capabilities: Dictionary = descriptor.get("capabilities", {})
+	if bool(capabilities.get("native_pixel", false)):
+		return [target_width, target_height]
+	var sizes: Array = capabilities.get("provider_output_sizes", [])
+	return Array(sizes[0]).duplicate() if not sizes.is_empty() else [target_width, target_height]
+
+
+func _prefixed_prompt(prefix: String, prompt: String) -> String:
+	if prefix.is_empty():
+		return prompt
+	return prefix if prompt.is_empty() else "%s, %s" % [prefix, prompt]
+
+
+func _erase_internal_request_fields(request: Dictionary) -> void:
+	for raw_key in request.keys():
+		if String(raw_key).begins_with("__"):
+			request.erase(raw_key)
 
 
 func _add_canvas_items(graph: PFGraph, asset_ids: Array, anchor: Vector2) -> Array:
 	var items := []
-	for node_id in ["objects", "size", "generate"]:
+	for node_id in ["objects", "prompt_preset", "generate"]:
 		var node_item: Node = _canvas._add_graph_node_card(
 			graph.id, node_id, anchor + _node_position(graph, node_id), "", false
 		)
@@ -746,8 +801,3 @@ func _node_position(graph: PFGraph, node_id: String) -> Vector2:
 	var node_data: Dictionary = graph.nodes.get(node_id, {})
 	var raw_position: Variant = node_data.get("position", [0, 0])
 	return Vector2(float(raw_position[0]), float(raw_position[1])).round()
-
-
-func _project_style_preset() -> Dictionary:
-	var style_data: Variant = ProjectService.current_project.manifest.get("style_preset", {})
-	return style_data if style_data is Dictionary else {}

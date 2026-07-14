@@ -5,31 +5,32 @@ const FileIO := preload("res://infra/file_io.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
+const PixelCleanupNode := preload("res://core/graph/nodes/pixel_cleanup_node.gd")
 
 const SCHEMA := "pixelforge.workflow-template"
-const VERSION := 1
+const VERSION := 2
 const STORAGE_DIR := "user://workflow_templates"
 const PARAM_WHITELIST := {
 	"text_prompt": ["text"],
-	"object_list": ["items", "rows"],
-	"style_preset": ["preset_ref", "preset"],
+	"object_list": ["rows"],
+	"prompt_preset": ["preset"],
 	"image_input": ["asset_id"],
 	"reference_set": ["asset_ids"],
-	"size_spec": ["width", "height", "per_subject"],
-	"ai_generate": ["provider_id", "model_id", "batch_size", "seed"],
+	"ai_generate": [
+		"provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"
+	],
+	"pixel_cleanup": ["preset_id", "settings"],
 	"batch": ["label"],
 }
 const TRANSIENT_PARAMS := {
 	"batch":
 	[
-		"asset_ids",
-		"review_state",
-		"review_filter",
-		"focus_asset_id",
-		"compare_asset_ids",
-		"run_state",
-		"run_error",
-		"expected_count",
+		"source_node_id",
+		"source_run_id",
+		"role",
+		"input_snapshots",
+		"request_records",
+		"result_slots",
 	]
 }
 const SENSITIVE_FRAGMENTS := [
@@ -321,7 +322,7 @@ static func validate_template(template: Dictionary) -> Dictionary:
 		):
 			return _failure("external_template_edge", JSON.stringify(edge))
 	var graph_data := {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "template_validation",
 		"name": "Template validation",
 		"nodes": template.get("nodes", []),
@@ -335,33 +336,41 @@ static func validate_template(template: Dictionary) -> Dictionary:
 
 static func builtin_templates() -> Array[Dictionary]:
 	return [
-		_builtin_text_batch(),
+		_builtin_basic_generation(),
+		_builtin_object_batch(),
 		_builtin_reference_continue(),
 		_builtin_generate_process(),
 	]
 
 
-static func _builtin_text_batch() -> Dictionary:
+static func _builtin_basic_generation() -> Dictionary:
 	return _builtin(
-		"builtin-text-batch",
-		"Text batch generation",
-		"Generate selected structured prompts into a result batch.",
+		"builtin-basic-generation",
+		"Basic generation",
+		"Enter a prompt, then generate an Output.",
 		[
-			_node("objects", "object_list", {"items": "small tower\nwooden crate"}, [40, 80]),
-			_node("size", "size_spec", {"width": 64, "height": 64, "per_subject": 1}, [360, 80]),
-			_node(
-				"generate",
-				"ai_generate",
-				{"provider_id": "mock", "model_id": "mock-image-v1", "batch_size": 1, "seed": 1},
-				[660, 80]
-			),
-			_node("batch", "batch", {"label": "Candidates"}, [1000, 80]),
+			_node("prompt", "text_prompt", {"text": ""}, [40, 80]),
+			_node("generate", "ai_generate", _generate_params(), [400, 80]),
 		],
+		[_edge("prompt", "prompt", "generate", "prompt")]
+	)
+
+
+static func _builtin_object_batch() -> Dictionary:
+	return _builtin(
+		"builtin-object-batch",
+		"Object batch generation",
+		"Generate one ordered batch from structured rows.",
 		[
-			_edge("objects", "items", "generate", "items"),
-			_edge("size", "spec", "generate", "spec"),
-			_edge("generate", "images", "batch", "in"),
-		]
+			_node(
+				"objects",
+				"object_list",
+				{"rows": [{"id": "tower", "text": "small tower", "count": 1, "enabled": true}]},
+				[40, 80]
+			),
+			_node("generate", "ai_generate", _generate_params(), [400, 80]),
+		],
+		[_edge("objects", "subjects", "generate", "subjects")]
 	)
 
 
@@ -371,33 +380,49 @@ static func _builtin_reference_continue() -> Dictionary:
 		"Reference continuation",
 		"Fill a reference slot and continue generation.",
 		[
-			_node("prompt", "text_prompt", {"text": "continue this character"}, [40, 80]),
+			_node("prompt", "text_prompt", {"text": ""}, [40, 80]),
 			_node("reference", "image_input", {"asset_id": ""}, [40, 300]),
-			_node("size", "size_spec", {"width": 64, "height": 64, "per_subject": 1}, [360, 80]),
-			_node(
-				"generate",
-				"ai_generate",
-				{"provider_id": "mock", "model_id": "mock-image-v1", "batch_size": 1, "seed": 2},
-				[660, 80]
-			),
-			_node("batch", "batch", {"label": "Continuation"}, [1000, 80]),
+			_node("generate", "ai_generate", _generate_params(), [400, 80]),
 		],
 		[
-			_edge("prompt", "text", "generate", "text"),
-			_edge("reference", "image", "generate", "image"),
-			_edge("size", "spec", "generate", "spec"),
-			_edge("generate", "images", "batch", "in"),
+			_edge("prompt", "prompt", "generate", "prompt"),
+			_edge("reference", "assets", "generate", "references"),
 		]
 	)
 
 
 static func _builtin_generate_process() -> Dictionary:
-	var result := _builtin_text_batch()
-	result["id"] = "builtin-generate-process"
-	result["name"] = "Generate and process"
-	result["description"] = "Generate a batch ready for cleanup and export."
-	result["nodes"][3]["params"]["label"] = "Process and export"
-	return result
+	return _builtin(
+		"builtin-generate-process",
+		"Generate and clean",
+		"Generate first, then connect its Output and start cleanup explicitly.",
+		[
+			_node("prompt", "text_prompt", {"text": ""}, [40, 80]),
+			_node("generate", "ai_generate", _generate_params(), [400, 80]),
+			_node(
+				"cleanup",
+				"pixel_cleanup",
+				{
+					"preset_id": "cleanup-16bit-db32",
+					"settings": PixelCleanupNode.DEFAULT_SETTINGS.duplicate(true),
+				},
+				[800, 300]
+			),
+		],
+		[_edge("prompt", "prompt", "generate", "prompt")]
+	)
+
+
+static func _generate_params() -> Dictionary:
+	return {
+		"provider_id": "openai_image",
+		"model_id": "gpt-image-2",
+		"target_width": 64,
+		"target_height": 64,
+		"batch_size": 1,
+		"seed": -1,
+		"extra": {"quality": "low"},
+	}
 
 
 static func _builtin(
@@ -414,6 +439,7 @@ static func _builtin(
 		"edges": edges,
 		"frame": {"label": name, "position": [0, 0], "size": [1320, 540], "color": "4f6f8fff"},
 		"requirements": _requirements(nodes),
+		"palette_requirements": [],
 		"builtin": true,
 	}
 
@@ -467,41 +493,7 @@ static func _sanitize_node(node: Dictionary) -> Dictionary:
 		sanitized["asset_ids"] = []
 	elif node_type == "batch":
 		sanitized = {"label": String(params.get("label", "Results"))}
-	elif node_type == "style_preset":
-		var style_issue := _validate_style_params(sanitized)
-		if not style_issue.is_empty():
-			return _failure("invalid_style_preset", style_issue)
 	return {"ok": true, "params": sanitized}
-
-
-static func _validate_style_params(params: Dictionary) -> String:
-	if String(params.get("preset_ref", "embedded")) != "embedded":
-		return "preset_ref"
-	var value: Variant = params.get("preset", null)
-	if not (value is Dictionary):
-		return "preset"
-	var preset: Dictionary = value
-	for key in ["style_version", "id", "name", "resolution_tier", "base_size", "palette"]:
-		if not preset.has(key):
-			return String(key)
-	if int(preset.get("style_version", 0)) != 1 or int(preset.get("base_size", 0)) <= 0:
-		return "version_or_size"
-	var palette_value: Variant = preset.get("palette", null)
-	if not (palette_value is Dictionary):
-		return "palette"
-	var palette: Dictionary = palette_value
-	var colors_value: Variant = palette.get("colors", [])
-	if not (colors_value is Array):
-		return "palette.colors"
-	if String(palette.get("ref", "")).is_empty() and colors_value.size() < 2:
-		return "palette.ref_or_colors"
-	if colors_value.size() > 256:
-		return "palette.colors"
-	for color in colors_value:
-		var text := String(color).trim_prefix("#")
-		if text.length() not in [6, 8] or not text.is_valid_hex_number():
-			return "palette.colors"
-	return ""
 
 
 static func _requirements(nodes: Array) -> Dictionary:

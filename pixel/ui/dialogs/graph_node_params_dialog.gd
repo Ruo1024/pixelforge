@@ -9,6 +9,7 @@ signal asset_import_requested(graph_id: String, node_id: String, param_key: Stri
 
 const Strings := preload("res://ui/shell/strings.gd")
 const AssetRefFieldScript := preload("res://ui/widgets/asset_ref_field.gd")
+const SchemaTextResolverScript := preload("res://services/schema_text_resolver.gd")
 
 const DIALOG_WIDTH := 480
 const DIALOG_HEIGHT := 420
@@ -194,16 +195,15 @@ func _set_control_value(control: Control, value: Variant) -> void:
 
 
 func _label_text(schema: Dictionary) -> String:
-	var label_key := String(schema.get("label_key", ""))
-	var fallback := Strings.GRAPH_PARAM_UNKNOWN_FORMAT % String(schema.get("key", "")).capitalize()
-	return Strings.text(label_key, fallback) if not label_key.is_empty() else fallback
+	return SchemaTextResolverScript.resolve(schema, "label_key")
 
 
 func _localized_node_name(node: PFNode) -> String:
 	var keys := {
 		"object_list": "NODE_OBJECT_LIST",
 		"image_input": "NODE_IMAGE_INPUT",
-		"size_spec": "NODE_SIZE_SPEC",
+		"prompt_preset": "NODE_PROMPT_PRESET",
+		"pixel_cleanup": "NODE_PIXEL_CLEANUP",
 		"ai_generate": "NODE_AI_GENERATE",
 		"batch": "NODE_BATCH",
 	}
