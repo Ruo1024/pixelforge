@@ -16,6 +16,7 @@ const ProviderResultMapperScript := preload("res://services/provider_result_mapp
 const ProviderRunProgressScript := preload("res://services/provider_run_progress.gd")
 const OutputAutoPlacementScript := preload("res://services/output_auto_placement.gd")
 const CardContractScript := preload("res://ui/canvas/canvas_card_contract.gd")
+const MonotonicClockScript := preload("res://infra/monotonic_clock.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 
 var _canvas: Control = null
@@ -41,6 +42,9 @@ func setup(
 	_cost_label = cost_label
 	_provider_settings_dialog = provider_settings_dialog
 	_coordinator = GenerationRunCoordinatorScript.new()
+	var clock: RefCounted = MonotonicClockScript.new()
+	_coordinator.configure_clock(clock)
+	_canvas.configure_run_edge_renderer(_coordinator, clock)
 	_budget_dialog = ConfirmationDialog.new()
 	_budget_dialog.name = "ProviderBudgetDialog"
 	_budget_dialog.title = Strings.DIALOG_PROVIDER_BUDGET_TITLE
