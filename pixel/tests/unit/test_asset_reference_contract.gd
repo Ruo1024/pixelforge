@@ -27,21 +27,36 @@ func test_live_references_block_delete_but_history_only_allows_it() -> void:
 	assert_eq(locations[0]["strength"], "history")
 
 
-func test_graph_batch_board_animation_and_transition_batch_are_live() -> void:
+func test_graph_slots_sprite_board_and_animation_are_live() -> void:
 	var image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
 	var ids := []
 	for index in range(5):
 		ids.append(AssetLibrary.register_image(image, "asset_%d" % index))
 	ProjectService.current_project.canvas["items"] = [
-		{"id": "legacy", "type": "batch_card", "asset_ids": [ids[0]], "position": [0, 0]}
+		{"id": "sprite", "type": "sprite", "asset_id": ids[0], "position": [0, 0]}
 	]
 	ProjectService.current_project.graphs["graph"] = {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "graph",
 		"nodes":
 		[
 			{"id": "reference", "type": "image_input", "params": {"asset_id": ids[1]}},
-			{"id": "batch", "type": "batch", "params": {"asset_ids": [ids[2]]}},
+			{
+				"id": "batch",
+				"type": "batch",
+				"params":
+				{
+					"label": "Output",
+					"source_node_id": "source",
+					"source_run_id": "run-live",
+					"role": "current",
+					"input_snapshots": {},
+					"request_records": [],
+					"result_slots": [
+						{"status": "succeeded", "detached": false, "asset_id": ids[2]}
+					],
+				},
+			},
 		],
 		"edges": [],
 	}
@@ -58,7 +73,7 @@ func test_reference_set_is_live_and_plural_provenance_is_history_in_order() -> v
 	var first_id: String = AssetLibrary.register_image(image, "first")
 	var second_id: String = AssetLibrary.register_image(image, "second")
 	ProjectService.current_project.graphs["graph"] = {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "graph",
 		"nodes":
 		[
@@ -71,7 +86,15 @@ func test_reference_set_is_live_and_plural_provenance_is_history_in_order() -> v
 		"edges": [],
 	}
 	AssetLibrary.register_image(
-		image, "derived", {"provenance": {"reference_asset_ids": [first_id, second_id]}}
+		image,
+		"derived",
+		{
+			"provenance":
+			{
+				"generation_snapshot":
+				{"reference_asset_ids": [first_id, second_id]}
+			}
+		}
 	)
 
 	var first_locations := ProjectService.get_asset_reference_locations(first_id)

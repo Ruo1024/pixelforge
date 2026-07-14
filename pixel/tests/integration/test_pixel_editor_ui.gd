@@ -4,9 +4,9 @@ const MainScript := preload("res://ui/shell/main.gd")
 const Drawing := preload("res://core/editor/pixel_drawing.gd")
 
 
-func test_canvas_editor_entry_save_as_updates_batch_and_provenance() -> void:
+func test_default_size_and_palette_are_module_owned_and_save_keeps_provenance() -> void:
 	ProjectService.new_project("Editor UI")
-	ProjectService.current_project.manifest["style_preset"] = {"palette": {"ref": "pico8"}}
+	assert_false(ProjectService.current_project.manifest.has("style_preset"))
 	var image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
 	image.fill(Color.BLACK)
 	var source_id := AssetLibrary.register_image(image, "AI Source", {"origin": "generated"})

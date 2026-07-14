@@ -11,7 +11,6 @@ func test_frame_plan_includes_external_dependencies_and_excludes_unrelated_branc
 	assert_eq(plan["result_count"], 9)
 	assert_eq(plan["request_count"], 2)
 	assert_eq(plan["known_cost"], 0.0)
-	assert_has(plan["included_node_ids"], "shared-size")
 	assert_has(plan["included_node_ids"], "outside-prompt")
 	assert_does_not_have(plan["included_node_ids"], "unrelated-bad")
 
@@ -28,22 +27,25 @@ func test_frame_without_valid_generate_target_is_rejected_without_scope() -> voi
 	assert_eq(plan["target_generate_ids"], [])
 
 
-func test_frame_target_missing_required_size_is_reported_but_other_target_runs() -> void:
+func test_frame_target_missing_required_prompt_is_reported_but_other_target_runs() -> void:
 	var graph := _graph()
 	graph["edges"] = graph["edges"].filter(
 		func(edge: Dictionary) -> bool:
-			return not (edge["from"][0] == "shared-size" and edge["to"][0] == "generate-b")
+			return not (
+				edge["to"][0] == "generate-b"
+				and edge["from"][0] in ["outside-prompt", "legacy"]
+			)
 	)
 	var plan := Planner.plan(graph, _canvas(), "frame-stage")
 
 	assert_true(plan["ok"])
 	assert_eq(plan["target_generate_ids"], ["generate-a"])
-	assert_eq(plan["invalid_targets"], [{"node_id": "generate-b", "reason": "missing_spec"}])
+	assert_eq(plan["invalid_targets"], [{"node_id": "generate-b", "reason": "missing_prompt"}])
 
 
 func _graph() -> Dictionary:
 	return {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "graph-main",
 		"name": "Planner",
 		"nodes":
@@ -54,7 +56,6 @@ func _graph() -> Dictionary:
 				"position": [0, 0],
 				"params":
 				{
-					"items": "tower\nbarrel",
 					"rows":
 					[
 						{"id": "a", "text": "tower", "count": 2, "enabled": true},
@@ -67,7 +68,13 @@ func _graph() -> Dictionary:
 				"id": "legacy",
 				"type": "object_list",
 				"position": [0, 200],
-				"params": {"items": "tree\nrock"}
+				"params":
+				{
+					"rows": [
+						{"id": "tree", "text": "tree", "count": 2, "enabled": true},
+						{"id": "rock", "text": "rock", "count": 2, "enabled": true},
+					]
+				}
 			},
 			{
 				"id": "outside-prompt",
@@ -76,24 +83,26 @@ func _graph() -> Dictionary:
 				"params": {"text": "shared"}
 			},
 			{
-				"id": "shared-size",
-				"type": "size_spec",
-				"position": [300, 0],
-				"params": {"width": 32, "height": 32, "per_subject": 1}
-			},
-			{
 				"id": "generate-a",
 				"type": "ai_generate",
 				"position": [600, 0],
 				"params":
-				{"provider_id": "mock", "model_id": "pixel_mock_v1", "batch_size": 7, "seed": 1}
+				{
+					"provider_id": "mock", "model_id": "pixel_mock_v1",
+					"target_width": 32, "target_height": 32,
+					"batch_size": 7, "seed": 1, "extra": {}
+				}
 			},
 			{
 				"id": "generate-b",
 				"type": "ai_generate",
 				"position": [600, 240],
 				"params":
-				{"provider_id": "mock", "model_id": "pixel_mock_v1", "batch_size": 2, "seed": 2}
+				{
+					"provider_id": "mock", "model_id": "pixel_mock_v1",
+					"target_width": 32, "target_height": 32,
+					"batch_size": 2, "seed": 2, "extra": {}
+				}
 			},
 			{
 				"id": "unrelated-bad",
@@ -104,11 +113,10 @@ func _graph() -> Dictionary:
 		],
 		"edges":
 		[
-			{"from": ["rows", "items"], "to": ["generate-a", "items"]},
-			{"from": ["legacy", "items"], "to": ["generate-b", "items"]},
-			{"from": ["outside-prompt", "text"], "to": ["generate-a", "text"]},
-			{"from": ["shared-size", "spec"], "to": ["generate-a", "spec"]},
-			{"from": ["shared-size", "spec"], "to": ["generate-b", "spec"]},
+			{"from": ["rows", "subjects"], "to": ["generate-a", "subjects"]},
+			{"from": ["legacy", "subjects"], "to": ["generate-b", "subjects"]},
+			{"from": ["outside-prompt", "prompt"], "to": ["generate-a", "prompt"]},
+			{"from": ["outside-prompt", "prompt"], "to": ["generate-b", "prompt"]},
 		],
 	}
 

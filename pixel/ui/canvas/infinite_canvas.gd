@@ -498,6 +498,8 @@ func load_canvas_data(canvas_data: Dictionary) -> void:
 				_unrendered_items.append(Dictionary(item_data).duplicate(true))
 				continue
 			_add_sprite_direct(item_data, image)
+		elif item_type == "batch_card":
+			_add_batch_direct(item_data)
 		elif item_type == "node" and GraphItemBridge.is_graph_batch_node_data(item_data):
 			_add_batch_direct(item_data)
 		elif item_type == "node":
@@ -536,8 +538,7 @@ func export_canvas_data() -> Dictionary:
 		if node.get_script() == CanvasItemSpriteScript:
 			items.append(node.to_canvas_data())
 		elif node.get_script() == CanvasBatchCardScript:
-			if node.has_graph_binding():
-				items.append(node.to_canvas_data())
+			items.append(node.to_canvas_data())
 		elif node.get_script() == CanvasNodeCardScript:
 			items.append(node.to_canvas_data())
 		elif node.get_script() == CanvasItemFrameScript:

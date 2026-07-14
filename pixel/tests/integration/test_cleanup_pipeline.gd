@@ -7,7 +7,7 @@ const FixtureGenerator := preload("res://tests/fixtures/generators/pixel_fixture
 
 
 func test_default_cleanup_pipeline_returns_true_pixel_asset() -> void:
-	var original := FixtureGenerator.make_base_sprite(Vector2i(16, 16), 0)
+	var original := FixtureGenerator.make_base_sprite(Vector2i(32, 32), 0)
 	var pseudo := FixtureGenerator.scale_nearest(original, 4)
 
 	var result := (
@@ -27,7 +27,7 @@ func test_default_cleanup_pipeline_returns_true_pixel_asset() -> void:
 
 	assert_eq(output.get_size(), original.get_size())
 	assert_lte(Quantizer.count_colors(output), 8)
-	assert_eq(report["output_size"], [16, 16])
+	assert_eq(report["output_size"], [32, 32])
 	assert_gte(float(report["detect"]["confidence"]), 1.0)
 
 

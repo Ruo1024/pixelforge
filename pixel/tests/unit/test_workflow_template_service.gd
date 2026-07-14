@@ -166,17 +166,27 @@ func _graph_fixture() -> Dictionary:
 				"params":
 				{
 					"label": "Results",
-					"asset_ids": ["generated-output"],
-					"review_state": {"generated-output": "keep"}
+					"source_node_id": "generate",
+					"source_run_id": "run-template",
+					"role": "current",
+					"input_snapshots": {},
+					"request_records": [],
+					"result_slots": [
+						{
+							"status": "succeeded",
+							"detached": false,
+							"asset_id": "generated-output",
+						}
+					],
 				}
 			},
 		],
 		"edges":
 		[
-			{"from": ["prompt", "text"], "to": ["generate", "prompt"]},
+			{"from": ["prompt", "prompt"], "to": ["generate", "prompt"]},
 			{"from": ["reference", "assets"], "to": ["generate", "references"]},
 			{"from": ["generate", "assets"], "to": ["batch", "in"]},
-			{"from": ["outside", "text"], "to": ["generate", "prompt"]},
+			{"from": ["outside", "prompt"], "to": ["generate", "prompt"]},
 		],
 	}
 

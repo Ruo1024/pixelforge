@@ -13,8 +13,8 @@ func test_graph_card_defaults_are_contract_values_and_survive_lod() -> void:
 	var expectations := {
 		"text_prompt": Vector2(360, 300),
 		"object_list": Vector2(400, 520),
-		"style_preset": Vector2(320, 280),
-		"size_spec": Vector2(320, 260),
+		"prompt_preset": Vector2(320, 280),
+		"pixel_cleanup": Vector2(400, 520),
 		"image_input": Vector2(320, 380),
 		"reference_set": Vector2(400, 480),
 		"ai_generate": Vector2(400, 520),
@@ -31,7 +31,7 @@ func test_graph_card_defaults_are_contract_values_and_survive_lod() -> void:
 
 func test_graph_ports_follow_edit_lod_and_keep_a_forty_pixel_hit_target() -> void:
 	var card := _card("text_prompt", {})
-	var anchor: Vector2 = card.get_graph_port_anchor("text", false)
+	var anchor: Vector2 = card.get_graph_port_anchor("prompt", false)
 	for zoom in [0.1, 0.25, 0.5]:
 		card.set_lod_camera_zoom(zoom)
 		assert_true(card._graph_port_at_world(anchor).is_empty(), "hidden at %s" % zoom)
@@ -42,7 +42,7 @@ func test_graph_ports_follow_edit_lod_and_keep_a_forty_pixel_hit_target() -> voi
 		card.set_lod_camera_zoom(zoom)
 		var hit_radius: float = 20.0 / float(zoom)
 		assert_eq(
-			card._graph_port_at_world(anchor + Vector2(hit_radius * 0.99, 0))["port_name"], "text"
+			card._graph_port_at_world(anchor + Vector2(hit_radius * 0.99, 0))["port_name"], "prompt"
 		)
 		assert_true(card._graph_port_at_world(anchor + Vector2(hit_radius * 1.01, 0)).is_empty())
 		assert_true(card.get_node("CollapseButton").visible)
@@ -165,7 +165,7 @@ func test_missing_and_invalid_card_fields_use_safe_contract_defaults() -> void:
 
 
 func test_rename_and_resize_each_create_one_undo_without_changing_graph() -> void:
-	var graph := _graph_data("text_prompt")
+	var graph := _graph_data("text_prompt", {"text": ""})
 	ProjectService.set_graph_data("graph_main", graph, false)
 	var canvas: Control = CanvasScript.new()
 	canvas.size = Vector2(900, 700)
@@ -194,7 +194,7 @@ func test_rename_and_resize_each_create_one_undo_without_changing_graph() -> voi
 
 
 func test_title_and_size_roundtrip_through_project_without_graph_fields() -> void:
-	var graph := _graph_data("text_prompt")
+	var graph := _graph_data("text_prompt", {"text": ""})
 	ProjectService.set_graph_data("graph_main", graph, false)
 	(
 		ProjectService
@@ -284,11 +284,11 @@ func _card(node_type: String, fields: Dictionary, params: Dictionary = {}) -> No
 
 func _graph_data(node_type: String, params: Dictionary = {}) -> Dictionary:
 	return {
-		"graph_version": 1,
+		"graph_version": 2,
 		"id": "graph_main",
 		"name": "Cards",
 		"nodes":
-		[{"id": "node", "type": node_type, "position": [0, 0], "params": params.duplicate(true)}],
+		[{"id": "node", "type": node_type, "params": params.duplicate(true)}],
 		"edges": [],
 	}
 

@@ -114,14 +114,24 @@ func setup_from_data(data: Dictionary) -> void:
 		if not graph_node_data.is_empty()
 		else _string_array(data.get("asset_ids", []))
 	)
-	run_state = _display_state_from_slots(graph_params.get("result_slots", []))
-	selected_asset_ids = []
-	review_states = {}
-	review_filter = FILTER_ALL
-	focus_asset_id = ""
-	compare_asset_ids = []
-	compare_mode = COMPARE_CURRENT
-	review_layout = LAYOUT_CONTACT
+	if not graph_node_data.is_empty():
+		run_state = _display_state_from_slots(graph_params.get("result_slots", []))
+		selected_asset_ids = []
+		review_states = {}
+		review_filter = FILTER_ALL
+		focus_asset_id = ""
+		compare_asset_ids = []
+		compare_mode = COMPARE_CURRENT
+		review_layout = LAYOUT_CONTACT
+	else:
+		run_state = Dictionary(data.get("run_state", {})).duplicate(true)
+		selected_asset_ids = _string_array(data.get("selected_asset_ids", []))
+		review_states = Dictionary(data.get("review_states", {})).duplicate(true)
+		review_filter = _normalize_review_filter(String(data.get("review_filter", FILTER_ALL)))
+		focus_asset_id = String(data.get("focus_asset_id", ""))
+		compare_asset_ids = _string_array(data.get("compare_asset_ids", []))
+		compare_mode = _normalize_compare_mode(String(data.get("compare_mode", COMPARE_CURRENT)))
+		review_layout = _normalize_review_layout(String(data.get("review_layout", LAYOUT_CONTACT)))
 	collapsed = bool(data.get("collapsed", false))
 	frame_id = data.get("frame_id", null)
 	_prune_selected_to_visible()
