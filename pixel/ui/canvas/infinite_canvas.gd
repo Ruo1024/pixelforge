@@ -1,4 +1,4 @@
-# gdlint: disable=max-file-lines
+# gdlint: disable=max-file-lines,max-public-methods
 class_name PFInfiniteCanvas
 extends Control
 
@@ -37,6 +37,8 @@ const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
 const CanvasItemFrameScript := preload("res://ui/canvas/canvas_item_frame.gd")
 const GraphEdgeRenderer := preload("res://ui/canvas/canvas_graph_edge_renderer.gd")
 const GraphEdgeInteraction := preload("res://ui/canvas/canvas_graph_edge_interaction.gd")
+const RunEdgePresenter := preload("res://ui/canvas/canvas_run_edge_presenter.gd")
+const MonotonicClock := preload("res://services/monotonic_clock.gd")
 const GraphItemBridge := preload("res://ui/canvas/canvas_graph_item_bridge.gd")
 const GraphClipboard := preload("res://core/graph/canvas_graph_clipboard.gd")
 const HitPolicy := preload("res://ui/canvas/canvas_hit_policy.gd")
@@ -82,6 +84,8 @@ var _selected_graph_edge := {}
 var _graph_clipboard := {}
 var _graph_edge_preview_signature := ""
 var _graph_edges_visible := true
+var _run_edge_presenter: Variant = null
+var _run_edges_were_ticking := false
 var _resize_drag := {}
 
 
@@ -113,6 +117,11 @@ func _process(delta: float) -> void:
 		_cull_elapsed = 0.0
 		_update_item_visibility()
 	_cleanup_preview.update_alt_state()
+	if _run_edge_presenter != null:
+		var run_edges_tick: bool = bool(_run_edge_presenter.needs_animation_tick())
+		if run_edges_tick or _run_edges_were_ticking:
+			queue_redraw()
+		_run_edges_were_ticking = run_edges_tick
 	if tool_manager != null and tool_manager.needs_redraw():
 		queue_redraw()
 
@@ -206,7 +215,9 @@ func _draw() -> void:
 			EDGE_COLOR,
 			_selected_graph_edge,
 			_graph_edge_drag,
-			_graph_edge_drag_world
+			_graph_edge_drag_world,
+			_run_edge_presenter,
+			int(round(camera_zoom * 100.0))
 		)
 	elif not _graph_edge_drag.is_empty():
 		GraphEdgeInteraction.draw_preview(
@@ -217,6 +228,21 @@ func _draw() -> void:
 
 	if tool_manager != null:
 		tool_manager.draw_overlay(self, _get_active_tool_target())
+
+
+func configure_run_edge_renderer(coordinator: Variant, clock: RefCounted = null) -> void:
+	var selected_clock: RefCounted = clock if clock != null else MonotonicClock.new()
+	if (
+		_run_edge_presenter != null
+		and _run_edge_presenter.visual_changed.is_connected(queue_redraw)
+	):
+		_run_edge_presenter.visual_changed.disconnect(queue_redraw)
+		_run_edge_presenter.bind_coordinator(null)
+	_run_edge_presenter = RunEdgePresenter.new(selected_clock)
+	_run_edge_presenter.visual_changed.connect(queue_redraw)
+	_run_edge_presenter.bind_coordinator(coordinator)
+	_run_edges_were_ticking = false
+	queue_redraw()
 
 
 func add_sprite_item(

@@ -260,9 +260,20 @@ static func draw_edges(
 	color: Color,
 	selected_edge: Dictionary,
 	drag_state: Dictionary,
-	drag_world: Vector2
+	drag_world: Vector2,
+	run_edge_presenter: Variant = null,
+	lod_percent: int = 100
 ) -> void:
-	edge_renderer.draw(canvas, items_by_id, batch_script, node_script, color, selected_edge)
+	edge_renderer.draw(
+		canvas,
+		items_by_id,
+		batch_script,
+		node_script,
+		color,
+		selected_edge,
+		run_edge_presenter,
+		lod_percent
+	)
 	if not drag_state.is_empty():
 		draw_preview(canvas, edge_renderer, drag_state, drag_world)
 
