@@ -50,8 +50,8 @@ pixelforge-plan/
 Beta 0.1–0.5 工程历史（整体人工未签收）
     └─> Beta 0.6 beta.1 已否决
           └─> beta.2 自适应壳工程基线已获授权集成到本地 main
-                └─> Beta 0.7 B7-0 至 B7-4 已全绿提交（当前唯一 E 正执行 B7-5）
-                      └─> B7-8 工程状态报告后停止
+                └─> Beta 0.7 B7-0 至 B7-8 已在本地 main 工程完成
+                      └─> 停止于工程状态报告；B7-9、候选与发布均未执行
 ```
 
 账号、权限、协作和版本历史永久排除；本地模型/ComfyUI 无限期延后。Beta 0.7 Provider v2 只覆盖 OpenAI Image 与 RetroDiffusion。M8 仍为远期研究，不进入当前 Beta 主线。

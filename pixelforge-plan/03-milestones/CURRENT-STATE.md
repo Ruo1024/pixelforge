@@ -54,9 +54,21 @@
   无问题。三张受保护 fixture 按固定 hash 临时恢复，测试后立即删除，未暂存 raster。
 - B7-4 全量：114 scripts、594/594 tests、10493 assertions、1 个既有 orphan，exit 0；
   三张受保护 fixture 按固定 hash 临时恢复并在测试后删除，未暂存 raster。
-- 当前下一卡：B7-5 最终 Output 卡、滚动、选择、拆出、预览与旧临时状态移除；继续按
-  “真实红灯→最小实现→定向/相关/静态/
-  全量绿色→范围检查→分卡提交”执行，红灯不得弱化测试或带入下一卡。
+- B7-5 已完成：Graph-bound Output 卡成为唯一结果 UI，具备固定槽、内部滚动、单选、
+  预览/编辑/下载、拆出与 Undo；旧 review/filter/focus/compare、独立 batch card 和
+  `_add_batch_card` 兼容入口已移除。结果编辑保留 slot 身份与原素材，不恢复覆盖语义。
+- B7-6 已完成：Cleanup Footer 通过共享协调器进入真实 Pipeline/TaskQueue，逐项单并发、
+  失败继续、取消收敛、retry 原快照、完整 provenance/report 与每次新 Output 已连通；
+  Inspector/Output 菜单旧直接清洗和原位替换入口已退役，独立抠图/切片/描边仍保留。
+- B7-7 已完成：默认离线示例只插入 text/preset/reference/generate/cleanup 五节点，不预建
+  Output、不自动连接 cleanup、不自动执行；布局为运行时 Output 预留固定通道，插入和
+  Undo 均不碰既有画布内容。
+- B7-8 已完成并提交至 `f7b278b`：用户可见文案迁到 en/zh_CN key 目录，运行时
+  en→zh→en 切换、18 组几何矩阵、Provider/node schema key 与源代码静态守护均通过；
+  旧 Output 创建入口和旧原位处理菜单在最终回归中一并清零。
+- 最终全量：130 scripts、621/621 tests、14818 assertions、1 个既有 orphan，exit 0；
+  唯一脚本解析错误来自故意损坏插件的隔离负向测试。全量 lint、i18n catalog、UI scaling、
+  `git diff --check` 绿色；受保护 fixture 按固定 SHA 临时恢复并在测试后删除。
 
 ## Beta 0.7 固定产品边界
 
@@ -75,15 +87,15 @@
 
 - Beta 0.6 beta.1 已被项目所有者否决，只保留历史证据。
 - beta.2 自动化工程基线已集成本地 main；这不把 Beta 0.6 改写为人工通过或发布通过。
-- Beta 0.7 当前开发中，尚未工程通过、人工通过或发布通过。
+- Beta 0.7 B7-0 至 B7-8 已工程通过；尚未人工通过或发布通过。
 - 本 Goal 禁止真实付费 API、Computer Use、未许可图片、B7-9、候选构建、push、发布、
   强制改写历史和删除分支/worktree。
 
 ## 下一步
 
-1. 从 B7-5 开始依序完成至 B7-8，每卡先保存真实红灯，再全量转绿并独立提交；
-2. B7-5 完成最终 Output 卡与临时交互，不恢复任何 legacy review/focus/compare schema；
-3. B7-8 后只报告工程状态并停止，不执行 B7-9 或候选构建。
+1. 停止产品开发并把 B7-0 至 B7-8 工程结果交回 P/项目所有者；
+2. 等待项目所有者统一人工验收，不把自动化结果冒充人工签收；
+3. 未获新授权不得执行 B7-9、候选构建、push、发布或删除旧分支/worktree。
 
 ## 禁止宣称
 
