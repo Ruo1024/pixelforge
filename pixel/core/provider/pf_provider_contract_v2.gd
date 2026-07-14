@@ -249,6 +249,11 @@ static func validate_pf_error(error: Dictionary) -> Variant:
 		return _issue("invalid_error_field", "provider_id")
 	if not (error["retryable"] is bool):
 		return _issue("invalid_error_field", "retryable")
+	var retryable_codes := [
+		"rate_limited", "network", "malformed_response", "result_count_mismatch", "interrupted"
+	]
+	if bool(error["retryable"]) != retryable_codes.has(String(error["code"])):
+		return _issue("invalid_error_field", "retryable")
 	var attempts: Variant = error["attempts"]
 	if not (attempts is int) or int(attempts) < 0 or int(attempts) > 3:
 		return _issue("invalid_error_field", "attempts")
