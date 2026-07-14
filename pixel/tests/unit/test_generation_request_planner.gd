@@ -1,6 +1,7 @@
 extends "res://addons/gut/test.gd"
 
 const PLANNER_PATH := "res://services/generation_request_planner.gd"
+const ProviderContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 
 
 func test_prompt_order_and_999_limit() -> void:
@@ -9,6 +10,7 @@ func test_prompt_order_and_999_limit() -> void:
 	if planner == null:
 		return
 	var input := _planner_input()
+	input["target_height"] = 16
 	input["prefix"] = "pixel art"
 	input["prompt"] = "game prop"
 	input["rows"] = [{"id": "barrel", "text": "wooden barrel", "count": 2}]
@@ -115,6 +117,10 @@ func test_extra_exact_descriptor_shape_and_reference_boundary() -> void:
 	assert_true(result["ok"])
 	assert_eq(result["requests"][0]["mode"], "img2img")
 	assert_eq(result["requests"][0]["extra"], {"remove_bg": true, "strength": 0.8})
+	assert_null(
+		ProviderContractV2.validate_gen_request(result["requests"][0]),
+		"planner output remains the exact PFGenRequest shape",
+	)
 	assert_false(result["requests"][0].has("reference_asset_ids"))
 	assert_eq(result["slots"][0]["input_snapshot"]["reference_asset_ids"], ["asset-a"])
 	var invalid := input.duplicate(true)
