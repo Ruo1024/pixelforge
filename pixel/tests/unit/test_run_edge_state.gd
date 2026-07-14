@@ -132,25 +132,30 @@ func test_low_lod_dot_and_no_geometry_mutation() -> void:
 	if state == null:
 		return
 	state.apply_run_state("run-a", "source-a", ["edge-a"], "Running")
-	var geometry := {
-		"start": Vector2(10, 20),
-		"end": Vector2(110, 60),
-		"hit_distance": 8.0,
-		"camera": Vector2(4, 5),
-		"bounds": Rect2(0, 0, 120, 80),
-	}.duplicate(true)
+	var geometry := (
+		{
+			"start": Vector2(10, 20),
+			"end": Vector2(110, 60),
+			"hit_distance": 8.0,
+			"camera": Vector2(4, 5),
+			"bounds": Rect2(0, 0, 120, 80),
+		}
+		. duplicate(true)
+	)
 	var before := geometry.duplicate(true)
 	for lod_percent in [10, 25]:
-		var visual: Dictionary = state.visual_for_edge(
-			"run-a", "source-a", "edge-a", lod_percent
-		)
+		var visual: Dictionary = state.visual_for_edge("run-a", "source-a", "edge-a", lod_percent)
 		assert_eq(visual["render_mode"], "single_dot")
 		assert_false(visual["outer_glow"])
 	assert_eq(geometry, before)
 	var renderer: Script = load(RENDERER_PATH)
-	var points_before: PackedVector2Array = renderer._bezier_points(geometry["start"], geometry["end"])
+	var points_before: PackedVector2Array = renderer._bezier_points(
+		geometry["start"], geometry["end"]
+	)
 	state.visual_for_edge("run-a", "source-a", "edge-a")
-	var points_after: PackedVector2Array = renderer._bezier_points(geometry["start"], geometry["end"])
+	var points_after: PackedVector2Array = renderer._bezier_points(
+		geometry["start"], geometry["end"]
+	)
 	assert_eq(points_after, points_before)
 
 
