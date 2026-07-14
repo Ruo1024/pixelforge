@@ -75,6 +75,8 @@ var _cleanup_grid_scale := 4.0
 var _cleanup_grid_offset := Vector2.ZERO
 var _cleanup_preview: Variant = CanvasCleanupPreviewScript.new()
 var _is_panning := false
+var _pan_button_mask := 0
+var _space_pan_armed := false
 var _cull_elapsed := 0.0
 var _suppress_change_signal := false
 var _last_wheel_zoom_msec := -1000000
@@ -109,6 +111,8 @@ func _ready() -> void:
 
 	_update_layer_transform()
 	set_process(true)
+	get_tree().node_added.connect(_on_tree_node_added)
+	_watch_existing_popups(get_tree().root)
 
 
 func _process(delta: float) -> void:
@@ -132,12 +136,29 @@ func _notification(what: int) -> void:
 			_cleanup_grid_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		_update_layer_transform()
 		queue_redraw()
+	elif what in [NOTIFICATION_WM_WINDOW_FOCUS_OUT, NOTIFICATION_APPLICATION_FOCUS_OUT]:
+		cancel_pointer_gestures()
+	elif what == NOTIFICATION_MOUSE_EXIT and not Rect2(Vector2.ZERO, size).has_point(
+		get_local_mouse_position()
+	):
+		cancel_pointer_gestures()
+
+
+func _exit_tree() -> void:
+	cancel_pointer_gestures()
 
 
 func _gui_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB:
-		graph_quick_add_requested.emit(Vector2i(get_screen_position() + get_local_mouse_position()))
-		accept_event()
+	if event is InputEventKey:
+		var key_event := event as InputEventKey
+		if key_event.keycode == KEY_SPACE:
+			_space_pan_armed = key_event.pressed and not key_event.echo and not _text_input_has_focus()
+			accept_event()
+		elif key_event.pressed and not key_event.echo and key_event.keycode == KEY_TAB:
+			graph_quick_add_requested.emit(
+				Vector2i(get_screen_position() + get_local_mouse_position())
+			)
+			accept_event()
 	elif _tool_manager_handles(event):
 		accept_event()
 		queue_redraw()
@@ -1079,16 +1100,26 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		_handle_wheel_zoom(-1, event.position)
 		accept_event()
 	elif event.button_index == MOUSE_BUTTON_MIDDLE:
-		_is_panning = event.pressed
+		if event.pressed:
+			_begin_pan(MOUSE_BUTTON_MASK_MIDDLE)
+		elif _pan_button_mask == MOUSE_BUTTON_MASK_MIDDLE:
+			_stop_pan()
 		accept_event()
 	elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		_emit_context_request(event.position)
 		accept_event()
 	elif event.button_index == MOUSE_BUTTON_LEFT:
+		if not event.pressed and _pan_button_mask == MOUSE_BUTTON_MASK_LEFT:
+			_stop_pan()
+			accept_event()
+			return
+		if event.pressed and (_space_pan_armed or Input.is_key_pressed(KEY_SPACE)):
+			if not _text_input_has_focus():
+				_begin_pan(MOUSE_BUTTON_MASK_LEFT)
+			accept_event()
+			return
 		grab_focus()
-		if Input.is_key_pressed(KEY_SPACE):
-			_is_panning = event.pressed
-		elif event.pressed and event.double_click:
+		if event.pressed and event.double_click:
 			if (
 				not _focus_low_lod_item_at(event.position)
 				and not _reset_resize_handle_at(event.position)
@@ -1205,6 +1236,10 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		queue_redraw()
 		accept_event()
 	elif _is_panning:
+		if _pan_button_mask == 0 or (event.button_mask & _pan_button_mask) == 0:
+			_stop_pan()
+			accept_event()
+			return
 		pan_by_pixels(-event.relative)
 		accept_event()
 	elif _selection.is_dragging_items:
@@ -1217,6 +1252,56 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		_selection.update_box(event.position)
 		queue_redraw()
 		accept_event()
+
+
+func cancel_pointer_gestures() -> void:
+	_stop_pan()
+	_space_pan_armed = false
+	_graph_edge_drag = {}
+	_graph_edge_drag_world = Vector2.ZERO
+	_graph_edge_preview_signature = ""
+	if _selection.is_dragging_items:
+		_selection.stop_drag()
+	if _selection.is_box_selecting:
+		_selection.stop_box()
+	if not _resize_drag.is_empty():
+		_cancel_resize_drag()
+	queue_redraw()
+
+
+func _begin_pan(button_mask: int) -> void:
+	_is_panning = true
+	_pan_button_mask = button_mask
+
+
+func _stop_pan() -> void:
+	_is_panning = false
+	_pan_button_mask = 0
+
+
+func _text_input_has_focus() -> bool:
+	var focus_owner: Control = get_viewport().gui_get_focus_owner()
+	return focus_owner is LineEdit or focus_owner is TextEdit
+
+
+func _on_tree_node_added(node: Node) -> void:
+	if node is Window:
+		_watch_popup(node as Window)
+
+
+func _watch_existing_popups(node: Node) -> void:
+	if node is Window:
+		_watch_popup(node as Window)
+	for child in node.get_children():
+		_watch_existing_popups(child)
+
+
+func _watch_popup(window: Window) -> void:
+	if window == get_tree().root:
+		return
+	var cancel := cancel_pointer_gestures
+	if not window.about_to_popup.is_connected(cancel):
+		window.about_to_popup.connect(cancel)
 
 
 func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
