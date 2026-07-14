@@ -26,14 +26,26 @@
   `655597660e21acdf7a4d5e2bab388bdf54586875ee59921211cdc1dad2f073f4`。
 - B7-0 已完成并提交：`c476c2a` 固定八份契约、228 条 requirement manifest、旧测试
   替换台账与本地 main 文档基线；批准计划字节与固定 SHA 保持不变。
-- B7-1 已完成实现与自动化，待本卡提交：敏感 Header/URL/错误表面脱敏；生成 POST
+- B7-1 已完成并提交：`9fcac09`。敏感 Header/URL/错误表面脱敏；生成 POST
   强制单次尝试；OpenAI 安全 GET 最多三次且使用可注入 RetryScheduler；删除 Retro
   哑元生成验证，configured 状态只在用户明确首次真实生成后转 verified/invalid；Provider
   meta 改为显式白名单；en/zh_CN 同步。凭据 sentinel 确认原始 mock transport 收到，
   log/task/PFError/当前持久化表面均未收到。
 - B7-1 全量：406/406 tests、7805 assertions、1 个既有 orphan，exit 0；三张受保护
   fixture 再次按固定 hash 临时恢复并在测试后删除。i18n 与 v1 security 静态守护绿色。
-- 当前下一卡：B7-2 完整 v2 数据竖切；继续按“真实红灯→最小实现→定向/相关/静态/
+- B7-2 已完成并分片提交，最终代码收口为 `aaf3ae2`。按 `B7-DEC-OWNER-01`
+  完成 v2 hard cut：Project/Graph/Provider/Plugin/Template/Clipboard 不接受 v1，不保留
+  alias；PromptPreset 与 CleanupPreset 拆分；旧 batch UI 仅从 `result_slots` 的
+  `succeeded && !detached` 唯一投影读取。生产 Provider 目录仅暴露 OpenAI Image 与
+  RetroDiffusion，mock 仅供内部自动化。
+- B7-2 全量：98 scripts、493/493 tests、9391 assertions、1 个既有 orphan，exit 0；
+  全量 lint 274 文件无问题。三张受保护 fixture 复核固定 hash 后临时恢复，
+  测试后立即删除，无 `.import`、无 raster 暂存。日志仅含预期故障注入
+  `syntax_error` 和既有 7-resource 退出提示。
+- B7-4 的最终 GenerationRunCoordinator/history 和 B7-5 的最终 Output UI 仍待各自
+  red→green，B7-2 没有提前完成或弱化它们。
+- 当前下一卡：B7-3 Provider 请求规划、成本、并发与幂等纯后端收口；继续按
+  “真实红灯→最小实现→定向/相关/静态/
   全量绿色→范围检查→分卡提交”执行，红灯不得弱化测试或带入下一卡。
 
 ## Beta 0.7 固定产品边界
@@ -59,8 +71,8 @@
 
 ## 下一步
 
-1. 提交已全绿的 B7-1 安全切片；
-2. 依序完成 B7-2 至 B7-8，每卡独立提交且全量绿色；
+1. 从 B7-3 开始依序完成至 B7-8，每卡先保存真实红灯，再全量转绿并独立提交；
+2. B7-3 不提前实现 B7-4 协调器或 B7-5 Output UI；
 3. B7-8 后只报告工程状态并停止，不执行 B7-9 或候选构建。
 
 ## 禁止宣称
