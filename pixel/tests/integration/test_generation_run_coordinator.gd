@@ -120,6 +120,10 @@ func test_retry_run_terminal_priority_and_busy_domain_gate() -> void:
 		return
 	var params: Dictionary = _retryable_params()
 	assert_eq(coordinator.output_terminal_state(params, "run-old"), "Partial")
+	params["result_slots"][1]["status"] = "running"
+	params["result_slots"][1]["error"] = null
+	params["request_records"][1]["state"] = "running"
+	params["request_records"][1]["error"] = null
 	for forbidden in ["copy", "delete", "detach", "edit", "undo"]:
 		assert_false(coordinator.is_action_allowed(params, forbidden))
 	for allowed in ["preview", "download"]:
