@@ -10,9 +10,7 @@ var _scheduled := []
 
 func schedule_ms(delay_ms: int, callback: Callable) -> int:
 	_next_id += 1
-	_scheduled.append(
-		{"id": _next_id, "due_ms": now_ms + maxi(0, delay_ms), "callback": callback}
-	)
+	_scheduled.append({"id": _next_id, "due_ms": now_ms + maxi(0, delay_ms), "callback": callback})
 	return _next_id
 
 
@@ -38,4 +36,3 @@ func advance_ms(delta_ms: int) -> void:
 			return
 		var due: Dictionary = _scheduled.pop_at(next_index)
 		(due["callback"] as Callable).call()
-

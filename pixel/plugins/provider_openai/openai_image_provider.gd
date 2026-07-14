@@ -6,7 +6,7 @@ extends PFProvider
 
 const HttpClientScript := preload("res://infra/http_client.gd")
 const ProviderTaskV2Script := preload("res://core/provider/pf_provider_task_v2.gd")
-const CancelTaskV2Script := preload("res://services/pf_cancel_task_v2.gd")
+const CancelSettlementV2Script := preload("res://services/provider_cancel_settlement_v2.gd")
 const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 
 const PROVIDER_ID := "openai_image"
@@ -29,8 +29,8 @@ var _edit_url := EDIT_URL
 var _validation_url := VALIDATION_URL
 var _generation_tasks := {}
 var _transport_tasks := {}
-var _cancel_tasks := {}
 var _cancel_requested := {}
+var _cancel_settlement: Variant = CancelSettlementV2Script.new(PROVIDER_ID)
 
 
 func get_api_version() -> int:
@@ -176,7 +176,6 @@ func _start_generation(request: Dictionary, wrapper: PFProviderTaskV2) -> void:
 	if wrapper.is_terminal():
 		return
 	if _cancel_requested.has(request_id):
-		_finish_canceled(request_id)
 		return
 	(
 		wrapper
@@ -232,7 +231,7 @@ func _start_generation(request: Dictionary, wrapper: PFProviderTaskV2) -> void:
 	_transport_tasks[request_id] = transport
 	transport.finished.connect(_on_transport_completed.bind(request_id))
 	transport.failed.connect(_on_transport_failed.bind(request, request_id))
-	transport.canceled.connect(_finish_canceled.bind(request_id))
+	transport.canceled.connect(_on_transport_canceled.bind(request_id))
 	TaskQueue.submit(transport)
 
 
@@ -243,16 +242,26 @@ func estimate_cost(_request: Dictionary) -> Variant:
 
 
 func cancel(request_id: String) -> PFCancelTaskV2:
-	if _cancel_tasks.has(request_id):
-		return _cancel_tasks[request_id]
-	var wrapper := CancelTaskV2Script.new(request_id, PROVIDER_ID)
-	_cancel_tasks[request_id] = wrapper
+	var existing: Variant = _cancel_settlement.get_cancel_task(request_id)
+	if existing != null:
+		return existing
+	var generation: PFProviderTaskV2 = _generation_tasks.get(request_id)
+	if generation == null:
+		generation = ProviderTaskV2Script.new(
+			{"request_id": request_id, "provider_id": PROVIDER_ID, "batch": 0}, []
+		)
 	_cancel_requested[request_id] = true
 	var transport: PFTask = _transport_tasks.get(request_id)
-	if transport != null:
-		transport.cancel()
-	else:
-		call_deferred("_finish_canceled", request_id)
+	var wrapper: PFCancelTaskV2 = _cancel_settlement.cancel(
+		request_id,
+		generation,
+		transport == null,
+		func() -> void:
+			if transport != null:
+				transport.cancel()
+	)
+	wrapper.resolved.connect(func(_result: Dictionary) -> void: _clear_active_request(request_id))
+	wrapper.rejected.connect(func(_error: Dictionary) -> void: _clear_active_request(request_id))
 	return wrapper
 
 
@@ -433,6 +442,9 @@ func _is_ready_for_request() -> bool:
 
 func _on_transport_completed(result: Variant, request_id: String) -> void:
 	var wrapper: PFProviderTaskV2 = _generation_tasks.get(request_id)
+	if _cancel_requested.has(request_id):
+		_cancel_settlement.confirm_local_stopped(request_id, _billing_update(result))
+		return
 	if wrapper != null and result is Dictionary:
 		wrapper.resolve(result)
 	_clear_active_request(request_id)
@@ -440,29 +452,26 @@ func _on_transport_completed(result: Variant, request_id: String) -> void:
 
 func _on_transport_failed(error: Dictionary, request: Dictionary, request_id: String) -> void:
 	var wrapper: PFProviderTaskV2 = _generation_tasks.get(request_id)
+	if _cancel_requested.has(request_id):
+		_cancel_settlement.confirm_local_stopped(request_id, null)
+		return
 	if wrapper != null:
 		wrapper.reject(_normalize_transport_error(error, request))
 	_clear_active_request(request_id)
 
 
-func _finish_canceled(request_id: String) -> void:
-	var generation: PFProviderTaskV2 = _generation_tasks.get(request_id)
-	if generation != null:
-		generation.mark_canceled(request_id)
-	var cancel_task: PFCancelTaskV2 = _cancel_tasks.get(request_id)
-	if cancel_task != null:
-		(
-			cancel_task
-			. resolve(
-				{
-					"request_id": request_id,
-					"local_stopped": true,
-					"remote_cancel_confirmed": false,
-					"billing_update": null,
-				}
-			)
-		)
-	_clear_active_request(request_id)
+func _on_transport_canceled(request_id: String) -> void:
+	_cancel_settlement.confirm_local_stopped(request_id, null)
+
+
+func _billing_update(result: Variant) -> Variant:
+	if not (result is Dictionary) or result.get("actual_cost_usd") == null:
+		return null
+	return {
+		"actual_cost_usd": result.get("actual_cost_usd"),
+		"charge_id": result.get("charge_id", ""),
+		"provider_meta": result.get("provider_meta", {}).duplicate(true),
+	}
 
 
 func _reject_unavailable(wrapper: PFProviderTaskV2, request: Dictionary) -> void:

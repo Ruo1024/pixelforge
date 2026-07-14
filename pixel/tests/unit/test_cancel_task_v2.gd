@@ -23,9 +23,7 @@ func test_cancel_order_deadlines_and_dedupe() -> void:
 		func() -> void: calls["local"] += 1,
 		func() -> void: calls["remote"] += 1
 	)
-	var second: Variant = controller.cancel(
-		"request-1", generation, false, Callable(), Callable()
-	)
+	var second: Variant = controller.cancel("request-1", generation, false, Callable(), Callable())
 	var events := []
 	var result := {}
 	generation.canceled.connect(func(_request_id: String) -> void: events.append("generation"))
@@ -114,13 +112,16 @@ func test_queued_and_remote_confirmed_branches() -> void:
 	var running_result := {}
 	running_task.resolved.connect(func(value: Dictionary) -> void: running_result.assign(value))
 	scheduler.advance_ms(0)
-	running_controller.confirm_local_stopped(
-		"request-remote",
-		{
-			"actual_cost_usd": "0.250000",
-			"charge_id": "charge-1",
-			"provider_meta": {"remote_task_id": "remote-1"},
-		}
+	(
+		running_controller
+		. confirm_local_stopped(
+			"request-remote",
+			{
+				"actual_cost_usd": "0.250000",
+				"charge_id": "charge-1",
+				"provider_meta": {"remote_task_id": "remote-1"},
+			}
+		)
 	)
 	running_controller.confirm_remote_cancel("request-remote", true)
 	assert_eq(running_result["remote_cancel_confirmed"], true)
@@ -161,21 +162,38 @@ func test_multi_request_wrappers_all_settle() -> void:
 	assert_eq(settled, [])
 	scheduler.advance_ms(5000)
 	assert_eq(settled.size(), 3)
-	assert_eq(settled.map(func(item: Dictionary) -> String: return item["request_id"]), [
-		"request-a", "request-b", "request-c"
-	])
-	assert_eq(settled.map(func(item: Dictionary) -> String: return item["status"]), [
-		"resolved", "resolved", "rejected"
-	])
+	assert_eq(
+		settled.map(func(item: Dictionary) -> String: return item["request_id"]),
+		["request-a", "request-b", "request-c"]
+	)
+	assert_eq(
+		settled.map(func(item: Dictionary) -> String: return item["status"]),
+		["resolved", "resolved", "rejected"]
+	)
+
+
+func test_built_in_providers_use_the_deadline_settlement_boundary() -> void:
+	for path in [
+		"res://plugins/provider_openai/openai_image_provider.gd",
+		"res://plugins/provider_retrodiffusion/retrodiffusion_provider.gd",
+	]:
+		var source := FileAccess.get_file_as_string(path)
+		assert_true(source.contains("provider_cancel_settlement_v2.gd"), path)
+		assert_true(source.contains("_cancel_settlement.cancel("), path)
+		assert_true(source.contains("confirm_local_stopped"), path)
+		assert_false(source.contains("_finish_canceled"), path)
 
 
 func _generation_task(request_id: String) -> PFProviderTaskV2:
-	return PFProviderTaskV2.new(
-		{
-			"request_id": request_id,
-			"provider_id": "openai_image",
-			"provider_output_size": [1, 1],
-			"batch": 1,
-		},
-		[]
+	return (
+		PFProviderTaskV2
+		. new(
+			{
+				"request_id": request_id,
+				"provider_id": "openai_image",
+				"provider_output_size": [1, 1],
+				"batch": 1,
+			},
+			[]
+		)
 	)
