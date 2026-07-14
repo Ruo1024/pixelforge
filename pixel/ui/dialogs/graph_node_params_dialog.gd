@@ -131,6 +131,9 @@ func _make_control(schema: Dictionary, value: Variant) -> Control:
 			var values: Array = schema.get("options", [])
 			if kind == PFNode.KIND_PROVIDER:
 				values = ProviderService.get_selectable_provider_ids()
+				var configured := String(value)
+				if not configured.is_empty() and not values.has(configured):
+					values.append(configured)
 			if values.is_empty():
 				values = [String(value)]
 			for option in values:
