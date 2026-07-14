@@ -79,7 +79,7 @@ func test_partial_summary_and_retryable_rules() -> void:
 		return
 	var pending := _terminal_summary(
 		[
-			_slot("slot-retry", _error("network", true)),
+			_slot("slot-retry", _error("result_count_mismatch", true)),
 			_slot("slot-fixed", _error("content_policy", false)),
 		],
 		"partial-pending"
@@ -103,10 +103,10 @@ func test_error_action_matrix_and_priority() -> void:
 		return
 	var exact_actions := {
 		"auth_failed": "open_provider_settings",
-		"rate_limited": "retry_failed",
+		"rate_limited": "close",
 		"quota_exceeded": "open_provider_settings",
 		"invalid_request": "return_generation_card",
-		"network": "retry_failed",
+		"network": "close",
 		"timeout": "regenerate_confirm",
 		"content_policy": "edit_prompt",
 		"provider_internal": "close",

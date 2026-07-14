@@ -23,10 +23,10 @@ const NO_DIALOG_MODES := {
 }
 const CODE_ACTIONS := {
 	"auth_failed": "open_provider_settings",
-	"rate_limited": "retry_failed",
+	"rate_limited": "close",
 	"quota_exceeded": "open_provider_settings",
 	"invalid_request": "return_generation_card",
-	"network": "retry_failed",
+	"network": "close",
 	"timeout": "regenerate_confirm",
 	"content_policy": "edit_prompt",
 	"provider_internal": "close",
@@ -89,7 +89,7 @@ func evaluate(summary: Dictionary) -> Dictionary:
 	var retry_slot_ids := PackedStringArray()
 	for failure_value in failures:
 		var failure: Dictionary = failure_value
-		if bool(failure["retryable"]):
+		if _dialog_retry_allowed(failure):
 			retry_slot_ids.append(String(failure["slot_id"]))
 	var primary_code := _select_primary_code(failures, not retry_slot_ids.is_empty())
 	var primary_action := (
@@ -102,6 +102,7 @@ func evaluate(summary: Dictionary) -> Dictionary:
 		"providers": _safe_providers(failures),
 		"reason_code": primary_code,
 		"request_ids": _safe_request_ids(failures),
+		"retry_after_seconds": _retry_after_for_code(failures, primary_code),
 		"retry_slot_ids": retry_slot_ids,
 		"succeeded_count": maxi(0, int(summary.get("succeeded_count", 0))),
 	}
@@ -132,6 +133,12 @@ func render(model: Dictionary, locale: String) -> Dictionary:
 	var succeeded_count := maxi(0, int(model.get("succeeded_count", 0)))
 	var affected_count := maxi(0, int(model.get("affected_count", 0)))
 	var reason := String(catalog.get(text_keys["reason"], text_keys["reason"]))
+	var next_step := String(catalog.get(text_keys["next_step"], text_keys["next_step"]))
+	if code == "rate_limited" and model.get("retry_after_seconds") != null:
+		next_step = (
+			String(catalog.get("GEN_ERROR_RATE_LIMITED_NEXT_WITH_SECONDS_FORMAT", ""))
+			% _seconds_text(float(model["retry_after_seconds"]))
+		)
 	if succeeded_count > 0:
 		reason = (
 			String(catalog.get("GEN_ERROR_PARTIAL_REASON_FORMAT", ""))
@@ -148,7 +155,7 @@ func render(model: Dictionary, locale: String) -> Dictionary:
 		),
 		"reason": reason,
 		"affected_count": affected_count,
-		"next_step": String(catalog.get(text_keys["next_step"], text_keys["next_step"])),
+		"next_step": next_step,
 		"primary_action":
 		{
 			"id": action_id,
@@ -205,12 +212,40 @@ func _normalize_failed_slots(value: Variant) -> Dictionary:
 					"code": String(error["code"]),
 					"provider_id": String(error["provider_id"]),
 					"request_id": String(error["request_id"]),
+					"retry_after_seconds": error.get("retry_after_seconds"),
 					"retryable": bool(error["retryable"]),
 					"slot_id": slot_id,
 				}
 			)
 		)
 	return {"failures": failures, "ok": true}
+
+
+func _dialog_retry_allowed(failure: Dictionary) -> bool:
+	return (
+		bool(failure.get("retryable", false))
+		and action_for_code(String(failure.get("code", ""))) == "retry_failed"
+	)
+
+
+func _retry_after_for_code(failures: Array, code: String) -> Variant:
+	var result: Variant = null
+	for failure_value in failures:
+		var failure: Dictionary = failure_value
+		if String(failure.get("code", "")) != code:
+			continue
+		var value: Variant = failure.get("retry_after_seconds")
+		if value is float or value is int:
+			result = maxf(float(result) if result != null else 0.0, float(value))
+	return result
+
+
+func _seconds_text(value: float) -> String:
+	return (
+		String.num_int64(roundi(value))
+		if is_equal_approx(value, roundf(value))
+		else String.num(value, 2)
+	)
 
 
 func _select_primary_code(failures: Array, has_retryable: bool) -> String:

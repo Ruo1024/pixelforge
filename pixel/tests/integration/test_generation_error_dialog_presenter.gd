@@ -114,7 +114,10 @@ func test_primary_action_emits_only_safe_routing_context() -> void:
 	)
 	summary["succeeded_count"] = 6
 	assert_true(presenter.present(summary)["show"])
-	(presenter.get_dialog().find_child("GenerationErrorPrimaryAction", true, false) as Button).pressed.emit()
+	var primary_button: Button = presenter.get_dialog().find_child(
+		"GenerationErrorPrimaryAction", true, false
+	)
+	primary_button.pressed.emit()
 	assert_eq(routed.size(), 1)
 	assert_eq(routed[0]["run_id"], "partial-action")
 	assert_eq(routed[0]["action_id"], "retry_failed")
@@ -133,6 +136,8 @@ func test_rate_limit_and_network_dialog_actions_close_instead_of_retrying() -> v
 		)
 		assert_true(decision["show"], code)
 		assert_eq(decision["model"]["primary_action_id"], "close", code)
+		if code == "rate_limited":
+			assert_true(presenter.visible_text_for_test().contains("30"))
 
 
 func test_visible_dialog_rerenders_en_zh_en_without_changing_safe_model() -> void:
@@ -166,7 +171,10 @@ func test_visible_dialog_rerenders_en_zh_en_without_changing_safe_model() -> voi
 
 
 func _new_presenter() -> Variant:
-	assert_true(FileAccess.file_exists(PRESENTER_PATH), "real generation error dialog presenter is missing")
+	assert_true(
+		FileAccess.file_exists(PRESENTER_PATH),
+		"real generation error dialog presenter is missing"
+	)
 	if not FileAccess.file_exists(PRESENTER_PATH):
 		return null
 	var presenter: Node = load(PRESENTER_PATH).new()
