@@ -133,14 +133,43 @@ func test_preflight_blocks_missing_or_invalid_estimates() -> void:
 
 
 func test_v2_storage_never_reads_legacy_float_buckets() -> void:
-	_service.set_monthly_budget(99.0)
-	assert_true(_service.record_cost("fixture_cost", 12.5, TEST_MONTH))
+	SettingsService.set_setting("provider_budget", "monthly_usd", 99.0)
+	SettingsService.set_setting("provider_cost_%s" % TEST_MONTH, "total", 12.5)
 	assert_eq(_service.get_monthly_budget_micro_usd(), 0)
 	assert_eq(_service.get_month_total_micro_usd(TEST_MONTH), 0)
 	assert_true(_service.set_monthly_budget_micro_usd(250000))
-	assert_eq(_service.get_monthly_budget(), 99.0)
-	assert_eq(_service.get_month_total(TEST_MONTH), 12.5)
 	assert_false(_service.set_monthly_budget_micro_usd(0.25))
+
+
+func test_float_cost_api_and_active_ui_paths_are_absent() -> void:
+	var cost_source := FileAccess.get_file_as_string("res://services/cost_service.gd")
+	for forbidden in [
+		"func record_cost(",
+		"func get_month_total(",
+		"func get_provider_total(",
+		"func set_monthly_budget(",
+		"func get_monthly_budget(",
+		"func estimate_request(",
+		"func estimate_with_provider(",
+		"func requires_confirmation(",
+		"func format_month_total(",
+	]:
+		assert_false(cost_source.contains(forbidden), forbidden)
+	var dialog_source := FileAccess.get_file_as_string(
+		"res://ui/dialogs/provider_settings_dialog.gd"
+	)
+	assert_false(dialog_source.contains("_budget_spin"))
+	assert_false(dialog_source.contains("SpinBox.new()"))
+	assert_true(dialog_source.contains("parse_usd_to_micro"))
+	var controller_source := FileAccess.get_file_as_string(
+		"res://ui/shell/openai_generation_controller.gd"
+	)
+	for forbidden in [
+		"estimate_request", "requires_confirmation", "record_cost", "get_month_total()"
+	]:
+		assert_false(controller_source.contains(forbidden), forbidden)
+	assert_true(controller_source.contains("CostService.preflight("))
+	assert_true(controller_source.contains("CostService.record_once("))
 
 
 func test_all_manual_retry_paths_preflight_without_side_effects() -> void:
