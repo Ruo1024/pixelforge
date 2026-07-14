@@ -181,6 +181,16 @@ func test_coordinator_events_and_errors_never_expose_credential_sentinel() -> vo
 	assert_false(Scanner.contains(events, Scanner.VALUE))
 
 
+func test_generation_controller_routes_progress_and_both_cancel_outcomes_through_coordinator() -> void:
+	var source := FileAccess.get_file_as_string("res://ui/shell/generation_run_controller.gd")
+	assert_true(source.contains("_coordinator.apply_provider_progress("))
+	assert_true(source.contains("_coordinator.begin_cancel_cutoff("))
+	assert_true(source.contains("cancel_task.rejected.connect("))
+	assert_true(source.contains("_coordinator.resolve_cancel("))
+	assert_true(source.contains("_coordinator.reject_cancel("))
+	assert_false(source.contains("ProviderRunProgressScript.apply_provider_progress("))
+
+
 func _graph() -> PFGraph:
 	var graph := GraphScript.new()
 	graph.id = "graph-runtime"
