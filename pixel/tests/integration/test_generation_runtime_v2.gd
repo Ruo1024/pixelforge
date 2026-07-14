@@ -204,6 +204,17 @@ func test_submit_failure_uses_atomic_pending_output_rollback_path() -> void:
 	assert_true(source.contains("_canvas._remove_item_direct("))
 
 
+func test_manual_retry_routes_original_failed_slots_to_retry_run_without_full_output_creation() -> void:
+	var controller := FileAccess.get_file_as_string("res://ui/shell/generation_run_controller.gd")
+	var shell := FileAccess.get_file_as_string("res://ui/shell/m2_1_ui_controller.gd")
+	assert_true(controller.contains("func retry_graph("))
+	assert_true(controller.contains("_coordinator.prepare_retry_preflight("))
+	assert_true(controller.contains("_coordinator.prepare_retry_run("))
+	assert_true(controller.contains("input_snapshots"))
+	assert_true(shell.contains("_generation_flow.retry_graph("))
+	assert_true(shell.contains('"retry", "retry_failed"'))
+
+
 func _graph() -> PFGraph:
 	var graph := GraphScript.new()
 	graph.id = "graph-runtime"
