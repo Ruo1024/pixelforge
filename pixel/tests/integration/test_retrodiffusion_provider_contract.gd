@@ -1,7 +1,7 @@
 extends "res://addons/gut/test.gd"
 
 const ProviderScript := preload("res://plugins/provider_retrodiffusion/retrodiffusion_provider.gd")
-const MainScript := preload("res://ui/shell/main.gd")
+const MAIN_PATH := "res://ui/shell/main.gd"
 const Strings := preload("res://ui/shell/strings.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
@@ -44,62 +44,63 @@ func after_each() -> void:
 
 
 func test_capabilities_and_schema_match_provider_contract() -> void:
-	assert_eq(_provider.get_id(), "retrodiffusion")
-	assert_eq(_provider.get_api_version(), 1)
-	var capabilities := _provider.get_capabilities()
+	assert_eq(_provider.get_api_version(), 2)
+	var descriptors := _provider.get_model_descriptors()
+	assert_eq(descriptors.size(), 3)
+	assert_eq(
+		descriptors.map(func(descriptor: Dictionary) -> String: return descriptor["model_id"]),
+		["rd_plus", "rd_pro", "rd_fast"]
+	)
+	var capabilities: Dictionary = descriptors[0]["capabilities"]
 	assert_true(capabilities["txt2img"])
 	assert_true(capabilities["img2img"])
 	assert_true(capabilities["transparent_bg"])
 	assert_true(capabilities["native_pixel"])
-	assert_eq(capabilities["sizes"], [[16, 16], [384, 384]])
+	assert_eq(capabilities["provider_output_sizes"], [])
+	assert_eq(capabilities["target_size_constraints"]["min_width"], 16)
+	assert_eq(capabilities["target_size_constraints"]["max_width"], 128)
 	assert_eq(_provider.get_config_schema()[0]["kind"], "password")
 
 
 func test_credential_save_and_validation_are_offline_until_user_generation() -> void:
-	assert_false(bool(_provider.get_capabilities().get("safe_validation", true)))
+	assert_false(
+		bool(_provider.get_model_descriptors()[0]["capabilities"].get("safe_validation", true))
+	)
 	assert_null(_provider.validate_credentials())
 	assert_eq(ProviderScript.MAX_RETRIES, 0)
 
 
 func test_request_uses_current_official_fields_and_style_hints() -> void:
-	var hinted := (
-		_provider
-		. build_request_body(
-			{
-				"prompt": "stone tile",
-				"width": 32,
-				"height": 32,
-				"batch": 8,
-				"seed": 123,
-				"style": {"provider_hints": {"retrodiffusion": {"style": "rd_tile__single_tile"}}},
-				"extra": {"remove_bg": false},
-			}
-		)
-	)
+	var request := _request("request-body", "rd_plus", 4, [32, 32])
+	request["seed"] = 123
+	request["extra"] = {"remove_bg": false, "strength": 0.8}
+	var hinted := _provider.build_request_body(request)
 
-	assert_eq(hinted["prompt_style"], "rd_tile__single_tile")
+	assert_eq(hinted["prompt_style"], "rd_plus__low_res")
 	assert_eq(hinted["num_images"], 4)
 	assert_eq(hinted["seed"], 123)
 	assert_false(hinted["remove_bg"])
 	assert_false(JSON.stringify(hinted).contains(TEST_SECRET))
-	var low_res := _provider.build_request_body(
-		{"prompt": "barrel", "width": 16, "height": 16, "style": {}}
-	)
-	assert_eq(low_res["prompt_style"], "rd_plus__low_res")
+	var pro := _provider.build_request_body(_request("request-pro", "rd_pro", 1, [64, 64]))
+	assert_eq(pro["prompt_style"], "rd_pro__default")
 
 
 func test_recorded_four_image_fixture_decodes_raw_pixels_cost_and_seeds() -> void:
-	var result := _provider.decode_success_payload(
-		_load_fixture(), {"seed": 50, "width": 128, "height": 128, "style": {}}
-	)
+	var request := _request("decode", "rd_plus", 4, [1, 1])
+	request["seed"] = 50
+	var result := _provider.decode_success_payload(_load_fixture(), request)
 
-	assert_true(result["ok"])
-	assert_eq(result["images"].size(), 4)
-	assert_true(result["raw_pixel"])
-	assert_eq(result["seeds"], [50, 51, 52, 53])
-	assert_eq(result["cost"], 1.0)
+	assert_eq(result["request_id"], "decode")
+	assert_eq(result["items"].size(), 4)
+	assert_eq(
+		result["items"].map(func(item: Dictionary) -> int: return item["actual_seed"]),
+		[50, 51, 52, 53]
+	)
+	assert_eq(result["actual_cost_usd"], "1.000000")
 	assert_eq(result["provider_meta"], {})
-	for image in result["images"]:
+	for item in result["items"]:
+		assert_null(item["error"])
+		var image: Image = item["image"]
 		assert_eq(image.get_format(), Image.FORMAT_RGBA8)
 
 
@@ -109,11 +110,7 @@ func test_error_mapping_covers_auth_quota_rate_limit_and_internal() -> void:
 	assert_eq(
 		(
 			_provider
-			. map_error(
-				HTTPRequest.RESULT_SUCCESS,
-				400,
-				{"provider_code": "insufficient_balance"}
-			)["code"]
+			. map_error(HTTPRequest.RESULT_SUCCESS, 400, {"provider_code": "insufficient_balance"})["code"]
 		),
 		"quota_exceeded"
 	)
@@ -121,13 +118,13 @@ func test_error_mapping_covers_auth_quota_rate_limit_and_internal() -> void:
 
 
 func test_generate_uses_real_http_task_and_worker_decodes_result() -> void:
-	var task: Variant = _provider.generate(
-		{"prompt": "barrel", "width": 32, "height": 32, "batch": 1, "seed": 7, "style": {}}
+	var task: PFProviderTaskV2 = _provider.generate(
+		_request("network-generate", "rd_plus", 1, [1, 1])
 	)
 	var outcome := {"status": "pending", "value": null}
-	task.finished.connect(
-		func(result: Variant) -> void:
-			outcome["status"] = "finished"
+	task.completed.connect(
+		func(result: Dictionary) -> void:
+			outcome["status"] = "completed"
 			outcome["value"] = result
 	)
 	task.failed.connect(
@@ -135,25 +132,25 @@ func test_generate_uses_real_http_task_and_worker_decodes_result() -> void:
 			outcome["status"] = "failed"
 			outcome["value"] = error
 	)
-	_queue.submit(task)
 	assert_true(await _wait_until(func() -> bool: return outcome["status"] != "pending"))
 
-	assert_eq(outcome["status"], "finished")
-	assert_eq(outcome["value"]["images"].size(), 1)
-	assert_eq(outcome["value"]["cost"], 0.25)
-	assert_true(outcome["value"]["raw_pixel"])
-	assert_false(JSON.stringify(task.payload).contains(TEST_SECRET))
+	assert_eq(outcome["status"], "completed")
+	assert_eq(outcome["value"]["items"].size(), 1)
+	assert_true(outcome["value"]["items"][0]["image"] is Image)
+	assert_eq(outcome["value"]["actual_cost_usd"], "0.250000")
+	assert_false(JSON.stringify(outcome["value"]).contains(TEST_SECRET))
 
 
 func test_result_materializes_complete_provenance_and_documented_estimate() -> void:
-	var request := {"batch": 2, "width": 256, "height": 256, "style": {}, "seed": 3}
-	assert_eq(_provider.estimate_cost(request), 0.5)
+	var request := _request("materialize", "rd_pro", 2, [1, 1])
+	request["seed"] = 3
+	assert_eq(_provider.estimate_cost(request), "0.500000")
 	var decoded := _provider.decode_success_payload(_load_fixture(), request)
 	var graph := GraphScript.new()
 	graph.id = "graph_retrodiffusion_contract"
 	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": "Retro"}, Vector2.ZERO)
 	var metadata := []
-	for index in range(decoded["images"].size()):
+	for index in range(decoded["items"].size()):
 		(
 			metadata
 			. append(
@@ -161,15 +158,15 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 					"provider": "retrodiffusion",
 					"model": "rd_pro",
 					"prompt": "barrel",
-					"seed": decoded["seeds"][index],
-					"cost": decoded["cost"] / decoded["images"].size(),
+					"seed": decoded["items"][index]["actual_seed"],
+					"cost": 0.25,
 					"provider_meta": decoded["provider_meta"],
 					"name": "retro_%d" % index,
 				}
 			)
 		)
 	var result := GraphRunnerScript.new().materialize_provider_batch(
-		graph, "batch_1", decoded["images"], metadata, AssetLibrary
+		graph, "batch_1", _successful_images(decoded), metadata, AssetLibrary
 	)
 	assert_true(result["ok"])
 	var asset_ids := BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_1"))
@@ -183,7 +180,7 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	ProjectService.new_project("RetroDiffusion UI")
 	ProjectService._pending_recovery_autosaves.clear()
 	SettingsService.set_setting("onboarding", "v1_complete", true)
-	var main: Control = MainScript.new()
+	var main: Control = load(MAIN_PATH).new()
 	main.size = Vector2(1280, 800)
 	add_child_autofree(main)
 	await wait_process_frames(2)
@@ -264,7 +261,7 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 
 func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_results() -> void:
 	ProjectService.new_project("RetroDiffusion cancel")
-	var main: Control = MainScript.new()
+	var main: Control = load(MAIN_PATH).new()
 	main.size = Vector2(1280, 800)
 	add_child_autofree(main)
 	await wait_process_frames(2)
@@ -362,6 +359,29 @@ func _item_id_for_node(items: Array, node_id: String) -> String:
 
 func _status_label(main: Control) -> Label:
 	return main.get_node("Root/BottomBar").get_child(0)
+
+
+func _request(request_id: String, model_id: String, batch: int, output_size: Array) -> Dictionary:
+	return {
+		"run_id": "run-%s" % request_id,
+		"request_id": request_id,
+		"idempotency_key": "idem-%s" % request_id,
+		"provider_id": "retrodiffusion",
+		"mode": "txt2img",
+		"model_id": model_id,
+		"prompt": "barrel",
+		"target_width": 32,
+		"target_height": 32,
+		"provider_output_size": output_size,
+		"batch": batch,
+		"seed": 7,
+		"ref_images": [],
+		"extra": {"remove_bg": true, "strength": 0.8},
+	}
+
+
+func _successful_images(result: Dictionary) -> Array:
+	return result["items"].map(func(item: Dictionary) -> Image: return item["image"])
 
 
 func _wait_until(check: Callable, timeout_seconds: float = 2.0) -> bool:

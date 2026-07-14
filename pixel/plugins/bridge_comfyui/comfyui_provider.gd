@@ -1,7 +1,7 @@
 class_name PFComfyUIProvider
-extends PFProvider
+extends RefCounted
 
-## Local/LAN ComfyUI adapter using official /prompt, /ws, /history, /view and /interrupt routes.
+## Dormant legacy ComfyUI adapter retained outside the Provider v2 registration boundary.
 
 const TaskScript := preload("res://services/pf_task.gd")
 const HttpClientScript := preload("res://infra/http_client.gd")

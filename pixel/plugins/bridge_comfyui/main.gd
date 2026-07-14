@@ -1,10 +1,8 @@
 class_name PFComfyUIBridgePlugin
 extends PFPlugin
 
-const ProviderScript := preload("res://plugins/bridge_comfyui/comfyui_provider.gd")
-const WorkflowNodeScript := preload("res://plugins/bridge_comfyui/comfyui_workflow_node.gd")
+## ComfyUI is intentionally dormant in Beta 0.7 and registers no Provider or Graph surface.
 
 
-func _enter_app(api: Variant) -> void:
-	api.register_provider(ProviderScript.new())
-	api.register_node_type("comfyui.run_workflow", WorkflowNodeScript)
+func _enter_app(_api: Variant) -> void:
+	pass
