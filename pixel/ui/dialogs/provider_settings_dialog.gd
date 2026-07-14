@@ -200,7 +200,7 @@ func _make_control(schema: Dictionary, value: Variant) -> Control:
 		return check
 	if kind == "enum":
 		var options := OptionButton.new()
-		for option in schema.get("options", []):
+		for option in schema.get("values", []):
 			options.add_item(String(option))
 			if option == value:
 				options.select(options.item_count - 1)

@@ -38,8 +38,7 @@ func before_each() -> void:
 
 func after_each() -> void:
 	_provider.clear_session_config()
-	ProviderService.clear_session("retrodiffusion")
-	ProviderService._set_validation_state("retrodiffusion", "unconfigured", "")
+	ProviderService.delete_provider_credentials("retrodiffusion")
 	CostService.set_monthly_budget(0.0)
 	CostService.reset_month_for_tests(CostService.get_month_key())
 
@@ -242,16 +241,16 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 		{"id": "single-request", "text": "barrel", "count": 2, "enabled": true}
 	]
 	ProjectService.set_graph_data(graph_id, graph_data, true)
-	assert_null(
+	assert_true(
 		(
 			ProviderService
-			. configure_session(
+			. save_provider_config(
 				"retrodiffusion",
 				{
 					"api_key": "rdpk-ui-fixture",
 					"endpoint": OS.get_environment("PF_HTTP_MOCK_URL") + "/retrodiffusion-success",
 				}
-			)
+			)["ok"]
 		)
 	)
 	ProviderService._set_validation_state("retrodiffusion", "verified", "Fixture verified")
@@ -326,16 +325,16 @@ func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_res
 		{"id": "single-request", "text": "barrel", "count": 2, "enabled": true}
 	]
 	ProjectService.set_graph_data(graph_id, graph_data, true)
-	assert_null(
+	assert_true(
 		(
 			ProviderService
-			. configure_session(
+			. save_provider_config(
 				"retrodiffusion",
 				{
 					"api_key": "rdpk-cancel-fixture",
 					"endpoint": OS.get_environment("PF_HTTP_MOCK_URL") + "/retrodiffusion-slow",
 				}
-			)
+			)["ok"]
 		)
 	)
 	ProviderService._set_validation_state("retrodiffusion", "verified", "Fixture verified")

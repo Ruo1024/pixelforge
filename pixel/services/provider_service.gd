@@ -19,6 +19,7 @@ const BUILTIN_PROVIDER_PLUGINS := [
 ]
 const API_VERSION := 2
 const AUTOMATION_PROVIDER := "mock"
+const VALIDATION_STATES := ["unconfigured", "configured", "validating", "verified", "invalid"]
 const MOCK_MODEL_DESCRIPTOR := {
 	"provider_id": "mock",
 	"model_id": "pixel_mock_v1",
@@ -340,28 +341,6 @@ func get_validation_message(provider_id: String) -> String:
 	return String(_validation_states.get(provider_id, {}).get("message", ""))
 
 
-func configure_session(provider_id: String, config: Dictionary) -> Variant:
-	var provider := get_provider(provider_id)
-	if provider == null:
-		return _error("invalid_request", "Provider is not registered")
-	return provider.configure(config)
-
-
-func clear_session(provider_id: String) -> void:
-	var provider := get_provider(provider_id)
-	if provider != null and provider.has_method("clear_session_config"):
-		provider.clear_session_config()
-
-
-func has_session_credentials(provider_id: String) -> bool:
-	var provider := get_provider(provider_id)
-	return (
-		provider != null
-		and provider.has_method("has_session_credentials")
-		and provider.has_session_credentials()
-	)
-
-
 func generate(provider_id: String, request: Dictionary) -> Variant:
 	var provider := get_provider(provider_id)
 	if provider == null:
@@ -439,6 +418,8 @@ func _configure_from_storage(provider_id: String) -> Variant:
 
 
 func _set_validation_state(provider_id: String, state: String, message: String) -> void:
+	if state not in VALIDATION_STATES:
+		return
 	_validation_states[provider_id] = {"state": state, "message": message}
 	provider_validation_changed.emit(provider_id, state, message)
 

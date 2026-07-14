@@ -3,24 +3,28 @@ extends "res://addons/gut/test.gd"
 const Clipboard := preload("res://core/graph/canvas_graph_clipboard.gd")
 const FileIO := preload("res://infra/file_io.gd")
 const Scanner := preload("res://tests/helpers/credential_sentinel_scanner.gd")
+const OpenAIProviderScript := preload("res://plugins/provider_openai/openai_image_provider.gd")
 
 const PROJECT_PATH := "user://tests/b7_sensitive_v2.pxproj"
+
+var _provider: PFOpenAIImageProvider = null
 
 
 func before_each() -> void:
 	ProjectService.new_project("Sensitive v2 surfaces")
 	AssetLibrary.clear()
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://tests"))
+	_provider = OpenAIProviderScript.new()
+	assert_null(_provider.configure({"api_key": Scanner.VALUE}))
 
 
 func after_each() -> void:
-	ProviderService.clear_session("openai_image")
+	_provider.clear_session_config()
 	if FileAccess.file_exists(PROJECT_PATH):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(PROJECT_PATH))
 
 
 func test_sentinel_only_reaches_transport_not_v2_persistence() -> void:
-	assert_null(ProviderService.configure_session("openai_image", {"api_key": Scanner.VALUE}))
 	var graph := _graph_fixture()
 	graph["nodes"][0]["params"]["extra"]["authorization_hint"] = Scanner.VALUE
 	(

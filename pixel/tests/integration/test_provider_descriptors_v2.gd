@@ -98,22 +98,13 @@ func test_service_rejects_nonexact_descriptor_and_config_schema_types() -> void:
 
 
 func test_openai_mock_generation_returns_deferred_v2_terminal() -> void:
-	var provider: PFOpenAIImageProvider = OpenAIProviderScript.new()
+	var provider: PFOpenAIImageProvider = OpenAIProviderScript.new(
+		OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-image-success"
+	)
 	var host := Node.new()
 	add_child_autofree(host)
 	provider.attach_request_host(host)
-	assert_null(
-		(
-			provider
-			. configure(
-				{
-					"api_key": "fixture-key",
-					"generation_url":
-					OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-image-success",
-				}
-			)
-		)
-	)
+	assert_null(provider.configure({"api_key": "fixture-key"}))
 	var task := provider.generate(_openai_request())
 	var outcome := {"status": "pending", "value": null, "progress": 0}
 	task.progress.connect(func(_value: Dictionary) -> void: outcome["progress"] += 1)

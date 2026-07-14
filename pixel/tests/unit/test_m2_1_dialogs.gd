@@ -4,7 +4,6 @@ const MatteDialogScript := preload("res://ui/dialogs/matte_dialog.gd")
 const SliceDialogScript := preload("res://ui/dialogs/slice_dialog.gd")
 const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
 const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
-const OpenAISessionDialogScript := preload("res://ui/dialogs/openai_session_dialog.gd")
 const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_settings_dialog.gd")
 const OpenAIGenerationControllerScript := preload("res://ui/shell/openai_generation_controller.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
@@ -106,22 +105,6 @@ func test_graph_node_params_dialog_uses_asset_ref_control() -> void:
 	assert_eq(
 		dialog._root.get_child(0).get_child(0).text, Strings.text("GRAPH_PARAM_REFERENCE_ASSET")
 	)
-
-
-func test_openai_session_dialog_masks_and_clears_the_session_secret() -> void:
-	var dialog: ConfirmationDialog = OpenAISessionDialogScript.new()
-	add_child_autofree(dialog)
-	await wait_process_frames(1)
-	var configured := []
-	dialog.session_configured.connect(func(value: String) -> void: configured.append(value))
-	var secret_edit: LineEdit = dialog.get_node("Content/ApiKey")
-
-	assert_true(dialog.is_secret_input())
-	dialog.set_api_key_for_test("temporary-session-value")
-	dialog.confirmed.emit()
-
-	assert_eq(configured, ["temporary-session-value"])
-	assert_eq(secret_edit.text, "")
 
 
 func test_provider_settings_dialog_masks_schema_password_and_shows_capabilities() -> void:

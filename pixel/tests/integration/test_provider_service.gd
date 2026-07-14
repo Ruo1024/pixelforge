@@ -83,8 +83,12 @@ func test_unsafe_validation_provider_is_offline_until_explicit_first_generation(
 
 	assert_true(result["ok"])
 	assert_eq(_service.get_validation_state("fixture_provider"), "configured")
-	assert_string_contains(
-		_service.get_validation_message("fixture_provider"), "first real generation"
+	assert_eq(
+		_service.get_validation_message("fixture_provider"),
+		LocalizationService.text(
+			"PROVIDER_STATUS_SAVED_FIRST_GENERATION",
+			"Saved; credentials will be verified on the first real generation"
+		)
 	)
 	assert_null(_service.validate_provider("fixture_provider"))
 	assert_eq(_service.get_selectable_provider_ids(), ["fixture_provider"])

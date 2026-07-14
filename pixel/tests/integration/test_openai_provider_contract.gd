@@ -22,14 +22,17 @@ func before_each() -> void:
 	_queue.clear()
 	_host = Node.new()
 	add_child_autofree(_host)
-	_provider = ProviderScript.new()
+	_provider = ProviderScript.new(
+		OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-image-success",
+		OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-image-edit",
+		OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-model"
+	)
 	_provider.attach_request_host(_host)
 	get_tree().root.get_node("ProjectService").new_project("M4 V1 Contract")
 
 
 func after_each() -> void:
 	_provider.clear_session_config()
-	get_tree().root.get_node("ProviderService").clear_session("openai_image")
 
 
 func test_ui_provider_catalog_declares_reference_support_without_network_request() -> void:
@@ -343,19 +346,7 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 
 
 func test_generate_uses_shared_http_worker_decode_and_official_response_metadata() -> void:
-	assert_null(
-		(
-			_provider
-			. configure(
-				{
-					"api_key": SECRET_SENTINEL,
-					"generation_url":
-					OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-image-success",
-					"validation_url": OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-model",
-				}
-			)
-		)
-	)
+	assert_null(_provider.configure({"api_key": SECRET_SENTINEL}))
 	var task: PFProviderTaskV2 = _provider.generate(_request("network-generate", 2, [1, 1]))
 	var outcome := {"status": "pending", "value": null}
 	task.completed.connect(
@@ -380,18 +371,7 @@ func test_generate_uses_shared_http_worker_decode_and_official_response_metadata
 
 
 func test_two_references_use_ordered_official_multipart_edit_fields() -> void:
-	assert_null(
-		(
-			_provider
-			. configure(
-				{
-					"api_key": SECRET_SENTINEL,
-					"edit_url": OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-image-edit",
-					"validation_url": OS.get_environment("PF_HTTP_MOCK_URL") + "/openai-model",
-				}
-			)
-		)
-	)
+	assert_null(_provider.configure({"api_key": SECRET_SENTINEL}))
 	var red := Image.create(2, 2, false, Image.FORMAT_RGBA8)
 	red.fill(Color.RED)
 	var blue := Image.create(2, 2, false, Image.FORMAT_RGBA8)

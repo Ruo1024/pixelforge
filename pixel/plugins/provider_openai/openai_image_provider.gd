@@ -33,6 +33,20 @@ var _cancel_requested := {}
 var _cancel_settlement: Variant = CancelSettlementV2Script.new(PROVIDER_ID)
 
 
+func _init(
+	generation_url: String = GENERATION_URL,
+	edit_url: String = EDIT_URL,
+	validation_url: String = VALIDATION_URL
+) -> void:
+	_generation_url = (
+		generation_url.strip_edges() if not generation_url.is_empty() else GENERATION_URL
+	)
+	_edit_url = edit_url.strip_edges() if not edit_url.is_empty() else EDIT_URL
+	_validation_url = (
+		validation_url.strip_edges() if not validation_url.is_empty() else VALIDATION_URL
+	)
+
+
 func get_api_version() -> int:
 	return API_VERSION
 
@@ -113,19 +127,14 @@ func attach_request_host(host: Node) -> void:
 
 
 func configure(config: Dictionary) -> Variant:
+	for key_value in config.keys():
+		var key := String(key_value)
+		if key != "api_key":
+			return {"code": "invalid_request", "field": key, "args": {}}
 	var candidate := String(config.get("api_key", "")).strip_edges()
 	if candidate.is_empty():
 		return {"code": "auth_failed", "field": "api_key", "args": {}}
 	_api_key = candidate
-	_generation_url = String(config.get("generation_url", GENERATION_URL)).strip_edges()
-	_edit_url = String(config.get("edit_url", EDIT_URL)).strip_edges()
-	_validation_url = String(config.get("validation_url", VALIDATION_URL)).strip_edges()
-	if _generation_url.is_empty():
-		_generation_url = GENERATION_URL
-	if _edit_url.is_empty():
-		_edit_url = EDIT_URL
-	if _validation_url.is_empty():
-		_validation_url = VALIDATION_URL
 	return null
 
 

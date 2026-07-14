@@ -120,7 +120,7 @@ func _queue_graph(
 		provider_id, String(generate_params.get("model_id", ""))
 	)
 	var display_name: String = String(descriptor.get("display_name", provider_id))
-	if not ProviderService.has_session_credentials(provider_id):
+	if not ProviderService.get_selectable_provider_ids().has(provider_id):
 		if provider_id == "openai_image":
 			_status_label.text = Strings.STATUS_OPENAI_SESSION_REQUIRED
 			configure_session()
