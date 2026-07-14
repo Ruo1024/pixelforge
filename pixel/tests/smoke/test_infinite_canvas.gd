@@ -182,7 +182,7 @@ func test_low_lod_double_click_focuses_card_at_one_hundred_percent() -> void:
 		. set_graph_data(
 			"graph_main",
 			{
-				"graph_version": 1,
+				"graph_version": 2,
 				"id": "graph_main",
 				"name": "Focus",
 				"nodes":
@@ -358,7 +358,7 @@ func test_copy_paste_graph_selection_remaps_ids_keeps_internal_edges_and_is_atom
 		. set_graph_data(
 			"graph_main",
 			{
-				"graph_version": 1,
+				"graph_version": 2,
 				"id": "graph_main",
 				"name": "Clipboard",
 				"nodes":
@@ -373,19 +373,28 @@ func test_copy_paste_graph_selection_remaps_ids_keeps_internal_edges_and_is_atom
 						"id": "generate",
 						"type": "ai_generate",
 						"position": [380, 120],
-						"params": {"provider_id": "mock", "batch_size": 1, "seed": 1},
+						"params":
+						{
+							"provider_id": "mock",
+							"model_id": "pixel_mock_v1",
+							"target_width": 32,
+							"target_height": 32,
+							"batch_size": 1,
+							"seed": 1,
+							"extra": {},
+						},
 					},
 					{
 						"id": "external",
-						"type": "size_spec",
+						"type": "image_input",
 						"position": [380, 400],
-						"params": {"width": 32, "height": 32, "per_subject": 1},
+						"params": {"asset_id": "reference_asset"},
 					},
 				],
 				"edges":
 				[
-					{"from": ["prompt", "text"], "to": ["generate", "text"]},
-					{"from": ["external", "spec"], "to": ["generate", "spec"]},
+					{"from": ["prompt", "text"], "to": ["generate", "prompt"]},
+					{"from": ["external", "assets"], "to": ["generate", "references"]},
 				],
 			},
 			false

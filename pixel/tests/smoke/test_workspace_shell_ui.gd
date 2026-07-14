@@ -94,14 +94,22 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 	var object_node_id := String(ProjectService.current_project.graphs[graph_id]["nodes"][0]["id"])
 	assert_true(
 		controller.apply_graph_node_params(
-			graph_id, object_node_id, {"items": "barrel\ncrate\nlantern"}
+			graph_id,
+			object_node_id,
+			{
+				"rows":
+				[
+					{"id": "barrel", "text": "barrel", "count": 3, "enabled": true},
+					{"id": "crate", "text": "crate", "count": 3, "enabled": true},
+					{"id": "lantern", "text": "lantern", "count": 3, "enabled": true},
+				]
+			}
 		)
 	)
-	var size_node_id: String = controller.add_graph_node_to_selected_graph("size_spec")
 	var reference_node_id: String = controller.add_graph_node_to_selected_graph("image_input")
 	var generate_node_id: String = controller.add_graph_node_to_selected_graph("ai_generate")
 	var batch_node_id: String = controller.add_graph_node_to_selected_graph("batch")
-	for node_id in [size_node_id, reference_node_id, generate_node_id, batch_node_id]:
+	for node_id in [reference_node_id, generate_node_id, batch_node_id]:
 		assert_false(String(node_id).is_empty())
 
 	var reference := Image.create(4, 4, false, Image.FORMAT_RGBA8)
@@ -116,15 +124,24 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 	)
 	assert_true(
 		controller.apply_graph_node_params(
-			graph_id, generate_node_id, {"provider_id": "mock", "batch_size": 3, "seed": 42}
+			graph_id,
+			generate_node_id,
+			{
+				"provider_id": "mock",
+				"model_id": "pixel_mock_v1",
+				"target_width": 32,
+				"target_height": 32,
+				"batch_size": 3,
+				"seed": 42,
+				"extra": {},
+			}
 		)
 	)
 
 	var graph := GraphScript.from_json(ProjectService.get_graph_data(graph_id))
-	assert_true(graph.add_edge(object_node_id, "items", generate_node_id, "items")["ok"])
-	assert_true(graph.add_edge(size_node_id, "spec", generate_node_id, "spec")["ok"])
-	assert_true(graph.add_edge(reference_node_id, "image", generate_node_id, "image")["ok"])
-	assert_true(graph.add_edge(generate_node_id, "images", batch_node_id, "in")["ok"])
+	assert_true(graph.add_edge(object_node_id, "subjects", generate_node_id, "subjects")["ok"])
+	assert_true(graph.add_edge(reference_node_id, "assets", generate_node_id, "references")["ok"])
+	assert_true(graph.add_edge(generate_node_id, "assets", batch_node_id, "in")["ok"])
 	ProjectService.set_graph_data(graph_id, graph.to_json(), true)
 	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], batch_node_id)
 	canvas.select_ids([batch_item_id])
@@ -134,40 +151,32 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 	var result_asset_ids: Array = canvas._get_batch_asset_ids(batch_item_id)
 	assert_eq(result_asset_ids.size(), 9)
 	var saved_graph: Dictionary = ProjectService.get_graph_data(graph_id)
-	assert_eq(_node_data(saved_graph, batch_node_id)["params"]["asset_ids"].size(), 9)
+	var saved_batch_params: Dictionary = _node_data(saved_graph, batch_node_id)["params"]
+	assert_false(saved_batch_params.has("asset_ids"))
+	assert_false(saved_batch_params.has("review_states"))
+	assert_eq(saved_batch_params["result_slots"].size(), 9)
 	assert_eq(
 		(
 			AssetLibrary
 			. get_asset_meta(
-				String(_node_data(saved_graph, batch_node_id)["params"]["asset_ids"][0])
-			)["provenance"]["reference_asset_id"]
+				String(saved_batch_params["result_slots"][0]["asset_id"])
+			)["provenance"]["generation_snapshot"]["reference_asset_ids"]
 		),
-		reference_asset_id
+		[reference_asset_id]
 	)
 	var generate_item_id: String = _item_id_for_node(
 		canvas.export_canvas_data()["items"], generate_node_id
 	)
 	assert_true(canvas._set_graph_node_collapsed(generate_item_id, true, false))
 	assert_true(canvas._set_batch_collapsed(batch_item_id, true, false))
-	assert_eq(
-		canvas._set_batch_review_state(batch_item_id, [result_asset_ids[0]], "keep", false), 1
-	)
 	var roundtrip_path := "user://tests/beta02_blank_chain_roundtrip.pxproj"
 	assert_eq(ProjectService.save_project(roundtrip_path), OK)
 	assert_eq(ProjectService.open_project(roundtrip_path), OK)
 	var loaded_graph: Dictionary = ProjectService.get_graph_data(graph_id)
-	assert_eq(_node_data(loaded_graph, batch_node_id)["params"]["asset_ids"], result_asset_ids)
-	assert_eq(
-		_node_data(loaded_graph, batch_node_id)["params"]["review_states"][result_asset_ids[0]],
-		"keep"
-	)
-	assert_eq(
-		(
-			AssetLibrary
-			. get_asset_meta(String(result_asset_ids[0]))["provenance"]["reference_asset_id"]
-		),
-		reference_asset_id
-	)
+	var loaded_batch_params: Dictionary = _node_data(loaded_graph, batch_node_id)["params"]
+	assert_false(loaded_batch_params.has("asset_ids"))
+	assert_false(loaded_batch_params.has("review_states"))
+	assert_eq(_visible_asset_ids(loaded_batch_params), result_asset_ids)
 	var loaded_canvas_items: Array = ProjectService.current_project.canvas["items"]
 	assert_true(_item_data_for_node(loaded_canvas_items, generate_node_id)["collapsed"])
 	assert_true(_item_data_for_node(loaded_canvas_items, batch_node_id)["collapsed"])
@@ -182,7 +191,7 @@ func test_offline_example_is_one_undoable_reference_to_batch_workspace() -> void
 	assert_eq(canvas.get_item_count(), 5)
 	var graph: Dictionary = ProjectService.current_project.graphs.values()[0]
 	assert_eq(_node_type(graph, "reference"), "image_input")
-	assert_true(_has_edge(graph, "reference", "image", "generate", "image"))
+	assert_true(_has_edge(graph, "reference", "assets", "generate", "references"))
 	var reference_id := String(_node_data(graph, "reference")["params"]["asset_id"])
 	assert_true(AssetLibrary.has_asset(reference_id))
 
@@ -395,6 +404,20 @@ func _item_data_for_node(items: Array, node_id: String) -> Dictionary:
 		if String(item.get("node_id", "")) == node_id:
 			return item
 	return {}
+
+
+func _visible_asset_ids(batch_params: Dictionary) -> Array:
+	var result := []
+	for raw_slot in batch_params.get("result_slots", []):
+		if not (raw_slot is Dictionary):
+			continue
+		var slot: Dictionary = raw_slot
+		if String(slot.get("status", "")) != "succeeded" or bool(slot.get("detached", false)):
+			continue
+		var asset_id := String(slot.get("asset_id", ""))
+		if not asset_id.is_empty():
+			result.append(asset_id)
+	return result
 
 
 func _has_edge(
