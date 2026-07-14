@@ -32,8 +32,7 @@ func test_frame_target_missing_required_prompt_is_reported_but_other_target_runs
 	graph["edges"] = graph["edges"].filter(
 		func(edge: Dictionary) -> bool:
 			return not (
-				edge["to"][0] == "generate-b"
-				and edge["from"][0] in ["outside-prompt", "legacy"]
+				edge["to"][0] == "generate-b" and edge["from"][0] in ["outside-prompt", "legacy"]
 			)
 	)
 	var plan := Planner.plan(graph, _canvas(), "frame-stage")
@@ -53,7 +52,6 @@ func _graph() -> Dictionary:
 			{
 				"id": "rows",
 				"type": "object_list",
-				"position": [0, 0],
 				"params":
 				{
 					"rows":
@@ -67,49 +65,45 @@ func _graph() -> Dictionary:
 			{
 				"id": "legacy",
 				"type": "object_list",
-				"position": [0, 200],
 				"params":
 				{
-					"rows": [
+					"rows":
+					[
 						{"id": "tree", "text": "tree", "count": 2, "enabled": true},
 						{"id": "rock", "text": "rock", "count": 2, "enabled": true},
 					]
 				}
 			},
-			{
-				"id": "outside-prompt",
-				"type": "text_prompt",
-				"position": [-300, 0],
-				"params": {"text": "shared"}
-			},
+			{"id": "outside-prompt", "type": "text_prompt", "params": {"text": "shared"}},
 			{
 				"id": "generate-a",
 				"type": "ai_generate",
-				"position": [600, 0],
 				"params":
 				{
-					"provider_id": "mock", "model_id": "pixel_mock_v1",
-					"target_width": 32, "target_height": 32,
-					"batch_size": 7, "seed": 1, "extra": {}
+					"provider_id": "mock",
+					"model_id": "pixel_mock_v1",
+					"target_width": 32,
+					"target_height": 32,
+					"batch_size": 7,
+					"seed": 1,
+					"extra": {}
 				}
 			},
 			{
 				"id": "generate-b",
 				"type": "ai_generate",
-				"position": [600, 240],
 				"params":
 				{
-					"provider_id": "mock", "model_id": "pixel_mock_v1",
-					"target_width": 32, "target_height": 32,
-					"batch_size": 2, "seed": 2, "extra": {}
+					"provider_id": "mock",
+					"model_id": "pixel_mock_v1",
+					"target_width": 32,
+					"target_height": 32,
+					"batch_size": 2,
+					"seed": 2,
+					"extra": {}
 				}
 			},
-			{
-				"id": "unrelated-bad",
-				"type": "image_input",
-				"position": [1000, 800],
-				"params": {"asset_id": "missing"}
-			},
+			{"id": "unrelated-bad", "type": "image_input", "params": {"asset_id": "missing"}},
 		],
 		"edges":
 		[

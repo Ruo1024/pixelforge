@@ -9,9 +9,7 @@ const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
 const LegacyAdapterScript := preload("res://services/legacy_generation_v2_adapter.gd")
 
 
-func run_to_batch(
-	graph: PFGraph, asset_library: Node, batch_node_id: String = ""
-) -> Dictionary:
+func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "") -> Dictionary:
 	var setup_result := _validate_run_setup(graph, asset_library)
 	if not bool(setup_result["ok"]):
 		return setup_result
@@ -46,11 +44,7 @@ func run_to_batch(
 
 
 func materialize_provider_batch(
-	graph: PFGraph,
-	batch_node_id: String,
-	images: Array,
-	metadata: Array,
-	asset_library: Node
+	graph: PFGraph, batch_node_id: String, images: Array, metadata: Array, asset_library: Node
 ) -> Dictionary:
 	return _materialize_batch(graph, batch_node_id, images, metadata, asset_library)
 
@@ -91,11 +85,7 @@ func _run_node(
 	if node.get_type() == "batch":
 		if batch_node_id.is_empty() or batch_node_id == node_id:
 			var materialized := _materialize_batch(
-				graph,
-				node_id,
-				inputs.get("in", []),
-				inputs.get("__metadata", []),
-				asset_library
+				graph, node_id, inputs.get("in", []), inputs.get("__metadata", []), asset_library
 			)
 			if not bool(materialized["ok"]):
 				return materialized
@@ -114,11 +104,7 @@ func _run_node(
 
 
 func _materialize_batch(
-	graph: PFGraph,
-	node_id: String,
-	value: Variant,
-	metadata: Variant,
-	asset_library: Node
+	graph: PFGraph, node_id: String, value: Variant, metadata: Variant, asset_library: Node
 ) -> Dictionary:
 	var images := _image_array(value)
 	var metas := _metadata_array(metadata)

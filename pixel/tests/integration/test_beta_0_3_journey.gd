@@ -41,7 +41,9 @@ func test_two_branch_stage_workspace_runs_saves_and_reopens_with_results() -> vo
 	)
 	assert_true(first_run["ok"])
 	var first_graph := GraphScript.from_json(first_run["graph"])
-	assert_eq(BatchNodeScript.get_visible_asset_ids(first_graph.get_node_params("batch_a")).size(), 4)
+	assert_eq(
+		BatchNodeScript.get_visible_asset_ids(first_graph.get_node_params("batch_a")).size(), 4
+	)
 	ProjectService.set_graph_data(Fixture.GRAPH_ID, first_run["graph"], true)
 	var second_run: Dictionary = runner.run_to_batch(
 		GraphScript.from_json(ProjectService.get_graph_data(Fixture.GRAPH_ID)),
@@ -50,7 +52,9 @@ func test_two_branch_stage_workspace_runs_saves_and_reopens_with_results() -> vo
 	)
 	assert_true(second_run["ok"])
 	var second_graph := GraphScript.from_json(second_run["graph"])
-	assert_eq(BatchNodeScript.get_visible_asset_ids(second_graph.get_node_params("batch_b")).size(), 4)
+	assert_eq(
+		BatchNodeScript.get_visible_asset_ids(second_graph.get_node_params("batch_b")).size(), 4
+	)
 	ProjectService.set_graph_data(Fixture.GRAPH_ID, second_run["graph"], true)
 
 	var canvas: Control = CanvasScript.new()

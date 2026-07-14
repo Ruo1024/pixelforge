@@ -38,9 +38,12 @@ func test_node_registry_registers_batch_and_rejects_duplicate_type() -> void:
 
 	assert_true(registry.has_type("batch"))
 	assert_false(registry.register("batch", BatchNodeScript))
-	assert_eq(NodeRegistryScript.BUILTIN_TYPES, registry.get_registered_types().filter(
-		func(type_name: String) -> bool: return type_name in NodeRegistryScript.BUILTIN_TYPES
-	))
+	assert_eq(
+		NodeRegistryScript.BUILTIN_TYPES,
+		registry.get_registered_types().filter(
+			func(type_name: String) -> bool: return type_name in NodeRegistryScript.BUILTIN_TYPES
+		)
+	)
 	assert_false(registry.has_type("size_spec"))
 	assert_false(registry.has_type("style_preset"))
 
@@ -179,17 +182,21 @@ func test_loaded_edge_schema_is_normalized_before_validation() -> void:
 
 func test_batch_node_result_slots_roundtrip_through_graph_json() -> void:
 	var graph := GraphScript.new()
-	var node_id := graph.add_node(
-		BatchNodeScript.new(),
-		"batch_1",
-		{
-			"label": "Candidates",
-			"result_slots": [
-				{"status": "succeeded", "asset_id": "asset-a", "detached": false},
-				{"status": "succeeded", "asset_id": "asset-b", "detached": true},
-			],
-		},
-		Vector2(128, -32)
+	var node_id := (
+		graph
+		. add_node(
+			BatchNodeScript.new(),
+			"batch_1",
+			{
+				"label": "Candidates",
+				"result_slots":
+				[
+					{"status": "succeeded", "asset_id": "asset-a", "detached": false},
+					{"status": "succeeded", "asset_id": "asset-b", "detached": true},
+				],
+			},
+			Vector2(128, -32)
+		)
 	)
 
 	assert_eq(node_id, "batch_1")
@@ -243,7 +250,16 @@ func test_known_graph_node_and_edge_unknown_fields_are_rejected() -> void:
 			{
 				"id": "generate",
 				"type": "ai_generate",
-				"params": {"provider_id": "p", "model_id": "m", "target_width": 32, "target_height": 32, "batch_size": 1, "seed": -1, "extra": {}},
+				"params":
+				{
+					"provider_id": "p",
+					"model_id": "m",
+					"target_width": 32,
+					"target_height": 32,
+					"batch_size": 1,
+					"seed": -1,
+					"extra": {}
+				},
 			},
 		],
 		"edges":

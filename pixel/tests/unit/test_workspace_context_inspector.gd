@@ -2,6 +2,8 @@ extends "res://addons/gut/test.gd"
 
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const InspectorScript := preload("res://ui/inspector/workspace_context_inspector.gd")
+const GraphScript := preload("res://core/graph/pf_graph.gd")
+const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 
 
 func before_each() -> void:
@@ -16,20 +18,21 @@ func test_single_candidate_maps_safe_snapshot_and_emits_safe_action_context() ->
 		{
 			"provider_id": "openai_image",
 			"model_id": "gpt-image-2",
+			"mode": "txt2img",
 			"prompt": "tiny forest shrine",
-			"negative_prompt": "blur",
-			"style": {"preset_id": "nes", "api_key": "nested-must-not-leak"},
-			"width": 1024,
-			"height": 1024,
-			"seed": 0,
+			"target_width": 32,
+			"target_height": 32,
+			"provider_output_size": [1024, 1024],
+			"actual_width": 1024,
+			"actual_height": 1024,
+			"requested_seed": -1,
+			"actual_seed": 0,
 			"reference_asset_ids": ["reference-a", "reference-b"],
-			"reference_content_sha256s": ["hash-a", "hash-b"],
-			"source_generate_node_id": "generate-cloud",
+			"reference_content_sha256s": ["a".repeat(64), "b".repeat(64)],
+			"source_node_id": "generate-cloud",
 			"run_id": "run-safe",
-			"cost": 0.042,
-			"created_at": "2026-07-13T08:00:00Z",
-			"api_key": "must-not-leak",
-			"external_response": {"raw": "must-not-leak"},
+			"request_id": "request-safe",
+			"extra": {"quality": "low", "authorization": "must-not-leak"},
 		},
 	)
 	var fixture := await _make_inspector_with_batch([asset_id], [asset_id])
@@ -42,7 +45,7 @@ func test_single_candidate_maps_safe_snapshot_and_emits_safe_action_context() ->
 	assert_eq(_row_value(panel, "Seed"), "0")
 	assert_eq(_row_value(panel, "Size"), "1024×1024")
 	assert_true(_row_value(panel, "References").contains("reference-a, reference-b"))
-	assert_eq(_row_value(panel, "Cost"), "$0.0420")
+	assert_false(panel.get_node("CostRow").visible)
 	assert_eq(_row_value(panel, "CreatedAt"), "2026-07-13T08:00:00Z")
 	assert_eq(_row_value(panel, "Source"), "generate-cloud")
 	assert_false(_all_label_text(panel).contains("must-not-leak"))
@@ -51,9 +54,6 @@ func test_single_candidate_maps_safe_snapshot_and_emits_safe_action_context() ->
 	watch_signals(inspector)
 	(panel.get_node("CandidateActions/CopySettingsButton") as Button).pressed.emit()
 	var expected_snapshot: Dictionary = fixture["snapshot"]
-	expected_snapshot.erase("api_key")
-	expected_snapshot.erase("external_response")
-	expected_snapshot["style"].erase("api_key")
 	var expected_context := {
 		"snapshot": expected_snapshot,
 		"asset_ids": [asset_id],
@@ -134,11 +134,22 @@ func _make_inspector_with_batch(asset_ids: Array, selected_ids: Array) -> Dictio
 	var inspector: Control = InspectorScript.new()
 	add_child_autofree(inspector)
 	await wait_process_frames(2)
-	var card: Node = canvas._add_batch_card(
-		asset_ids, Vector2(24, 24), "Candidates", "batch-item", false
+	var graph := GraphScript.new()
+	graph.id = "graph-main"
+	(
+		graph
+		. add_node(
+			BatchNodeScript.new(),
+			"batch-results",
+			_output_params(asset_ids),
+			Vector2.ZERO,
+		)
 	)
-	card.graph_id = "graph-main"
-	card.node_id = "batch-results"
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+	var card: Node = canvas._add_graph_node_card(
+		graph.id, "batch-results", Vector2(24, 24), "batch-item", false
+	)
+	assert_eq(card.asset_ids, asset_ids)
 	card._set_selected_asset_ids(selected_ids)
 	canvas.select_ids([card.item_id])
 	inspector.show_canvas_selection(canvas)
@@ -151,6 +162,40 @@ func _make_inspector_with_batch(asset_ids: Array, selected_ids: Array) -> Dictio
 	}
 
 
+func _output_params(asset_ids: Array) -> Dictionary:
+	var slots := []
+	for index in range(asset_ids.size()):
+		slots.append(_slot("slot-%d" % index, String(asset_ids[index]), false))
+	if not asset_ids.is_empty():
+		slots.append(_slot("slot-detached", String(asset_ids[0]), true))
+	return {
+		"label": "Candidates",
+		"source_node_id": "",
+		"source_run_id": "",
+		"role": "standalone",
+		"input_snapshots": {},
+		"request_records": [],
+		"result_slots": slots,
+	}
+
+
+func _slot(slot_id: String, asset_id: String, detached: bool) -> Dictionary:
+	return {
+		"slot_id": slot_id,
+		"run_id": "",
+		"request_id": "",
+		"source_row_id": "",
+		"source_asset_id": "",
+		"input_snapshot_id": "",
+		"planned_size": [4, 4],
+		"status": "succeeded",
+		"asset_id": asset_id,
+		"detached": detached,
+		"unexpected": false,
+		"error": null,
+	}
+
+
 func _register_candidate(
 	name: String, snapshot: Dictionary, include_snapshot: bool = true
 ) -> String:
@@ -158,10 +203,40 @@ func _register_candidate(
 	image.fill(Color.DARK_ORANGE)
 	var provenance := {"created_at": "legacy-time"}
 	if include_snapshot:
-		provenance["generation_snapshot"] = snapshot.duplicate(true)
-	return AssetLibrary.register_image(
+		var complete_snapshot := _generation_snapshot_fixture()
+		complete_snapshot.merge(snapshot, true)
+		provenance["created_at"] = "2026-07-13T08:00:00Z"
+		provenance["generation_snapshot"] = complete_snapshot
+	var asset_id := AssetLibrary.register_image(
 		image, name, {"origin": "generated", "provenance": provenance}
 	)
+	assert_false(asset_id.is_empty())
+	return asset_id
+
+
+func _generation_snapshot_fixture() -> Dictionary:
+	return {
+		"provider_id": "openai_image",
+		"model_id": "gpt-image-2",
+		"mode": "txt2img",
+		"target_width": 32,
+		"target_height": 32,
+		"provider_output_size": [1024, 1024],
+		"actual_width": 4,
+		"actual_height": 4,
+		"requested_seed": -1,
+		"actual_seed": null,
+		"run_id": "run-fixture",
+		"request_id": "request-fixture",
+		"source_node_id": "generate-fixture",
+		"source_row_id": "",
+		"prompt_preset_id": "",
+		"prompt_prefix": "",
+		"prompt": "fixture prompt",
+		"reference_asset_ids": [],
+		"reference_content_sha256s": [],
+		"extra": {"quality": "low"},
+	}
 
 
 func _snapshot_for_asset(asset_id: String) -> Dictionary:

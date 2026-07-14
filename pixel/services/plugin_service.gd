@@ -60,8 +60,11 @@ func load_directory_plugin(directory_path: String) -> Dictionary:
 		if failure_reason.is_empty() and String(parsed.get("code", "")).is_empty():
 			failure_reason = "Invalid manifest"
 		return _record_failure(
-			directory_path.get_file(), failure_reason, directory_path,
-			String(parsed.get("code", "")), Dictionary(parsed.get("args", {}))
+			directory_path.get_file(),
+			failure_reason,
+			directory_path,
+			String(parsed.get("code", "")),
+			Dictionary(parsed.get("args", {}))
 		)
 	var manifest: Dictionary = parsed["manifest"]
 	var plugin_id := String(manifest["id"])
@@ -91,7 +94,10 @@ func load_pck_plugin(pck_path: String) -> Dictionary:
 		if failure_reason.is_empty() and String(parsed.get("code", "")).is_empty():
 			failure_reason = "Invalid PCK manifest"
 		return _record_failure(
-			expected_id, failure_reason, pck_path, String(parsed.get("code", "")),
+			expected_id,
+			failure_reason,
+			pck_path,
+			String(parsed.get("code", "")),
 			Dictionary(parsed.get("args", {}))
 		)
 	var manifest: Dictionary = parsed["manifest"]
@@ -245,6 +251,7 @@ func list_capabilities(kind: String) -> Array:
 	return ids
 
 
+# gdlint: disable=max-returns
 func validate_manifest(manifest: Dictionary) -> Dictionary:
 	for field in REQUIRED_FIELDS:
 		if not manifest.has(field):
@@ -273,8 +280,13 @@ func _activate(
 	var validation := validate_manifest(manifest)
 	if not bool(validation.get("ok", false)):
 		return _record(
-			manifest, "failed", String(validation.get("reason", "")), source, builtin,
-			String(validation.get("code", "")), Dictionary(validation.get("args", {}))
+			manifest,
+			"failed",
+			String(validation.get("reason", "")),
+			source,
+			builtin,
+			String(validation.get("code", "")),
+			Dictionary(validation.get("args", {}))
 		)
 	var plugin_id := String(manifest["id"])
 	if _records.has(plugin_id) and String(_records[plugin_id].get("state", "")) == "loaded":
@@ -310,7 +322,9 @@ func _read_manifest(path: String) -> Dictionary:
 	if parsed.get("api_version") is float:
 		var parsed_version: float = parsed["api_version"]
 		if parsed_version != floorf(parsed_version):
-			return {"ok": false, "code": "invalid_plugin_manifest", "args": {"field": "api_version"}}
+			return {
+				"ok": false, "code": "invalid_plugin_manifest", "args": {"field": "api_version"}
+			}
 		parsed["api_version"] = int(parsed_version)
 	var validation := validate_manifest(parsed)
 	return (
@@ -326,8 +340,13 @@ func _read_manifest(path: String) -> Dictionary:
 
 
 func _record(
-	manifest: Dictionary, state: String, reason: String, source: String, builtin: bool,
-	code: String = "", args: Dictionary = {}
+	manifest: Dictionary,
+	state: String,
+	reason: String,
+	source: String,
+	builtin: bool,
+	code: String = "",
+	args: Dictionary = {}
 ) -> Dictionary:
 	var plugin_id := String(manifest.get("id", source.get_file().get_basename()))
 	var record := {

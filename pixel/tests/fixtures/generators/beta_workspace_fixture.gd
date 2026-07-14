@@ -23,16 +23,13 @@ static func build() -> Dictionary:
 				prompt_id,
 				"object_list",
 				{
-					"rows": _rows(
-						["barrel", "fence"] if branch_index == 0 else ["well", "lantern"], 2
-					)
+					"rows":
+					_rows(["barrel", "fence"] if branch_index == 0 else ["well", "lantern"], 2)
 				}
 			),
 			_node(reference_id, "image_input", {"asset_id": ""}),
 			_node(
-				preset_id,
-				"prompt_preset",
-				{"preset": _prompt_preset("prompt-fixture-%s" % suffix)}
+				preset_id, "prompt_preset", {"preset": _prompt_preset("prompt-fixture-%s" % suffix)}
 			),
 			_node(generate_id, "ai_generate", _generate_params(100 + branch_index)),
 			_node(batch_id, "batch", _output_params("Branch %s results" % suffix.to_upper())),
@@ -100,13 +97,16 @@ static func _node(id: String, type: String, params: Dictionary) -> Dictionary:
 static func _rows(texts: Array, count: int) -> Array:
 	var rows := []
 	for index in range(texts.size()):
-		rows.append(
-			{
-				"id": "row-%d" % index,
-				"text": String(texts[index]),
-				"count": count,
-				"enabled": true,
-			}
+		(
+			rows
+			. append(
+				{
+					"id": "row-%d" % index,
+					"text": String(texts[index]),
+					"count": count,
+					"enabled": true,
+				}
+			)
 		)
 	return rows
 

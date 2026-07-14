@@ -1,6 +1,7 @@
 extends "res://addons/gut/test.gd"
 
 const FileIOScript := preload("res://infra/file_io.gd")
+const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
 
 
 func before_each() -> void:
@@ -52,9 +53,8 @@ func test_graph_slots_sprite_board_and_animation_are_live() -> void:
 					"role": "current",
 					"input_snapshots": {},
 					"request_records": [],
-					"result_slots": [
-						{"status": "succeeded", "detached": false, "asset_id": ids[2]}
-					],
+					"result_slots":
+					[{"status": "succeeded", "detached": false, "asset_id": ids[2]}],
 				},
 			},
 		],
@@ -85,17 +85,47 @@ func test_reference_set_is_live_and_plural_provenance_is_history_in_order() -> v
 		],
 		"edges": [],
 	}
-	AssetLibrary.register_image(
-		image,
-		"derived",
-		{
-			"provenance":
+	var derived_id: String = (
+		AssetLibrary
+		. register_image(
+			image,
+			"derived",
 			{
-				"generation_snapshot":
-				{"reference_asset_ids": [first_id, second_id]}
+				"origin": "generated",
+				"provenance":
+				{
+					"generation_snapshot":
+					{
+						"provider_id": "openai_image",
+						"model_id": "gpt-image-2",
+						"mode": "img2img",
+						"target_width": 2,
+						"target_height": 2,
+						"provider_output_size": [2, 2],
+						"actual_width": 2,
+						"actual_height": 2,
+						"requested_seed": -1,
+						"actual_seed": null,
+						"run_id": "run-history",
+						"request_id": "request-history",
+						"source_node_id": "generate-history",
+						"source_row_id": "",
+						"prompt_preset_id": "",
+						"prompt_prefix": "",
+						"prompt": "derived reference",
+						"reference_asset_ids": [first_id, second_id],
+						"reference_content_sha256s":
+						[
+							GraphContextScript.image_content_sha256(image),
+							GraphContextScript.image_content_sha256(image),
+						],
+						"extra": {"quality": "low"},
+					}
+				}
 			}
-		}
+		)
 	)
+	assert_false(derived_id.is_empty())
 
 	var first_locations := ProjectService.get_asset_reference_locations(first_id)
 	var second_locations := ProjectService.get_asset_reference_locations(second_id)

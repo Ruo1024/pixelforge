@@ -62,7 +62,10 @@ static func _scan_batch_fields(
 				continue
 			var strength := (
 				"live"
-				if String(slot.get("status", "")) == "succeeded" and not bool(slot.get("detached", false))
+				if (
+					String(slot.get("status", "")) == "succeeded"
+					and not bool(slot.get("detached", false))
+				)
 				else "history"
 			)
 			_add(references, asset_id, "%s/result_slots/%d/asset_id" % [base, index], strength)

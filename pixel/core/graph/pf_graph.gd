@@ -318,7 +318,7 @@ static func _validate_v2_data(data: Dictionary) -> Dictionary:
 			for key in params.keys():
 				if String(key) not in PARAM_KEYS[node_type]:
 					return _load_error("unknown_graph_param", "nodes[%d].params.%s" % [index, key])
-			if node_type not in ["batch", "object_list"]:
+			if node_type not in ["batch", "object_list", "reference_set"]:
 				var known_node: PFNode = registry.create(node_type)
 				if (
 					known_node == null
@@ -346,6 +346,13 @@ static func _validate_v2_data(data: Dictionary) -> Dictionary:
 					"invalid_object_rows",
 					"nodes[%d].%s" % [index, String(rows_issue.get("path", "params"))]
 				)
+		if node_type == "reference_set":
+			var asset_ids: Variant = params.get("asset_ids", null)
+			if not (asset_ids is Array):
+				return _load_error("invalid_asset_ids", "nodes[%d].params.asset_ids" % index)
+			for asset_id in asset_ids:
+				if not (asset_id is String):
+					return _load_error("invalid_asset_ids", "nodes[%d].params.asset_ids" % index)
 		if node_type == "prompt_preset":
 			var preset: Variant = params.get("preset", null)
 			if (

@@ -46,9 +46,7 @@ static func validate_preset(preset: Dictionary) -> Dictionary:
 		return _failure("invalid_cleanup_preset", {"field": "id"})
 	if preset.has("name") == preset.has("name_key"):
 		return _failure("invalid_cleanup_preset", {"field": "name"})
-	if preset.has("name") and (
-		not (preset["name"] is String) or String(preset["name"]).is_empty()
-	):
+	if preset.has("name") and (not (preset["name"] is String) or String(preset["name"]).is_empty()):
 		return _failure("invalid_cleanup_preset", {"field": "name"})
 	if preset.has("name_key") and not (preset["name_key"] is String):
 		return _failure("invalid_cleanup_preset", {"field": "name_key"})
@@ -115,8 +113,16 @@ static func _validate_settings(settings: Dictionary) -> Dictionary:
 	if float(detect["scale"]) != float(resample["scale"]) or detect["offset"] != resample["offset"]:
 		return _failure("invalid_cleanup_preset", {"field": "geometry"})
 	var quantize_fields := [
-		"enabled", "mode", "palette_id", "auto_k_strategy", "k", "dither",
-		"dither_strength", "dither_contrast", "dither_chroma", "dither_density",
+		"enabled",
+		"mode",
+		"palette_id",
+		"auto_k_strategy",
+		"k",
+		"dither",
+		"dither_strength",
+		"dither_contrast",
+		"dither_chroma",
+		"dither_density",
 	]
 	if not _has_only_keys(quantize, quantize_fields):
 		return _failure("invalid_cleanup_preset", {"field": "quantize"})

@@ -81,7 +81,9 @@ func test_prompt_and_cleanup_preset_snapshots_are_visible_without_execution() ->
 		}
 	)
 	assert_eq(cleanup["card"].get_content_control("CleanupPresetId").text, "cleanup-user-original")
-	assert_true(cleanup["card"].get_content_control("CleanupSettingsSnapshot").text.contains("quantize"))
+	assert_true(
+		cleanup["card"].get_content_control("CleanupSettingsSnapshot").text.contains("quantize")
+	)
 	assert_null(cleanup["card"].get_content_control("PrimaryActionButton"))
 
 

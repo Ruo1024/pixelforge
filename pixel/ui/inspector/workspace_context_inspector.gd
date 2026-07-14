@@ -19,20 +19,24 @@ const CONTENT_GAP := 8
 const GENERATION_SNAPSHOT_KEYS: Array[String] = [
 	"provider_id",
 	"model_id",
+	"mode",
+	"target_width",
+	"target_height",
+	"provider_output_size",
+	"actual_width",
+	"actual_height",
+	"requested_seed",
+	"actual_seed",
+	"run_id",
+	"request_id",
+	"source_node_id",
+	"source_row_id",
+	"prompt_preset_id",
+	"prompt_prefix",
 	"prompt",
-	"negative_prompt",
-	"style",
-	"width",
-	"height",
-	"batch_size",
-	"seed",
 	"reference_asset_ids",
 	"reference_content_sha256s",
-	"source_generate_node_id",
-	"source_row_id",
-	"run_id",
-	"cost",
-	"created_at",
+	"extra",
 ]
 const CANDIDATE_ACTIONS: Array[String] = [
 	"copy_prompt", "copy_settings", "rerun", "as_reference", "continue_branch"
@@ -243,10 +247,10 @@ func _show_batch_context(item: Node) -> void:
 		_show_multiple_candidates(selected_asset_ids.size())
 		return
 	var snapshot: Dictionary = _candidate_context["snapshot"]
-	_show_single_candidate(snapshot)
+	_show_single_candidate(snapshot, _created_at_for_asset(selected_asset_ids[0]))
 
 
-func _show_single_candidate(snapshot: Dictionary) -> void:
+func _show_single_candidate(snapshot: Dictionary, created_at: String) -> void:
 	_candidate_summary.text = (
 		Strings.text("INSPECTOR_CANDIDATE_DETAILS")
 		if not snapshot.is_empty()
@@ -254,9 +258,12 @@ func _show_single_candidate(snapshot: Dictionary) -> void:
 	)
 	_set_candidate_row("prompt", snapshot.get("prompt", ""))
 	_set_candidate_row("model", snapshot.get("model_id", ""))
-	_set_candidate_row("seed", snapshot.get("seed", null))
-	var width := int(snapshot.get("width", 0))
-	var height := int(snapshot.get("height", 0))
+	var seed: Variant = snapshot.get("actual_seed", null)
+	if seed == null:
+		seed = snapshot.get("requested_seed", null)
+	_set_candidate_row("seed", seed)
+	var width := int(snapshot.get("actual_width", 0))
+	var height := int(snapshot.get("actual_height", 0))
 	_set_candidate_row("size", "%d×%d" % [width, height] if width > 0 and height > 0 else "")
 	var references: Array = snapshot.get("reference_asset_ids", [])
 	_set_candidate_row(
@@ -270,17 +277,9 @@ func _show_single_candidate(snapshot: Dictionary) -> void:
 			else ""
 		),
 	)
-	var cost: Variant = snapshot.get("cost", null)
-	_set_candidate_row(
-		"cost",
-		(
-			Strings.text("INSPECTOR_CANDIDATE_COST_FORMAT") % float(cost)
-			if cost is int or cost is float
-			else ""
-		),
-	)
-	_set_candidate_row("created_at", snapshot.get("created_at", ""))
-	_set_candidate_row("source", snapshot.get("source_generate_node_id", ""))
+	_set_candidate_row("cost", "")
+	_set_candidate_row("created_at", created_at if not snapshot.is_empty() else "")
+	_set_candidate_row("source", snapshot.get("source_node_id", ""))
 	_set_action_visibility(false)
 	_candidate_action_buttons["copy_prompt"].disabled = (
 		String(snapshot.get("prompt", "")).is_empty()
@@ -349,6 +348,12 @@ func _snapshot_for_asset(asset_id: String) -> Dictionary:
 	var meta: Dictionary = AssetLibrary.get_asset_meta(asset_id)
 	var provenance: Dictionary = meta.get("provenance", {})
 	return _safe_generation_snapshot(provenance.get("generation_snapshot", {}))
+
+
+func _created_at_for_asset(asset_id: String) -> String:
+	var meta: Dictionary = AssetLibrary.get_asset_meta(asset_id)
+	var provenance: Dictionary = meta.get("provenance", {})
+	return String(provenance.get("created_at", ""))
 
 
 func _sanitize_snapshot_value(value: Variant) -> Variant:

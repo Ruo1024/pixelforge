@@ -2,9 +2,11 @@ class_name PFPixelCleanupNode
 extends PFNode
 
 const DEFAULT_SETTINGS := {
-	"detect_grid": {"enabled": true, "mode": "auto", "scale": 4.0, "offset": [0.0, 0.0], "base_size": 32},
+	"detect_grid":
+	{"enabled": true, "mode": "auto", "scale": 4.0, "offset": [0.0, 0.0], "base_size": 32},
 	"resample": {"enabled": true, "mode": "mode", "scale": 4.0, "offset": [0.0, 0.0]},
-	"quantize": {
+	"quantize":
+	{
 		"enabled": true,
 		"mode": "fixed_palette",
 		"palette_id": "db32",
@@ -51,7 +53,12 @@ func validate_params(params: Dictionary) -> Dictionary:
 	var settings: Variant = params.get("settings", DEFAULT_SETTINGS)
 	return {
 		"preset_id": String(params.get("preset_id", "cleanup-16bit-db32")),
-		"settings": Dictionary(settings).duplicate(true) if settings is Dictionary else DEFAULT_SETTINGS.duplicate(true),
+		"settings":
+		(
+			Dictionary(settings).duplicate(true)
+			if settings is Dictionary
+			else DEFAULT_SETTINGS.duplicate(true)
+		),
 	}
 
 

@@ -36,12 +36,7 @@ static func build() -> Dictionary:
 					]
 				}
 			),
-			_node(
-				ids["prompt"],
-				"text_prompt",
-				base + Vector2(0, 300),
-				{"text": "game asset"}
-			),
+			_node(ids["prompt"], "text_prompt", base + Vector2(0, 300), {"text": "game asset"}),
 			_node(
 				ids["preset"],
 				"prompt_preset",
@@ -71,10 +66,7 @@ static func build() -> Dictionary:
 				}
 			),
 			_node(
-				ids["batch"],
-				"batch",
-				base + Vector2(960, 0),
-				_output_params("Branch %s" % suffix)
+				ids["batch"], "batch", base + Vector2(960, 0), _output_params("Branch %s" % suffix)
 			),
 		]
 		for node in branch_nodes:

@@ -280,16 +280,45 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 	)
 	var graph := GraphScript.new()
 	graph.id = "graph_openai_contract"
+	(
+		graph
+		. add_node(
+			AiGenerateNodeScript.new(),
+			"generate",
+			{
+				"provider_id": "openai_image",
+				"model_id": "gpt-image-2",
+				"target_width": 32,
+				"target_height": 32,
+				"batch_size": 1,
+				"seed": -1,
+				"extra": {"quality": "low"},
+			}
+		)
+	)
 	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": "OpenAI"}, Vector2.ZERO)
+	assert_true(graph.add_edge("generate", "assets", "batch_1", "in")["ok"])
 	var metadata := [
 		{
-			"provider": "openai_image",
-			"model": "gpt-image-2",
-			"prompt": "wooden barrel",
-			"seed": null,
-			"cost": -1.0,
-			"provider_meta": decoded["provider_meta"],
 			"name": "openai_001",
+			"actual_seed": null,
+			"generation_snapshot":
+			{
+				"provider_id": "openai_image",
+				"model_id": "gpt-image-2",
+				"mode": "txt2img",
+				"prompt": "wooden barrel",
+				"prompt_preset_id": "",
+				"prompt_prefix": "",
+				"target_width": 32,
+				"target_height": 32,
+				"provider_output_size": [1, 1],
+				"requested_seed": -1,
+				"reference_asset_ids": [],
+				"reference_content_sha256s": [],
+				"source_row_id": "",
+				"extra": {"quality": "low"},
+			},
 		}
 	]
 	var result := GraphRunnerScript.new().materialize_provider_batch(
@@ -303,6 +332,7 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 	assert_eq(snapshot["provider_id"], "openai_image")
 	assert_eq(snapshot["model_id"], "gpt-image-2")
 	assert_eq(snapshot["prompt"], "wooden barrel")
+	assert_eq(snapshot["source_node_id"], "generate")
 	assert_false(provenance.has("cost"))
 	assert_false(provenance.has("provider_meta"))
 	assert_false(JSON.stringify(meta).contains(SECRET_SENTINEL))

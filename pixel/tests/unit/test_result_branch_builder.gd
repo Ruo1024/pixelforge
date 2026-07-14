@@ -14,7 +14,9 @@ func test_single_result_becomes_reference_without_touching_source_branch() -> vo
 	var node_id := String(result["focus_node_id"])
 	assert_eq(graph.get_node(node_id).get_type(), "image_input")
 	assert_eq(graph.get_node_params(node_id)["asset_id"], "asset-a")
-	assert_eq(BatchNodeScript.get_visible_asset_ids(graph.get_node_params("source_batch")), ["asset-a"])
+	assert_eq(
+		BatchNodeScript.get_visible_asset_ids(graph.get_node_params("source_batch")), ["asset-a"]
+	)
 	assert_eq(before["edges"], graph.to_json()["edges"])
 
 
@@ -55,28 +57,29 @@ func test_multiple_results_build_runnable_independent_continue_branch() -> void:
 	assert_eq(graph.get_node_params(type_ids["ai_generate"])["batch_size"], 3)
 	assert_true(graph.get_node_params(type_ids["batch"])["result_slots"].is_empty())
 	assert_eq(graph.validate_edges(), [])
-	assert_eq(BatchNodeScript.get_visible_asset_ids(graph.get_node_params("source_batch")), ["asset-a"])
+	assert_eq(
+		BatchNodeScript.get_visible_asset_ids(graph.get_node_params("source_batch")), ["asset-a"]
+	)
 
 
 func _source_graph() -> PFGraph:
 	var graph := GraphScript.new()
 	graph.id = "graph_result_branch"
-	graph.add_node(
-		BatchNodeScript.new(),
-		"source_batch",
-		{
-			"label": "Source",
-			"source_node_id": "source",
-			"source_run_id": "run-source",
-			"role": "current",
-			"input_snapshots": {},
-			"request_records": [],
-			"result_slots": [
-				{
-					"status": "succeeded", "detached": false, "asset_id": "asset-a"
-				}
-			],
-		},
-		Vector2.ZERO
+	(
+		graph
+		. add_node(
+			BatchNodeScript.new(),
+			"source_batch",
+			{
+				"label": "Source",
+				"source_node_id": "source",
+				"source_run_id": "run-source",
+				"role": "current",
+				"input_snapshots": {},
+				"request_records": [],
+				"result_slots": [{"status": "succeeded", "detached": false, "asset_id": "asset-a"}],
+			},
+			Vector2.ZERO
+		)
 	)
 	return graph

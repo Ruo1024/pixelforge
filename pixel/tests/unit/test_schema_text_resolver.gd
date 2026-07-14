@@ -61,9 +61,13 @@ func test_all_key_fields_validate_but_only_graph_ui_fields_resolve() -> void:
 	}
 	assert_true(
 		bool(
-			resolver.validate_schema(
-				[{"name_key": "PRESET_NAME", "custom_key": "CUSTOM_VALUE"}], catalogs
-			).get("ok", false)
+			(
+				resolver
+				. validate_schema(
+					[{"name_key": "PRESET_NAME", "custom_key": "CUSTOM_VALUE"}], catalogs
+				)
+				. get("ok", false)
+			)
 		)
 	)
 	assert_eq(resolver.resolve({"name_key": "PROMPT_PRESET_HIBIT"}, "name_key"), "")

@@ -20,4 +20,4 @@ func test_adapter_is_marked_for_b7_4_removal_and_has_no_overwrite_alias() -> voi
 	var source := FileAccess.get_file_as_string(ADAPTER_PATH)
 	assert_string_contains(source, "B7-4 DELETE")
 	assert_false("replace_batch_assets" in source)
-	assert_false("params[\"asset_ids\"]" in source)
+	assert_false('params["asset_ids"]' in source)

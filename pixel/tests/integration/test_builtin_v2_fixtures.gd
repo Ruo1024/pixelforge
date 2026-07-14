@@ -8,15 +8,28 @@ const ProjectModel := preload("res://services/pf_project.gd")
 const ProviderService := preload("res://services/provider_service.gd")
 const WorkflowTemplates := preload("res://services/workflow_template_service.gd")
 const WorkspaceFixture := preload("res://tests/fixtures/generators/beta_workspace_fixture.gd")
-const LargeWorkspaceFixture := preload("res://tests/fixtures/generators/beta_large_workspace_fixture.gd")
+const LargeWorkspaceFixture := preload(
+	"res://tests/fixtures/generators/beta_large_workspace_fixture.gd"
+)
 
 const MAIN_PATH_TYPES := [
-	"ai_generate", "batch", "image_input", "object_list", "pixel_cleanup", "prompt_preset",
-	"reference_set", "text_prompt",
+	"ai_generate",
+	"batch",
+	"image_input",
+	"object_list",
+	"pixel_cleanup",
+	"prompt_preset",
+	"reference_set",
+	"text_prompt",
 ]
 const RETIRED_TOKENS := [
-	"\"size_spec\"", "\"style_preset\"", "\"review_states\"",
-	"\"review_filter\"", "\"review_layout\"", "\"focus_asset_id\"", "\"compare_",
+	'"size_spec"',
+	'"style_preset"',
+	'"review_states"',
+	'"review_filter"',
+	'"review_layout"',
+	'"focus_asset_id"',
+	'"compare_',
 ]
 
 
@@ -62,7 +75,9 @@ func test_all_default_resources_are_v2() -> void:
 		assert_eq(int(manifest.get("api_version", 0)), 2, plugin_dir)
 		var plugin: Variant = load(plugin_script_path).new()
 		assert_not_null(plugin, plugin_script_path)
-	assert_eq(int(_json_file("res://templates/plugin_template/plugin.json").get("api_version", 0)), 2)
+	assert_eq(
+		int(_json_file("res://templates/plugin_template/plugin.json").get("api_version", 0)), 2
+	)
 
 	for preset_dir in ["res://assets/prompt_presets", "res://assets/cleanup_presets"]:
 		var files := Array(DirAccess.get_files_at(preset_dir)).filter(
@@ -72,7 +87,9 @@ func test_all_default_resources_are_v2() -> void:
 		for file_name in files:
 			var preset := _json_file(preset_dir.path_join(String(file_name)))
 			var version_key := (
-				"prompt_preset_version" if "prompt_presets" in preset_dir else "cleanup_preset_version"
+				"prompt_preset_version"
+				if "prompt_presets" in preset_dir
+				else "cleanup_preset_version"
 			)
 			assert_eq(int(preset.get(version_key, 0)), 1, preset_dir.path_join(String(file_name)))
 			assert_false(preset.has("based_on"), String(file_name))
@@ -87,10 +104,18 @@ func _assert_v2_graph(graph_data: Dictionary, source_name: String) -> void:
 		assert_true(String(node.get("type", "")) in MAIN_PATH_TYPES, JSON.stringify(node))
 		if String(node.get("type", "")) == "batch":
 			for legacy_key in [
-				"asset_ids", "expected_count", "review_states", "review_filter", "review_layout",
-				"focus_asset_id", "compare_asset_id",
+				"asset_ids",
+				"expected_count",
+				"review_states",
+				"review_filter",
+				"review_layout",
+				"focus_asset_id",
+				"compare_asset_id",
 			]:
-				assert_false(node.get("params", {}).has(legacy_key), "%s batch.%s" % [source_name, legacy_key])
+				assert_false(
+					node.get("params", {}).has(legacy_key),
+					"%s batch.%s" % [source_name, legacy_key]
+				)
 
 
 func _assert_no_retired_tokens(value: Variant, source_name: String) -> void:

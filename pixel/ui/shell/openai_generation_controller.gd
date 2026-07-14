@@ -84,7 +84,9 @@ func cancel_graph(graph_id: String, generate_node_id: String = "") -> bool:
 				or String(state.get("generate_node_id", "")) == generate_node_id
 			)
 		):
-			var provider: PFProvider = ProviderService.get_provider(String(state.get("provider_id", "")))
+			var provider: PFProvider = ProviderService.get_provider(
+				String(state.get("provider_id", ""))
+			)
 			if provider != null and provider.cancel(request_id) != null:
 				canceled = true
 	return canceled
@@ -460,18 +462,12 @@ func _metadata(
 					"cost": total_cost / count if total_cost >= 0.0 and count > 0 else -1.0,
 					"provider_meta": provider_meta,
 					"reference_asset_ids": provenance_inputs.get("reference_asset_ids", []),
-					"reference_content_sha256s": provenance_inputs.get(
-						"reference_content_sha256s", []
-					),
+					"reference_content_sha256s":
+					provenance_inputs.get("reference_content_sha256s", []),
 					"source_node_id": String(provenance_inputs.get("source_node_id", "")),
 					"source_row_id": "",
 					"generation_snapshot":
-					_generation_snapshot(
-						request,
-						provider_id,
-						model_id,
-						provenance_inputs
-					),
+					_generation_snapshot(request, provider_id, model_id, provenance_inputs),
 					"name": "%s_%03d" % [provider_id, index + 1],
 				}
 			)
@@ -508,20 +504,24 @@ func _make_graph() -> PFGraph:
 	var graph := GraphScript.new()
 	graph.id = "graph_openai_%s" % IdUtil.uuid_v4().left(8)
 	graph.name = "OpenAI Generate Batch"
-	graph.add_node(
-		ObjectListNodeScript.new(),
-		"objects",
-		{
-			"rows": [
-				{
-					"id": "default",
-					"text": Strings.OPENAI_V1_FIXED_PROMPT,
-					"count": 2,
-					"enabled": true,
-				}
-			]
-		},
-		Vector2(0, 0)
+	(
+		graph
+		. add_node(
+			ObjectListNodeScript.new(),
+			"objects",
+			{
+				"rows":
+				[
+					{
+						"id": "default",
+						"text": Strings.OPENAI_V1_FIXED_PROMPT,
+						"count": 2,
+						"enabled": true,
+					}
+				]
+			},
+			Vector2(0, 0)
+		)
 	)
 	graph.add_node(
 		PromptPresetNodeScript.new(),
@@ -529,19 +529,22 @@ func _make_graph() -> PFGraph:
 		{"preset": PromptPresetNodeScript.DEFAULT_PRESET.duplicate(true)},
 		Vector2(0, 150)
 	)
-	graph.add_node(
-		AiGenerateNodeScript.new(),
-		"generate",
-		{
-			"provider_id": "openai_image",
-			"model_id": "",
-			"target_width": 32,
-			"target_height": 32,
-			"batch_size": 2,
-			"seed": 1,
-			"extra": {},
-		},
-		Vector2(280, 75)
+	(
+		graph
+		. add_node(
+			AiGenerateNodeScript.new(),
+			"generate",
+			{
+				"provider_id": "openai_image",
+				"model_id": "",
+				"target_width": 32,
+				"target_height": 32,
+				"batch_size": 2,
+				"seed": 1,
+				"extra": {},
+			},
+			Vector2(280, 75)
+		)
 	)
 	graph.add_node(
 		BatchNodeScript.new(), "batch_1", {"label": Strings.OPENAI_BATCH_LABEL}, Vector2(560, 29)
@@ -552,7 +555,9 @@ func _make_graph() -> PFGraph:
 	return graph
 
 
-func _request_for_graph(graph: PFGraph, generate_node_id: String, provider_id: String) -> Dictionary:
+func _request_for_graph(
+	graph: PFGraph, generate_node_id: String, provider_id: String
+) -> Dictionary:
 	var generate_params := graph.get_node_params(generate_node_id)
 	var model_id := ProviderService.resolve_model_id(
 		provider_id, String(generate_params.get("model_id", ""))
@@ -572,9 +577,7 @@ func _request_for_graph(graph: PFGraph, generate_node_id: String, provider_id: S
 		"ref_images": [],
 		"target_width": target_width,
 		"target_height": target_height,
-		"provider_output_size": _provider_output_size(
-			descriptor, target_width, target_height
-		),
+		"provider_output_size": _provider_output_size(descriptor, target_width, target_height),
 		"batch": int(generate_params.get("batch_size", 1)),
 		"seed": int(generate_params.get("seed", -1)),
 		"extra": Dictionary(generate_params.get("extra", {})).duplicate(true),
@@ -602,7 +605,9 @@ func _request_for_graph(graph: PFGraph, generate_node_id: String, provider_id: S
 	return request
 
 
-func _requests_for_graph(graph: PFGraph, generate_node_id: String, provider_id: String) -> Dictionary:
+func _requests_for_graph(
+	graph: PFGraph, generate_node_id: String, provider_id: String
+) -> Dictionary:
 	var base := _request_for_graph(graph, generate_node_id, provider_id)
 	if base.has("__error"):
 		return {"ok": false, "error": String(base["__error"]), "requests": []}
@@ -611,9 +616,7 @@ func _requests_for_graph(graph: PFGraph, generate_node_id: String, provider_id: 
 		"prompt_preset_id": String(base.get("__prompt_preset_id", "")),
 		"prompt_prefix": String(base.get("__prompt_prefix", "")),
 		"reference_asset_ids": Array(base.get("__reference_asset_ids", [])).duplicate(),
-		"reference_content_sha256s": (
-			Array(base.get("__reference_content_sha256s", [])).duplicate()
-		),
+		"reference_content_sha256s": Array(base.get("__reference_content_sha256s", [])).duplicate(),
 	}
 	var rows_value: Variant = base.get("__source_rows", null)
 	if not (rows_value is Array):

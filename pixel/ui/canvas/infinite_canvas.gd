@@ -317,7 +317,10 @@ func _add_graph_node_card(
 	}
 
 	var do_add := func() -> void:
-		_add_node_direct(data)
+		if GraphItemBridge.is_graph_batch_node_data(data):
+			_add_batch_direct(data)
+		else:
+			_add_node_direct(data)
 		_select_only([String(data["id"])])
 		_emit_canvas_changed()
 

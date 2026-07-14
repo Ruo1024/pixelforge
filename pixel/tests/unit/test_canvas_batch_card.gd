@@ -18,6 +18,11 @@ const TextPromptNodeScript := preload("res://core/graph/nodes/text_prompt_node.g
 func before_each() -> void:
 	LocalizationService.set_language("en")
 	get_tree().root.get_node("ProjectService").new_project("Batch Card")
+	ProviderService.enable_automation_mock_for_tests()
+
+
+func after_each() -> void:
+	ProviderService._automation_mock_enabled = false
 
 
 func test_canvas_batch_card_exports_asset_queue_and_can_split_subset() -> void:

@@ -45,9 +45,7 @@ static func validate_preset(preset: Dictionary) -> Dictionary:
 		return _failure("invalid_prompt_preset", {"field": "prefix"})
 	if preset.has("name") == preset.has("name_key"):
 		return _failure("invalid_prompt_preset", {"field": "name"})
-	if preset.has("name") and (
-		not (preset["name"] is String) or String(preset["name"]).is_empty()
-	):
+	if preset.has("name") and (not (preset["name"] is String) or String(preset["name"]).is_empty()):
 		return _failure("invalid_prompt_preset", {"field": "name"})
 	if preset.has("name_key") and not (preset["name_key"] is String):
 		return _failure("invalid_prompt_preset", {"field": "name_key"})

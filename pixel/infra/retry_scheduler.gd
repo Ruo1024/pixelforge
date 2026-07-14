@@ -84,15 +84,18 @@ func _parse_retry_after(value: String) -> Variant:
 		or not clock[2].is_valid_int()
 	):
 		return null
-	var target_unix := Time.get_unix_time_from_datetime_dict(
-		{
-			"year": year_text.to_int(),
-			"month": int(MONTHS[month_text]),
-			"day": day_text.to_int(),
-			"hour": clock[0].to_int(),
-			"minute": clock[1].to_int(),
-			"second": clock[2].to_int(),
-		}
+	var target_unix := (
+		Time
+		. get_unix_time_from_datetime_dict(
+			{
+				"year": year_text.to_int(),
+				"month": int(MONTHS[month_text]),
+				"day": day_text.to_int(),
+				"hour": clock[0].to_int(),
+				"minute": clock[1].to_int(),
+				"second": clock[2].to_int(),
+			}
+		)
 	)
 	return float(target_unix) - _utc_now_seconds()
 

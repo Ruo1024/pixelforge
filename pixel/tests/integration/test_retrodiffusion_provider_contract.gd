@@ -5,6 +5,7 @@ const MAIN_PATH := "res://ui/shell/main.gd"
 const Strings := preload("res://ui/shell/strings.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const GraphRunnerScript := preload("res://services/graph_mock_runner.gd")
 
 const FIXTURE_PATH := "res://tests/fixtures/providers/retrodiffusion_success.json"
@@ -148,20 +149,49 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 	var decoded := _provider.decode_success_payload(_load_fixture(), request)
 	var graph := GraphScript.new()
 	graph.id = "graph_retrodiffusion_contract"
+	(
+		graph
+		. add_node(
+			AiGenerateNodeScript.new(),
+			"generate",
+			{
+				"provider_id": "retrodiffusion",
+				"model_id": "rd_pro",
+				"target_width": 32,
+				"target_height": 32,
+				"batch_size": 2,
+				"seed": 3,
+				"extra": {"remove_bg": true, "strength": 0.8},
+			}
+		)
+	)
 	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": "Retro"}, Vector2.ZERO)
+	assert_true(graph.add_edge("generate", "assets", "batch_1", "in")["ok"])
 	var metadata := []
 	for index in range(decoded["items"].size()):
 		(
 			metadata
 			. append(
 				{
-					"provider": "retrodiffusion",
-					"model": "rd_pro",
-					"prompt": "barrel",
-					"seed": decoded["items"][index]["actual_seed"],
-					"cost": 0.25,
-					"provider_meta": decoded["provider_meta"],
 					"name": "retro_%d" % index,
+					"actual_seed": decoded["items"][index]["actual_seed"],
+					"generation_snapshot":
+					{
+						"provider_id": "retrodiffusion",
+						"model_id": "rd_pro",
+						"mode": "txt2img",
+						"prompt": "barrel",
+						"prompt_preset_id": "",
+						"prompt_prefix": "",
+						"target_width": 32,
+						"target_height": 32,
+						"provider_output_size": [1, 1],
+						"requested_seed": 3 + index,
+						"reference_asset_ids": [],
+						"reference_content_sha256s": [],
+						"source_row_id": "",
+						"extra": {"remove_bg": true, "strength": 0.8},
+					},
 				}
 			)
 		)
@@ -172,6 +202,7 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 	var asset_ids := BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_1"))
 	var provenance: Dictionary = AssetLibrary.get_asset_meta(asset_ids[0])["provenance"]
 	assert_eq(provenance["generation_snapshot"]["provider_id"], "retrodiffusion")
+	assert_eq(provenance["generation_snapshot"]["source_node_id"], "generate")
 	assert_false(provenance.has("provider_meta"))
 	assert_false(JSON.stringify(provenance).contains(TEST_SECRET))
 

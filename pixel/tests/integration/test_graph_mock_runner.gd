@@ -51,7 +51,7 @@ func test_mock_path_uses_result_slots_projection_only() -> void:
 	assert_eq(BatchNodeScript.get_visible_asset_ids(params).size(), 10)
 	var source := FileAccess.get_file_as_string("res://services/graph_mock_runner.gd")
 	assert_false("replace_batch_assets" in source)
-	assert_false("params[\"asset_ids\"]" in source)
+	assert_false('params["asset_ids"]' in source)
 
 
 func test_structured_object_rows_override_batch_size_and_persist_source_provenance() -> void:
@@ -70,17 +70,20 @@ func test_structured_object_rows_override_batch_size_and_persist_source_provenan
 			},
 		)
 	)
-	graph.set_node_params(
-		"generate",
-		{
-			"provider_id": "mock",
-			"model_id": "pixel_mock_v1",
-			"target_width": 12,
-			"target_height": 10,
-			"batch_size": 7,
-			"seed": 900,
-			"extra": {},
-		}
+	(
+		graph
+		. set_node_params(
+			"generate",
+			{
+				"provider_id": "mock",
+				"model_id": "pixel_mock_v1",
+				"target_width": 12,
+				"target_height": 10,
+				"batch_size": 7,
+				"seed": 900,
+				"extra": {},
+			}
+		)
 	)
 
 	var result: Dictionary = MockRunnerScript.new().run_to_batch(graph, AssetLibrary, "batch_1")
@@ -173,9 +176,7 @@ func test_reference_image_changes_mock_output_and_persists_provenance() -> void:
 	var provenance: Dictionary = asset_library.get_asset_meta(red_id_out)["provenance"]
 	var snapshot: Dictionary = provenance["generation_snapshot"]
 	assert_eq(snapshot["reference_asset_ids"], [red_id])
-	assert_eq(
-		snapshot["reference_content_sha256s"], [GraphContextScript.image_content_sha256(red)]
-	)
+	assert_eq(snapshot["reference_content_sha256s"], [GraphContextScript.image_content_sha256(red)])
 
 
 func test_ordered_reference_set_reaches_mock_and_persists_plural_provenance() -> void:
@@ -249,34 +250,40 @@ func _make_mock_graph() -> PFGraph:
 	var graph := GraphScript.new()
 	graph.id = "graph_main"
 	graph.name = "M3 Mock Generate"
-	graph.add_node(
-		ObjectListNodeScript.new(),
-		"objects",
-		{
-			"rows":
-			[
-				{"id": "row-barrel", "text": "barrel", "count": 2, "enabled": true},
-				{"id": "row-fence", "text": "fence", "count": 2, "enabled": true},
-				{"id": "row-scarecrow", "text": "scarecrow", "count": 2, "enabled": true},
-				{"id": "row-crate", "text": "crate", "count": 2, "enabled": true},
-				{"id": "row-well", "text": "well", "count": 2, "enabled": true},
-			]
-		},
-		Vector2(0, 0)
+	(
+		graph
+		. add_node(
+			ObjectListNodeScript.new(),
+			"objects",
+			{
+				"rows":
+				[
+					{"id": "row-barrel", "text": "barrel", "count": 2, "enabled": true},
+					{"id": "row-fence", "text": "fence", "count": 2, "enabled": true},
+					{"id": "row-scarecrow", "text": "scarecrow", "count": 2, "enabled": true},
+					{"id": "row-crate", "text": "crate", "count": 2, "enabled": true},
+					{"id": "row-well", "text": "well", "count": 2, "enabled": true},
+				]
+			},
+			Vector2(0, 0)
+		)
 	)
-	graph.add_node(
-		AiGenerateNodeScript.new(),
-		"generate",
-		{
-			"provider_id": "mock",
-			"model_id": "pixel_mock_v1",
-			"target_width": 12,
-			"target_height": 10,
-			"batch_size": 2,
-			"seed": 700,
-			"extra": {},
-		},
-		Vector2(440, 0)
+	(
+		graph
+		. add_node(
+			AiGenerateNodeScript.new(),
+			"generate",
+			{
+				"provider_id": "mock",
+				"model_id": "pixel_mock_v1",
+				"target_width": 12,
+				"target_height": 10,
+				"batch_size": 2,
+				"seed": 700,
+				"extra": {},
+			},
+			Vector2(440, 0)
+		)
 	)
 	graph.add_node(BatchNodeScript.new(), "batch_1", {"label": "Mock Batch"}, Vector2(660, 0))
 	assert_true(bool(graph.add_edge("objects", "subjects", "generate", "subjects")["ok"]))

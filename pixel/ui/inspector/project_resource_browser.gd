@@ -102,11 +102,7 @@ func _refresh_categories() -> void:
 	if kind == KIND_ASSET:
 		categories = ["imported", "generated"]
 	for category in categories:
-		var key_prefix := (
-			"RESOURCE_SOURCE_"
-			if kind == KIND_WORKFLOW
-			else "RESOURCE_ORIGIN_"
-		)
+		var key_prefix := "RESOURCE_SOURCE_" if kind == KIND_WORKFLOW else "RESOURCE_ORIGIN_"
 		_category.add_item(Strings.text("%s%s" % [key_prefix, category.to_upper()]))
 		_category.set_item_metadata(_category.item_count - 1, category)
 

@@ -115,6 +115,12 @@ static func _target_counts(graph: PFGraph, target_id: String) -> Dictionary:
 	var provider_id := String(params.get("provider_id", "mock"))
 	var model_id := String(params.get("model_id", ""))
 	var descriptor: Dictionary = ProviderService.get_model_descriptor(provider_id, model_id)
+	if (
+		descriptor.is_empty()
+		and provider_id == ProviderService.AUTOMATION_PROVIDER
+		and model_id == String(ProviderService.MOCK_MODEL_DESCRIPTOR["model_id"])
+	):
+		descriptor = ProviderService.MOCK_MODEL_DESCRIPTOR
 	var max_batch := maxi(1, int(descriptor.get("capabilities", {}).get("max_batch", 1)))
 	var results := maxi(1, int(params.get("batch_size", 1)))
 	for edge in graph.edges:

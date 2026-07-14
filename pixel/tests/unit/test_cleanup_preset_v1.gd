@@ -4,7 +4,8 @@ const REGISTRY_PATH := "res://services/cleanup_preset_registry.gd"
 const BUILTIN_DIR := "res://assets/cleanup_presets"
 
 const CASES := {
-	"cleanup-hibit": ["CLEANUP_PRESET_HIBIT", 48, true, "fixed_palette", "endesga64", 32, "none", 0.0],
+	"cleanup-hibit":
+	["CLEANUP_PRESET_HIBIT", 48, true, "fixed_palette", "endesga64", 32, "none", 0.0],
 	"cleanup-gb": ["CLEANUP_PRESET_GB", 16, true, "fixed_palette", "gb_4", 4, "bayer4", 0.35],
 	"cleanup-hd2d-prop": ["CLEANUP_PRESET_HD2D_PROP", 64, false, "none", "custom", 64, "none", 0.0],
 	"cleanup-1bit": ["CLEANUP_PRESET_1BIT", 32, true, "fixed_palette", "bw_2", 2, "bayer4", 0.5],
@@ -97,9 +98,14 @@ func _expected_preset(preset_id: String, values: Array) -> Dictionary:
 		"settings":
 		{
 			"detect_grid":
-			{"enabled": true, "mode": "auto", "scale": 4.0, "offset": [0.0, 0.0], "base_size": values[1]},
-			"resample":
-			{"enabled": true, "mode": "mode", "scale": 4.0, "offset": [0.0, 0.0]},
+			{
+				"enabled": true,
+				"mode": "auto",
+				"scale": 4.0,
+				"offset": [0.0, 0.0],
+				"base_size": values[1]
+			},
+			"resample": {"enabled": true, "mode": "mode", "scale": 4.0, "offset": [0.0, 0.0]},
 			"quantize":
 			{
 				"enabled": values[2],

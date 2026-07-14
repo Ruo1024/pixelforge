@@ -31,9 +31,7 @@ func open() -> void:
 		Log.warn("Mock graph generation failed", result.get("error", {}))
 		_status_label.text = Strings.text("STATUS_MOCK_GENERATE_FAILED")
 		return
-	var asset_ids: Array = BatchNodeScript.get_visible_asset_ids(
-		graph.get_node_params("batch_1")
-	)
+	var asset_ids: Array = BatchNodeScript.get_visible_asset_ids(graph.get_node_params("batch_1"))
 	var anchor: Vector2 = _canvas.get_mouse_world_position()
 	var item_ids := {
 		"objects": IdUtil.uuid_v4(),

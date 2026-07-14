@@ -620,6 +620,10 @@ func _normalize_graph_json_integer_fields(graph_data: Dictionary) -> void:
 				_normalize_known_ints(
 					params, ["target_width", "target_height", "batch_size", "seed"]
 				)
+			"prompt_preset":
+				var preset: Variant = params.get("preset", null)
+				if preset is Dictionary:
+					_normalize_known_ints(preset, ["prompt_preset_version"])
 			"batch":
 				for raw_snapshot in Dictionary(params.get("input_snapshots", {})).values():
 					if not (raw_snapshot is Dictionary):

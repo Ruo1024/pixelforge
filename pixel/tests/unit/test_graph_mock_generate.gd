@@ -71,9 +71,14 @@ func test_ai_generate_mock_is_deterministic_and_uses_incrementing_seeds() -> voi
 
 	assert_eq(first["assets"].size(), 4)
 	assert_eq(
-		first["metadata"].map(func(entry: Dictionary) -> int: return int(entry["seed"])),
+		first["metadata"].map(func(entry: Dictionary) -> int: return int(entry["actual_seed"])),
 		[100, 101, 102, 103]
 	)
+	var requested_seeds := []
+	for entry in first["metadata"]:
+		requested_seeds.append(int(entry["generation_snapshot"]["requested_seed"]))
+		assert_false(entry.has("seed"))
+	assert_eq(requested_seeds, [100, 101, 102, 103])
 	assert_eq(_sample_color(first["assets"][0]), _sample_color(second["assets"][0]))
 	assert_ne(_sample_color(first["assets"][0]), _sample_color(first["assets"][1]))
 

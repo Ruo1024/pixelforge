@@ -53,9 +53,7 @@ static func validate_key(key: String, catalogs: Dictionary = {}) -> Dictionary:
 	return {"ok": true}
 
 
-static func resolve(
-	schema_entry: Dictionary, field: String, args: Array = []
-) -> String:
+static func resolve(schema_entry: Dictionary, field: String, args: Array = []) -> String:
 	if field not in RESOLVABLE_SCHEMA_FIELDS or not schema_entry.has(field):
 		return ""
 	var dynamic_key := String(schema_entry[field])

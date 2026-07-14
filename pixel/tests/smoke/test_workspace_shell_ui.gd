@@ -93,17 +93,20 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
 	var object_node_id := String(ProjectService.current_project.graphs[graph_id]["nodes"][0]["id"])
 	assert_true(
-		controller.apply_graph_node_params(
-			graph_id,
-			object_node_id,
-			{
-				"rows":
-				[
-					{"id": "barrel", "text": "barrel", "count": 3, "enabled": true},
-					{"id": "crate", "text": "crate", "count": 3, "enabled": true},
-					{"id": "lantern", "text": "lantern", "count": 3, "enabled": true},
-				]
-			}
+		(
+			controller
+			. apply_graph_node_params(
+				graph_id,
+				object_node_id,
+				{
+					"rows":
+					[
+						{"id": "barrel", "text": "barrel", "count": 3, "enabled": true},
+						{"id": "crate", "text": "crate", "count": 3, "enabled": true},
+						{"id": "lantern", "text": "lantern", "count": 3, "enabled": true},
+					]
+				}
+			)
 		)
 	)
 	var reference_node_id: String = controller.add_graph_node_to_selected_graph("image_input")
@@ -123,18 +126,21 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 		)
 	)
 	assert_true(
-		controller.apply_graph_node_params(
-			graph_id,
-			generate_node_id,
-			{
-				"provider_id": "mock",
-				"model_id": "pixel_mock_v1",
-				"target_width": 32,
-				"target_height": 32,
-				"batch_size": 3,
-				"seed": 42,
-				"extra": {},
-			}
+		(
+			controller
+			. apply_graph_node_params(
+				graph_id,
+				generate_node_id,
+				{
+					"provider_id": "mock",
+					"model_id": "pixel_mock_v1",
+					"target_width": 32,
+					"target_height": 32,
+					"batch_size": 3,
+					"seed": 42,
+					"extra": {},
+				}
+			)
 		)
 	)
 
@@ -155,15 +161,11 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 	assert_false(saved_batch_params.has("asset_ids"))
 	assert_false(saved_batch_params.has("review_states"))
 	assert_eq(saved_batch_params["result_slots"].size(), 9)
-	assert_eq(
-		(
-			AssetLibrary
-			. get_asset_meta(
-				String(saved_batch_params["result_slots"][0]["asset_id"])
-			)["provenance"]["generation_snapshot"]["reference_asset_ids"]
-		),
-		[reference_asset_id]
+	var first_result_id := String(saved_batch_params["result_slots"][0]["asset_id"])
+	var first_snapshot: Dictionary = (
+		AssetLibrary.get_asset_meta(first_result_id)["provenance"]["generation_snapshot"]
 	)
+	assert_eq(first_snapshot["reference_asset_ids"], [reference_asset_id])
 	var generate_item_id: String = _item_id_for_node(
 		canvas.export_canvas_data()["items"], generate_node_id
 	)

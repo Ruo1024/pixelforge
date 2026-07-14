@@ -55,20 +55,23 @@ static func search_prompt_presets(query: String = "") -> Array[Dictionary]:
 		var name := _preset_name(preset)
 		if (
 			not normalized_query.is_empty()
-			and normalized_query
-			not in (
-				"%s %s %s" % [preset_id, name, String(preset.get("prefix", ""))]
-			).to_lower()
+			and (
+				normalized_query
+				not in ("%s %s %s" % [preset_id, name, String(preset.get("prefix", ""))]).to_lower()
+			)
 		):
 			continue
-		result.append(
-			{
-				"id": String(preset_id),
-				"name": name,
-				"name_key": String(preset.get("name_key", "")),
-				"available": true,
-				"preset": preset.duplicate(true),
-			}
+		(
+			result
+			. append(
+				{
+					"id": String(preset_id),
+					"name": name,
+					"name_key": String(preset.get("name_key", "")),
+					"available": true,
+					"preset": preset.duplicate(true),
+				}
+			)
 		)
 	return result
 
@@ -95,14 +98,17 @@ static func search_cleanup_presets(query: String = "") -> Array[Dictionary]:
 		)
 		if not normalized_query.is_empty() and normalized_query not in haystack.to_lower():
 			continue
-		result.append(
-			{
-				"id": String(preset_id),
-				"name": name,
-				"name_key": String(preset.get("name_key", "")),
-				"available": true,
-				"preset": preset.duplicate(true),
-			}
+		(
+			result
+			. append(
+				{
+					"id": String(preset_id),
+					"name": name,
+					"name_key": String(preset.get("name_key", "")),
+					"available": true,
+					"preset": preset.duplicate(true),
+				}
+			)
 		)
 	return result
 

@@ -425,8 +425,7 @@ func _handle_candidate_action(action_id: String, context: Dictionary) -> void:
 			_status_label.text = Strings.text("STATUS_CANDIDATE_SETTINGS_COPIED")
 		"rerun":
 			_run_graph_node(
-				String(context.get("graph_id", "")),
-				String(snapshot.get("source_generate_node_id", ""))
+				String(context.get("graph_id", "")), String(snapshot.get("source_node_id", ""))
 			)
 		"as_reference", "continue_branch":
 			_apply_result_branch(action_id, context)

@@ -290,9 +290,7 @@ func _handle_failure(
 	var retries := int(state["opts"]["retries"])
 	if attempt < retries and _is_retryable(result, status_code):
 		var next_attempt := attempt + 1
-		var delay_seconds: float = float(
-			_retry_scheduler.delay_for(attempt, response_headers)
-		)
+		var delay_seconds: float = float(_retry_scheduler.delay_for(attempt, response_headers))
 		state["attempt"] = next_attempt
 		_requests[task_id] = state
 		var task: Variant = state["task"]
@@ -307,11 +305,7 @@ func _handle_failure(
 	var error: Dictionary = (
 		error_mapper.call(result, status_code, detail)
 		if error_mapper.is_valid()
-		else map_error(
-			result,
-			status_code,
-			{"status_code": status_code, "attempts": attempt + 1}
-		)
+		else map_error(result, status_code, {"status_code": status_code, "attempts": attempt + 1})
 	)
 	_finish_failed(task_id, error)
 
@@ -410,15 +404,18 @@ func _redacted_headers(headers: PackedStringArray) -> PackedStringArray:
 
 
 func _is_sensitive_header_name(normalized_name: String) -> bool:
-	if normalized_name in [
-		"authorization",
-		"proxy-authorization",
-		"x-api-key",
-		"api-key",
-		"x-rd-token",
-		"cookie",
-		"set-cookie",
-	]:
+	if (
+		normalized_name
+		in [
+			"authorization",
+			"proxy-authorization",
+			"x-api-key",
+			"api-key",
+			"x-rd-token",
+			"cookie",
+			"set-cookie",
+		]
+	):
 		return true
 	for marker in ["token", "secret", "credential", "api-key"]:
 		if normalized_name.contains(marker):

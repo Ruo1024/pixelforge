@@ -91,13 +91,17 @@ func test_safe_get_retries_at_most_three_attempts_with_fake_scheduler() -> void:
 	_queue.submit(task)
 
 	assert_true(
-		await _wait_until(func() -> bool: return timestamps.size() == 1 and waiter.pending_count == 1)
+		await _wait_until(
+			func() -> bool: return timestamps.size() == 1 and waiter.pending_count == 1
+		)
 	)
 	assert_eq(timestamps, [1010])
 	assert_eq(waiter.delays, [30.0])
 	waiter.advance()
 	assert_true(
-		await _wait_until(func() -> bool: return timestamps.size() == 2 and waiter.pending_count == 1)
+		await _wait_until(
+			func() -> bool: return timestamps.size() == 2 and waiter.pending_count == 1
+		)
 	)
 	assert_eq(timestamps, [1010, 1020])
 	assert_eq(waiter.delays, [30.0, 30.0])
@@ -135,18 +139,21 @@ func test_sensitive_headers_are_redacted_for_request_logs() -> void:
 
 
 func test_sensitive_header_names_are_case_insensitive_trimmed_and_pattern_redacted() -> void:
-	var redacted: PackedStringArray = _client.call(
-		"_redacted_headers",
-		PackedStringArray(
-			[
-				"  x-rD-ToKeN  : sentinel",
-				"Cookie: sentinel",
-				"Set-Cookie: sentinel",
-				"X-Custom-Secret: sentinel",
-				"Credential-Bag: sentinel",
-				"X-Session-Token: sentinel",
-				"Accept: */*",
-			]
+	var redacted: PackedStringArray = (
+		_client
+		. call(
+			"_redacted_headers",
+			PackedStringArray(
+				[
+					"  x-rD-ToKeN  : sentinel",
+					"Cookie: sentinel",
+					"Set-Cookie: sentinel",
+					"X-Custom-Secret: sentinel",
+					"Credential-Bag: sentinel",
+					"X-Session-Token: sentinel",
+					"Accept: */*",
+				]
+			)
 		)
 	)
 
@@ -198,17 +205,20 @@ func test_credential_sentinel_reaches_transport_but_not_log_task_error_or_projec
 	var logger := get_tree().root.get_node("Logger")
 	var log_path: String = logger.get_current_log_path()
 	var log_offset := FileAccess.get_file_as_bytes(log_path).size()
-	var task: Variant = _client.request_json(
-		HTTPClient.METHOD_POST,
-		_base_url + "/credential-sentinel?credential=" + CREDENTIAL_SENTINEL,
-		PackedStringArray(
-			[
-				"Content-Type: application/json",
-				"X-RD-Token: " + CREDENTIAL_SENTINEL,
-			]
-		),
-		{"prompt": CREDENTIAL_SENTINEL},
-		{"log_requests": true, "retries": 3}
+	var task: Variant = (
+		_client
+		. request_json(
+			HTTPClient.METHOD_POST,
+			_base_url + "/credential-sentinel?credential=" + CREDENTIAL_SENTINEL,
+			PackedStringArray(
+				[
+					"Content-Type: application/json",
+					"X-RD-Token: " + CREDENTIAL_SENTINEL,
+				]
+			),
+			{"prompt": CREDENTIAL_SENTINEL},
+			{"log_requests": true, "retries": 3}
+		)
 	)
 	var outcome := await _submit_and_wait(task)
 	var success_task: Variant = _client.request_json(
@@ -232,16 +242,19 @@ func test_credential_sentinel_reaches_transport_but_not_log_task_error_or_projec
 	assert_false(SentinelScanner.contains(success_task.payload, CREDENTIAL_SENTINEL))
 	assert_false(SentinelScanner.contains(success_outcome, CREDENTIAL_SENTINEL))
 	assert_false(
-		SentinelScanner.contains(
-			{
-				"manifest": ProjectService.current_project.manifest,
-				"canvas": ProjectService.current_project.canvas,
-				"graphs": ProjectService.current_project.graphs,
-				"boards": ProjectService.current_project.boards,
-				"animations": ProjectService.current_project.animations,
-				"asset_metadata": AssetLibrary._metadata,
-			},
-			CREDENTIAL_SENTINEL
+		(
+			SentinelScanner
+			. contains(
+				{
+					"manifest": ProjectService.current_project.manifest,
+					"canvas": ProjectService.current_project.canvas,
+					"graphs": ProjectService.current_project.graphs,
+					"boards": ProjectService.current_project.boards,
+					"animations": ProjectService.current_project.animations,
+					"asset_metadata": AssetLibrary._metadata,
+				},
+				CREDENTIAL_SENTINEL
+			)
 		),
 		"current project/persistence surface leaked the credential sentinel"
 	)
@@ -280,18 +293,10 @@ func _run_request(
 
 
 func _run_request_on(
-	client: Node,
-	method: int,
-	url: String,
-	opts: Dictionary = {},
-	timeout_seconds: float = 2.0
+	client: Node, method: int, url: String, opts: Dictionary = {}, timeout_seconds: float = 2.0
 ) -> Dictionary:
 	var task: Variant = client.request_json(
-		method,
-		url,
-		PackedStringArray(["Content-Type: application/json"]),
-		{"fixture": true},
-		opts
+		method, url, PackedStringArray(["Content-Type: application/json"]), {"fixture": true}, opts
 	)
 	return await _submit_and_wait(task, timeout_seconds)
 
@@ -299,7 +304,9 @@ func _run_request_on(
 func _submit_and_wait(task: Variant, timeout_seconds: float = 2.0) -> Dictionary:
 	var outcome := _watch_task(task)
 	_queue.submit(task)
-	assert_true(await _wait_until(func() -> bool: return outcome["status"] != "pending", timeout_seconds))
+	assert_true(
+		await _wait_until(func() -> bool: return outcome["status"] != "pending", timeout_seconds)
+	)
 	return outcome
 
 
