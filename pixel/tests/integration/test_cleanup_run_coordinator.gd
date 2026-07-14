@@ -6,6 +6,10 @@ const CleanupNodeScript := preload("res://core/graph/nodes/pixel_cleanup_node.gd
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 
 
+func before_each() -> void:
+	AssetLibrary.clear()
+
+
 func test_every_click_new_output_and_single_failure_continues() -> void:
 	var coordinator: Variant = load(COORDINATOR_PATH).new()
 	var graph := _graph()
@@ -47,6 +51,7 @@ func test_retry_interrupted_same_output_original_snapshots_only() -> void:
 	assert_true(coordinator.mark_cleanup_running(graph, "output", "request-b")["ok"])
 	assert_true(coordinator.recover_interrupted(graph)["ok"])
 	var before: Dictionary = graph.get_node_params("output")
+	var old_records: Array = before["request_records"].duplicate(true)
 	var original_snapshot: Dictionary = before["input_snapshots"][before["result_slots"][1]["input_snapshot_id"]]
 	var retry: Dictionary = coordinator.prepare_cleanup_retry(graph, "output", "run-retry")
 	assert_true(retry.get("ok", false))
@@ -56,6 +61,34 @@ func test_retry_interrupted_same_output_original_snapshots_only() -> void:
 	assert_eq(after["result_slots"][0]["status"], "succeeded")
 	assert_eq(after["input_snapshots"][after["result_slots"][1]["input_snapshot_id"]], original_snapshot)
 	assert_ne(after["result_slots"][1]["request_id"], "request-b")
+	assert_eq(after["request_records"].size(), old_records.size() + 1)
+	assert_eq(after["request_records"][1], old_records[1])
+
+
+func test_success_registers_cleaned_asset_with_frozen_provenance_before_slot_write() -> void:
+	var coordinator: Variant = load(COORDINATOR_PATH).new()
+	var graph := _graph()
+	var source := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	source.fill(Color.RED)
+	var source_id := AssetLibrary.register_image(source, "source", {"id": "source-a"})
+	assert_eq(source_id, "source-a")
+	assert_true(coordinator.prepare_cleanup_run(graph, "cleanup", "output", _plan("run-provenance"))["ok"])
+	assert_true(coordinator.mark_cleanup_running(graph, "output", "request-a")["ok"])
+	var cleaned := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	cleaned.fill(Color.BLUE)
+	var result: Dictionary = coordinator.apply_cleanup_success(
+		graph, "output", "request-a", cleaned, _report(), AssetLibrary
+	)
+	assert_true(result.get("ok", false))
+	var slot: Dictionary = graph.get_node_params("output")["result_slots"][0]
+	assert_true(AssetLibrary.has_asset(String(slot["asset_id"])))
+	var meta: Dictionary = AssetLibrary.get_asset_meta(String(slot["asset_id"]))
+	assert_eq(meta["origin"], "cleaned")
+	assert_eq(meta["provenance"]["parent_asset"], "source-a")
+	assert_eq(meta["provenance"]["cleanup"]["source_asset"], "source-a")
+	assert_eq(meta["provenance"]["cleanup"]["run_id"], "run-provenance")
+	assert_eq(meta["provenance"]["cleanup"]["request_id"], "request-a")
+	assert_eq(meta["provenance"]["cleanup"]["report"], _report())
 
 
 func _graph() -> PFGraph:
