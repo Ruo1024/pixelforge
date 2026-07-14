@@ -155,6 +155,7 @@ func _start_request(
 		"expect_json": expect_json,
 		"opts": opts,
 		"attempt": 0,
+		"request_dispatched": false,
 	}
 	request_started.emit(task.id, _safe_log_url(url), method)
 	_attempt_request(task.id)
@@ -172,6 +173,7 @@ func _attempt_request(task_id: String) -> void:
 	request.timeout = float(state["opts"]["timeout"])
 	add_child(request)
 	state["request"] = request
+	state["request_dispatched"] = false
 	_requests[task_id] = state
 	request.request_completed.connect(_on_request_completed.bind(task_id))
 	var attempt := int(state["attempt"])
@@ -185,6 +187,9 @@ func _attempt_request(task_id: String) -> void:
 		_handle_failure(
 			task_id, HTTPRequest.RESULT_REQUEST_FAILED, 0, PackedStringArray(), PackedByteArray()
 		)
+	else:
+		state["request_dispatched"] = true
+		_requests[task_id] = state
 
 
 func _on_request_completed(
@@ -297,7 +302,11 @@ func _handle_failure(
 		task.report_progress(0.0, "Retrying network request (%d/%d)" % [next_attempt, retries])
 		_retry_after(task_id, delay_seconds)
 		return
-	var detail := {"status_code": status_code, "attempts": attempt + 1}
+	var detail := {
+		"status_code": status_code,
+		"attempts": attempt + 1,
+		"request_dispatched": bool(state.get("request_dispatched", false)),
+	}
 	var provider_code := _safe_provider_code(response_body)
 	if not provider_code.is_empty():
 		detail["provider_code"] = provider_code

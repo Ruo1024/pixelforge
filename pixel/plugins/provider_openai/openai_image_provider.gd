@@ -362,10 +362,14 @@ func map_error(
 	result: int, status_code: int, detail: Dictionary = {}, request: Dictionary = {}
 ) -> Dictionary:
 	var code := "provider_internal"
-	if result == HTTPRequest.RESULT_TIMEOUT:
-		code = "timeout"
-	elif result != HTTPRequest.RESULT_SUCCESS:
-		code = "network"
+	var is_generation := int(request.get("batch", 0)) > 0
+	if result != HTTPRequest.RESULT_SUCCESS:
+		if result == HTTPRequest.RESULT_TIMEOUT:
+			code = "timeout"
+		elif not is_generation or not bool(detail.get("request_dispatched", true)):
+			code = "network"
+		else:
+			code = "ambiguous_result"
 	if result == HTTPRequest.RESULT_SUCCESS:
 		var provider_code := String(detail.get("provider_code", ""))
 		match status_code:
@@ -379,6 +383,8 @@ func map_error(
 					if provider_code in ["moderation_blocked", "content_policy_violation"]
 					else "invalid_request"
 				)
+			500, 501, 502, 503, 504, 505, 506, 507, 508, 510, 511:
+				code = "ambiguous_result" if is_generation else "provider_internal"
 	var normalized := _provider_error(
 		code,
 		"http",
@@ -500,7 +506,17 @@ func _provider_error(
 		"code": code,
 		"stage": stage,
 		"provider_id": PROVIDER_ID,
-		"retryable": code in ["result_count_mismatch", "interrupted"],
+		"retryable":
+		(
+			code
+			in [
+				"rate_limited",
+				"network",
+				"malformed_response",
+				"result_count_mismatch",
+				"interrupted"
+			]
+		),
 		"retry_after_seconds": null,
 		"status_code": null,
 		"request_id": String(request.get("request_id", "")),
