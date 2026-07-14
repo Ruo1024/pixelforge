@@ -61,7 +61,7 @@ func _build() -> void:
 	for spec in ACTIONS:
 		var button := Button.new()
 		button.name = String(spec[2])
-		button.text = Strings.text(String(spec[1]))
+		button.text = _action_text(String(spec[0]))
 		var action_id := String(spec[0])
 		button.pressed.connect(func() -> void: action_requested.emit(action_id, selected_slot_id))
 		add_child(button)
@@ -69,3 +69,15 @@ func _build() -> void:
 
 func _on_language_changed(_preference: String, _locale: String) -> void:
 	_build()
+
+
+func _action_text(action_id: String) -> String:
+	match action_id:
+		"preview":
+			return Strings.text("OUTPUT_ACTION_PREVIEW")
+		"edit":
+			return Strings.text("OUTPUT_ACTION_EDIT")
+		"detach":
+			return Strings.text("OUTPUT_ACTION_DETACH")
+		_:
+			return Strings.text("OUTPUT_ACTION_DOWNLOAD")

@@ -35,9 +35,9 @@ func _ready() -> void:
 	if _built:
 		return
 	_built = true
-	title = Strings.DIALOG_SLICE_TITLE
-	ok_button_text = Strings.DIALOG_APPLY
-	cancel_button_text = Strings.DIALOG_CANCEL
+	title = Strings.text("DIALOG_SLICE_TITLE")
+	ok_button_text = Strings.text("DIALOG_APPLY")
+	cancel_button_text = Strings.text("DIALOG_CANCEL")
 	min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
 	_build_ui()
 	confirmed.connect(func() -> void: params_confirmed.emit(get_params()))
@@ -71,18 +71,18 @@ func _build_ui() -> void:
 	add_child(root)
 
 	_auto_matte_check = CheckBox.new()
-	_auto_matte_check.text = Strings.SLICE_AUTO_MATTE
+	_auto_matte_check.text = Strings.text("SLICE_AUTO_MATTE")
 	_auto_matte_check.button_pressed = true
 	root.add_child(_auto_matte_check)
 
 	_matte_tolerance_spin = _make_spin(0.0, 100.0, 1.0, 12.0)
-	_add_labeled_control(root, Strings.MATTE_LABEL_TOLERANCE, _matte_tolerance_spin)
+	_add_labeled_control(root, Strings.text("MATTE_LABEL_TOLERANCE"), _matte_tolerance_spin)
 
 	_merge_spin = _make_spin(0.0, 32.0, 1.0, Segmenter.DEFAULT_MERGE_DISTANCE)
-	_add_labeled_control(root, Strings.SLICE_LABEL_MERGE_DISTANCE, _merge_spin)
+	_add_labeled_control(root, Strings.text("SLICE_LABEL_MERGE_DISTANCE"), _merge_spin)
 
 	_min_area_spin = _make_spin(1.0, 4096.0, 1.0, Segmenter.DEFAULT_MIN_AREA)
-	_add_labeled_control(root, Strings.SLICE_LABEL_MIN_AREA, _min_area_spin)
+	_add_labeled_control(root, Strings.text("SLICE_LABEL_MIN_AREA"), _min_area_spin)
 
 	_preview_texture = TextureRect.new()
 	_preview_texture.custom_minimum_size = Vector2(PREVIEW_SIZE, PREVIEW_SIZE)
@@ -145,7 +145,7 @@ func _update_preview() -> void:
 	for segment in segments:
 		_draw_rect_outline(preview, segment["rect"], Color(1.0, 0.82, 0.16, 1.0))
 	_preview_texture.texture = ImageTexture.create_from_image(preview)
-	_count_label.text = Strings.SLICE_PREVIEW_COUNT_FORMAT % segments.size()
+	_count_label.text = Strings.text("SLICE_PREVIEW_COUNT_FORMAT") % segments.size()
 
 
 func _draw_rect_outline(image: Image, rect: Rect2i, color: Color) -> void:

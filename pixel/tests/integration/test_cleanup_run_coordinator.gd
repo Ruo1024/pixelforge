@@ -16,23 +16,43 @@ func test_every_click_new_output_and_single_failure_continues() -> void:
 	assert_true(coordinator.prepare_cleanup_run(graph, "cleanup", "output-1", _plan("run-1"))["ok"])
 	assert_eq(coordinator.next_cleanup_operation(graph, "output-1")["source_asset_id"], "source-a")
 	assert_true(coordinator.mark_cleanup_running(graph, "output-1", "request-a")["ok"])
-	assert_true(coordinator.apply_cleanup_failure(graph, "output-1", "request-a", _error("request-a"))["ok"])
+	assert_true(
+		coordinator.apply_cleanup_failure(graph, "output-1", "request-a", _error("request-a"))["ok"]
+	)
 	assert_eq(coordinator.next_cleanup_operation(graph, "output-1")["source_asset_id"], "source-b")
 	assert_true(coordinator.mark_cleanup_running(graph, "output-1", "request-b")["ok"])
-	assert_true(coordinator.apply_cleanup_success(graph, "output-1", "request-b", _image(), _report(), AssetLibrary)["ok"])
-	assert_eq(coordinator.output_terminal_state(graph.get_node_params("output-1"), "run-1"), "Partial")
+	assert_true(
+		(
+			coordinator
+			. apply_cleanup_success(
+				graph, "output-1", "request-b", _image(), _report(), AssetLibrary
+			)["ok"]
+		)
+	)
+	assert_eq(
+		coordinator.output_terminal_state(graph.get_node_params("output-1"), "run-1"), "Partial"
+	)
 	assert_true(coordinator.prepare_cleanup_run(graph, "cleanup", "output-2", _plan("run-2"))["ok"])
 	assert_eq(graph.get_node_params("output-1")["role"], "history")
 	assert_eq(graph.get_node_params("output-2")["role"], "current")
-	assert_true(AssetLibrary.has_asset(graph.get_node_params("output-1")["result_slots"][1]["asset_id"]))
+	assert_true(
+		AssetLibrary.has_asset(graph.get_node_params("output-1")["result_slots"][1]["asset_id"])
+	)
 
 
 func test_cancel_keeps_success_and_cancels_remaining() -> void:
 	var coordinator: Variant = load(COORDINATOR_PATH).new()
 	var graph := _graph()
-	assert_true(coordinator.prepare_cleanup_run(graph, "cleanup", "output", _plan("run-cancel"))["ok"])
+	assert_true(
+		coordinator.prepare_cleanup_run(graph, "cleanup", "output", _plan("run-cancel"))["ok"]
+	)
 	assert_true(coordinator.mark_cleanup_running(graph, "output", "request-a")["ok"])
-	assert_true(coordinator.apply_cleanup_success(graph, "output", "request-a", _image(), _report(), AssetLibrary)["ok"])
+	assert_true(
+		(
+			coordinator
+			. apply_cleanup_success(graph, "output", "request-a", _image(), _report(), AssetLibrary)["ok"]
+		)
+	)
 	assert_true(coordinator.mark_cleanup_running(graph, "output", "request-b")["ok"])
 	var canceled: Dictionary = coordinator.cancel_cleanup_remaining(graph, "output", "request-b")
 	assert_true(canceled.get("ok", false))
@@ -47,7 +67,12 @@ func test_retry_interrupted_same_output_original_snapshots_only() -> void:
 	var graph := _graph()
 	assert_true(coordinator.prepare_cleanup_run(graph, "cleanup", "output", _plan("run-old"))["ok"])
 	assert_true(coordinator.mark_cleanup_running(graph, "output", "request-a")["ok"])
-	assert_true(coordinator.apply_cleanup_success(graph, "output", "request-a", _image(), _report(), AssetLibrary)["ok"])
+	assert_true(
+		(
+			coordinator
+			. apply_cleanup_success(graph, "output", "request-a", _image(), _report(), AssetLibrary)["ok"]
+		)
+	)
 	assert_true(coordinator.mark_cleanup_running(graph, "output", "request-b")["ok"])
 	assert_true(coordinator.recover_interrupted(graph)["ok"])
 	var before: Dictionary = graph.get_node_params("output")
@@ -59,7 +84,9 @@ func test_retry_interrupted_same_output_original_snapshots_only() -> void:
 	var after: Dictionary = graph.get_node_params("output")
 	assert_true(AssetLibrary.has_asset(after["result_slots"][0]["asset_id"]))
 	assert_eq(after["result_slots"][0]["status"], "succeeded")
-	assert_eq(after["input_snapshots"][after["result_slots"][1]["input_snapshot_id"]], original_snapshot)
+	assert_eq(
+		after["input_snapshots"][after["result_slots"][1]["input_snapshot_id"]], original_snapshot
+	)
 	assert_ne(after["result_slots"][1]["request_id"], "request-b")
 	assert_eq(after["request_records"].size(), old_records.size() + 1)
 	assert_eq(after["request_records"][1], old_records[1])
@@ -72,7 +99,9 @@ func test_success_registers_cleaned_asset_with_frozen_provenance_before_slot_wri
 	source.fill(Color.RED)
 	var source_id := AssetLibrary.register_image(source, "source", {"id": "source-a"})
 	assert_eq(source_id, "source-a")
-	assert_true(coordinator.prepare_cleanup_run(graph, "cleanup", "output", _plan("run-provenance"))["ok"])
+	assert_true(
+		coordinator.prepare_cleanup_run(graph, "cleanup", "output", _plan("run-provenance"))["ok"]
+	)
 	assert_true(coordinator.mark_cleanup_running(graph, "output", "request-a")["ok"])
 	var cleaned := Image.create(4, 4, false, Image.FORMAT_RGBA8)
 	cleaned.fill(Color.BLUE)
@@ -103,26 +132,61 @@ func _plan(run_id: String) -> Dictionary:
 	for index in range(2):
 		var suffix := "a" if index == 0 else "b"
 		var snapshot := {
-			"kind": "cleanup", "graph_id": "graph", "source_node_id": "cleanup",
-			"input_source_node_id": "source", "input_source_kind": "reference_set",
-			"source_asset_id": "source-%s" % suffix, "source_batch_node_id": "", "source_slot_id": "",
-			"preset_id": "cleanup-16bit-db32", "settings": settings.duplicate(true),
-			"palette_snapshot": null, "effective_target_size": [0, 0],
+			"kind": "cleanup",
+			"graph_id": "graph",
+			"source_node_id": "cleanup",
+			"input_source_node_id": "source",
+			"input_source_kind": "reference_set",
+			"source_asset_id": "source-%s" % suffix,
+			"source_batch_node_id": "",
+			"source_slot_id": "",
+			"preset_id": "cleanup-16bit-db32",
+			"settings": settings.duplicate(true),
+			"palette_snapshot": null,
+			"effective_target_size": [0, 0],
 		}
-		slots.append({
-			"slot_id": "slot-%s" % suffix, "request_id": "request-%s" % suffix,
-			"source_asset_id": "source-%s" % suffix, "source_row_id": "",
-			"planned_size": [8, 8], "input_snapshot": snapshot,
-		})
+		(
+			slots
+			. append(
+				{
+					"slot_id": "slot-%s" % suffix,
+					"request_id": "request-%s" % suffix,
+					"source_asset_id": "source-%s" % suffix,
+					"source_row_id": "",
+					"planned_size": [8, 8],
+					"input_snapshot": snapshot,
+				}
+			)
+		)
 	return {"ok": true, "kind": "cleanup", "run_id": run_id, "slots": slots}
 
 
 func _error(request_id: String) -> Dictionary:
-	return {"code": "cleanup_failed", "stage": "cleanup", "provider_id": "", "request_id": request_id, "attempts": 1, "expected_count": 1, "received_count": 0, "retryable": false, "retry_after_seconds": null, "status_code": null}
+	return {
+		"code": "cleanup_failed",
+		"stage": "cleanup",
+		"provider_id": "",
+		"request_id": request_id,
+		"attempts": 1,
+		"expected_count": 1,
+		"received_count": 0,
+		"retryable": false,
+		"retry_after_seconds": null,
+		"status_code": null
+	}
 
 
 func _report() -> Dictionary:
-	return {"input_size": [8, 8], "output_size": [8, 8], "effective_target_size": [0, 0], "detected_grid": {"cell_size": [1, 1], "offset": [0, 0]}, "steps": {"detect_grid": true, "resample": true, "quantize": true}, "input_color_count": 2, "output_color_count": 2, "elapsed_ms": 1}
+	return {
+		"input_size": [8, 8],
+		"output_size": [8, 8],
+		"effective_target_size": [0, 0],
+		"detected_grid": {"cell_size": [1, 1], "offset": [0, 0]},
+		"steps": {"detect_grid": true, "resample": true, "quantize": true},
+		"input_color_count": 2,
+		"output_color_count": 2,
+		"elapsed_ms": 1
+	}
 
 
 func _image() -> Image:

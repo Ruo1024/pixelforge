@@ -1,4 +1,4 @@
-# gdlint: disable=max-returns
+# gdlint: disable=max-file-lines,max-public-methods,max-returns
 class_name PFGenerationRunCoordinator
 extends RefCounted
 
@@ -120,8 +120,18 @@ func prepare_full_run(
 	}
 
 
-func prepare_cleanup_run(graph: PFGraph, source_node_id: String, output_node_id: String, plan: Dictionary) -> Dictionary:
-	if graph == null or graph.get_node(source_node_id) == null or graph.get_node(source_node_id).get_type() != "pixel_cleanup" or graph.get_node(output_node_id) != null or String(plan.get("kind", "")) != "cleanup" or String(plan.get("run_id", "")).is_empty() or Array(plan.get("slots", [])).is_empty():
+func prepare_cleanup_run(
+	graph: PFGraph, source_node_id: String, output_node_id: String, plan: Dictionary
+) -> Dictionary:
+	if (
+		graph == null
+		or graph.get_node(source_node_id) == null
+		or graph.get_node(source_node_id).get_type() != "pixel_cleanup"
+		or graph.get_node(output_node_id) != null
+		or String(plan.get("kind", "")) != "cleanup"
+		or String(plan.get("run_id", "")).is_empty()
+		or Array(plan.get("slots", [])).is_empty()
+	):
 		return _command_error("invalid_cleanup_plan")
 	var rollback_token := {"graph": graph.to_json()}
 	for node_id_value in graph.nodes.keys():
@@ -129,19 +139,31 @@ func prepare_cleanup_run(graph: PFGraph, source_node_id: String, output_node_id:
 		var node: PFNode = graph.get_node(node_id)
 		if node != null and node.get_type() == "batch":
 			var old := graph.get_node_params(node_id)
-			if String(old.get("source_node_id", "")) == source_node_id and String(old.get("role", "")) == "current":
+			if (
+				String(old.get("source_node_id", "")) == source_node_id
+				and String(old.get("role", "")) == "current"
+			):
 				old["role"] = "history"
 				graph.set_node_params(node_id, old)
 				_remove_execution_edge(graph, source_node_id, node_id)
 	var pending := _pending_params(source_node_id, plan)
-	if not bool(BatchNodeScript.validate_v2_domain(pending).get("ok", false)) or graph.add_node(BatchNodeScript.new(), output_node_id, pending).is_empty() or not bool(graph.add_edge(source_node_id, "assets", output_node_id, "in").get("ok", false)):
+	if (
+		not bool(BatchNodeScript.validate_v2_domain(pending).get("ok", false))
+		or graph.add_node(BatchNodeScript.new(), output_node_id, pending).is_empty()
+		or not bool(graph.add_edge(source_node_id, "assets", output_node_id, "in").get("ok", false))
+	):
 		_restore_graph(graph, rollback_token["graph"])
 		return _command_error("output_create_failed")
 	var run_id := String(plan["run_id"])
 	_run_states[run_id] = "Queued"
 	_run_started_msec[run_id] = _now_msec()
 	_emit_run_state(run_id, source_node_id, output_node_id, "Queued")
-	return {"ok": true, "run_id": run_id, "output_node_id": output_node_id, "rollback_token": rollback_token}
+	return {
+		"ok": true,
+		"run_id": run_id,
+		"output_node_id": output_node_id,
+		"rollback_token": rollback_token
+	}
 
 
 func next_cleanup_operation(graph: PFGraph, output_node_id: String) -> Dictionary:
@@ -151,15 +173,26 @@ func next_cleanup_operation(graph: PFGraph, output_node_id: String) -> Dictionar
 			return {}
 	for slot in params.get("result_slots", []):
 		if String(slot.get("status", "")) == "queued":
-			var snapshot: Dictionary = params.get("input_snapshots", {}).get(String(slot.get("input_snapshot_id", "")), {})
-			return {"request_id": String(slot.get("request_id", "")), "slot_id": String(slot.get("slot_id", "")), "source_asset_id": String(slot.get("source_asset_id", "")), "input_snapshot": snapshot.duplicate(true)}
+			var snapshot: Dictionary = params.get("input_snapshots", {}).get(
+				String(slot.get("input_snapshot_id", "")), {}
+			)
+			return {
+				"request_id": String(slot.get("request_id", "")),
+				"slot_id": String(slot.get("slot_id", "")),
+				"source_asset_id": String(slot.get("source_asset_id", "")),
+				"input_snapshot": snapshot.duplicate(true)
+			}
 	return {}
 
 
 func mark_cleanup_running(graph: PFGraph, output_node_id: String, request_id: String) -> Dictionary:
 	var params := graph.get_node_params(output_node_id)
 	for record in params.get("request_records", []):
-		if String(record.get("request_id", "")) == request_id and String(record.get("kind", "")) == "cleanup" and String(record.get("state", "")) == "queued":
+		if (
+			String(record.get("request_id", "")) == request_id
+			and String(record.get("kind", "")) == "cleanup"
+			and String(record.get("state", "")) == "queued"
+		):
 			record["state"] = "running"
 			record["attempts"] = int(record.get("attempts", 0)) + 1
 			for slot in params["result_slots"]:
@@ -170,11 +203,20 @@ func mark_cleanup_running(graph: PFGraph, output_node_id: String, request_id: St
 	return _command_error("invalid_cleanup_operation")
 
 
-func apply_cleanup_failure(graph: PFGraph, output_node_id: String, request_id: String, error: Dictionary) -> Dictionary:
+func apply_cleanup_failure(
+	graph: PFGraph, output_node_id: String, request_id: String, error: Dictionary
+) -> Dictionary:
 	return _finish_cleanup_operation(graph, output_node_id, request_id, "failed", "", error)
 
 
-func apply_cleanup_success(graph: PFGraph, output_node_id: String, request_id: String, image: Image, report: Dictionary, asset_library: Variant = null) -> Dictionary:
+func apply_cleanup_success(
+	graph: PFGraph,
+	output_node_id: String,
+	request_id: String,
+	image: Image,
+	report: Dictionary,
+	asset_library: Variant = null
+) -> Dictionary:
 	if image == null or report.is_empty():
 		return _command_error("invalid_cleanup_result")
 	var params := graph.get_node_params(output_node_id)
@@ -185,7 +227,9 @@ func apply_cleanup_success(graph: PFGraph, output_node_id: String, request_id: S
 			break
 	if slot.is_empty():
 		return _command_error("invalid_cleanup_result")
-	var snapshot: Dictionary = params.get("input_snapshots", {}).get(String(slot.get("input_snapshot_id", "")), {})
+	var snapshot: Dictionary = params.get("input_snapshots", {}).get(
+		String(slot.get("input_snapshot_id", "")), {}
+	)
 	var library: Variant = asset_library if asset_library != null else AssetLibrary
 	var cleanup := {
 		"source_asset": String(snapshot.get("source_asset_id", "")),
@@ -202,21 +246,37 @@ func apply_cleanup_success(graph: PFGraph, output_node_id: String, request_id: S
 		"palette_snapshot": snapshot.get("palette_snapshot"),
 		"report": report.duplicate(true),
 	}
-	var asset_id: String = library.register_image(image, "Cleaned", {
-		"origin": "cleaned", "tags": ["cleanup"],
-		"palette_ref": cleanup["palette_snapshot"],
-		"provenance": {
-			"provider": null, "model": null, "prompt": "", "seed": null,
-			"parent_asset": cleanup["source_asset"], "graph_id": snapshot.get("graph_id"),
-			"created_at": IdUtil.utc_now_iso(), "cleanup": cleanup,
-		},
-	})
+	var asset_id: String = (
+		library
+		. register_image(
+			image,
+			"Cleaned",
+			{
+				"origin": "cleaned",
+				"tags": ["cleanup"],
+				"palette_ref": cleanup["palette_snapshot"],
+				"provenance":
+				{
+					"provider": null,
+					"model": null,
+					"prompt": "",
+					"seed": null,
+					"parent_asset": cleanup["source_asset"],
+					"graph_id": snapshot.get("graph_id"),
+					"created_at": IdUtil.utc_now_iso(),
+					"cleanup": cleanup,
+				},
+			}
+		)
+	)
 	if asset_id.is_empty():
 		return _command_error("invalid_cleanup_result")
 	return _finish_cleanup_operation(graph, output_node_id, request_id, "succeeded", asset_id, null)
 
 
-func cancel_cleanup_remaining(graph: PFGraph, output_node_id: String, active_request_id: String) -> Dictionary:
+func cancel_cleanup_remaining(
+	graph: PFGraph, output_node_id: String, active_request_id: String
+) -> Dictionary:
 	var params := graph.get_node_params(output_node_id)
 	for slot in params.get("result_slots", []):
 		if String(slot.get("status", "")) in ["queued", "running"]:
@@ -225,10 +285,14 @@ func cancel_cleanup_remaining(graph: PFGraph, output_node_id: String, active_req
 	for record in params.get("request_records", []):
 		if String(record.get("state", "")) in ["queued", "running"]:
 			record["state"] = "canceled"
-			record["remote_cancel_confirmed"] = String(record.get("request_id", "")) == active_request_id
+			record["remote_cancel_confirmed"] = (
+				String(record.get("request_id", "")) == active_request_id
+			)
 			record["error"] = null
 	graph.set_node_params(output_node_id, params)
-	return {"ok": true, "state": output_terminal_state(params, String(params.get("source_run_id", "")))}
+	return {
+		"ok": true, "state": output_terminal_state(params, String(params.get("source_run_id", "")))
+	}
 
 
 func prepare_cleanup_retry(graph: PFGraph, output_node_id: String, run_id: String) -> Dictionary:
@@ -236,20 +300,39 @@ func prepare_cleanup_retry(graph: PFGraph, output_node_id: String, run_id: Strin
 	var retried := 0
 	for slot in params.get("result_slots", []):
 		var error: Variant = slot.get("error")
-		if String(slot.get("status", "")) != "failed" or not (error is Dictionary) or String(error.get("code", "")) != "interrupted":
+		if (
+			String(slot.get("status", "")) != "failed"
+			or not (error is Dictionary)
+			or String(error.get("code", "")) != "interrupted"
+		):
 			continue
 		var request_id := IdUtil.uuid_v4()
 		slot["run_id"] = run_id
 		slot["request_id"] = request_id
 		slot["status"] = "queued"
 		slot["error"] = null
-		params["request_records"].append({
-			"kind": "cleanup", "provider_id": "", "run_id": run_id,
-			"request_id": request_id, "source_row_id": "", "slot_ids": [String(slot["slot_id"])],
-			"requested_count": 1, "received_count": 0, "attempts": 0, "state": "queued",
-			"actual_cost_usd": null, "charge_id": "", "provider_meta": {},
-			"remote_cancel_confirmed": null, "error": null,
-		})
+		(
+			params["request_records"]
+			. append(
+				{
+					"kind": "cleanup",
+					"provider_id": "",
+					"run_id": run_id,
+					"request_id": request_id,
+					"source_row_id": "",
+					"slot_ids": [String(slot["slot_id"])],
+					"requested_count": 1,
+					"received_count": 0,
+					"attempts": 0,
+					"state": "queued",
+					"actual_cost_usd": null,
+					"charge_id": "",
+					"provider_meta": {},
+					"remote_cancel_confirmed": null,
+					"error": null,
+				}
+			)
+		)
 		retried += 1
 	if retried == 0:
 		return _command_error("retry_source_unavailable")
@@ -260,7 +343,14 @@ func prepare_cleanup_retry(graph: PFGraph, output_node_id: String, run_id: Strin
 	return {"ok": true, "run_id": run_id, "output_node_id": output_node_id}
 
 
-func _finish_cleanup_operation(graph: PFGraph, output_node_id: String, request_id: String, status: String, asset_id: String, error: Variant) -> Dictionary:
+func _finish_cleanup_operation(
+	graph: PFGraph,
+	output_node_id: String,
+	request_id: String,
+	status: String,
+	asset_id: String,
+	error: Variant
+) -> Dictionary:
 	var params := graph.get_node_params(output_node_id)
 	var found := false
 	for slot in params.get("result_slots", []):
@@ -279,7 +369,9 @@ func _finish_cleanup_operation(graph: PFGraph, output_node_id: String, request_i
 	if not found or not bool(BatchNodeScript.validate_v2_domain(params).get("ok", false)):
 		return _command_error("invalid_cleanup_result")
 	graph.set_node_params(output_node_id, params)
-	return {"ok": true, "state": output_terminal_state(params, String(params.get("source_run_id", "")))}
+	return {
+		"ok": true, "state": output_terminal_state(params, String(params.get("source_run_id", "")))
+	}
 
 
 func rollback_pending_run(graph: PFGraph, rollback_token: Dictionary) -> Dictionary:
@@ -876,14 +968,28 @@ func _queued_records(plan: Dictionary) -> Array:
 	if String(plan.get("kind", "provider")) == "cleanup":
 		for slot_value in plan.get("slots", []):
 			var slot: Dictionary = slot_value
-			result.append({
-				"kind": "cleanup", "provider_id": "", "run_id": String(plan.get("run_id", "")),
-				"request_id": String(slot.get("request_id", "")), "source_row_id": "",
-				"slot_ids": [String(slot.get("slot_id", ""))], "requested_count": 1,
-				"received_count": 0, "attempts": 0, "state": "queued",
-				"actual_cost_usd": null, "charge_id": "", "provider_meta": {},
-				"remote_cancel_confirmed": null, "error": null,
-			})
+			(
+				result
+				. append(
+					{
+						"kind": "cleanup",
+						"provider_id": "",
+						"run_id": String(plan.get("run_id", "")),
+						"request_id": String(slot.get("request_id", "")),
+						"source_row_id": "",
+						"slot_ids": [String(slot.get("slot_id", ""))],
+						"requested_count": 1,
+						"received_count": 0,
+						"attempts": 0,
+						"state": "queued",
+						"actual_cost_usd": null,
+						"charge_id": "",
+						"provider_meta": {},
+						"remote_cancel_confirmed": null,
+						"error": null,
+					}
+				)
+			)
 		return result
 	for request_value in plan.get("requests", []):
 		var request: Dictionary = request_value
@@ -927,7 +1033,8 @@ func _domain_slot(
 		"source_row_id": String(planned.get("source_row_id", "")),
 		"source_asset_id": String(planned.get("source_asset_id", "")),
 		"input_snapshot_id": snapshot_id,
-		"planned_size": Array(planned.get("planned_size", snapshot.get("provider_output_size", []))).duplicate(),
+		"planned_size":
+		Array(planned.get("planned_size", snapshot.get("provider_output_size", []))).duplicate(),
 		"status": String(planned.get("status", "queued")),
 		"detached": bool(planned.get("detached", false)),
 		"unexpected": bool(planned.get("unexpected", false)),
@@ -952,7 +1059,11 @@ func _source_row_for_request(plan: Dictionary, request_id: String) -> String:
 
 func _plan_run_id(plan: Dictionary) -> String:
 	var requests: Array = plan.get("requests", [])
-	return String(requests[0].get("run_id", "")) if not requests.is_empty() else String(plan.get("run_id", ""))
+	return (
+		String(requests[0].get("run_id", ""))
+		if not requests.is_empty()
+		else String(plan.get("run_id", ""))
+	)
 
 
 func _remove_execution_edge(graph: PFGraph, source_node_id: String, output_node_id: String) -> void:

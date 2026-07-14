@@ -71,13 +71,16 @@ func _execute(_task: PFTask, source: Image, snapshot: Dictionary) -> Dictionary:
 	var scale_x := float(detect.get("scale_x", detect.get("scale", 0.0)))
 	var scale_y := float(detect.get("scale_y", detect.get("scale", 0.0)))
 	var offset: Variant = detect.get("offset", Vector2.ZERO)
-	var offset_array := [float(offset.x), float(offset.y)] if offset is Vector2 else Array(offset).duplicate()
+	var offset_array := (
+		[float(offset.x), float(offset.y)] if offset is Vector2 else Array(offset).duplicate()
+	)
 	var report := {
 		"input_size": [source.get_width(), source.get_height()],
 		"output_size": [output.get_width(), output.get_height()],
 		"effective_target_size": Array(snapshot.get("effective_target_size", [0, 0])).duplicate(),
 		"detected_grid": {"cell_size": [scale_x, scale_y], "offset": offset_array},
-		"steps": {
+		"steps":
+		{
 			"detect_grid": bool(Dictionary(settings.get("detect_grid", {})).get("enabled", false)),
 			"resample": bool(Dictionary(settings.get("resample", {})).get("enabled", false)),
 			"quantize": bool(Dictionary(settings.get("quantize", {})).get("enabled", false)),
@@ -97,7 +100,10 @@ func _pipeline_params(snapshot: Dictionary) -> Dictionary:
 		if offset is Array and offset.size() == 2:
 			values["offset"] = Vector2(float(offset[0]), float(offset[1]))
 	var target: Variant = snapshot.get("effective_target_size", [0, 0])
-	if bool(Dictionary(settings.get("resample", {})).get("enabled", false)) and _positive_pair(target):
+	if (
+		bool(Dictionary(settings.get("resample", {})).get("enabled", false))
+		and _positive_pair(target)
+	):
 		settings["resample"]["target_size"] = Vector2i(int(target[0]), int(target[1]))
 	var palette: Variant = snapshot.get("palette_snapshot")
 	if palette is Dictionary:
@@ -112,12 +118,18 @@ func _on_operation_canceled(request_id: String) -> void:
 	state["terminal"] = true
 	var wrapper: Variant = state.get("wrapper")
 	if wrapper is PFCancelTaskV2 and not wrapper.is_terminal():
-		wrapper.call_deferred("resolve", {
-			"request_id": request_id,
-			"local_stopped": true,
-			"remote_cancel_confirmed": true,
-			"billing_update": null,
-		})
+		(
+			wrapper
+			. call_deferred(
+				"resolve",
+				{
+					"request_id": request_id,
+					"local_stopped": true,
+					"remote_cancel_confirmed": true,
+					"billing_update": null,
+				}
+			)
+		)
 
 
 func _on_operation_finished(_result: Variant, request_id: String) -> void:
@@ -148,15 +160,29 @@ func _positive_pair(value: Variant) -> bool:
 
 func _cancel_error(request_id: String) -> Dictionary:
 	return {
-		"code": "cancel_failed", "stage": "cancel", "provider_id": "",
-		"retryable": false, "retry_after_seconds": null, "status_code": null,
-		"request_id": request_id, "attempts": 1, "expected_count": 0, "received_count": 0,
+		"code": "cancel_failed",
+		"stage": "cancel",
+		"provider_id": "",
+		"retryable": false,
+		"retry_after_seconds": null,
+		"status_code": null,
+		"request_id": request_id,
+		"attempts": 1,
+		"expected_count": 0,
+		"received_count": 0,
 	}
 
 
 func _cleanup_error(request_id: String) -> Dictionary:
 	return {
-		"code": "cleanup_failed", "stage": "cleanup", "provider_id": "",
-		"retryable": false, "retry_after_seconds": null, "status_code": null,
-		"request_id": request_id, "attempts": 1, "expected_count": 1, "received_count": 0,
+		"code": "cleanup_failed",
+		"stage": "cleanup",
+		"provider_id": "",
+		"retryable": false,
+		"retry_after_seconds": null,
+		"status_code": null,
+		"request_id": request_id,
+		"attempts": 1,
+		"expected_count": 1,
+		"received_count": 0,
 	}

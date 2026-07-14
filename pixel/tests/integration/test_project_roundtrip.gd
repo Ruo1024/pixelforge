@@ -511,8 +511,28 @@ func test_cleanup_provenance_survives_project_roundtrip() -> void:
 					"cleanup":
 					{
 						"source_asset": "source-asset",
-						"params": {"steps": ["detect_grid", "resample", "quantize"]},
-						"report": {"output_size": [4, 4]},
+						"input_source_kind": "image_input",
+						"input_source_node_id": "image-source",
+						"source_batch_node_id": "",
+						"source_slot_id": "",
+						"cleanup_node_id": "cleanup",
+						"run_id": "cleanup-run",
+						"request_id": "cleanup-request",
+						"preset_id": "",
+						"effective_target_size": [4, 4],
+						"settings": {"steps": ["detect_grid", "resample", "quantize"]},
+						"palette_snapshot": {},
+						"report":
+						{
+							"input_size": [4, 4],
+							"output_size": [4, 4],
+							"effective_target_size": [4, 4],
+							"detected_grid": null,
+							"steps": ["detect_grid", "resample", "quantize"],
+							"input_color_count": 1,
+							"output_color_count": 1,
+							"elapsed_ms": 1,
+						},
 					},
 				},
 			}

@@ -11,8 +11,8 @@ var _install_dialog: FileDialog = null
 
 
 func _ready() -> void:
-	title = Strings.DIALOG_PLUGIN_MANAGER
-	ok_button_text = Strings.ACTION_CLOSE
+	title = Strings.text("DIALOG_PLUGIN_MANAGER")
+	ok_button_text = Strings.text("ACTION_CLOSE")
 	min_size = Vector2i(860, 620)
 	_build_ui()
 	PluginService.plugins_changed.connect(refresh)
@@ -47,7 +47,7 @@ func _build_ui() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(root)
 	var warning := Label.new()
-	warning.text = Strings.PLUGIN_SECURITY_WARNING
+	warning.text = Strings.text("PLUGIN_SECURITY_WARNING")
 	warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(warning)
 	var body := HSplitContainer.new()
@@ -63,12 +63,14 @@ func _build_ui() -> void:
 	body.add_child(_details)
 	var actions := HFlowContainer.new()
 	root.add_child(actions)
-	_add_button(actions, Strings.PLUGIN_ENABLE_DISABLE, _toggle_selected)
+	_add_button(actions, Strings.text("PLUGIN_ENABLE_DISABLE"), _toggle_selected)
 	_add_button(
-		actions, Strings.PLUGIN_INSTALL, func() -> void: _install_dialog.popup_centered_ratio()
+		actions,
+		Strings.text("PLUGIN_INSTALL"),
+		func() -> void: _install_dialog.popup_centered_ratio()
 	)
-	_add_button(actions, Strings.PLUGIN_UNINSTALL, _uninstall_selected)
-	_add_button(actions, Strings.PLUGIN_OPEN_FOLDER, _open_folder)
+	_add_button(actions, Strings.text("PLUGIN_UNINSTALL"), _uninstall_selected)
+	_add_button(actions, Strings.text("PLUGIN_OPEN_FOLDER"), _open_folder)
 
 	_install_dialog = FileDialog.new()
 	_install_dialog.access = FileDialog.ACCESS_FILESYSTEM

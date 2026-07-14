@@ -1,3 +1,4 @@
+# gdlint: disable=max-returns
 class_name PFGenerationCardView
 extends Control
 
@@ -69,7 +70,7 @@ func _build_status_group() -> void:
 	add_child(group)
 	var state := Label.new()
 	state.name = "RunState"
-	state.text = Strings.text(_state_key(String(_run_context.get("state", "Ready"))))
+	state.text = _state_text(String(_run_context.get("state", "Ready")))
 	state.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	group.add_child(state)
 	var progress := Label.new()
@@ -179,8 +180,10 @@ func _build_provider_group(parent: VBoxContainer) -> void:
 	var available := bool(_run_context.get("provider_available", not descriptor.is_empty()))
 	var availability := Label.new()
 	availability.name = "ProviderAvailability"
-	availability.text = Strings.text(
-		"GEN_CARD_PROVIDER_AVAILABLE" if available else "GEN_CARD_PROVIDER_UNAVAILABLE"
+	availability.text = (
+		Strings.text("GEN_CARD_PROVIDER_AVAILABLE")
+		if available
+		else Strings.text("GEN_CARD_PROVIDER_UNAVAILABLE")
 	)
 	group.add_child(availability)
 	var settings := Button.new()
@@ -253,8 +256,10 @@ func _build_core_group(parent: VBoxContainer) -> void:
 		toggle.toggled.connect(
 			func(value: bool) -> void:
 				list.visible = value
-				toggle.text = Strings.text(
-					"GEN_CARD_PROMPT_LIST_HIDE" if value else "GEN_CARD_PROMPT_LIST_SHOW"
+				toggle.text = (
+					Strings.text("GEN_CARD_PROMPT_LIST_HIDE")
+					if value
+					else Strings.text("GEN_CARD_PROMPT_LIST_SHOW")
 				)
 		)
 		group.add_child(list)
@@ -350,7 +355,7 @@ func _build_footer() -> void:
 	var action: Dictionary = _policy.footer_action(_run_context)
 	var button := Button.new()
 	button.name = "PrimaryAction"
-	button.text = LocalizationService.text(String(action["text_key"]), action["args"])
+	button.text = _footer_action_text(action)
 	button.disabled = bool(action["disabled"])
 	button.set_meta("action_id", action["action_id"])
 	button.set_meta("route", action["route"])
@@ -365,7 +370,7 @@ func _group(parent: VBoxContainer, group_name: String, title_key: String) -> VBo
 	group.name = group_name
 	var title := Label.new()
 	title.name = "GroupTitle"
-	title.text = Strings.text(title_key)
+	title.text = _group_text(title_key)
 	group.add_child(title)
 	parent.add_child(group)
 	return group
@@ -382,7 +387,7 @@ func _number_field(
 	var row := HBoxContainer.new()
 	row.name = "%sRow" % control_name
 	var label := Label.new()
-	label.text = Strings.text(label_key)
+	label.text = _field_text(label_key)
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(label)
 	var spin := SpinBox.new()
@@ -479,18 +484,24 @@ func _commit_extra(key: String, value: Variant) -> void:
 	params_commit_requested.emit(params.duplicate(true))
 
 
-func _state_key(state: String) -> String:
-	var keys := {
-		"Ready": "CONTENT_STATUS_READY",
-		"Queued": "CONTENT_STATUS_QUEUED",
-		"Running": "CONTENT_STATUS_RUNNING",
-		"Canceling": "CONTENT_STATUS_CANCELING",
-		"Partial": "CONTENT_STATUS_PARTIAL",
-		"Failed": "CONTENT_STATUS_FAILED",
-		"Complete": "CONTENT_STATUS_COMPLETE",
-		"Canceled": "CONTENT_STATUS_CANCELED",
-	}
-	return String(keys.get(state, "CONTENT_STATUS_READY"))
+func _state_text(state: String) -> String:
+	match state:
+		"Queued":
+			return Strings.text("CONTENT_STATUS_QUEUED")
+		"Running":
+			return Strings.text("CONTENT_STATUS_RUNNING")
+		"Canceling":
+			return Strings.text("CONTENT_STATUS_CANCELING")
+		"Partial":
+			return Strings.text("CONTENT_STATUS_PARTIAL")
+		"Failed":
+			return Strings.text("CONTENT_STATUS_FAILED")
+		"Complete":
+			return Strings.text("CONTENT_STATUS_COMPLETE")
+		"Canceled":
+			return Strings.text("CONTENT_STATUS_CANCELED")
+		_:
+			return Strings.text("CONTENT_STATUS_READY")
 
 
 func _progress_text(value: Variant) -> String:
@@ -515,8 +526,62 @@ func _cost_text(value: Variant) -> String:
 	var kind := String(cost.get("kind", "unknown"))
 	if kind not in ["estimate", "actual"] or not (cost.get("micro_usd") is int):
 		return Strings.text("GEN_CARD_COST_UNKNOWN")
-	var key := "GEN_CARD_COST_ACTUAL" if kind == "actual" else "GEN_CARD_COST_ESTIMATE"
-	return LocalizationService.text(key, [float(int(cost["micro_usd"])) / 1000000.0])
+	var args := [float(int(cost["micro_usd"])) / 1000000.0]
+	return (
+		LocalizationService.text("GEN_CARD_COST_ACTUAL", args)
+		if kind == "actual"
+		else LocalizationService.text("GEN_CARD_COST_ESTIMATE", args)
+	)
+
+
+func _footer_action_text(action: Dictionary) -> String:
+	match String(action.get("action_id", "")):
+		"generate":
+			return Strings.text("GEN_CARD_ACTION_GENERATE")
+		"cancel":
+			return Strings.text("GEN_CARD_ACTION_CANCEL")
+		"regenerate":
+			return Strings.text("GEN_CARD_ACTION_REGENERATE")
+		"cancel_failed":
+			return Strings.text("GEN_CARD_ACTION_CANCEL_FAILED")
+		"retry_wait":
+			return LocalizationService.text("GEN_CARD_ACTION_RETRY_WAIT", action["args"])
+		"retry_failed":
+			return Strings.text("GEN_CARD_ACTION_RETRY_FAILED")
+		"provider_settings":
+			return Strings.text("GEN_CARD_ACTION_PROVIDER_SETTINGS")
+		"edit_prompt":
+			return Strings.text("GEN_CARD_ACTION_EDIT_PROMPT")
+		"focus_generation":
+			return Strings.text("GEN_CARD_ACTION_RETURN_GENERATION")
+		"regenerate_confirm":
+			return Strings.text("GEN_CARD_ACTION_REGENERATE_CONFIRM")
+		_:
+			return Strings.text("GEN_CARD_ACTION_CANCELING")
+
+
+func _group_text(key: String) -> String:
+	match key:
+		"GEN_CARD_GROUP_PROVIDER":
+			return Strings.text("GEN_CARD_GROUP_PROVIDER")
+		"GEN_CARD_GROUP_INPUT":
+			return Strings.text("GEN_CARD_GROUP_INPUT")
+		"GEN_CARD_GROUP_CORE":
+			return Strings.text("GEN_CARD_GROUP_CORE")
+		_:
+			return Strings.text("GEN_CARD_GROUP_DYNAMIC")
+
+
+func _field_text(key: String) -> String:
+	match key:
+		"GEN_CARD_TARGET_WIDTH":
+			return Strings.text("GEN_CARD_TARGET_WIDTH")
+		"GEN_CARD_TARGET_HEIGHT":
+			return Strings.text("GEN_CARD_TARGET_HEIGHT")
+		"GEN_CARD_BATCH_SIZE":
+			return Strings.text("GEN_CARD_BATCH_SIZE")
+		_:
+			return Strings.text("GRAPH_PARAM_SEED")
 
 
 func _on_language_changed(_preference: String, _locale: String) -> void:

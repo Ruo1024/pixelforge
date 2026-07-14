@@ -102,8 +102,7 @@ func _refresh_categories() -> void:
 	if kind == KIND_ASSET:
 		categories = ["imported", "generated"]
 	for category in categories:
-		var key_prefix := "RESOURCE_SOURCE_" if kind == KIND_WORKFLOW else "RESOURCE_ORIGIN_"
-		_category.add_item(Strings.text("%s%s" % [key_prefix, category.to_upper()]))
+		_category.add_item(_category_text(kind, category))
 		_category.set_item_metadata(_category.item_count - 1, category)
 
 
@@ -157,7 +156,7 @@ func _build_workflow_actions() -> void:
 	]:
 		var button := Button.new()
 		button.name = String(spec[0])
-		button.text = Strings.text(String(spec[1]))
+		button.text = _workflow_action_text(String(spec[1]))
 		button.pressed.connect(spec[2])
 		_workflow_actions.add_child(button)
 	add_child(_workflow_actions)
@@ -175,6 +174,28 @@ func _build_workflow_actions() -> void:
 	_delete_dialog.confirmed.connect(_delete_selected_workflow)
 	add_child(_delete_dialog)
 	_sync_workflow_actions()
+
+
+func _category_text(kind: String, category: String) -> String:
+	if kind == KIND_WORKFLOW:
+		return (
+			Strings.text("RESOURCE_SOURCE_BUILTIN")
+			if category == "builtin"
+			else Strings.text("RESOURCE_SOURCE_USER")
+		)
+	return (
+		Strings.text("RESOURCE_ORIGIN_IMPORTED")
+		if category == "imported"
+		else Strings.text("RESOURCE_ORIGIN_GENERATED")
+	)
+
+
+func _workflow_action_text(key: String) -> String:
+	return (
+		Strings.text("ACTION_RENAME_WORKFLOW")
+		if key == "ACTION_RENAME_WORKFLOW"
+		else Strings.text("ACTION_DELETE_WORKFLOW")
+	)
 
 
 func _selected_user_workflow() -> Dictionary:

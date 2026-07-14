@@ -1,3 +1,4 @@
+# gdlint: disable=max-returns
 class_name PFGraphMockRunner
 extends RefCounted
 
@@ -34,7 +35,12 @@ func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "
 
 	if terminal_items.is_empty() and ready_node_ids.is_empty():
 		return _error("empty_batch", "No generated images reached a batch node")
-	return {"ok": true, "terminal_items": terminal_items, "ready_node_ids": ready_node_ids, "graph": graph.to_json()}
+	return {
+		"ok": true,
+		"terminal_items": terminal_items,
+		"ready_node_ids": ready_node_ids,
+		"graph": graph.to_json()
+	}
 
 
 func _validate_run_setup(graph: PFGraph, asset_library: Node) -> Dictionary:

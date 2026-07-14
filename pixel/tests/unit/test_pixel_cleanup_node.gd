@@ -70,7 +70,10 @@ func test_zero_and_thousand_rejected_before_output() -> void:
 		var fixture := _fixture("reference_set", count)
 		var result: Dictionary = builder.build(fixture.graph, "cleanup", fixture.assets)
 		assert_false(result.get("ok", false))
-		assert_eq(result.get("issue", {}).get("code"), "missing_cleanup_input" if count == 0 else "cleanup_input_limit_exceeded")
+		assert_eq(
+			result.get("issue", {}).get("code"),
+			"missing_cleanup_input" if count == 0 else "cleanup_input_limit_exceeded"
+		)
 		assert_null(fixture.graph.get_node("output"))
 
 

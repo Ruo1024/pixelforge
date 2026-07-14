@@ -250,7 +250,7 @@ func test_selection_tool_buttons_are_hidden_until_selection_actions_are_wired() 
 	assert_gt(checked_buttons, 0)
 
 
-func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
+func test_offline_example_action_creates_v2_graph_without_output() -> void:
 	ProjectService.new_project("Mock UI")
 	var main: Control = MainScript.new()
 	main.size = Vector2(1280, 800)
@@ -266,102 +266,24 @@ func test_mock_generate_menu_action_creates_visible_batch_and_graph() -> void:
 	assert_eq(ProjectService.current_project.graphs.size(), 1)
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
 	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
-	var batch_node: Dictionary = _node_data_for_id(graph_data["nodes"], "batch_1")
-	assert_eq(batch_node["type"], "batch")
-	assert_false(batch_node["params"].has("asset_ids"))
-	assert_false(batch_node["params"].has("review_states"))
-	assert_eq(batch_node["params"]["result_slots"].size(), 10)
 	var canvas_items: Array = canvas.export_canvas_data()["items"]
 	assert_eq(canvas_items.size(), 5)
 	assert_eq(
 		_node_ids_from_canvas_items(canvas_items),
-		["objects", "prompt_preset", "reference", "generate", "batch_1"]
+		["prompt_preset", "text_prompt", "reference_set", "generate", "cleanup"]
+	)
+	assert_false(
+		graph_data["nodes"].any(func(node: Dictionary) -> bool: return node["type"] == "batch")
 	)
 	for canvas_item in canvas_items:
 		assert_eq(canvas_item["type"], "node")
 		assert_eq(canvas_item["graph_id"], graph_id)
-
-	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
-	var generate_item_id := _item_id_for_node(canvas_items, "generate")
-	var generate_card: Node = canvas._items_by_id[generate_item_id]
-	var first_asset_ids: Array = _visible_asset_ids(batch_node["params"])
-	canvas.select_ids([batch_item_id])
-	controller.run_selected_mock_graph()
-	await wait_process_frames(2)
-
-	graph_data = ProjectService.current_project.graphs[graph_id]
-	batch_node = _node_data_for_id(graph_data["nodes"], "batch_1")
-	var rerun_batch: Dictionary = _newest_batch_node_except(graph_data["nodes"], ["batch_1"])
-	var rerun_asset_ids: Array = _visible_asset_ids(rerun_batch["params"])
-	assert_eq(_visible_asset_ids(batch_node["params"]), first_asset_ids)
-	assert_false(rerun_batch["params"].has("asset_ids"))
-	assert_eq(rerun_asset_ids.size(), 10)
-	assert_ne(rerun_asset_ids, first_asset_ids)
-	var rerun_batch_item_id := _item_id_for_node(
-		canvas.export_canvas_data()["items"], String(rerun_batch["id"])
-	)
-	assert_eq(canvas._get_batch_asset_ids(rerun_batch_item_id), rerun_asset_ids)
-	assert_eq(generate_card._status_badge, Strings.text("CONTENT_STATUS_COMPLETE"))
-	assert_eq(
-		generate_card.get_content_control("ExecutionDetail").text,
-		Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % rerun_asset_ids.size()
-	)
-
-	canvas.select_ids([])
-	canvas._selected_graph_edge = {
-		"graph_id": graph_id,
-		"edge": {"from": ["generate", "assets"], "to": ["batch_1", "in"]},
-	}
-	controller.run_selected_mock_graph()
-	await wait_process_frames(2)
-
-	graph_data = ProjectService.current_project.graphs[graph_id]
-	var edge_rerun_batch: Dictionary = _newest_batch_node_except(
-		graph_data["nodes"], ["batch_1", String(rerun_batch["id"])]
-	)
-	var edge_rerun_asset_ids: Array = _visible_asset_ids(edge_rerun_batch["params"])
-	assert_eq(edge_rerun_asset_ids.size(), 10)
-	assert_ne(edge_rerun_asset_ids, rerun_asset_ids)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id), first_asset_ids)
-	var valid_graph_data := graph_data.duplicate(true)
-
-	canvas.select_ids([])
-	canvas._selected_graph_edge = {"graph_id": "missing_graph", "edge": {}}
-	controller.run_selected_mock_graph()
-	await wait_process_frames(2)
-
-	assert_eq(
-		_status_label(main).text,
-		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % Strings.STATUS_GRAPH_RUN_MISSING_GRAPH
-	)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id), first_asset_ids)
-
-	var graph_without_batch := valid_graph_data.duplicate(true)
-	var kept_nodes := []
-	for raw_node in graph_without_batch["nodes"]:
-		var node_data: Dictionary = raw_node
-		if String(node_data.get("type", "")) != "batch":
-			kept_nodes.append(node_data)
-	graph_without_batch["nodes"] = kept_nodes
-	ProjectService.set_graph_data(graph_id, graph_without_batch, true)
-
-	canvas.select_ids([batch_item_id])
-	controller.run_selected_mock_graph()
-	await wait_process_frames(2)
-
-	assert_eq(
-		_status_label(main).text,
-		Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "Target node does not exist"
-	)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id), first_asset_ids)
-
-	for node_data in valid_graph_data["nodes"]:
+	for node_data in graph_data["nodes"]:
 		assert_ne(String(node_data.get("type", "")), "size_spec")
-	assert_false(valid_graph_data["edges"].any(_edge_uses_legacy_generation_port))
-	assert_false(canvas.export_canvas_data()["items"][2].has("execution_status"))
+	assert_false(graph_data["edges"].any(_edge_uses_legacy_generation_port))
 
 
-func test_selected_graph_node_params_are_undoable_and_affect_rerun() -> void:
+func test_selected_graph_node_params_are_undoable() -> void:
 	ProjectService.new_project("Graph Params UI")
 	var main: Control = MainScript.new()
 	main.size = Vector2(1280, 800)
@@ -375,41 +297,26 @@ func test_selected_graph_node_params_are_undoable_and_affect_rerun() -> void:
 
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
 	var canvas_items: Array = canvas.export_canvas_data()["items"]
-	var object_item_id := _item_id_for_node(canvas_items, "objects")
-	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
-	var object_card: Node = canvas._items_by_id[object_item_id]
-	canvas.select_ids([object_item_id])
+	var prompt_item_id := _item_id_for_node(canvas_items, "text_prompt")
+	canvas.select_ids([prompt_item_id])
 
 	assert_true(
-		(
-			controller
-			. apply_graph_node_params(
-				graph_id,
-				"objects",
-				{
-					"rows":
-					[
-						{"id": "tree", "text": "tree", "count": 2, "enabled": true},
-						{"id": "rock", "text": "rock", "count": 2, "enabled": true},
-					]
-				}
-			)
-		)
+		controller.apply_graph_node_params(graph_id, "text_prompt", {"text": "four tiny towers"})
 	)
-	assert_eq(object_card._summary, "2 of 2 rows selected")
+	assert_eq(
+		_node_data_for_id(ProjectService.get_graph_data(graph_id)["nodes"], "text_prompt")["params"]["text"],
+		"four tiny towers"
+	)
 	assert_true(UndoService.undo())
-	assert_eq(object_card._summary, "5 of 5 rows selected")
+	assert_ne(
+		_node_data_for_id(ProjectService.get_graph_data(graph_id)["nodes"], "text_prompt")["params"]["text"],
+		"four tiny towers"
+	)
 	assert_true(UndoService.redo())
-	assert_eq(object_card._summary, "2 of 2 rows selected")
-
-	controller.run_selected_mock_graph()
-	await wait_process_frames(2)
-	var updated_graph: Dictionary = ProjectService.get_graph_data(graph_id)
-	var new_batch: Dictionary = _newest_batch_node_except(updated_graph["nodes"], ["batch_1"])
-	assert_false(new_batch["params"].has("asset_ids"))
-	assert_eq(new_batch["params"]["result_slots"].size(), 4)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id).size(), 10)
-	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_RUN_DONE % 4)
+	assert_eq(
+		_node_data_for_id(ProjectService.get_graph_data(graph_id)["nodes"], "text_prompt")["params"]["text"],
+		"four tiny towers"
+	)
 
 
 func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
@@ -434,8 +341,8 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	assert_false(add_menu_texts.has("ComfyUI Workflow"))
 
 	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
-	var object_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "objects")
-	canvas.select_ids([object_item_id])
+	var source_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], "text_prompt")
+	canvas.select_ids([source_item_id])
 	var tab_event := InputEventKey.new()
 	tab_event.keycode = KEY_TAB
 	tab_event.pressed = true
@@ -485,7 +392,7 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	var graph_nodes: Array = ProjectService.current_project.graphs[graph_id]["nodes"]
 	var added_node_data := _node_data_for_id(graph_nodes, node_id)
 	assert_false(added_node_data.has("position"))
-	assert_eq(_status_label(main).text, Strings.STATUS_GRAPH_ADD_DONE % "Text Prompt")
+	assert_eq(_status_label(main).text, Strings.text("STATUS_GRAPH_ADD_DONE") % "Text Prompt")
 
 	assert_true(UndoService.undo())
 	assert_true(_item_id_for_node(canvas.export_canvas_data()["items"], node_id).is_empty())
@@ -514,9 +421,9 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	assert_true(controller._graph_quick_add_menu.visible)
 	controller._graph_quick_add_menu.hide()
 
-	canvas.select_ids([object_item_id])
-	var object_item_data := _item_data_for_id(canvas.export_canvas_data()["items"], object_item_id)
-	var object_position: Array = object_item_data["position"]
+	canvas.select_ids([source_item_id])
+	var source_item_data := _item_data_for_id(canvas.export_canvas_data()["items"], source_item_id)
+	var source_position: Array = source_item_data["position"]
 	var prompt_node_id: String = controller.add_graph_node_to_selected_graph("text_prompt")
 	var prompt_node_data := _node_data_for_id(
 		ProjectService.current_project.graphs[graph_id]["nodes"], prompt_node_id
@@ -525,7 +432,7 @@ func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
 	var prompt_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], prompt_node_id)
 	assert_eq(
 		_item_data_for_id(canvas.export_canvas_data()["items"], prompt_item_id)["position"],
-		[int(object_position[0]) + 280, int(object_position[1])],
+		[int(source_position[0]) + 280, int(source_position[1])],
 	)
 
 	var batch_node_id: String = controller.add_graph_node_to_selected_graph(
@@ -615,19 +522,19 @@ func test_graph_status_events_update_status_bar() -> void:
 	canvas.graph_status.emit({"type": "edge_selected", "edge": edge})
 	assert_eq(
 		_status_label(main).text,
-		Strings.STATUS_GRAPH_EDGE_SELECTED % ["objects", "subjects", "generate", "subjects"]
+		Strings.text("STATUS_GRAPH_EDGE_SELECTED") % ["objects", "subjects", "generate", "subjects"]
 	)
 
 	canvas.graph_status.emit({"type": "edge_deleted", "edge": edge})
 	assert_eq(
 		_status_label(main).text,
-		Strings.STATUS_GRAPH_EDGE_DELETED % ["objects", "subjects", "generate", "subjects"]
+		Strings.text("STATUS_GRAPH_EDGE_DELETED") % ["objects", "subjects", "generate", "subjects"]
 	)
 
 	canvas.graph_status.emit({"type": "connect_succeeded", "edge": edge})
 	assert_eq(
 		_status_label(main).text,
-		Strings.STATUS_GRAPH_CONNECT_DONE % ["objects", "subjects", "generate", "subjects"]
+		Strings.text("STATUS_GRAPH_CONNECT_DONE") % ["objects", "subjects", "generate", "subjects"]
 	)
 	canvas.graph_status.emit({"type": "nodes_grouped", "count": 2})
 	assert_eq(_status_label(main).text, Strings.text("STATUS_FRAME_GROUPED_FORMAT") % 2)
@@ -700,8 +607,8 @@ func test_run_selected_graph_reports_ghost_node_type() -> void:
 	assert_eq(
 		_status_label(main).text,
 		(
-			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
-			% (Strings.STATUS_GRAPH_RUN_MISSING_NODE_TYPE % "missing.plugin_node")
+			Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL")
+			% (Strings.text("STATUS_GRAPH_RUN_MISSING_NODE_TYPE") % "missing.plugin_node")
 		)
 	)
 
@@ -738,9 +645,7 @@ func test_candidate_continue_branch_is_one_undoable_canvas_action() -> void:
 	await wait_process_frames(2)
 	var controller: Node = main.get_node("M21UiController")
 	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
-	canvas._add_batch_card(
-		[asset_id], Vector2.ZERO, "Source", "source_item", false, graph.id, "source_batch"
-	)
+	canvas._add_graph_node_card(graph.id, "source_batch", Vector2.ZERO, "source_item", false)
 	(
 		controller
 		. _handle_candidate_action(

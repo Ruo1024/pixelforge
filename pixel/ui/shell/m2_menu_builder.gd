@@ -54,13 +54,6 @@ static func populate_batch(popup: PopupMenu, controller: Node) -> void:
 	_add_group(
 		popup,
 		[
-			["BATCH_ACTION_MATTE", controller.BATCH_MENU_MATTE],
-			["BATCH_ACTION_OUTLINE", controller.BATCH_MENU_OUTLINE],
-		]
-	)
-	_add_group(
-		popup,
-		[
 			["BATCH_ACTION_EXPORT", controller.BATCH_MENU_EXPORT],
 			["BATCH_ACTION_EDIT", controller.BATCH_MENU_EDIT],
 		],

@@ -19,7 +19,13 @@ var _asset_library: Variant
 var _runs := {}
 
 
-func setup(canvas: Control, status_label: Label, coordinator: PFGenerationRunCoordinator, queue: Variant = null, asset_library: Variant = null) -> void:
+func setup(
+	canvas: Control,
+	status_label: Label,
+	coordinator: PFGenerationRunCoordinator,
+	queue: Variant = null,
+	asset_library: Variant = null
+) -> void:
 	_canvas = canvas
 	_status_label = status_label
 	_coordinator = coordinator
@@ -33,18 +39,20 @@ func run_graph(graph: PFGraph, cleanup_node_id: String) -> bool:
 		_status_label.text = String(plan.get("issue", {}).get("code", "cleanup_failed"))
 		return false
 	var output_node_id := "output_%s" % IdUtil.uuid_v4().left(8)
-	var prepared: Dictionary = _coordinator.prepare_cleanup_run(graph, cleanup_node_id, output_node_id, plan)
+	var prepared: Dictionary = _coordinator.prepare_cleanup_run(
+		graph, cleanup_node_id, output_node_id, plan
+	)
 	if not bool(prepared.get("ok", false)):
 		return false
 	var bounds := _canvas_item_bounds(graph, cleanup_node_id)
 	var position := OutputAutoPlacementScript.find_position(
 		bounds["source"], bounds["existing"], CardContractScript.default_size_for_type("batch")
 	)
-	var card: Node = _canvas._add_batch_card(
-		[], position, Strings.text("BATCH_DEFAULT_LABEL"), "", false, graph.id, output_node_id
-	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+	var card: Node = _canvas._add_graph_node_card(graph.id, output_node_id, position, "", false)
 	if card == null:
 		_coordinator.rollback_pending_run(graph, prepared["rollback_token"])
+		ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 		return false
 	_runs[graph.id] = _run_state(graph, cleanup_node_id, output_node_id)
 	_persist_and_refresh(_runs[graph.id])
@@ -71,7 +79,10 @@ func cancel_graph(graph_id: String, node_id: String = "") -> bool:
 	if not _runs.has(graph_id):
 		return false
 	var state: Dictionary = _runs[graph_id]
-	if not node_id.is_empty() and node_id not in [state["cleanup_node_id"], state["output_node_id"]]:
+	if (
+		not node_id.is_empty()
+		and node_id not in [state["cleanup_node_id"], state["output_node_id"]]
+	):
 		return false
 	var request_id := String(state.get("active_request_id", ""))
 	if request_id.is_empty():
@@ -93,7 +104,11 @@ func _dispatch_next(graph_id: String) -> void:
 		_runs.erase(graph_id)
 		return
 	var request_id := String(operation["request_id"])
-	if not bool(_coordinator.mark_cleanup_running(graph, String(state["output_node_id"]), request_id).get("ok", false)):
+	if not bool(
+		_coordinator.mark_cleanup_running(graph, String(state["output_node_id"]), request_id).get(
+			"ok", false
+		)
+	):
 		return
 	state["active_request_id"] = request_id
 	_runs[graph_id] = state
@@ -108,9 +123,18 @@ func _on_operation_finished(result: Variant, graph_id: String, request_id: Strin
 	var state: Dictionary = _runs[graph_id]
 	var graph: PFGraph = state["graph"]
 	if result is Dictionary and result.get("image") is Image and result.get("report") is Dictionary:
-		_coordinator.apply_cleanup_success(graph, String(state["output_node_id"]), request_id, result["image"], result["report"], _asset_library)
+		_coordinator.apply_cleanup_success(
+			graph,
+			String(state["output_node_id"]),
+			request_id,
+			result["image"],
+			result["report"],
+			_asset_library
+		)
 	else:
-		_coordinator.apply_cleanup_failure(graph, String(state["output_node_id"]), request_id, _cleanup_error(request_id))
+		_coordinator.apply_cleanup_failure(
+			graph, String(state["output_node_id"]), request_id, _cleanup_error(request_id)
+		)
 	state["active_request_id"] = ""
 	_runs[graph_id] = state
 	_persist_and_refresh(state)
@@ -121,7 +145,9 @@ func _on_cancel_resolved(_result: Dictionary, graph_id: String, request_id: Stri
 	if not _runs.has(graph_id):
 		return
 	var state: Dictionary = _runs[graph_id]
-	_coordinator.cancel_cleanup_remaining(state["graph"], String(state["output_node_id"]), request_id)
+	_coordinator.cancel_cleanup_remaining(
+		state["graph"], String(state["output_node_id"]), request_id
+	)
 	_persist_and_refresh(state)
 	_runs.erase(graph_id)
 
@@ -130,13 +156,20 @@ func _on_cancel_rejected(error: Dictionary, graph_id: String, request_id: String
 	if not _runs.has(graph_id):
 		return
 	var state: Dictionary = _runs[graph_id]
-	_coordinator.apply_cleanup_failure(state["graph"], String(state["output_node_id"]), request_id, error)
+	_coordinator.apply_cleanup_failure(
+		state["graph"], String(state["output_node_id"]), request_id, error
+	)
 	_persist_and_refresh(state)
 	_runs.erase(graph_id)
 
 
 func _run_state(graph: PFGraph, cleanup_node_id: String, output_node_id: String) -> Dictionary:
-	return {"graph": graph, "cleanup_node_id": cleanup_node_id, "output_node_id": output_node_id, "active_request_id": ""}
+	return {
+		"graph": graph,
+		"cleanup_node_id": cleanup_node_id,
+		"output_node_id": output_node_id,
+		"active_request_id": ""
+	}
 
 
 func _persist_and_refresh(state: Dictionary) -> void:
@@ -149,11 +182,19 @@ func _persist_and_refresh(state: Dictionary) -> void:
 func _cleanup_output_id(graph: PFGraph, selected_node_id: String) -> String:
 	var selected := graph.get_node(selected_node_id)
 	if selected != null and selected.get_type() == "batch":
-		var source := graph.get_node(String(graph.get_node_params(selected_node_id).get("source_node_id", "")))
+		var source := graph.get_node(
+			String(graph.get_node_params(selected_node_id).get("source_node_id", ""))
+		)
 		if source != null and source.get_type() == "pixel_cleanup":
 			return selected_node_id
 	for node_id in graph.nodes:
-		if graph.get_node(String(node_id)).get_type() == "batch" and String(graph.get_node_params(String(node_id)).get("source_node_id", "")) == selected_node_id:
+		if (
+			graph.get_node(String(node_id)).get_type() == "batch"
+			and (
+				String(graph.get_node_params(String(node_id)).get("source_node_id", ""))
+				== selected_node_id
+			)
+		):
 			return String(node_id)
 	return ""
 
@@ -172,4 +213,15 @@ func _canvas_item_bounds(graph: PFGraph, source_node_id: String) -> Dictionary:
 
 
 func _cleanup_error(request_id: String) -> Dictionary:
-	return {"code": "cleanup_failed", "stage": "cleanup", "provider_id": "", "retryable": false, "retry_after_seconds": null, "status_code": null, "request_id": request_id, "attempts": 1, "expected_count": 1, "received_count": 0}
+	return {
+		"code": "cleanup_failed",
+		"stage": "cleanup",
+		"provider_id": "",
+		"retryable": false,
+		"retry_after_seconds": null,
+		"status_code": null,
+		"request_id": request_id,
+		"attempts": 1,
+		"expected_count": 1,
+		"received_count": 0
+	}

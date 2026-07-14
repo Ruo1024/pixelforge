@@ -39,8 +39,8 @@ var _layer_asset_options: OptionButton = null
 
 
 func _ready() -> void:
-	title = Strings.DIALOG_PIXEL_EDITOR
-	ok_button_text = Strings.ACTION_CLOSE
+	title = Strings.text("DIALOG_PIXEL_EDITOR")
+	ok_button_text = Strings.text("ACTION_CLOSE")
 	min_size = Vector2i(1240, 800)
 	_build_ui()
 	confirmed.connect(_request_close)
@@ -63,7 +63,7 @@ func open_asset(asset_id: String, batch_id: String = "") -> bool:
 	_rebuild_timeline()
 	_rebuild_palette()
 	_status.text = (
-		Strings.EDITOR_OPENED % AssetLibrary.get_asset_meta(asset_id).get("name", asset_id)
+		Strings.text("EDITOR_OPENED") % AssetLibrary.get_asset_meta(asset_id).get("name", asset_id)
 	)
 	popup_centered()
 	var veil := TransitionScript.new()
@@ -123,14 +123,14 @@ func _build_ui() -> void:
 	var toolbar := HFlowContainer.new()
 	root.add_child(toolbar)
 	for spec in [
-		[Strings.EDITOR_PENCIL, "pencil"],
-		[Strings.EDITOR_ERASER, "eraser"],
-		[Strings.EDITOR_PICKER, "picker"],
-		[Strings.EDITOR_FILL, "fill"],
-		[Strings.EDITOR_LINE, "line"],
-		[Strings.EDITOR_RECTANGLE, "rectangle"],
-		[Strings.EDITOR_ELLIPSE, "ellipse"],
-		[Strings.EDITOR_MOVE, "move"]
+		[Strings.text("EDITOR_PENCIL"), "pencil"],
+		[Strings.text("EDITOR_ERASER"), "eraser"],
+		[Strings.text("EDITOR_PICKER"), "picker"],
+		[Strings.text("EDITOR_FILL"), "fill"],
+		[Strings.text("EDITOR_LINE"), "line"],
+		[Strings.text("EDITOR_RECTANGLE"), "rectangle"],
+		[Strings.text("EDITOR_ELLIPSE"), "ellipse"],
+		[Strings.text("EDITOR_MOVE"), "move"]
 	]:
 		_add_tool_button(toolbar, String(spec[0]), String(spec[1]))
 	var brush_size := SpinBox.new()
@@ -139,36 +139,42 @@ func _build_ui() -> void:
 	brush_size.value = 1
 	brush_size.value_changed.connect(func(value: float) -> void: _canvas.brush_size = int(value))
 	toolbar.add_child(brush_size)
-	_add_button(toolbar, Strings.EDITOR_UNDO, _undo)
-	_add_button(toolbar, Strings.EDITOR_REDO, _redo)
+	_add_button(toolbar, Strings.text("EDITOR_UNDO"), _undo)
+	_add_button(toolbar, Strings.text("EDITOR_REDO"), _redo)
 	_add_button(
-		toolbar, Strings.EDITOR_MIRROR_H, func() -> void: _canvas.mirror_h = not _canvas.mirror_h
-	)
-	_add_button(
-		toolbar, Strings.EDITOR_MIRROR_V, func() -> void: _canvas.mirror_v = not _canvas.mirror_v
+		toolbar,
+		Strings.text("EDITOR_MIRROR_H"),
+		func() -> void: _canvas.mirror_h = not _canvas.mirror_h
 	)
 	_add_button(
 		toolbar,
-		Strings.EDITOR_CONSTRAIN,
+		Strings.text("EDITOR_MIRROR_V"),
+		func() -> void: _canvas.mirror_v = not _canvas.mirror_v
+	)
+	_add_button(
+		toolbar,
+		Strings.text("EDITOR_CONSTRAIN"),
 		func() -> void: _canvas.constrain_palette = not _canvas.constrain_palette
 	)
 	_add_button(
 		toolbar,
-		Strings.EDITOR_GLOBAL_FILL,
+		Strings.text("EDITOR_GLOBAL_FILL"),
 		func() -> void: _canvas.global_fill = not _canvas.global_fill
 	)
-	_add_button(toolbar, Strings.EDITOR_NOISE_CLEAN, _clean_noise)
-	_add_button(toolbar, Strings.EDITOR_GAP_SCAN, _scan_gaps)
-	_add_button(toolbar, Strings.EDITOR_QUANTIZE, _quantize_to_palette)
-	_add_button(toolbar, Strings.EDITOR_SAVE_AS, func() -> void: _save(false))
+	_add_button(toolbar, Strings.text("EDITOR_NOISE_CLEAN"), _clean_noise)
+	_add_button(toolbar, Strings.text("EDITOR_GAP_SCAN"), _scan_gaps)
+	_add_button(toolbar, Strings.text("EDITOR_QUANTIZE"), _quantize_to_palette)
+	_add_button(toolbar, Strings.text("EDITOR_SAVE_AS"), func() -> void: _save(false))
 	_add_button(
-		toolbar, Strings.EDITOR_OVERWRITE, func() -> void: _overwrite_dialog.popup_centered()
+		toolbar,
+		Strings.text("EDITOR_OVERWRITE"),
+		func() -> void: _overwrite_dialog.popup_centered()
 	)
-	_add_button(toolbar, Strings.EDITOR_PREVIEW, _show_preview)
+	_add_button(toolbar, Strings.text("EDITOR_PREVIEW"), _show_preview)
 	var inpaint := Button.new()
-	inpaint.text = Strings.EDITOR_INPAINT
+	inpaint.text = Strings.text("EDITOR_INPAINT")
 	inpaint.disabled = true
-	inpaint.tooltip_text = Strings.EDITOR_INPAINT_DISABLED
+	inpaint.tooltip_text = Strings.text("EDITOR_INPAINT_DISABLED")
 	toolbar.add_child(inpaint)
 	_status = Label.new()
 	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -181,7 +187,7 @@ func _build_ui() -> void:
 	left.custom_minimum_size.x = 220
 	body.add_child(left)
 	var palette_title := Label.new()
-	palette_title.text = Strings.EDITOR_PALETTE
+	palette_title.text = Strings.text("EDITOR_PALETTE")
 	left.add_child(palette_title)
 	_palette_grid = GridContainer.new()
 	_palette_grid.columns = 6
@@ -192,19 +198,19 @@ func _build_ui() -> void:
 		func(color: Color) -> void: _canvas.foreground = _constrained(color)
 	)
 	left.add_child(foreground_picker)
-	_add_button(left, Strings.EDITOR_SWAP_COLORS, _swap_colors)
-	_add_button(left, Strings.EDITOR_PALETTE_ADD, _add_palette_color)
-	_add_button(left, Strings.EDITOR_PALETTE_DELETE, _delete_palette_color)
-	_add_button(left, Strings.EDITOR_PALETTE_UP, func() -> void: _move_palette_color(-1))
-	_add_button(left, Strings.EDITOR_PALETTE_DOWN, func() -> void: _move_palette_color(1))
-	_add_button(left, Strings.EDITOR_PALETTE_REMAP, _remap_palette_color)
+	_add_button(left, Strings.text("EDITOR_SWAP_COLORS"), _swap_colors)
+	_add_button(left, Strings.text("EDITOR_PALETTE_ADD"), _add_palette_color)
+	_add_button(left, Strings.text("EDITOR_PALETTE_DELETE"), _delete_palette_color)
+	_add_button(left, Strings.text("EDITOR_PALETTE_UP"), func() -> void: _move_palette_color(-1))
+	_add_button(left, Strings.text("EDITOR_PALETTE_DOWN"), func() -> void: _move_palette_color(1))
+	_add_button(left, Strings.text("EDITOR_PALETTE_REMAP"), _remap_palette_color)
 
 	_canvas = CanvasScript.new()
 	_canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_canvas.document_changed.connect(
 		func(_rect: Rect2i) -> void:
-			_status.text = Strings.EDITOR_MODIFIED
+			_status.text = Strings.text("EDITOR_MODIFIED")
 			_update_preview()
 	)
 	_canvas.stroke_started.connect(func() -> void: _history.capture(document))
@@ -215,18 +221,18 @@ func _build_ui() -> void:
 	right.custom_minimum_size.x = 230
 	body.add_child(right)
 	var layers_title := Label.new()
-	layers_title.text = Strings.EDITOR_LAYERS
+	layers_title.text = Strings.text("EDITOR_LAYERS")
 	right.add_child(layers_title)
 	_layers = ItemList.new()
 	_layers.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_layers.item_selected.connect(func(index: int) -> void: _canvas.set_layer(index))
 	right.add_child(_layers)
-	_add_button(right, Strings.EDITOR_ADD_LAYER, _add_layer)
+	_add_button(right, Strings.text("EDITOR_ADD_LAYER"), _add_layer)
 	_layer_asset_options = OptionButton.new()
 	right.add_child(_layer_asset_options)
-	_add_button(right, Strings.EDITOR_IMPORT_LAYER, _import_selected_layer)
-	_add_button(right, Strings.EDITOR_TOGGLE_LAYER, _toggle_layer)
-	_add_button(right, Strings.EDITOR_LOCK_LAYER, _toggle_lock)
+	_add_button(right, Strings.text("EDITOR_IMPORT_LAYER"), _import_selected_layer)
+	_add_button(right, Strings.text("EDITOR_TOGGLE_LAYER"), _toggle_layer)
+	_add_button(right, Strings.text("EDITOR_LOCK_LAYER"), _toggle_lock)
 	var opacity := HSlider.new()
 	opacity.min_value = 0.0
 	opacity.max_value = 1.0
@@ -237,14 +243,14 @@ func _build_ui() -> void:
 
 	var timeline_row := HBoxContainer.new()
 	root.add_child(timeline_row)
-	_add_button(timeline_row, Strings.EDITOR_PLAY, func() -> void: _playing = not _playing)
-	_add_button(timeline_row, Strings.EDITOR_ADD_FRAME, _add_frame)
-	_add_button(timeline_row, Strings.EDITOR_DUP_FRAME, _duplicate_frame)
-	_add_button(timeline_row, Strings.EDITOR_DELETE_FRAME, _delete_frame)
-	_add_button(timeline_row, Strings.EDITOR_FRAME_LEFT, func() -> void: _move_frame(-1))
-	_add_button(timeline_row, Strings.EDITOR_FRAME_RIGHT, func() -> void: _move_frame(1))
+	_add_button(timeline_row, Strings.text("EDITOR_PLAY"), func() -> void: _playing = not _playing)
+	_add_button(timeline_row, Strings.text("EDITOR_ADD_FRAME"), _add_frame)
+	_add_button(timeline_row, Strings.text("EDITOR_DUP_FRAME"), _duplicate_frame)
+	_add_button(timeline_row, Strings.text("EDITOR_DELETE_FRAME"), _delete_frame)
+	_add_button(timeline_row, Strings.text("EDITOR_FRAME_LEFT"), func() -> void: _move_frame(-1))
+	_add_button(timeline_row, Strings.text("EDITOR_FRAME_RIGHT"), func() -> void: _move_frame(1))
 	var onion := CheckButton.new()
-	onion.text = Strings.EDITOR_ONION
+	onion.text = Strings.text("EDITOR_ONION")
 	onion.button_pressed = true
 	onion.toggled.connect(
 		func(value: bool) -> void:
@@ -259,7 +265,7 @@ func _build_ui() -> void:
 	_duration.value_changed.connect(_set_duration)
 	timeline_row.add_child(_duration)
 	_tag_name = LineEdit.new()
-	_tag_name.placeholder_text = Strings.EDITOR_TAG_NAME
+	_tag_name.placeholder_text = Strings.text("EDITOR_TAG_NAME")
 	_tag_name.custom_minimum_size.x = 100
 	timeline_row.add_child(_tag_name)
 	_tag_from = SpinBox.new()
@@ -270,7 +276,7 @@ func _build_ui() -> void:
 	_tag_to.min_value = 1
 	_tag_to.max_value = 64
 	timeline_row.add_child(_tag_to)
-	_add_button(timeline_row, Strings.EDITOR_ADD_TAG, _add_tag)
+	_add_button(timeline_row, Strings.text("EDITOR_ADD_TAG"), _add_tag)
 	_timeline = ItemList.new()
 	_timeline.layout_mode = 1
 	_timeline.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -282,8 +288,8 @@ func _build_ui() -> void:
 	timeline_row.add_child(_timeline)
 
 	_discard_dialog = ConfirmationDialog.new()
-	_discard_dialog.title = Strings.EDITOR_DISCARD_TITLE
-	_discard_dialog.dialog_text = Strings.EDITOR_DISCARD_BODY
+	_discard_dialog.title = Strings.text("EDITOR_DISCARD_TITLE")
+	_discard_dialog.dialog_text = Strings.text("EDITOR_DISCARD_BODY")
 	_discard_dialog.confirmed.connect(
 		func() -> void:
 			document.dirty = false
@@ -291,12 +297,12 @@ func _build_ui() -> void:
 	)
 	add_child(_discard_dialog)
 	_overwrite_dialog = ConfirmationDialog.new()
-	_overwrite_dialog.title = Strings.EDITOR_OVERWRITE_TITLE
-	_overwrite_dialog.dialog_text = Strings.EDITOR_OVERWRITE_BODY
+	_overwrite_dialog.title = Strings.text("EDITOR_OVERWRITE_TITLE")
+	_overwrite_dialog.dialog_text = Strings.text("EDITOR_OVERWRITE_BODY")
 	_overwrite_dialog.confirmed.connect(func() -> void: _save(true))
 	add_child(_overwrite_dialog)
 	_preview_window = Window.new()
-	_preview_window.title = Strings.EDITOR_PREVIEW_TITLE
+	_preview_window.title = Strings.text("EDITOR_PREVIEW_TITLE")
 	_preview_window.size = Vector2i(320, 320)
 	_preview_window.visible = false
 	var preview_root := VBoxContainer.new()
@@ -378,7 +384,7 @@ func _import_selected_layer() -> void:
 		return
 	var asset_id := String(_layer_asset_options.get_item_metadata(_layer_asset_options.selected))
 	if not import_as_layer(asset_id):
-		_status.text = Strings.EDITOR_IMPORT_LAYER_FAILED
+		_status.text = Strings.text("EDITOR_IMPORT_LAYER_FAILED")
 
 
 func _rebuild_timeline() -> void:
@@ -398,7 +404,7 @@ func _sync_timeline_selection() -> void:
 
 func _add_layer() -> void:
 	if document.layers.size() >= 32:
-		_status.text = Strings.EDITOR_LAYER_LIMIT
+		_status.text = Strings.text("EDITOR_LAYER_LIMIT")
 		return
 	_history.capture(document)
 	_canvas.set_layer(document.add_layer("Layer %d" % (document.layers.size() + 1)))
@@ -430,7 +436,7 @@ func _set_layer_opacity(value: float) -> void:
 
 func _add_frame() -> void:
 	if document.frame_count() >= 64:
-		_status.text = Strings.EDITOR_FRAME_LIMIT
+		_status.text = Strings.text("EDITOR_FRAME_LIMIT")
 		return
 	_history.capture(document)
 	_canvas.set_frame(document.add_frame())
@@ -439,7 +445,7 @@ func _add_frame() -> void:
 
 func _duplicate_frame() -> void:
 	if document.frame_count() >= 64:
-		_status.text = Strings.EDITOR_FRAME_LIMIT
+		_status.text = Strings.text("EDITOR_FRAME_LIMIT")
 		return
 	_history.capture(document)
 	_canvas.set_frame(
@@ -492,13 +498,13 @@ func _clean_noise() -> void:
 	var changed := Repair.clean_noise(document.get_frame(_canvas.layer_index, _canvas.frame_index))
 	document.dirty = not changed.is_empty() or document.dirty
 	_canvas.refresh()
-	_status.text = Strings.EDITOR_NOISE_RESULT % changed.size()
+	_status.text = Strings.text("EDITOR_NOISE_RESULT") % changed.size()
 
 
 func _scan_gaps() -> void:
 	var endpoints := Repair.outline_endpoints(document.flatten(_canvas.frame_index))
 	_canvas.set_highlights(endpoints)
-	_status.text = Strings.EDITOR_GAP_RESULT % endpoints.size()
+	_status.text = Strings.text("EDITOR_GAP_RESULT") % endpoints.size()
 
 
 func _quantize_to_palette() -> void:
@@ -547,7 +553,7 @@ func _save(overwrite: bool) -> void:
 	document.source_asset_id = new_id
 	document.dirty = false
 	asset_saved.emit(old_id, new_id, source_batch_id)
-	_status.text = Strings.EDITOR_SAVED
+	_status.text = Strings.text("EDITOR_SAVED")
 
 
 func _request_close() -> void:
@@ -613,7 +619,7 @@ func _remap_palette_color() -> void:
 	document.dirty = true
 	_canvas.refresh()
 	_rebuild_palette()
-	_status.text = Strings.EDITOR_REMAP_RESULT % (Time.get_ticks_msec() - started)
+	_status.text = Strings.text("EDITOR_REMAP_RESULT") % (Time.get_ticks_msec() - started)
 
 
 func _add_tag() -> void:
@@ -624,7 +630,7 @@ func _add_tag() -> void:
 	var to_index := clampi(int(_tag_to.value) - 1, from_index, document.frame_count() - 1)
 	document.tags.append({"name": tag_name, "from": from_index, "to": to_index})
 	document.dirty = true
-	_status.text = Strings.EDITOR_TAG_ADDED % tag_name
+	_status.text = Strings.text("EDITOR_TAG_ADDED") % tag_name
 
 
 func _show_preview() -> void:

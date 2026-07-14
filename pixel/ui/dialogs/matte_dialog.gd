@@ -33,9 +33,9 @@ func _ready() -> void:
 	if _built:
 		return
 	_built = true
-	title = Strings.DIALOG_MATTE_TITLE
-	ok_button_text = Strings.DIALOG_APPLY
-	cancel_button_text = Strings.DIALOG_CANCEL
+	title = Strings.text("DIALOG_MATTE_TITLE")
+	ok_button_text = Strings.text("DIALOG_APPLY")
+	cancel_button_text = Strings.text("DIALOG_CANCEL")
 	min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
 	_build_ui()
 	confirmed.connect(func() -> void: params_confirmed.emit(get_params()))
@@ -60,15 +60,15 @@ func _build_ui() -> void:
 	add_child(root)
 
 	_mode_options = OptionButton.new()
-	_mode_options.add_item(Strings.MATTE_MODE_FLOOD)
-	_mode_options.add_item(Strings.MATTE_MODE_GLOBAL)
-	_add_labeled_control(root, Strings.MATTE_LABEL_MODE, _mode_options)
+	_mode_options.add_item(Strings.text("MATTE_MODE_FLOOD"))
+	_mode_options.add_item(Strings.text("MATTE_MODE_GLOBAL"))
+	_add_labeled_control(root, Strings.text("MATTE_LABEL_MODE"), _mode_options)
 
 	_tolerance_spin = _make_spin(0.0, 100.0, 1.0, Matting.DEFAULT_TOLERANCE)
-	_add_labeled_control(root, Strings.MATTE_LABEL_TOLERANCE, _tolerance_spin)
+	_add_labeled_control(root, Strings.text("MATTE_LABEL_TOLERANCE"), _tolerance_spin)
 
 	_feather_spin = _make_spin(0.0, 8.0, 1.0, Matting.DEFAULT_FEATHER)
-	_add_labeled_control(root, Strings.MATTE_LABEL_FEATHER, _feather_spin)
+	_add_labeled_control(root, Strings.text("MATTE_LABEL_FEATHER"), _feather_spin)
 
 	_preview_texture = TextureRect.new()
 	_preview_texture.custom_minimum_size = Vector2(PREVIEW_SIZE, PREVIEW_SIZE)
@@ -126,7 +126,9 @@ func _update_preview() -> void:
 	_preview_texture.texture = ImageTexture.create_from_image(image)
 	var warning := String(result.get("warning", ""))
 	_warning_label.text = (
-		Strings.MATTE_WARNING_NON_FLAT_BACKGROUND if warning == "non_flat_background" else ""
+		Strings.text("MATTE_WARNING_NON_FLAT_BACKGROUND")
+		if warning == "non_flat_background"
+		else ""
 	)
 
 

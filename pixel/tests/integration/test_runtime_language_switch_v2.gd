@@ -35,6 +35,7 @@ func test_en_zh_en_all_surfaces() -> void:
 	main.size = Vector2(1280, 720)
 	add_child_autofree(main)
 	await wait_process_frames(2)
+	main.get_node("RecoveryDialog").hide()
 	var shell_id := main.get_instance_id()
 	var controller: Node = main.get_node("M21UiController")
 	controller.generate_mock_batch()
@@ -61,7 +62,9 @@ func test_en_zh_en_all_surfaces() -> void:
 	LocalizationService.set_language("zh_CN")
 	await wait_process_frames(2)
 	var chinese := _surface_snapshot(main, provider_dialog, generation, output, cleanup, presenter)
-	assert_eq(main.get_instance_id(), shell_id, "language switching must not rebuild the main scene")
+	assert_eq(
+		main.get_instance_id(), shell_id, "language switching must not rebuild the main scene"
+	)
 	assert_eq(
 		[
 			provider_dialog.get_instance_id(),
@@ -116,7 +119,9 @@ func test_data_stores_code_args_only() -> void:
 	for locale in ["en", "zh_CN"]:
 		for key in ["GEN_ERROR_AUTH_FAILED_REASON", "GEN_ERROR_AUTH_FAILED_NEXT"]:
 			var rendered := _catalog_text(locale, key)
-			assert_false(stored_json.contains(rendered), "%s rendered text leaked into data" % locale)
+			assert_false(
+				stored_json.contains(rendered), "%s rendered text leaked into data" % locale
+			)
 
 	var english_rendered: Dictionary = policy.render(safe_model, "en")
 	var chinese_rendered: Dictionary = policy.render(safe_model, "zh_CN")
@@ -245,24 +250,30 @@ func _generation_view() -> Control:
 func _output_view() -> Control:
 	var slots := []
 	for index in range(4):
-		slots.append(
-			{
-				"slot_id": "slot-%d" % index,
-				"status": "succeeded",
-				"asset_id": "asset-%d" % index,
-				"detached": false,
-			}
+		(
+			slots
+			. append(
+				{
+					"slot_id": "slot-%d" % index,
+					"status": "succeeded",
+					"asset_id": "asset-%d" % index,
+					"detached": false,
+				}
+			)
 		)
 	var view: Control = OutputCardControllerScript.new()
 	view.size = Vector2(600, 488)
 	add_child_autofree(view)
-	view.configure(
-		{
-			"state": "Complete",
-			"role": "current",
-			"source_node_id": "generate",
-			"result_slots": slots,
-		}
+	(
+		view
+		. configure(
+			{
+				"state": "Complete",
+				"role": "current",
+				"source_node_id": "generate",
+				"result_slots": slots,
+			}
+		)
 	)
 	await wait_process_frames(1)
 	return view
@@ -272,12 +283,15 @@ func _cleanup_view() -> Control:
 	var view: Control = CleanupCardViewScript.new()
 	view.size = Vector2(420, 680)
 	add_child_autofree(view)
-	view.configure(
-		{
-			"params": {"preset_id": "cleanup-16bit-db32", "settings": {}},
-			"run": {"state": "Ready"},
-			"input": {"kind": "Output", "count": 2, "target": "32×32"},
-		}
+	(
+		view
+		. configure(
+			{
+				"params": {"preset_id": "cleanup-16bit-db32", "settings": {}},
+				"run": {"state": "Ready"},
+				"input": {"kind": "Output", "count": 2, "target": "32×32"},
+			}
+		)
 	)
 	await wait_process_frames(1)
 	return view

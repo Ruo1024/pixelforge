@@ -25,8 +25,7 @@ func test_production_ui_has_no_direct_strings_constants() -> void:
 func test_visible_control_properties_have_no_raw_english_literals() -> void:
 	var failures := []
 	var pattern := (
-		"(?m)(?:text|title|dialog_text|tooltip_text|placeholder_text)"
-		+ "\\s*=\\s*\"[A-Za-z][^\"]*\""
+		"(?m)(?:text|title|dialog_text|tooltip_text|placeholder_text)" + '\\s*=\\s*"[A-Za-z][^"]*"'
 	)
 	for path in _gd_files(UI_ROOT):
 		for token in _matches(FileAccess.get_file_as_string(path), pattern):
@@ -46,8 +45,7 @@ func test_dynamic_catalog_access_is_confined_to_compatibility_and_schema_resolve
 				continue
 			var source := FileAccess.get_file_as_string(path)
 			for token in _matches(
-				source,
-				"(?:Strings|PFStrings|LocalizationService)\\.text\\(\\s*+(?![\"&])"
+				source, '(?:Strings|PFStrings|LocalizationService)\\.text\\(\\s*+(?!["&])'
 			):
 				failures.append("%s: %s" % [path, token])
 	assert_eq(failures, [])
@@ -55,10 +53,7 @@ func test_dynamic_catalog_access_is_confined_to_compatibility_and_schema_resolve
 
 func test_provider_and_node_schemas_have_no_raw_visible_fields() -> void:
 	var failures := []
-	var pattern := (
-		"(?m)\"(?:label|help|placeholder|description)\""
-		+ "\\s*:\\s*\"[A-Za-z][^\"]*\""
-	)
+	var pattern := '(?m)"(?:label|help|placeholder|description)"' + '\\s*:\\s*"[A-Za-z][^"]*"'
 	for root in ["res://core/graph/nodes", "res://plugins"]:
 		for path in _gd_files(root):
 			for token in _matches(FileAccess.get_file_as_string(path), pattern):
@@ -74,8 +69,7 @@ func test_literal_catalog_keys_exist_in_both_languages() -> void:
 		for path in _gd_files(root):
 			var source := FileAccess.get_file_as_string(path)
 			for key in _captures(
-				source,
-				"(?:Strings|PFStrings|LocalizationService)\\.text\\(\\s*+[\"&]([^\"]+)"
+				source, '(?:Strings|PFStrings|LocalizationService)\\.text\\(\\s*+["&]([^"]+)'
 			):
 				if not english.has(key) or String(english.get(key, "")).is_empty():
 					failures.append("%s: en:%s" % [path, key])

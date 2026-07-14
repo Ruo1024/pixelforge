@@ -33,9 +33,9 @@ func _ready() -> void:
 	if _built:
 		return
 	_built = true
-	title = Strings.DIALOG_OUTLINE_TITLE
-	ok_button_text = Strings.DIALOG_APPLY
-	cancel_button_text = Strings.DIALOG_CANCEL
+	title = Strings.text("DIALOG_OUTLINE_TITLE")
+	ok_button_text = Strings.text("DIALOG_APPLY")
+	cancel_button_text = Strings.text("DIALOG_CANCEL")
 	min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
 	_build_ui()
 	confirmed.connect(func() -> void: params_confirmed.emit(get_params()))
@@ -62,22 +62,22 @@ func _build_ui() -> void:
 	add_child(root)
 
 	_type_options = OptionButton.new()
-	_type_options.add_item(Strings.OUTLINE_TYPE_OUTER)
-	_type_options.add_item(Strings.OUTLINE_TYPE_INNER)
-	_add_labeled_control(root, Strings.OUTLINE_LABEL_TYPE, _type_options)
+	_type_options.add_item(Strings.text("OUTLINE_TYPE_OUTER"))
+	_type_options.add_item(Strings.text("OUTLINE_TYPE_INNER"))
+	_add_labeled_control(root, Strings.text("OUTLINE_LABEL_TYPE"), _type_options)
 
 	_corner_options = OptionButton.new()
-	_corner_options.add_item(Strings.OUTLINE_CORNER_CROSS)
-	_corner_options.add_item(Strings.OUTLINE_CORNER_SQUARE)
-	_add_labeled_control(root, Strings.OUTLINE_LABEL_CORNER, _corner_options)
+	_corner_options.add_item(Strings.text("OUTLINE_CORNER_CROSS"))
+	_corner_options.add_item(Strings.text("OUTLINE_CORNER_SQUARE"))
+	_add_labeled_control(root, Strings.text("OUTLINE_LABEL_CORNER"), _corner_options)
 
 	_colored_check = CheckBox.new()
-	_colored_check.text = Strings.OUTLINE_COLORED
+	_colored_check.text = Strings.text("OUTLINE_COLORED")
 	root.add_child(_colored_check)
 
 	_color_picker = ColorPickerButton.new()
 	_color_picker.color = Color.BLACK
-	_add_labeled_control(root, Strings.OUTLINE_LABEL_COLOR, _color_picker)
+	_add_labeled_control(root, Strings.text("OUTLINE_LABEL_COLOR"), _color_picker)
 
 	_preview_texture = TextureRect.new()
 	_preview_texture.custom_minimum_size = Vector2(PREVIEW_SIZE, PREVIEW_SIZE)

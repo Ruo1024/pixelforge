@@ -6,6 +6,7 @@ extends Node
 const OfflineExampleGraph := preload("res://services/offline_example_graph.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
 const Strings := preload("res://ui/shell/strings.gd")
+const Catalog := preload("res://infra/localization_catalog.gd")
 
 var _canvas: Control = null
 var _status_label: Label = null
@@ -14,6 +15,7 @@ var _status_label: Label = null
 func setup(canvas: Control, status_label: Label) -> void:
 	_canvas = canvas
 	_status_label = status_label
+	LocalizationService.language_changed.connect(_on_language_changed)
 
 
 func open() -> void:
@@ -45,6 +47,19 @@ func open() -> void:
 	if not items.is_empty():
 		_canvas._focus_item_ids(_canvas._items_by_id.keys())
 	_status_label.text = Strings.text("STATUS_EXAMPLE_OPENED")
+
+
+func _on_language_changed(_preference: String, _locale: String) -> void:
+	if _status_label == null:
+		return
+	var current := _status_label.text
+	var was_example := false
+	for locale in ["en", "zh_CN"]:
+		if current == String(Catalog.load_catalog(locale).get("STATUS_EXAMPLE_OPENED", "")):
+			was_example = true
+			break
+	if was_example:
+		_status_label.text = Strings.text("STATUS_EXAMPLE_OPENED")
 
 
 func _add_canvas_items(graph: PFGraph, anchor: Vector2, item_ids: Dictionary) -> Array:

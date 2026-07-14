@@ -13,10 +13,13 @@ const CONTROL_HEIGHT := 30
 const ROOT_SEPARATION := 8
 
 var _provider_options: OptionButton = null
+var _provider_label: Label = null
+var _budget_label: Label = null
 var _capabilities_label: Label = null
 var _form: VBoxContainer = null
 var _status_label: Label = null
 var _validate_button: Button = null
+var _save_button: Button = null
 var _budget_edit: LineEdit = null
 var _fields := {}
 var _provider_id := ""
@@ -25,6 +28,7 @@ var _provider_id := ""
 func _ready() -> void:
 	_build()
 	ProviderService.provider_validation_changed.connect(_on_provider_validation_changed)
+	LocalizationService.language_changed.connect(_on_language_changed)
 	_refresh_provider_list()
 
 
@@ -51,7 +55,7 @@ func is_validation_available() -> bool:
 func save_current_config() -> Dictionary:
 	var budget_micro: Variant = CostService.parse_usd_to_micro(_budget_edit.text.strip_edges())
 	if budget_micro == null or not CostService.set_monthly_budget_micro_usd(budget_micro):
-		_status_label.text = Strings.PROVIDER_SETTINGS_SAVE_FAILED
+		_status_label.text = Strings.text("PROVIDER_SETTINGS_SAVE_FAILED")
 		return {
 			"ok": false,
 			"error": {"code": "invalid_budget", "field": "monthly_budget", "args": {}},
@@ -61,9 +65,9 @@ func save_current_config() -> Dictionary:
 		config[String(key)] = _control_value(_fields[key])
 	var result := ProviderService.save_provider_config(_provider_id, config)
 	_status_label.text = (
-		Strings.PROVIDER_SETTINGS_SAVED
+		Strings.text("PROVIDER_SETTINGS_SAVED")
 		if bool(result.get("ok", false))
-		else Strings.PROVIDER_SETTINGS_SAVE_FAILED
+		else Strings.text("PROVIDER_SETTINGS_SAVE_FAILED")
 	)
 	if bool(result.get("ok", false)):
 		_render_provider(_provider_id)
@@ -73,30 +77,30 @@ func save_current_config() -> Dictionary:
 func validate_current_provider() -> bool:
 	var task: Variant = ProviderService.validate_provider(_provider_id)
 	if task == null:
-		_status_label.text = Strings.PROVIDER_SETTINGS_VALIDATE_UNAVAILABLE
+		_status_label.text = Strings.text("PROVIDER_SETTINGS_VALIDATE_UNAVAILABLE")
 		return false
 	TaskQueue.submit(task)
 	return true
 
 
 func _build() -> void:
-	title = Strings.DIALOG_PROVIDER_SETTINGS_TITLE
-	ok_button_text = Strings.ACTION_CLOSE
+	title = Strings.text("DIALOG_PROVIDER_SETTINGS_TITLE")
+	ok_button_text = Strings.text("ACTION_CLOSE")
 	min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", ROOT_SEPARATION)
 	add_child(root)
 
-	var provider_label := Label.new()
-	provider_label.text = Strings.PROVIDER_SETTINGS_PROVIDER
-	root.add_child(provider_label)
+	_provider_label = Label.new()
+	_provider_label.text = Strings.text("PROVIDER_SETTINGS_PROVIDER")
+	root.add_child(_provider_label)
 	_provider_options = OptionButton.new()
 	_provider_options.custom_minimum_size.y = CONTROL_HEIGHT
 	_provider_options.item_selected.connect(_on_provider_selected)
 	root.add_child(_provider_options)
-	var budget_label := Label.new()
-	budget_label.text = Strings.PROVIDER_MONTHLY_BUDGET
-	root.add_child(budget_label)
+	_budget_label = Label.new()
+	_budget_label.text = Strings.text("PROVIDER_MONTHLY_BUDGET")
+	root.add_child(_budget_label)
 	_budget_edit = LineEdit.new()
 	_budget_edit.name = "MonthlyBudget"
 	_budget_edit.custom_minimum_size.y = CONTROL_HEIGHT
@@ -113,12 +117,12 @@ func _build() -> void:
 	root.add_child(_form)
 
 	var actions := HBoxContainer.new()
-	var save_button := Button.new()
-	save_button.text = Strings.ACTION_SAVE_PROVIDER
-	save_button.pressed.connect(save_current_config)
-	actions.add_child(save_button)
+	_save_button = Button.new()
+	_save_button.text = Strings.text("ACTION_SAVE_PROVIDER")
+	_save_button.pressed.connect(save_current_config)
+	actions.add_child(_save_button)
 	_validate_button = Button.new()
-	_validate_button.text = Strings.ACTION_VALIDATE_PROVIDER
+	_validate_button.text = Strings.text("ACTION_VALIDATE_PROVIDER")
 	_validate_button.pressed.connect(validate_current_provider)
 	actions.add_child(_validate_button)
 	root.add_child(actions)
@@ -188,7 +192,7 @@ func _add_field(schema: Dictionary, values: Dictionary) -> void:
 	_form.add_child(control)
 	_fields[key] = control
 	if String(schema.get("kind", "")) == "password" and bool(values.get("%s_saved" % key, false)):
-		(control as LineEdit).placeholder_text = Strings.PROVIDER_SETTINGS_SECRET_SAVED
+		(control as LineEdit).placeholder_text = Strings.text("PROVIDER_SETTINGS_SECRET_SAVED")
 
 
 func _make_control(schema: Dictionary, value: Variant) -> Control:
@@ -227,7 +231,7 @@ func _control_value(control: Control) -> Variant:
 
 func _capabilities_text(capabilities: Dictionary) -> String:
 	return (
-		Strings.PROVIDER_SETTINGS_CAPABILITIES_FORMAT
+		Strings.text("PROVIDER_SETTINGS_CAPABILITIES_FORMAT")
 		% [
 			_yes_no(bool(capabilities.get("txt2img", false))),
 			_yes_no(bool(capabilities.get("img2img", false))),
@@ -239,7 +243,7 @@ func _capabilities_text(capabilities: Dictionary) -> String:
 
 
 func _yes_no(value: bool) -> String:
-	return Strings.VALUE_YES if value else Strings.VALUE_NO
+	return Strings.text("VALUE_YES") if value else Strings.text("VALUE_NO")
 
 
 func _refresh_budget_text() -> void:
@@ -252,3 +256,14 @@ func _refresh_budget_text() -> void:
 func _on_provider_validation_changed(provider_id: String, _state: String, message: String) -> void:
 	if provider_id == _provider_id:
 		_status_label.text = message
+
+
+func _on_language_changed(_preference: String, _locale: String) -> void:
+	title = Strings.text("DIALOG_PROVIDER_SETTINGS_TITLE")
+	ok_button_text = Strings.text("ACTION_CLOSE")
+	_provider_label.text = Strings.text("PROVIDER_SETTINGS_PROVIDER")
+	_budget_label.text = Strings.text("PROVIDER_MONTHLY_BUDGET")
+	_save_button.text = Strings.text("ACTION_SAVE_PROVIDER")
+	_validate_button.text = Strings.text("ACTION_VALIDATE_PROVIDER")
+	if not _provider_id.is_empty():
+		_render_provider(_provider_id)

@@ -1,3 +1,4 @@
+# gdlint: disable=max-returns
 class_name PFGraphNodeParamsDialog
 extends ConfirmationDialog
 
@@ -206,20 +207,21 @@ func _label_text(schema: Dictionary) -> String:
 
 
 func _localized_node_name(node: PFNode) -> String:
-	var keys := {
-		"object_list": "NODE_OBJECT_LIST",
-		"image_input": "NODE_IMAGE_INPUT",
-		"prompt_preset": "NODE_PROMPT_PRESET",
-		"pixel_cleanup": "NODE_PIXEL_CLEANUP",
-		"ai_generate": "NODE_AI_GENERATE",
-		"batch": "NODE_BATCH",
-	}
-	var key := String(keys.get(node.get_type(), ""))
-	return (
-		Strings.text(key, node.get_display_name())
-		if not key.is_empty()
-		else node.get_display_name()
-	)
+	match node.get_type():
+		"object_list":
+			return Strings.text("NODE_OBJECT_LIST")
+		"image_input":
+			return Strings.text("NODE_IMAGE_INPUT")
+		"prompt_preset":
+			return Strings.text("NODE_PROMPT_PRESET")
+		"pixel_cleanup":
+			return Strings.text("NODE_PIXEL_CLEANUP")
+		"ai_generate":
+			return Strings.text("NODE_AI_GENERATE")
+		"batch":
+			return Strings.text("NODE_BATCH")
+		_:
+			return node.get_display_name()
 
 
 func _on_language_changed(_preference: String, _locale: String) -> void:

@@ -1,3 +1,4 @@
+# gdlint: disable=max-returns
 class_name PFWorkspaceContextInspector
 extends PanelContainer
 
@@ -75,7 +76,7 @@ func _ready() -> void:
 
 	_title_label = Label.new()
 	_title_label.name = "ContextTitle"
-	_title_label.text = Strings.INSPECTOR_TITLE
+	_title_label.text = Strings.text("INSPECTOR_TITLE")
 	root.add_child(_title_label)
 
 	_graph_summary = VBoxContainer.new()
@@ -302,16 +303,50 @@ func _set_candidate_row(field_id: String, raw_value: Variant) -> void:
 	var value := str(raw_value) if raw_value != null else ""
 	var visible := not value.is_empty()
 	entry["row"].visible = visible
-	entry["label"].text = Strings.text("INSPECTOR_CANDIDATE_%s" % field_id.to_upper())
+	entry["label"].text = _candidate_field_text(field_id)
 	entry["value"].text = value if visible else ""
 
 
 func _set_action_visibility(multiple: bool) -> void:
 	for action_id in CANDIDATE_ACTIONS:
 		var button: Button = _candidate_action_buttons[action_id]
-		button.text = Strings.text("INSPECTOR_CANDIDATE_ACTION_%s" % action_id.to_upper())
+		button.text = _candidate_action_text(action_id)
 		button.visible = not multiple or action_id in ["as_reference", "continue_branch"]
 		button.disabled = false
+
+
+func _candidate_field_text(field_id: String) -> String:
+	match field_id:
+		"prompt":
+			return Strings.text("INSPECTOR_CANDIDATE_PROMPT")
+		"model":
+			return Strings.text("INSPECTOR_CANDIDATE_MODEL")
+		"seed":
+			return Strings.text("INSPECTOR_CANDIDATE_SEED")
+		"size":
+			return Strings.text("INSPECTOR_CANDIDATE_SIZE")
+		"references":
+			return Strings.text("INSPECTOR_CANDIDATE_REFERENCES")
+		"cost":
+			return Strings.text("INSPECTOR_CANDIDATE_COST")
+		"created_at":
+			return Strings.text("INSPECTOR_CANDIDATE_CREATED_AT")
+		_:
+			return Strings.text("INSPECTOR_CANDIDATE_SOURCE")
+
+
+func _candidate_action_text(action_id: String) -> String:
+	match action_id:
+		"copy_prompt":
+			return Strings.text("INSPECTOR_CANDIDATE_ACTION_COPY_PROMPT")
+		"copy_settings":
+			return Strings.text("INSPECTOR_CANDIDATE_ACTION_COPY_SETTINGS")
+		"rerun":
+			return Strings.text("INSPECTOR_CANDIDATE_ACTION_RERUN")
+		"as_reference":
+			return Strings.text("INSPECTOR_CANDIDATE_ACTION_AS_REFERENCE")
+		_:
+			return Strings.text("INSPECTOR_CANDIDATE_ACTION_CONTINUE_BRANCH")
 
 
 func _set_canvas(canvas: Control) -> void:

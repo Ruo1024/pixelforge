@@ -36,12 +36,18 @@ func get_param_schema() -> Array[Dictionary]:
 	return [
 		{
 			"key": "template_id",
-			"label_key": "ComfyUI Template",
+			"label_key": "COMFY_FIELD_TEMPLATE",
 			"kind": KIND_ENUM,
 			"default": "sdxl_pixel_txt2img",
 			"options": Templates.builtin_ids(),
 		},
-		{"key": "seed", "label_key": "Seed", "kind": KIND_SEED, "default": 1, "min": 0},
+		{
+			"key": "seed",
+			"label_key": "GRAPH_PARAM_SEED",
+			"kind": KIND_SEED,
+			"default": 1,
+			"min": 0,
+		},
 	]
 
 

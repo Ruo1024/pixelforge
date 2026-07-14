@@ -128,7 +128,10 @@ func _assert_container_children_do_not_overlap(container: Control, label: String
 			var overlap := left.intersection(right)
 			assert_true(
 				overlap.size.x <= 0.5 or overlap.size.y <= 0.5,
-				"%s: %s overlaps %s" % [label, children[left_index].name, children[right_index].name],
+				(
+					"%s: %s overlaps %s"
+					% [label, children[left_index].name, children[right_index].name]
+				),
 			)
 
 
@@ -219,7 +222,13 @@ func _generation_snapshot() -> Dictionary:
 			"state": "Running",
 			"errors": [],
 			"progress":
-			{"determinate": true, "completed_items": 2, "total_items": 4, "ratio": 0.5, "elapsed_ms": 3200},
+			{
+				"determinate": true,
+				"completed_items": 2,
+				"total_items": 4,
+				"ratio": 0.5,
+				"elapsed_ms": 3200
+			},
 			"cost": {"kind": "estimate", "micro_usd": 250000},
 		},
 	}
@@ -228,13 +237,16 @@ func _generation_snapshot() -> Dictionary:
 func _output_snapshot() -> Dictionary:
 	var slots := []
 	for index in range(12):
-		slots.append(
-			{
-				"slot_id": "slot-%02d" % index,
-				"status": "succeeded" if index % 3 != 2 else "failed",
-				"asset_id": "asset-%02d" % index if index % 3 != 2 else null,
-				"detached": false,
-			}
+		(
+			slots
+			. append(
+				{
+					"slot_id": "slot-%02d" % index,
+					"status": "succeeded" if index % 3 != 2 else "failed",
+					"asset_id": "asset-%02d" % index if index % 3 != 2 else null,
+					"detached": false,
+				}
+			)
 		)
 	return {
 		"state": "Partial",

@@ -13,12 +13,12 @@ func before_each() -> void:
 	get_tree().root.get_node("ProjectService").new_project("Hit Policy")
 
 
-func test_canvas_hit_policy_prioritizes_batch_thumbnail_inside_review_card() -> void:
+func test_canvas_hit_policy_prioritizes_output_tile() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red"), _register_asset(Color.BLUE, "blue")]
-	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
+	var card: Node = _add_output_card(canvas, ids, Vector2(16, 24), "batch_1")
 
-	var hit := _hit(canvas, card.position + card._slot_rect(0).get_center())
+	var hit := _hit(canvas, _slot_center(card, 0))
 
 	assert_eq(hit["kind"], HitPolicy.KIND_BATCH_THUMBNAIL)
 	assert_eq(hit["item_id"], "batch_1")
@@ -28,24 +28,22 @@ func test_canvas_hit_policy_prioritizes_batch_thumbnail_inside_review_card() -> 
 func test_canvas_left_click_on_batch_thumbnail_does_not_start_card_drag() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]
-	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
+	var card: Node = _add_output_card(canvas, ids, Vector2(16, 24), "batch_1")
 
-	canvas._begin_left_interaction(
-		canvas.world_to_screen(card.position + card._slot_rect(0).get_center()), false
-	)
+	canvas._begin_left_interaction(canvas.world_to_screen(_slot_center(card, 0)), false)
 
 	assert_eq(canvas.get_selected_ids(), ["batch_1"])
 	assert_eq(card.get_selected_asset_ids(), [ids[0]])
 	assert_false(canvas._selection.is_dragging_items)
 
 
-func test_canvas_hit_policy_keeps_batch_thumbnail_available_at_25_percent() -> void:
+func test_canvas_hit_policy_keeps_output_tile_available_at_25_percent() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]
-	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
+	var card: Node = _add_output_card(canvas, ids, Vector2(16, 24), "batch_1")
 	card.set_lod_camera_zoom(0.25)
 
-	var hit := _hit(canvas, card.position + card._slot_rect(0).get_center())
+	var hit := _hit(canvas, _slot_center(card, 0))
 
 	assert_eq(hit["kind"], HitPolicy.KIND_BATCH_THUMBNAIL)
 	assert_eq(hit["item_id"], "batch_1")
@@ -56,8 +54,8 @@ func test_canvas_hit_policy_prioritizes_batch_graph_port_over_thumbnail() -> voi
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]
 	_set_graph("graph_hit", [_batch_node("batch_1", ids)])
-	var card: Node = canvas._add_batch_card(
-		ids, Vector2(16, 24), "Batch", "batch_item", false, "graph_hit", "batch_1"
+	var card: Node = canvas._add_graph_node_card(
+		"graph_hit", "batch_1", Vector2(16, 24), "batch_item", false
 	)
 
 	var hit := _hit(canvas, card.get_graph_port_anchor("in", true))
@@ -177,15 +175,15 @@ func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> vo
 	canvas.graph_status.connect(func(event: Dictionary) -> void: status_events.append(event))
 	canvas.graph_connect_failed.connect(
 		func(reason: String) -> void:
-			status_messages.append(Strings.STATUS_GRAPH_CONNECT_FAILED % reason)
+			status_messages.append(Strings.text("STATUS_GRAPH_CONNECT_FAILED") % reason)
 	)
 	var ids := [_register_asset(Color.RED, "red")]
 	_set_graph("graph_hit", [_graph_node("objects", "object_list"), _batch_node("batch_1", ids)])
 	var objects: Node = canvas._add_node_direct(
 		_node_item("objects_item", "graph_hit", "objects", Vector2(100, 100))
 	)
-	var batch: Node = canvas._add_batch_card(
-		ids, Vector2(380, 100), "Batch", "batch_item", false, "graph_hit", "batch_1"
+	var batch: Node = canvas._add_graph_node_card(
+		"graph_hit", "batch_1", Vector2(700, 100), "batch_item", false
 	)
 
 	canvas._begin_left_interaction(
@@ -202,7 +200,7 @@ func test_canvas_drag_between_incompatible_graph_ports_does_not_add_edge() -> vo
 	assert_eq(ProjectService.get_graph_data("graph_hit").get("edges", []), [])
 	assert_eq(
 		status_messages,
-		[Strings.STATUS_GRAPH_CONNECT_FAILED % "Cannot connect subject_list to asset_list"]
+		[Strings.text("STATUS_GRAPH_CONNECT_FAILED") % "Cannot connect subject_list to asset_list"]
 	)
 
 
@@ -333,7 +331,7 @@ func test_stage_frame_rejects_cross_graph_grouping() -> void:
 func test_canvas_hit_policy_keeps_topmost_item_order() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]
-	canvas._add_batch_card(ids, Vector2.ZERO, "Batch", "batch_1", false)
+	_add_output_card(canvas, ids, Vector2.ZERO, "batch_1")
 	canvas.add_sprite_item(_image(Color.GREEN), "", Vector2.ZERO, "sprite_top", false)
 
 	var hit := _hit(canvas, Vector2(2, 2))
@@ -354,7 +352,7 @@ func test_canvas_hit_policy_reports_empty_space() -> void:
 func test_canvas_right_click_routes_batch_before_empty_graph_quick_add() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]
-	var card: Node = canvas._add_batch_card(ids, Vector2(16, 24), "Batch", "batch_1", false)
+	var card: Node = _add_output_card(canvas, ids, Vector2(16, 24), "batch_1")
 	var batch_requests := []
 	var graph_requests := []
 	canvas.batch_context_requested.connect(
@@ -384,6 +382,20 @@ func _canvas() -> Control:
 	canvas.size = Vector2(512, 512)
 	add_child_autofree(canvas)
 	return canvas
+
+
+func _add_output_card(
+	canvas: Control, asset_ids: Array, position: Vector2, item_id: String
+) -> Node:
+	var graph_id := "graph_%s" % item_id
+	var node_id := "output_%s" % item_id
+	_set_graph(graph_id, [_batch_node(node_id, asset_ids)])
+	return canvas._add_graph_node_card(graph_id, node_id, position, item_id, false)
+
+
+func _slot_center(card: Node, index: int) -> Vector2:
+	var grid: Control = card.get_node("OutputCardController/SlotGrid")
+	return card.position + grid.position + grid.slot_rect(index).get_center()
 
 
 func _hit(canvas: Control, world_position: Vector2) -> Dictionary:
@@ -441,9 +453,17 @@ func _output_params(asset_ids: Array) -> Dictionary:
 			. append(
 				{
 					"slot_id": "slot-%d" % index,
+					"run_id": "",
+					"request_id": "",
+					"source_row_id": "",
+					"source_asset_id": "",
+					"input_snapshot_id": "",
+					"planned_size": [4, 4],
 					"status": "succeeded",
 					"asset_id": String(asset_ids[index]),
 					"detached": false,
+					"unexpected": false,
+					"error": null,
 				}
 			)
 		)

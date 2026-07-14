@@ -11,7 +11,7 @@ static func show_matte_error(parent: Node, warning: String) -> void:
 	if warning != "non_flat_background" or parent == null:
 		return
 	var dialog := AcceptDialog.new()
-	dialog.title = Strings.DIALOG_MATTE_NON_FLAT_TITLE
-	dialog.dialog_text = Strings.DIALOG_MATTE_NON_FLAT_BODY
+	dialog.title = Strings.text("DIALOG_MATTE_NON_FLAT_TITLE")
+	dialog.dialog_text = Strings.text("DIALOG_MATTE_NON_FLAT_BODY")
 	parent.add_child(dialog)
 	dialog.popup_centered()

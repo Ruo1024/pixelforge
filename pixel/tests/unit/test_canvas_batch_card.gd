@@ -63,21 +63,24 @@ func _make_card(count: int) -> Dictionary:
 func _params(count: int) -> Dictionary:
 	var slots := []
 	for index in range(count):
-		slots.append(
-			{
-				"slot_id": "slot-%d" % index,
-				"run_id": "",
-				"request_id": "",
-				"source_row_id": "",
-				"source_asset_id": "",
-				"input_snapshot_id": "",
-				"planned_size": [4, 4],
-				"status": "succeeded",
-				"asset_id": "asset-%d" % index,
-				"detached": false,
-				"unexpected": false,
-				"error": null,
-			}
+		(
+			slots
+			. append(
+				{
+					"slot_id": "slot-%d" % index,
+					"run_id": "",
+					"request_id": "",
+					"source_row_id": "",
+					"source_asset_id": "",
+					"input_snapshot_id": "",
+					"planned_size": [4, 4],
+					"status": "succeeded",
+					"asset_id": "asset-%d" % index,
+					"detached": false,
+					"unexpected": false,
+					"error": null,
+				}
+			)
 		)
 	return {
 		"label": "Output",

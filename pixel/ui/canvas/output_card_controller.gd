@@ -1,3 +1,4 @@
+# gdlint: disable=max-returns
 class_name PFOutputCardController
 extends Control
 
@@ -115,7 +116,7 @@ func _rebuild() -> void:
 	if not empty_reason().is_empty():
 		var empty := Label.new()
 		empty.name = "EmptyState"
-		empty.text = Strings.text(_empty_key(empty_reason()))
+		empty.text = _empty_text(empty_reason())
 		empty.position = Vector2(16, 72)
 		add_child(empty)
 
@@ -142,7 +143,7 @@ func _build_top_rail() -> void:
 	rail.add_child(count)
 	var state := Label.new()
 	state.name = "State"
-	var state_text := Strings.text(_state_key(String(_output.get("state", "Ready"))))
+	var state_text := _state_text(String(_output.get("state", "Ready")))
 	if String(_output.get("role", "current")) == "history":
 		state_text = "%s · %s" % [Strings.text("OUTPUT_HISTORY"), state_text]
 	state.text = state_text
@@ -153,7 +154,11 @@ func _build_top_rail() -> void:
 	]:
 		var button := Button.new()
 		button.name = String(spec[0])
-		button.text = Strings.text(String(spec[1]))
+		button.text = (
+			Strings.text("OUTPUT_ACTION_DOWNLOAD_ALL")
+			if String(spec[2]) == "download"
+			else Strings.text("OUTPUT_ACTION_DETACH_ALL")
+		)
 		button.disabled = String(spec[2]) == "detach_all" and _is_busy()
 		var action_id := String(spec[2])
 		button.pressed.connect(func() -> void: action_requested.emit(action_id, ""))
@@ -183,19 +188,32 @@ func _is_busy() -> bool:
 	return String(_output.get("state", "Ready")) in BUSY_STATES
 
 
-func _state_key(state: String) -> String:
-	return "OUTPUT_STATE_%s" % state.to_upper()
+func _state_text(state: String) -> String:
+	match state:
+		"Running":
+			return Strings.text("OUTPUT_STATE_RUNNING")
+		"Canceling":
+			return Strings.text("OUTPUT_STATE_CANCELING")
+		"Partial":
+			return Strings.text("OUTPUT_STATE_PARTIAL")
+		"Complete":
+			return Strings.text("OUTPUT_STATE_COMPLETE")
+		"Failed":
+			return Strings.text("OUTPUT_STATE_FAILED")
+		"Canceled":
+			return Strings.text("OUTPUT_STATE_CANCELED")
+		_:
+			return Strings.text("OUTPUT_STATE_READY")
 
 
-func _empty_key(reason: String) -> String:
-	return (
-		{
-			"not_run": "OUTPUT_EMPTY_NOT_RUN",
-			"empty": "OUTPUT_EMPTY_NONE",
-			"detached": "OUTPUT_EMPTY_DETACHED",
-		}
-		. get(reason, "OUTPUT_EMPTY_NONE")
-	)
+func _empty_text(reason: String) -> String:
+	match reason:
+		"not_run":
+			return Strings.text("OUTPUT_EMPTY_NOT_RUN")
+		"detached":
+			return Strings.text("OUTPUT_EMPTY_DETACHED")
+		_:
+			return Strings.text("OUTPUT_EMPTY_NONE")
 
 
 func _on_language_changed(_preference: String, _locale: String) -> void:

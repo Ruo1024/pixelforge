@@ -80,11 +80,14 @@ func test_prompt_and_cleanup_preset_snapshots_are_visible_without_execution() ->
 			"settings": PixelCleanupNodeScript.DEFAULT_SETTINGS.duplicate(true),
 		}
 	)
-	assert_eq(cleanup["card"].get_content_control("CleanupPresetId").text, "cleanup-user-original")
-	assert_true(
-		cleanup["card"].get_content_control("CleanupSettingsSnapshot").text.contains("quantize")
+	var cleanup_view: Control = cleanup["card"].get_content_control("CleanupCardView")
+	assert_not_null(cleanup_view)
+	assert_eq(cleanup_view.call("get_group_ids")[2], "preset")
+	var cleanup_params: Dictionary = (
+		ProjectService.get_graph_data(cleanup["card"].graph_id)["nodes"][0]["params"]
 	)
-	assert_null(cleanup["card"].get_content_control("PrimaryActionButton"))
+	assert_eq(cleanup_params["preset_id"], "cleanup-user-original")
+	assert_true(cleanup_params["settings"].has("quantize"))
 
 
 func test_generate_card_has_one_primary_action_for_every_v2_state() -> void:

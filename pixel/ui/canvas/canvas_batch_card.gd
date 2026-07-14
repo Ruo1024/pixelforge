@@ -186,6 +186,15 @@ func asset_index_at_world(world_position: Vector2) -> int:
 	return -1
 
 
+func select_asset_at_world(world_position: Vector2) -> bool:
+	var index := asset_index_at_world(world_position)
+	var slots := _controller.visible_slots() if _controller != null else []
+	if index < 0 or index >= slots.size():
+		return false
+	_controller.select_slot(String(slots[index].get("slot_id", "")))
+	return true
+
+
 func get_graph_port_anchor(port_name: String, is_input: bool) -> Vector2:
 	var ports := INPUT_PORTS if is_input else OUTPUT_PORTS
 	var index := maxi(0, ports.find(port_name))
@@ -208,10 +217,13 @@ func resize_handle_contains_world(world_position: Vector2) -> bool:
 	if locked or _lod_camera_zoom < 0.75:
 		return false
 	var hit_world := 16.0 / maxf(_lod_camera_zoom, 0.01)
-	return Rect2(
-		Vector2(requested_size.x, _card_height()) - Vector2.ONE * hit_world,
-		Vector2.ONE * hit_world
-	).has_point(world_position - position)
+	return (
+		Rect2(
+			Vector2(requested_size.x, _card_height()) - Vector2.ONE * hit_world,
+			Vector2.ONE * hit_world
+		)
+		. has_point(world_position - position)
+	)
 
 
 func begin_title_edit() -> void:
@@ -225,7 +237,9 @@ func begin_title_edit() -> void:
 		add_child(_title_edit)
 	_title_edit.position = Vector2(16, 2)
 	_title_edit.size = Vector2(maxf(64.0, requested_size.x - 120.0), 28)
-	_title_edit.text = display_title if not display_title.is_empty() else String(_params.get("label", "Output"))
+	_title_edit.text = (
+		display_title if not display_title.is_empty() else String(_params.get("label", "Output"))
+	)
 	_title_edit.visible = true
 	_title_edit.grab_focus()
 	_title_edit.select_all()
@@ -251,14 +265,22 @@ func _rebuild_controller() -> void:
 	_controller.position = Vector2.ZERO
 	_controller.size = Vector2(requested_size.x, _card_height())
 	_controller.visible = not collapsed and _lod_camera_zoom >= 0.25
-	_controller.configure(
-		{
-			"title": display_title if not display_title.is_empty() else String(_params.get("label", "Output")),
-			"role": String(_params.get("role", "current")),
-			"state": _display_state(),
-			"source_node_id": String(_params.get("source_node_id", "")),
-			"result_slots": _params.get("result_slots", []),
-		}
+	(
+		_controller
+		. configure(
+			{
+				"title":
+				(
+					display_title
+					if not display_title.is_empty()
+					else String(_params.get("label", "Output"))
+				),
+				"role": String(_params.get("role", "current")),
+				"state": _display_state(),
+				"source_node_id": String(_params.get("source_node_id", "")),
+				"result_slots": _params.get("result_slots", []),
+			}
+		)
 	)
 
 
@@ -278,6 +300,8 @@ func _rebuild_header_controls() -> void:
 		_title_button = Button.new()
 		_title_button.name = "TitleButton"
 		_title_button.flat = true
+		_title_button.focus_mode = Control.FOCUS_NONE
+		_title_button.mouse_filter = Control.MOUSE_FILTER_PASS
 		_title_button.gui_input.connect(_on_title_input)
 		add_child(_title_button)
 	_title_button.position = Vector2(8, 2)
@@ -303,6 +327,7 @@ func _on_output_action(action_id: String, slot_id: String) -> void:
 func _on_title_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.double_click:
 		begin_title_edit()
+		_title_button.accept_event()
 
 
 func _commit_title_edit() -> void:

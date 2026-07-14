@@ -113,7 +113,10 @@ func test_all_title_buttons_pass_single_clicks_and_own_double_clicks() -> void:
 	await _assert_title_input_contract(canvas, graph_card, quick_add_requests, asset_edit_requests)
 	canvas._remove_item_direct(graph_card.item_id)
 
-	var batch_card: Node = canvas._add_batch_card([], item_position, "Batch", "batch_card", false)
+	ProjectService.set_graph_data("output_graph", _output_graph_data(), false)
+	var batch_card: Node = canvas._add_graph_node_card(
+		"output_graph", "output", item_position, "batch_card", false
+	)
 	await _assert_title_input_contract(canvas, batch_card, quick_add_requests, asset_edit_requests)
 	canvas._remove_item_direct(batch_card.item_id)
 
@@ -318,6 +321,32 @@ func _graph_data(node_type: String, params: Dictionary = {}) -> Dictionary:
 		"id": "graph_main",
 		"name": "Cards",
 		"nodes": [{"id": "node", "type": node_type, "params": params.duplicate(true)}],
+		"edges": [],
+	}
+
+
+func _output_graph_data() -> Dictionary:
+	return {
+		"graph_version": 2,
+		"id": "output_graph",
+		"name": "Output Card",
+		"nodes":
+		[
+			{
+				"id": "output",
+				"type": "batch",
+				"params":
+				{
+					"label": "Output",
+					"source_node_id": "",
+					"source_run_id": "",
+					"role": "standalone",
+					"input_snapshots": {},
+					"request_records": [],
+					"result_slots": [],
+				},
+			}
+		],
 		"edges": [],
 	}
 

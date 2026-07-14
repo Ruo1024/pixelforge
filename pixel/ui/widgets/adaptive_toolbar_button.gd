@@ -29,10 +29,20 @@ func set_compact(value: bool) -> void:
 
 
 func refresh_text() -> void:
-	var localized := Strings.text(text_key)
+	var localized := _localized_text()
 	text = "" if compact else localized
 	tooltip_text = localized
 	queue_redraw()
+
+
+func _localized_text() -> String:
+	match text_key:
+		"ACTION_UNDO":
+			return Strings.text("ACTION_UNDO")
+		"ACTION_REDO":
+			return Strings.text("ACTION_REDO")
+		_:
+			return Strings.text("ACTION_INSPECTOR")
 
 
 func _draw() -> void:

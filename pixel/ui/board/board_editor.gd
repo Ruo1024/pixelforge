@@ -24,8 +24,8 @@ var _export_dialog: FileDialog = null
 
 
 func _ready() -> void:
-	title = Strings.DIALOG_BOARD_TITLE
-	ok_button_text = Strings.ACTION_CLOSE
+	title = Strings.text("DIALOG_BOARD_TITLE")
+	ok_button_text = Strings.text("ACTION_CLOSE")
 	min_size = DIALOG_SIZE
 	_build_ui()
 	_refresh_assets()
@@ -58,10 +58,10 @@ func _build_ui() -> void:
 	assets_panel.custom_minimum_size.x = 230
 	root.add_child(assets_panel)
 	var assets_title := Label.new()
-	assets_title.text = Strings.BOARD_ASSETS
+	assets_title.text = Strings.text("BOARD_ASSETS")
 	assets_panel.add_child(assets_title)
 	_asset_search = LineEdit.new()
-	_asset_search.placeholder_text = Strings.BOARD_SEARCH_ASSETS
+	_asset_search.placeholder_text = Strings.text("BOARD_SEARCH_ASSETS")
 	_asset_search.text_changed.connect(func(_text: String) -> void: _refresh_assets())
 	assets_panel.add_child(_asset_search)
 	_asset_list = ItemList.new()
@@ -70,15 +70,15 @@ func _build_ui() -> void:
 	_asset_list.item_selected.connect(_on_asset_selected)
 	assets_panel.add_child(_asset_list)
 	var terrain_button := Button.new()
-	terrain_button.text = Strings.BOARD_DEFINE_TERRAIN_16
+	terrain_button.text = Strings.text("BOARD_DEFINE_TERRAIN_16")
 	terrain_button.pressed.connect(_define_terrain_16)
 	assets_panel.add_child(terrain_button)
 	var terrain_47_button := Button.new()
-	terrain_47_button.text = Strings.BOARD_DEFINE_TERRAIN_47
+	terrain_47_button.text = Strings.text("BOARD_DEFINE_TERRAIN_47")
 	terrain_47_button.pressed.connect(_define_terrain_47)
 	assets_panel.add_child(terrain_47_button)
 	var animation_button := Button.new()
-	animation_button.text = Strings.BOARD_CREATE_ANIMATION
+	animation_button.text = Strings.text("BOARD_CREATE_ANIMATION")
 	animation_button.pressed.connect(_create_animation_from_selection)
 	assets_panel.add_child(animation_button)
 
@@ -88,11 +88,17 @@ func _build_ui() -> void:
 	root.add_child(center)
 	var tools := HBoxContainer.new()
 	center.add_child(tools)
-	_add_button(tools, Strings.BOARD_TOOL_PAINT, func() -> void: _canvas.set_brush_mode("paint"))
-	_add_button(tools, Strings.BOARD_TOOL_RECT, func() -> void: _canvas.set_brush_mode("rectangle"))
-	_add_button(tools, Strings.BOARD_TOOL_FILL, func() -> void: _canvas.set_brush_mode("fill"))
-	_add_button(tools, Strings.BOARD_PLAY_PAUSE, _toggle_playback)
-	_add_button(tools, Strings.BOARD_EXPORT, _show_export_dialog)
+	_add_button(
+		tools, Strings.text("BOARD_TOOL_PAINT"), func() -> void: _canvas.set_brush_mode("paint")
+	)
+	_add_button(
+		tools, Strings.text("BOARD_TOOL_RECT"), func() -> void: _canvas.set_brush_mode("rectangle")
+	)
+	_add_button(
+		tools, Strings.text("BOARD_TOOL_FILL"), func() -> void: _canvas.set_brush_mode("fill")
+	)
+	_add_button(tools, Strings.text("BOARD_PLAY_PAUSE"), _toggle_playback)
+	_add_button(tools, Strings.text("BOARD_EXPORT"), _show_export_dialog)
 	_status = Label.new()
 	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tools.add_child(_status)
@@ -100,11 +106,11 @@ func _build_ui() -> void:
 	_canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_canvas.fallback_warning.connect(
-		func(count: int) -> void: _status.text = Strings.BOARD_TERRAIN_FALLBACK % count
+		func(count: int) -> void: _status.text = Strings.text("BOARD_TERRAIN_FALLBACK") % count
 	)
 	_canvas.palette_warning.connect(
 		func(asset_palette: String, project_palette: String) -> void:
-			_status.text = Strings.BOARD_PALETTE_WARNING % [asset_palette, project_palette]
+			_status.text = Strings.text("BOARD_PALETTE_WARNING") % [asset_palette, project_palette]
 	)
 	center.add_child(_canvas)
 
@@ -112,7 +118,7 @@ func _build_ui() -> void:
 	layers_panel.custom_minimum_size.x = 230
 	root.add_child(layers_panel)
 	var layers_title := Label.new()
-	layers_title.text = Strings.BOARD_LAYERS
+	layers_title.text = Strings.text("BOARD_LAYERS")
 	layers_panel.add_child(layers_title)
 	_layer_list = ItemList.new()
 	_layer_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -120,16 +126,16 @@ func _build_ui() -> void:
 	layers_panel.add_child(_layer_list)
 	var add_row := HBoxContainer.new()
 	layers_panel.add_child(add_row)
-	_add_button(add_row, Strings.BOARD_ADD_TILE_LAYER, _add_tile_layer)
-	_add_button(add_row, Strings.BOARD_ADD_FREE_LAYER, _add_free_layer)
+	_add_button(add_row, Strings.text("BOARD_ADD_TILE_LAYER"), _add_tile_layer)
+	_add_button(add_row, Strings.text("BOARD_ADD_FREE_LAYER"), _add_free_layer)
 	var order_row := HBoxContainer.new()
 	layers_panel.add_child(order_row)
-	_add_button(order_row, Strings.BOARD_LAYER_UP, _move_layer_up)
-	_add_button(order_row, Strings.BOARD_LAYER_DOWN, _move_layer_down)
-	_add_button(layers_panel, Strings.BOARD_LAYER_VISIBLE, _toggle_layer_visible)
-	_add_button(layers_panel, Strings.BOARD_DELETE_LAYER, _delete_layer)
+	_add_button(order_row, Strings.text("BOARD_LAYER_UP"), _move_layer_up)
+	_add_button(order_row, Strings.text("BOARD_LAYER_DOWN"), _move_layer_down)
+	_add_button(layers_panel, Strings.text("BOARD_LAYER_VISIBLE"), _toggle_layer_visible)
+	_add_button(layers_panel, Strings.text("BOARD_DELETE_LAYER"), _delete_layer)
 	var opacity_label := Label.new()
-	opacity_label.text = Strings.BOARD_OPACITY
+	opacity_label.text = Strings.text("BOARD_OPACITY")
 	layers_panel.add_child(opacity_label)
 	_opacity = HSlider.new()
 	_opacity.min_value = 0.0
@@ -236,7 +242,7 @@ func _selected_asset_ids() -> Array:
 func _define_terrain_16() -> void:
 	var ids := _selected_asset_ids()
 	if ids.size() < 16:
-		_status.text = Strings.BOARD_TERRAIN_NEEDS_16
+		_status.text = Strings.text("BOARD_TERRAIN_NEEDS_16")
 		return
 	var group := TerrainGroupScript.new()
 	group.id = "terrain_%s" % _board.id.left(8)
@@ -245,13 +251,13 @@ func _define_terrain_16() -> void:
 	for role in range(16):
 		group.roles[str(role)] = [ids[role]]
 	_canvas.set_terrain_group(group)
-	_status.text = Strings.BOARD_TERRAIN_READY
+	_status.text = Strings.text("BOARD_TERRAIN_READY")
 
 
 func _define_terrain_47() -> void:
 	var ids := _selected_asset_ids()
 	if ids.size() < 47:
-		_status.text = Strings.BOARD_TERRAIN_NEEDS_47
+		_status.text = Strings.text("BOARD_TERRAIN_NEEDS_47")
 		return
 	var group := TerrainGroupScript.new()
 	group.id = "terrain47_%s" % _board.id.left(8)
@@ -260,13 +266,13 @@ func _define_terrain_47() -> void:
 	for role in range(47):
 		group.roles[str(role)] = [ids[role]]
 	_canvas.set_terrain_group(group)
-	_status.text = Strings.BOARD_TERRAIN_47_READY
+	_status.text = Strings.text("BOARD_TERRAIN_47_READY")
 
 
 func _create_animation_from_selection() -> void:
 	var ids := _selected_asset_ids()
 	if ids.size() < 2:
-		_status.text = Strings.BOARD_ANIMATION_NEEDS_FRAMES
+		_status.text = Strings.text("BOARD_ANIMATION_NEEDS_FRAMES")
 		return
 	var animation := AnimationScript.new(
 		"Animation %d" % (ProjectService.get_document_data("animations").size() + 1)
@@ -278,7 +284,7 @@ func _create_animation_from_selection() -> void:
 	ProjectService.set_document_data("animations", animation.id, animation.to_json(), true)
 	_canvas.set_selected_asset(String(ids[0]), animation.id)
 	_refresh_assets()
-	_status.text = Strings.BOARD_ANIMATION_READY % ids.size()
+	_status.text = Strings.text("BOARD_ANIMATION_READY") % ids.size()
 
 
 func _add_tile_layer() -> void:
@@ -360,7 +366,9 @@ func _export_board(path: String) -> void:
 			AssetLibrary,
 			ProjectService.get_document_data("animations")
 		)
-	_status.text = Strings.BOARD_EXPORT_DONE if error == OK else Strings.BOARD_EXPORT_FAILED
+	_status.text = (
+		Strings.text("BOARD_EXPORT_DONE") if error == OK else Strings.text("BOARD_EXPORT_FAILED")
+	)
 
 
 func _commit_board() -> void:

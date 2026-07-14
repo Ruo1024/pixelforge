@@ -1,7 +1,9 @@
 extends "res://addons/gut/test.gd"
 
 const AdapterScript := preload("res://services/cleanup_operation_adapter.gd")
-const ManualSchedulerScript := preload("res://tests/fixtures/providers/manual_deadline_scheduler.gd")
+const ManualSchedulerScript := preload(
+	"res://tests/fixtures/providers/manual_deadline_scheduler.gd"
+)
 const CleanupNodeScript := preload("res://core/graph/nodes/pixel_cleanup_node.gd")
 
 
@@ -39,9 +41,13 @@ func test_real_pipeline_uses_frozen_palette_and_returns_contract_report() -> voi
 func test_cancel_is_deduped_and_resolves_only_after_worker_canceled_terminal() -> void:
 	var scheduler := ManualSchedulerScript.new()
 	var adapter: Variant = AdapterScript.new(TaskQueue, AssetLibrary, scheduler)
-	var task := PFTask.new("cleanup", {}, func(_task: Variant) -> Variant:
-		OS.delay_msec(80)
-		return {})
+	var task := PFTask.new(
+		"cleanup",
+		{},
+		func(_task: Variant) -> Variant:
+			OS.delay_msec(80)
+			return {}
+	)
 	adapter.track("request", task)
 	TaskQueue.submit(task)
 	assert_true(await _wait_until(func() -> bool: return TaskQueue.get_running_count() == 1))
@@ -52,7 +58,9 @@ func test_cancel_is_deduped_and_resolves_only_after_worker_canceled_terminal() -
 	assert_same(first, second)
 	first.resolved.connect(func(_result: Dictionary) -> void: events.append("wrapper"))
 	assert_false(first.is_terminal())
-	assert_true(await _wait_until(func() -> bool: return TaskQueue.is_idle() and first.is_terminal()))
+	assert_true(
+		await _wait_until(func() -> bool: return TaskQueue.is_idle() and first.is_terminal())
+	)
 	assert_eq(events, ["operation", "wrapper"])
 
 
@@ -65,10 +73,17 @@ func _snapshot() -> Dictionary:
 	settings["resample"]["enabled"] = false
 	settings["quantize"]["mode"] = "fixed_palette"
 	return {
-		"kind": "cleanup", "graph_id": "graph", "source_node_id": "cleanup",
-		"input_source_kind": "image_input", "input_source_node_id": "input",
-		"source_batch_node_id": "", "source_slot_id": "", "source_asset_id": "source",
-		"effective_target_size": [0, 0], "preset_id": "", "settings": settings,
+		"kind": "cleanup",
+		"graph_id": "graph",
+		"source_node_id": "cleanup",
+		"input_source_kind": "image_input",
+		"input_source_node_id": "input",
+		"source_batch_node_id": "",
+		"source_slot_id": "",
+		"source_asset_id": "source",
+		"effective_target_size": [0, 0],
+		"preset_id": "",
+		"settings": settings,
 		"palette_snapshot": null,
 	}
 

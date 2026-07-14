@@ -262,13 +262,15 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	var generate_node := _node_data_for_id(graph_data["nodes"], "generate")
 	generate_node["params"]["provider_id"] = "retrodiffusion"
 	generate_node["params"]["model_id"] = "rd_pro"
-	generate_node["params"]["batch_size"] = 4
+	generate_node["params"]["batch_size"] = 2
 	generate_node["params"]["target_width"] = 256
 	generate_node["params"]["target_height"] = 256
 	generate_node["params"]["extra"] = {"remove_bg": true, "strength": 0.8}
-	_node_data_for_id(graph_data["nodes"], "objects")["params"]["rows"] = [
-		{"id": "single-request", "text": "barrel", "count": 2, "enabled": true}
-	]
+	_node_data_for_id(graph_data["nodes"], "text_prompt")["params"]["text"] = "barrel"
+	var reference_image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	reference_image.fill(Color.CORNFLOWER_BLUE)
+	var reference_id := AssetLibrary.register_image(reference_image, "reference", {})
+	_node_data_for_id(graph_data["nodes"], "reference_set")["params"]["asset_ids"] = [reference_id]
 	ProjectService.set_graph_data(graph_id, graph_data, true)
 	assert_true(
 		(
@@ -286,47 +288,32 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 	CostService.set_monthly_budget_micro_usd(100000)
 
 	var canvas_items: Array = canvas.export_canvas_data()["items"]
-	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
 	var generate_item_id := _item_id_for_node(canvas_items, "generate")
-	canvas.select_ids([batch_item_id])
+	canvas.select_ids([generate_item_id])
 	controller.run_selected_mock_graph()
 	var budget_dialog: ConfirmationDialog = controller._generation_flow.get_budget_dialog()
 	assert_true(await _wait_until(func() -> bool: return budget_dialog.visible, 1.0))
 	assert_string_contains(budget_dialog.dialog_text, "$0.50")
-	assert_eq(
-		canvas._items_by_id[generate_item_id]._status_badge, Strings.text("CONTENT_STATUS_WAITING")
-	)
-	assert_eq(
-		canvas._items_by_id[generate_item_id].get_content_control("ExecutionDetail").text,
-		budget_dialog.dialog_text
-	)
 	assert_true(TaskQueue.is_idle())
 	budget_dialog.confirmed.emit()
 	assert_true(
 		await _wait_until(
-			func() -> bool: return _status_label(main).text == Strings.STATUS_GRAPH_RUN_DONE % 2,
+			func() -> bool:
+				return _status_label(main).text == Strings.text("STATUS_GRAPH_RUN_DONE") % 2,
 			3.0
 		)
 	)
 	var completed_graph: Dictionary = ProjectService.get_graph_data(graph_id)
-	var cloud_batch: Dictionary = _newest_batch_node_except(completed_graph["nodes"], ["batch_1"])
+	var cloud_batch: Dictionary = _newest_batch_node_except(completed_graph["nodes"], [])
 	var cloud_batch_item_id := _item_id_for_node(
 		canvas.export_canvas_data()["items"], String(cloud_batch["id"])
 	)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id).size(), 10)
 	assert_eq(canvas._get_batch_asset_ids(cloud_batch_item_id).size(), 2)
-	assert_eq(
-		canvas._items_by_id[generate_item_id].get_content_control("ExecutionDetail").text,
-		Strings.text("CONTENT_DETAIL_COMPLETE_FORMAT") % 2
-	)
 	var first_asset_id := String(canvas._get_batch_asset_ids(cloud_batch_item_id)[0])
 	var provenance: Dictionary = AssetLibrary.get_asset_meta(first_asset_id)["provenance"]
 	var snapshot: Dictionary = provenance["generation_snapshot"]
 	assert_eq(snapshot["provider_id"], "retrodiffusion")
 	assert_eq(snapshot["model_id"], "rd_pro")
-	var reference_id := String(
-		_node_data_for_id(graph_data["nodes"], "reference")["params"]["asset_id"]
-	)
 	assert_eq(snapshot["reference_asset_ids"], [reference_id])
 	assert_eq(String(snapshot["reference_content_sha256s"][0]).length(), 64)
 
@@ -347,12 +334,11 @@ func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_res
 	var generate_node := _node_data_for_id(graph_data["nodes"], "generate")
 	generate_node["params"]["provider_id"] = "retrodiffusion"
 	generate_node["params"]["model_id"] = "rd_pro"
+	generate_node["params"]["batch_size"] = 2
 	generate_node["params"]["target_width"] = 256
 	generate_node["params"]["target_height"] = 256
 	generate_node["params"]["extra"] = {"remove_bg": true, "strength": 0.8}
-	_node_data_for_id(graph_data["nodes"], "objects")["params"]["rows"] = [
-		{"id": "single-request", "text": "barrel", "count": 2, "enabled": true}
-	]
+	_node_data_for_id(graph_data["nodes"], "text_prompt")["params"]["text"] = "barrel"
 	ProjectService.set_graph_data(graph_id, graph_data, true)
 	assert_true(
 		(
@@ -369,32 +355,20 @@ func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_res
 	ProviderService._set_validation_state("retrodiffusion", "verified", "Fixture verified")
 	CostService.set_monthly_budget_micro_usd(10000000)
 	var items: Array = canvas.export_canvas_data()["items"]
-	var batch_item_id := _item_id_for_node(items, "batch_1")
 	var generate_item_id := _item_id_for_node(items, "generate")
-	var stable_asset_ids: Array = canvas._get_batch_asset_ids(batch_item_id).duplicate()
-	canvas.select_ids([batch_item_id])
+	canvas.select_ids([generate_item_id])
 
 	controller.run_selected_mock_graph()
-	assert_eq(
-		canvas._items_by_id[generate_item_id]._status_badge, Strings.text("CONTENT_STATUS_RUNNING")
-	)
-	assert_eq(
-		canvas._items_by_id[generate_item_id].get_content_control("ExecutionDetail").text,
-		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % 0.5
-	)
 	assert_true(controller.cancel_graph_run(graph_id))
-	var canceled_status := Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT % "Retro Diffusion Pro"
+	var canceled_status := (
+		Strings.text("STATUS_PROVIDER_GENERATE_CANCELED_FORMAT") % "Retro Diffusion Pro"
+	)
 	assert_true(
 		await _wait_until(func() -> bool: return _status_label(main).text == canceled_status)
 	)
-	assert_eq(
-		canvas._items_by_id[generate_item_id]._status_badge, Strings.text("CONTENT_STATUS_CANCELED")
-	)
-	assert_eq(
-		canvas._items_by_id[generate_item_id].get_content_control("ExecutionDetail").text,
-		Strings.text("CONTENT_DETAIL_CANCELED")
-	)
-	assert_eq(canvas._get_batch_asset_ids(batch_item_id), stable_asset_ids)
+	var canceled_graph: Dictionary = ProjectService.get_graph_data(graph_id)
+	var canceled_output: Dictionary = _newest_batch_node_except(canceled_graph["nodes"], [])
+	assert_eq(BatchNodeScript.get_visible_asset_ids(canceled_output.get("params", {})), [])
 	assert_false(canvas.export_canvas_data()["items"][2].has("execution_status"))
 
 

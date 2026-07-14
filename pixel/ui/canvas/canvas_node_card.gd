@@ -1,4 +1,4 @@
-# gdlint: disable=max-file-lines
+# gdlint: disable=max-file-lines,max-returns
 class_name PFCanvasNodeCard
 extends Node2D
 
@@ -180,7 +180,7 @@ func get_content_control(control_name: String) -> Control:
 
 func set_execution_status(status_key: String, _detail: String = "") -> void:
 	_execution_status_key = status_key
-	_status_badge = Strings.text(status_key) if not status_key.is_empty() else ""
+	_status_badge = _execution_status_text(status_key) if not status_key.is_empty() else ""
 	_sync_run_controls()
 	queue_redraw()
 
@@ -303,15 +303,15 @@ func _resolve_graph_node() -> void:
 	var node: PFNode = registry.create(_node_type)
 	if node == null:
 		_is_ghost = true
-		_display_name = Strings.GRAPH_NODE_MISSING_DISPLAY % _node_type
-		_summary = Strings.GRAPH_NODE_GHOST_SUMMARY
+		_display_name = Strings.text("GRAPH_NODE_MISSING_DISPLAY") % _node_type
+		_summary = Strings.text("GRAPH_NODE_GHOST_SUMMARY")
 		_input_count = 0
 		_output_count = 0
 		_input_ports = []
 		_output_ports = []
 		_visible_input_ports = []
 		_visible_output_ports = []
-		_status_badge = Strings.GRAPH_NODE_BADGE_MISSING
+		_status_badge = Strings.text("GRAPH_NODE_BADGE_MISSING")
 		return
 
 	_display_name = _localized_display_name(node)
@@ -330,9 +330,9 @@ func _resolve_graph_node() -> void:
 	_output_count = _visible_output_ports.size()
 	_is_ghost = false
 	if _has_edge_error:
-		_status_badge = Strings.GRAPH_NODE_BADGE_EDGE_ERROR
+		_status_badge = Strings.text("GRAPH_NODE_BADGE_EDGE_ERROR")
 	if not _execution_status_key.is_empty():
-		_status_badge = Strings.text(_execution_status_key)
+		_status_badge = _execution_status_text(_execution_status_key)
 	elif _node_type == "ai_generate" and not _has_edge_error:
 		_status_badge = Strings.text("CONTENT_STATUS_READY")
 
@@ -682,10 +682,20 @@ func _build_prompt_preset_controls() -> void:
 func _build_cleanup_shell_controls() -> void:
 	_cleanup_view = CleanupCardViewScript.new()
 	_cleanup_view.name = "CleanupCardView"
-	_cleanup_view.action_requested.connect(func(action_id: String) -> void: action_requested.emit(graph_id, node_id, action_id))
-	_cleanup_view.params_commit_requested.connect(func(params: Dictionary) -> void: params_commit_requested.emit(graph_id, node_id, params))
+	_cleanup_view.action_requested.connect(
+		func(action_id: String) -> void: action_requested.emit(graph_id, node_id, action_id)
+	)
+	_cleanup_view.params_commit_requested.connect(
+		func(params: Dictionary) -> void: params_commit_requested.emit(graph_id, node_id, params)
+	)
 	_content_root.add_child(_cleanup_view)
-	_cleanup_view.configure({"params": _params_snapshot.duplicate(true), "run": {"state": _generation_state().capitalize()}, "input": {}})
+	_cleanup_view.configure(
+		{
+			"params": _params_snapshot.duplicate(true),
+			"run": {"state": _generation_state().capitalize()},
+			"input": {}
+		}
+	)
 
 
 func _build_generate_controls() -> void:
@@ -860,7 +870,7 @@ func _reference_set_row(asset_ids: Array, index: int) -> Control:
 	for action in ["up", "down", "remove"]:
 		var button := Button.new()
 		button.name = "ReferenceSet%s%d" % [String(action).capitalize(), index]
-		button.text = Strings.text("ACTION_REFERENCE_%s" % String(action).to_upper())
+		button.text = _reference_action_text(String(action))
 		button.disabled = (
 			(action == "up" and index == 0) or (action == "down" and index == asset_ids.size() - 1)
 		)
@@ -1016,22 +1026,55 @@ func _on_generation_card_action(action_id: String, _route: String) -> void:
 
 
 func _localized_display_name(node: PFNode) -> String:
-	var key_by_type := {
-		"text_prompt": "NODE_TEXT_PROMPT",
-		"object_list": "NODE_OBJECT_LIST",
-		"prompt_preset": "NODE_PROMPT_PRESET",
-		"image_input": "NODE_IMAGE_INPUT",
-		"reference_set": "NODE_REFERENCE_SET",
-		"ai_generate": "NODE_AI_GENERATE",
-		"pixel_cleanup": "NODE_PIXEL_CLEANUP",
-		"batch": "NODE_BATCH",
-	}
-	var key := String(key_by_type.get(node.get_type(), ""))
-	return (
-		Strings.text(key, node.get_display_name())
-		if not key.is_empty()
-		else node.get_display_name()
-	)
+	match node.get_type():
+		"text_prompt":
+			return Strings.text("NODE_TEXT_PROMPT")
+		"object_list":
+			return Strings.text("NODE_OBJECT_LIST")
+		"prompt_preset":
+			return Strings.text("NODE_PROMPT_PRESET")
+		"image_input":
+			return Strings.text("NODE_IMAGE_INPUT")
+		"reference_set":
+			return Strings.text("NODE_REFERENCE_SET")
+		"ai_generate":
+			return Strings.text("NODE_AI_GENERATE")
+		"pixel_cleanup":
+			return Strings.text("NODE_PIXEL_CLEANUP")
+		"batch":
+			return Strings.text("NODE_BATCH")
+		_:
+			return node.get_display_name()
+
+
+func _execution_status_text(key: String) -> String:
+	match key:
+		"CONTENT_STATUS_QUEUED":
+			return Strings.text("CONTENT_STATUS_QUEUED")
+		"CONTENT_STATUS_RUNNING":
+			return Strings.text("CONTENT_STATUS_RUNNING")
+		"CONTENT_STATUS_CANCELING":
+			return Strings.text("CONTENT_STATUS_CANCELING")
+		"CONTENT_STATUS_PARTIAL":
+			return Strings.text("CONTENT_STATUS_PARTIAL")
+		"CONTENT_STATUS_FAILED":
+			return Strings.text("CONTENT_STATUS_FAILED")
+		"CONTENT_STATUS_COMPLETE":
+			return Strings.text("CONTENT_STATUS_COMPLETE")
+		"CONTENT_STATUS_CANCELED":
+			return Strings.text("CONTENT_STATUS_CANCELED")
+		_:
+			return Strings.text("CONTENT_STATUS_READY")
+
+
+func _reference_action_text(action: String) -> String:
+	match action:
+		"up":
+			return Strings.text("ACTION_REFERENCE_UP")
+		"down":
+			return Strings.text("ACTION_REFERENCE_DOWN")
+		_:
+			return Strings.text("ACTION_REFERENCE_REMOVE")
 
 
 func _on_language_changed(_preference: String, _locale: String) -> void:

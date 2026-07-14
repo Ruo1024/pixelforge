@@ -65,7 +65,7 @@ func setup(
 	add_child(_regenerate_dialog)
 	_budget_dialog = ConfirmationDialog.new()
 	_budget_dialog.name = "ProviderBudgetDialog"
-	_budget_dialog.title = Strings.DIALOG_PROVIDER_BUDGET_TITLE
+	_budget_dialog.title = Strings.text("DIALOG_PROVIDER_BUDGET_TITLE")
 	_budget_dialog.confirmed.connect(_confirm_budget_run)
 	_budget_dialog.canceled.connect(func() -> void: _pending_budget_run.clear())
 	add_child(_budget_dialog)
@@ -109,7 +109,9 @@ func run_graph(
 func retry_graph(graph: PFGraph, selected_node_id: String) -> void:
 	var output_node_id := _retry_output_node_id(graph, selected_node_id)
 	if output_node_id.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "retry_source_unavailable"
+		_status_label.text = (
+			Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL") % "retry_source_unavailable"
+		)
 		return
 	var params := graph.get_node_params(output_node_id)
 	var failed_slots := []
@@ -130,7 +132,9 @@ func retry_graph(graph: PFGraph, selected_node_id: String) -> void:
 		)
 		failed_slots.append(retry_slot)
 	if failed_slots.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "retry_source_unavailable"
+		_status_label.text = (
+			Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL") % "retry_source_unavailable"
+		)
 		return
 	var snapshot: Dictionary = failed_slots[0]["input_snapshot"]
 	var provider_id := String(snapshot.get("provider_id", ""))
@@ -143,7 +147,7 @@ func retry_graph(graph: PFGraph, selected_node_id: String) -> void:
 	)
 	if not bool(plan.get("ok", false)):
 		_status_label.text = (
-			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
+			Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL")
 			% String(plan.get("issue", {}).get("code", "retry_source_unavailable"))
 		)
 		return
@@ -151,14 +155,14 @@ func retry_graph(graph: PFGraph, selected_node_id: String) -> void:
 	var preflight: Dictionary = plan.get("preflight", {})
 	if String(preflight.get("decision", "blocked")) == "blocked":
 		_status_label.text = (
-			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
+			Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL")
 			% String(preflight.get("reason_code", "invalid_estimate"))
 		)
 		return
 	if String(preflight.get("decision", "blocked")) == "needs_confirmation":
 		_pending_budget_run = {"kind": "retry", "runs": run_states, "preflight": preflight}
 		_budget_dialog.dialog_text = (
-			Strings.STATUS_PROVIDER_BUDGET_CONFIRM_FORMAT
+			Strings.text("STATUS_PROVIDER_BUDGET_CONFIRM_FORMAT")
 			% [
 				_usd_display(int(preflight.get("estimated_total_micro_usd", 0))),
 				_usd_display(int(preflight.get("budget_micro_usd", 0))),
@@ -217,7 +221,7 @@ func _queue_graph(
 ) -> void:
 	if generate_node_id.is_empty() or graph.get_node(generate_node_id) == null:
 		var missing_target := Strings.text("CONTENT_DETAIL_INVALID_RESPONSE")
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % missing_target
+		_status_label.text = Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL") % missing_target
 		return
 	var target_state := {
 		"graph": graph,
@@ -229,7 +233,7 @@ func _queue_graph(
 		var issue: Dictionary = request_result.get(
 			"issue", {"code": "invalid_request", "field": "", "args": {}}
 		)
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % String(issue["code"])
+		_status_label.text = Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL") % String(issue["code"])
 		return
 	var descriptor: Dictionary = (
 		_mock_descriptor()
@@ -241,11 +245,11 @@ func _queue_graph(
 	var display_name: String = String(descriptor.get("display_name", provider_id))
 	if provider_id != "mock" and not ProviderService.get_selectable_provider_ids().has(provider_id):
 		if provider_id == "openai_image":
-			_status_label.text = Strings.STATUS_OPENAI_SESSION_REQUIRED
+			_status_label.text = Strings.text("STATUS_OPENAI_SESSION_REQUIRED")
 			configure_session()
 		else:
 			_status_label.text = (
-				Strings.STATUS_PROVIDER_CREDENTIALS_REQUIRED_FORMAT % display_name
+				Strings.text("STATUS_PROVIDER_CREDENTIALS_REQUIRED_FORMAT") % display_name
 			)
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", _status_label.text)
 		_refresh_output_card(target_state)
@@ -260,14 +264,14 @@ func _queue_graph(
 		if not validation_message.is_empty():
 			_set_graph_status(target_state, "CONTENT_STATUS_FAILED", validation_message)
 			_refresh_output_card(target_state)
-			_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % validation_message
+			_status_label.text = Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL") % validation_message
 			return
 	var preflight: Dictionary = _coordinator.preflight_plan(request_result, provider_id == "mock")
 	if String(preflight.get("decision", "blocked")) == "blocked":
 		var reason := String(preflight.get("reason_code", "invalid_estimate"))
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", reason)
 		_refresh_output_card(target_state)
-		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % reason
+		_status_label.text = Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL") % reason
 		return
 	var estimate_micro: Variant = preflight.get("estimated_total_micro_usd")
 	var scope_id := IdUtil.uuid_v4()
@@ -324,7 +328,7 @@ func _queue_graph(
 	if String(preflight["decision"]) == "needs_confirmation":
 		_pending_budget_run = {"runs": run_states, "preflight": preflight.duplicate(true)}
 		_budget_dialog.dialog_text = (
-			Strings.STATUS_PROVIDER_BUDGET_CONFIRM_FORMAT
+			Strings.text("STATUS_PROVIDER_BUDGET_CONFIRM_FORMAT")
 			% [
 				_usd_display(int(estimate_micro)),
 				_usd_display(int(preflight["budget_micro_usd"])),
@@ -347,7 +351,7 @@ func _submit_mock_runs(run_states: Array) -> void:
 	var prepared: Dictionary = _prepare_pending_output(run_states)
 	if not bool(prepared.get("ok", false)):
 		_status_label.text = (
-			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
+			Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL")
 			% String(prepared.get("error", {}).get("code", "output_create_failed"))
 		)
 		return
@@ -363,7 +367,7 @@ func _submit_mock_runs(run_states: Array) -> void:
 	if not bool(executed.get("ok", false)):
 		_rollback_pending_output(run_states)
 		_status_label.text = (
-			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
+			Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL")
 			% String(executed.get("error", {}).get("code", "mock_failed"))
 		)
 		return
@@ -387,7 +391,7 @@ func _submit_provider_runs(run_states: Array) -> void:
 	var prepared := _prepare_pending_output(run_states)
 	if not bool(prepared.get("ok", false)):
 		_status_label.text = (
-			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
+			Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL")
 			% String(prepared.get("error", {}).get("code", "output_create_failed"))
 		)
 		return
@@ -398,7 +402,7 @@ func _submit_retry_runs(run_states: Array) -> void:
 	var prepared := _prepare_retry_output(run_states)
 	if not bool(prepared.get("ok", false)):
 		_status_label.text = (
-			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
+			Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL")
 			% String(prepared.get("error", {}).get("code", "retry_source_unavailable"))
 		)
 		return
@@ -450,17 +454,13 @@ func _prepare_pending_output(run_states: Array) -> Dictionary:
 	var position: Vector2 = OutputAutoPlacementScript.find_position(
 		bounds["source"], bounds["existing"], output_size
 	)
-	var card: Node = _canvas._add_batch_card(
-		[],
-		position,
-		Strings.text("BATCH_DEFAULT_LABEL"),
-		IdUtil.uuid_v4(),
-		false,
-		graph.id,
-		output_node_id
+	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+	var card: Node = _canvas._add_graph_node_card(
+		graph.id, output_node_id, position, IdUtil.uuid_v4(), false
 	)
 	if card == null:
 		_coordinator.rollback_pending_run(graph, prepared["rollback_token"])
+		ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 		return {"ok": false, "error": {"code": "output_card_create_failed"}}
 	for run_state_value in run_states:
 		var run_state: Dictionary = run_state_value
@@ -493,7 +493,7 @@ func _submit_provider_run(run_state: Dictionary) -> bool:
 	if task == null or task is Dictionary:
 		var unavailable := Strings.text("CONTENT_DETAIL_PROVIDER_UNAVAILABLE")
 		_status_label.text = (
-			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, unavailable]
+			Strings.text("STATUS_PROVIDER_GENERATE_FAILED_FORMAT") % [display_name, unavailable]
 		)
 		_set_graph_status(run_state, "CONTENT_STATUS_FAILED", unavailable)
 		_refresh_output_card(run_state)
@@ -512,7 +512,7 @@ func _submit_provider_run(run_state: Dictionary) -> bool:
 	task.completed.connect(_on_finished.bind(request_id))
 	task.failed.connect(_on_failed.bind(request_id))
 	task.canceled.connect(_on_canceled)
-	_status_label.text = Strings.STATUS_PROVIDER_GENERATE_QUEUED_FORMAT % display_name
+	_status_label.text = Strings.text("STATUS_PROVIDER_GENERATE_QUEUED_FORMAT") % display_name
 	return true
 
 
@@ -572,7 +572,7 @@ func _on_progress(value: Dictionary, request_id: String) -> void:
 		_set_graph_status(
 			state, "CONTENT_STATUS_RUNNING", Strings.text("CONTENT_PLACEHOLDER_WAITING")
 		)
-		_status_label.text = Strings.STATUS_PROVIDER_GENERATE_QUEUED_FORMAT % display_name
+		_status_label.text = Strings.text("STATUS_PROVIDER_GENERATE_QUEUED_FORMAT") % display_name
 	else:
 		var percent := roundi(float(ratio) * 100.0)
 		_set_graph_status(
@@ -581,7 +581,8 @@ func _on_progress(value: Dictionary, request_id: String) -> void:
 			Strings.text("CONTENT_DETAIL_PROGRESS_FORMAT") % [percent, message]
 		)
 		_status_label.text = (
-			Strings.STATUS_PROVIDER_GENERATE_RUNNING_FORMAT % [display_name, percent, message]
+			Strings.text("STATUS_PROVIDER_GENERATE_RUNNING_FORMAT")
+			% [display_name, percent, message]
 		)
 
 
@@ -614,7 +615,8 @@ func _on_finished(result: Variant, task_id: String) -> void:
 		_set_graph_status(state, "CONTENT_STATUS_FAILED", invalid_response)
 		_refresh_output_card(state)
 		_status_label.text = (
-			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, invalid_response]
+			Strings.text("STATUS_PROVIDER_GENERATE_FAILED_FORMAT")
+			% [display_name, invalid_response]
 		)
 		return
 	_record_billing_update(provider_id, String(request["request_id"]), result)
@@ -627,12 +629,14 @@ func _on_finished(result: Variant, task_id: String) -> void:
 		_set_graph_status(state, "CONTENT_STATUS_FAILED", invalid_response)
 		_refresh_output_card(state)
 		_status_label.text = (
-			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT % [display_name, invalid_response]
+			Strings.text("STATUS_PROVIDER_GENERATE_FAILED_FORMAT")
+			% [display_name, invalid_response]
 		)
 		return
 	var asset_ids: Array = BatchNodeScript.get_visible_asset_ids(
 		graph.get_node_params(batch_node_id)
 	)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	var scope_result := _finish_scope_task(
 		state,
 		String(mapped.get("state", "failed")) != "succeeded",
@@ -657,17 +661,16 @@ func _on_finished(result: Variant, task_id: String) -> void:
 			_refresh_output_card(state)
 	else:
 		_refresh_output_card(state)
-	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 	if scope_done and int(scope_result.get("failed", 0)) > 0:
 		_present_terminal_error(state, graph)
 	if not batch_card_id.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
+		_status_label.text = Strings.text("STATUS_GRAPH_RUN_DONE") % asset_ids.size()
 		return
-	var items := _add_canvas_items(graph, asset_ids, state["anchor"])
+	var items := _add_canvas_items(graph, state["anchor"])
 	if not items.is_empty():
 		_focus_bounds(_bounds_for_items(items))
 	_status_label.text = (
-		Strings.STATUS_PROVIDER_GENERATE_DONE_FORMAT % [display_name, asset_ids.size()]
+		Strings.text("STATUS_PROVIDER_GENERATE_DONE_FORMAT") % [display_name, asset_ids.size()]
 	)
 
 
@@ -709,7 +712,7 @@ func _on_failed(error: Dictionary, task_id: String) -> void:
 		_refresh_output_card(state)
 		_present_terminal_error(state, graph)
 	_status_label.text = (
-		Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
+		Strings.text("STATUS_PROVIDER_GENERATE_FAILED_FORMAT")
 		% [String(state.get("provider_name", "Provider")), message]
 	)
 
@@ -732,7 +735,7 @@ func _finalize_canceled(task_id: String) -> void:
 		_refresh_output_card(state)
 	if bool(scope_result.get("done", true)):
 		_status_label.text = (
-			Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT
+			Strings.text("STATUS_PROVIDER_GENERATE_CANCELED_FORMAT")
 			% String(state.get("provider_name", "Provider"))
 		)
 	_refresh_cost_label()
@@ -782,7 +785,7 @@ func _on_cancel_rejected(error: Dictionary, request_id: String) -> void:
 		_refresh_output_card(state)
 		_present_terminal_error(state, graph, "user_canceled")
 		_status_label.text = (
-			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
+			Strings.text("STATUS_PROVIDER_GENERATE_FAILED_FORMAT")
 			% [
 				String(state.get("provider_name", "Provider")),
 				String(error.get("code", "cancel_failed"))
@@ -791,6 +794,8 @@ func _on_cancel_rejected(error: Dictionary, request_id: String) -> void:
 
 
 func _present_terminal_error(state: Dictionary, graph: PFGraph, mode: String = "terminal") -> void:
+	if _error_presenter == null:
+		return
 	var output_node_id := String(state.get("batch_node_id", ""))
 	if graph == null or graph.get_node(output_node_id) == null:
 		return
@@ -990,7 +995,7 @@ func _make_graph() -> PFGraph:
 				[
 					{
 						"id": "default",
-						"text": Strings.OPENAI_V1_FIXED_PROMPT,
+						"text": Strings.text("OPENAI_V1_FIXED_PROMPT"),
 						"count": 2,
 						"enabled": true,
 					}
@@ -1170,7 +1175,7 @@ func _request_reference_images(request: Dictionary) -> Array:
 	return value if value is Array else []
 
 
-func _add_canvas_items(graph: PFGraph, asset_ids: Array, anchor: Vector2) -> Array:
+func _add_canvas_items(graph: PFGraph, anchor: Vector2) -> Array:
 	var items := []
 	for node_id in ["objects", "prompt_preset", "generate"]:
 		var node_item: Node = _canvas._add_graph_node_card(
@@ -1178,14 +1183,8 @@ func _add_canvas_items(graph: PFGraph, asset_ids: Array, anchor: Vector2) -> Arr
 		)
 		if node_item != null:
 			items.append(node_item)
-	var batch_card: Node = _canvas._add_batch_card(
-		asset_ids,
-		anchor + _node_position(graph, "batch_1"),
-		Strings.OPENAI_BATCH_LABEL,
-		"",
-		false,
-		graph.id,
-		"batch_1"
+	var batch_card: Node = _canvas._add_graph_node_card(
+		graph.id, "batch_1", anchor + _node_position(graph, "batch_1"), "", false
 	)
 	if batch_card != null:
 		items.append(batch_card)

@@ -2,7 +2,6 @@
 extends "res://addons/gut/test.gd"
 
 const CanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
-const LODProfile := preload("res://ui/canvas/canvas_lod_profile.gd")
 const CanvasScalePolicy := preload("res://ui/canvas/canvas_scale_policy.gd")
 const ImageMath := preload("res://core/util/image_math.gd")
 const MagicWandToolScript := preload("res://ui/tools/magic_wand_tool.gd")
@@ -159,20 +158,26 @@ func test_batch_lod_uses_camera_zoom_not_compensated_art_scale() -> void:
 	await wait_process_frames(2)
 
 	var ids := [_register_asset(Color.RED, "red")]
-	var card: Node = canvas._add_batch_card(ids, Vector2.ZERO, "Batch", "batch_1", false)
+	ProjectService.set_graph_data("lod_output", _output_graph(ids), false)
+	var card: Node = canvas._add_graph_node_card(
+		"lod_output", "output", Vector2.ZERO, "batch_1", false
+	)
 
 	canvas._set_viewport_scale_factor_for_test(1.5)
 	canvas.set_camera_zoom(0.25, Vector2(160, 120))
 	await wait_process_frames(1)
 
 	assert_almost_eq(canvas._get_art_logical_scale(), 0.333, 0.001)
-	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_BROWSE)
+	assert_true(card.get_node("OutputCardController").visible)
+	assert_false(card.get_node("TitleButton").visible)
 
 	canvas.set_camera_zoom(4.0, Vector2(160, 120))
-	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_INSPECT)
+	assert_true(card.get_node("OutputCardController").visible)
+	assert_true(card.get_node("TitleButton").visible)
 
 	canvas.set_camera_zoom(1.0, Vector2(160, 120))
-	assert_eq(card._get_lod_profile(), LODProfile.PROFILE_EDIT)
+	assert_true(card.get_node("OutputCardController").visible)
+	assert_true(card.get_node("TitleButton").visible)
 
 
 func test_low_lod_double_click_focuses_card_at_one_hundred_percent() -> void:
@@ -572,6 +577,53 @@ func _make_checker_image(size: int) -> Image:
 		for x in range(size):
 			image.set_pixel(x, y, Color.WHITE if (x + y) % 2 == 0 else Color.BLACK)
 	return image
+
+
+func _output_graph(asset_ids: Array) -> Dictionary:
+	var slots := []
+	for index in range(asset_ids.size()):
+		(
+			slots
+			. append(
+				{
+					"slot_id": "slot-%d" % index,
+					"run_id": "",
+					"request_id": "",
+					"source_row_id": "",
+					"source_asset_id": "",
+					"input_snapshot_id": "",
+					"planned_size": [4, 4],
+					"status": "succeeded",
+					"asset_id": String(asset_ids[index]),
+					"detached": false,
+					"unexpected": false,
+					"error": null,
+				}
+			)
+		)
+	return {
+		"graph_version": 2,
+		"id": "lod_output",
+		"name": "LOD Output",
+		"nodes":
+		[
+			{
+				"id": "output",
+				"type": "batch",
+				"params":
+				{
+					"label": "Output",
+					"source_node_id": "",
+					"source_run_id": "",
+					"role": "standalone",
+					"input_snapshots": {},
+					"request_records": [],
+					"result_slots": slots,
+				},
+			}
+		],
+		"edges": [],
+	}
 
 
 func _register_asset(color: Color, name: String) -> String:

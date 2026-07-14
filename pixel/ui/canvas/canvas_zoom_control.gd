@@ -61,7 +61,7 @@ func _build_ui() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	z_as_relative = false
 	z_index = OVERLAY_Z_INDEX
-	tooltip_text = Strings.ZOOM_CONTROL_TOOLTIP
+	tooltip_text = Strings.text("ZOOM_CONTROL_TOOLTIP")
 	custom_minimum_size = get_logical_size()
 
 	var background := StyleBoxFlat.new()
@@ -98,7 +98,7 @@ func _build_ui() -> void:
 	_slider.ticks_on_borders = true
 	_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slider.custom_minimum_size = Vector2(SLIDER_WIDTH, 0)
-	_slider.tooltip_text = Strings.ZOOM_CONTROL_TOOLTIP
+	_slider.tooltip_text = Strings.text("ZOOM_CONTROL_TOOLTIP")
 	_slider.value_changed.connect(_on_slider_value_changed)
 	row.add_child(_slider)
 

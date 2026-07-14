@@ -278,8 +278,9 @@ func _remove_tree(path: String) -> void:
 
 
 func test_unverified_plugin_warning_survives_v2() -> void:
-	assert_true(Strings.PLUGIN_SECURITY_WARNING.contains("Install only plugins you trust"))
-	assert_true(Strings.PLUGIN_SECURITY_WARNING.contains("not a sandbox"))
+	LocalizationService.set_language("en")
+	assert_true(Strings.text("PLUGIN_SECURITY_WARNING").contains("Install only plugins you trust"))
+	assert_true(Strings.text("PLUGIN_SECURITY_WARNING").contains("not a sandbox"))
 
 
 func test_signature_is_not_api_v2_gate() -> void:

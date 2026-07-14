@@ -46,7 +46,7 @@ func _add_button(
 ) -> void:
 	var button := Button.new()
 	button.name = button_name
-	button.text = Strings.text(text_key)
+	button.text = _navigation_text(text_key)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.focus_mode = Control.FOCUS_NONE
 	button.pressed.connect(callback)
@@ -57,7 +57,17 @@ func _add_button(
 
 func _refresh_text(_preference: String, _locale: String) -> void:
 	for button in _buttons:
-		button.text = Strings.text(String(button.get_meta("text_key", "")))
+		button.text = _navigation_text(String(button.get_meta("text_key", "")))
+
+
+func _navigation_text(key: String) -> String:
+	match key:
+		"ACTION_FOCUS_SELECTED":
+			return Strings.text("ACTION_FOCUS_SELECTED")
+		"ACTION_FOCUS_ALL":
+			return Strings.text("ACTION_FOCUS_ALL")
+		_:
+			return Strings.text("ACTION_TOGGLE_MINIMAP")
 
 
 func _focus_selected() -> void:

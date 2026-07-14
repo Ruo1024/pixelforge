@@ -27,14 +27,14 @@ func open_selected() -> bool:
 		var ids: Array = _canvas._get_batch_asset_ids(item_id, true)
 		if not ids.is_empty():
 			return open_asset(String(ids[0]), item_id)
-	_status.text = PFStrings.EDITOR_SELECT_ASSET
+	_status.text = PFStrings.text("EDITOR_SELECT_ASSET")
 	return false
 
 
 func open_asset(asset_id: String, batch_id: String) -> bool:
 	if _editor.open_asset(asset_id, batch_id):
 		return true
-	_status.text = PFStrings.EDITOR_OPEN_FAILED
+	_status.text = PFStrings.text("EDITOR_OPEN_FAILED")
 	return false
 
 
@@ -43,4 +43,4 @@ func _on_asset_saved(old_asset_id: String, new_asset_id: String, batch_id: Strin
 		_canvas._replace_asset_reference(old_asset_id, new_asset_id)
 	else:
 		_canvas._replace_output_slot_asset(batch_id, old_asset_id, new_asset_id)
-	_status.text = PFStrings.EDITOR_SAVED
+	_status.text = PFStrings.text("EDITOR_SAVED")

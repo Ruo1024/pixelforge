@@ -160,8 +160,17 @@ func can_connect(
 		var source: PFNode = nodes[from_node]["node"]
 		var target: PFNode = nodes[to_node]["node"]
 		result = _validate_connect_ports(source, from_port, target, to_port)
-		if bool(result["ok"]) and source.get_type() == "ai_generate" and target.get_type() == "pixel_cleanup":
-			result = {"ok": false, "reason": "Cleanup requires an Output source", "auto_wrap": false, "code": "cleanup_requires_output_source"}
+		if (
+			bool(result["ok"])
+			and source.get_type() == "ai_generate"
+			and target.get_type() == "pixel_cleanup"
+		):
+			result = {
+				"ok": false,
+				"reason": "Cleanup requires an Output source",
+				"auto_wrap": false,
+				"code": "cleanup_requires_output_source"
+			}
 	if bool(result["ok"]) and _input_port_has_source(to_node, to_port):
 		result = _connect_result(false, "Input port already has a connection")
 	if bool(result["ok"]) and _would_create_cycle(from_node, to_node):
@@ -214,7 +223,14 @@ func validate_edges() -> Array[Dictionary]:
 			)
 			continue
 		if source.get_type() == "ai_generate" and target.get_type() == "pixel_cleanup":
-			errors.append(_edge_validation_error(index, edge, "cleanup_requires_output_source", "Cleanup requires an Output source"))
+			errors.append(
+				_edge_validation_error(
+					index,
+					edge,
+					"cleanup_requires_output_source",
+					"Cleanup requires an Output source"
+				)
+			)
 			continue
 
 		var input_key := _input_key(to_node, to_port)

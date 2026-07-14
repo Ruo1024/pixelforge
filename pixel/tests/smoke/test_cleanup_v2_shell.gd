@@ -35,9 +35,21 @@ func test_shell_only_saves_settings_and_never_executes() -> void:
 	)
 	await wait_process_frames(2)
 
-	assert_eq(card.get_content_control("CleanupPresetId").text, "cleanup-user-shell")
-	assert_true(card.get_content_control("CleanupSettingsSnapshot").text.contains("db16"))
-	assert_null(card.get_content_control("PrimaryActionButton"))
+	var cleanup_view: Control = card.get_content_control("CleanupCardView")
+	assert_not_null(cleanup_view)
+	assert_eq(
+		cleanup_view.call("get_group_ids"),
+		[
+			"run_status",
+			"input_summary",
+			"preset",
+			"grid",
+			"resample",
+			"quantize",
+			"last_report",
+			"footer"
+		]
+	)
 	assert_eq(actions, [])
 	assert_true(AssetLibrary.get_all_meta().is_empty())
 	assert_eq(ProjectService.get_graph_data(graph.id)["nodes"][0]["params"], params)

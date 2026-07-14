@@ -4,6 +4,7 @@ const MainScript := preload("res://ui/shell/main.gd")
 
 
 func test_board_editor_entry_uses_fixed_module_defaults_and_places_asset() -> void:
+	LocalizationService.set_language("en")
 	ProjectService.new_project("Board UI")
 	var image := Image.create(24, 24, false, Image.FORMAT_RGBA8)
 	image.fill(Color(0.3, 0.6, 0.2, 1.0))

@@ -56,19 +56,19 @@ func get_config_schema() -> Array[Dictionary]:
 	return [
 		{
 			"key": "endpoint",
-			"label": "ComfyUI endpoint",
+			"label_key": "COMFY_FIELD_ENDPOINT",
 			"kind": "text",
 			"default": DEFAULT_ENDPOINT,
 		},
 		{
 			"key": "default_template",
-			"label": "Default workflow template id",
+			"label_key": "COMFY_FIELD_DEFAULT_TEMPLATE",
 			"kind": "text",
 			"default": "sdxl_pixel_txt2img",
 		},
 		{
 			"key": "template_dir",
-			"label": "Imported API workflow template directory",
+			"label_key": "COMFY_FIELD_TEMPLATE_DIRECTORY",
 			"kind": "text",
 			"default": "user://comfyui_templates",
 		},

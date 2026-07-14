@@ -18,14 +18,23 @@ static func text(event: Dictionary) -> String:
 					% String(event.get("reason", ""))
 				)
 		"connect_succeeded":
-			return Strings.STATUS_GRAPH_CONNECT_DONE % _edge_status_parts(event.get("edge", {}))
+			return (
+				Strings.text("STATUS_GRAPH_CONNECT_DONE")
+				% _edge_status_parts(event.get("edge", {}))
+			)
 		"edge_selected":
-			return Strings.STATUS_GRAPH_EDGE_SELECTED % _edge_status_parts(event.get("edge", {}))
+			return (
+				Strings.text("STATUS_GRAPH_EDGE_SELECTED")
+				% _edge_status_parts(event.get("edge", {}))
+			)
 		"edge_deleted":
-			return Strings.STATUS_GRAPH_EDGE_DELETED % _edge_status_parts(event.get("edge", {}))
+			return (
+				Strings.text("STATUS_GRAPH_EDGE_DELETED")
+				% _edge_status_parts(event.get("edge", {}))
+			)
 		"nodes_deleted":
 			return (
-				Strings.STATUS_GRAPH_NODES_DELETED
+				Strings.text("STATUS_GRAPH_NODES_DELETED")
 				% [int(event.get("nodes", 0)), int(event.get("edges", 0))]
 			)
 		"nodes_grouped":
@@ -33,13 +42,9 @@ static func text(event: Dictionary) -> String:
 		"nodes_ungrouped":
 			return Strings.text("STATUS_FRAME_UNGROUPED")
 		"group_failed":
-			return Strings.text(
-				(
-					"STATUS_FRAME_GROUP_CROSS_GRAPH"
-					if String(event.get("reason", "")) == "cross_graph"
-					else "STATUS_FRAME_GROUP_NEEDS_NODES"
-				)
-			)
+			if String(event.get("reason", "")) == "cross_graph":
+				return Strings.text("STATUS_FRAME_GROUP_CROSS_GRAPH")
+			return Strings.text("STATUS_FRAME_GROUP_NEEDS_NODES")
 	return ""
 
 

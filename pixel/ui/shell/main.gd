@@ -1,4 +1,4 @@
-# gdlint: disable=max-file-lines
+# gdlint: disable=max-file-lines,max-returns
 class_name PFMain
 extends Control
 
@@ -376,7 +376,7 @@ func _add_toolbar_button(
 	var button: Button
 	if compact_icon_id.is_empty():
 		button = Button.new()
-		button.text = Strings.text(text_key)
+		button.text = _toolbar_text(text_key)
 	else:
 		button = AdaptiveToolbarButtonScript.new()
 		button.call("setup", text_key, compact_icon_id, button_width, COMPACT_BUTTON_WIDTH)
@@ -399,7 +399,7 @@ func _add_rail_button(
 	var button := MonoIconButtonScript.new()
 	button.name = action_id.to_pascal_case()
 	button.setup(action_id)
-	button.tooltip_text = Strings.text(text_key)
+	button.tooltip_text = _toolbar_text(text_key)
 	button.custom_minimum_size = Vector2.ONE * AppTheme.RAIL_BUTTON_SIZE
 	button.focus_mode = Control.FOCUS_NONE
 	button.set_meta("text_key", text_key)
@@ -442,11 +442,11 @@ func _refresh_toolbar_text(_preference: String, _locale: String) -> void:
 		if is_instance_valid(button):
 			var text_key := String(button.get_meta("text_key", ""))
 			if bool(button.get_meta("icon_only", false)):
-				button.tooltip_text = Strings.text(text_key)
+				button.tooltip_text = _toolbar_text(text_key)
 			elif bool(button.get_meta("adaptive_label", false)):
 				button.call("refresh_text")
 			else:
-				button.text = Strings.text(text_key)
+				button.text = _toolbar_text(text_key)
 	if _responsive_top_bar != null:
 		_responsive_top_bar.call("refresh_layout")
 	_recovery_dialog.title = Strings.text("DIALOG_RECOVERY_TITLE")
@@ -458,10 +458,30 @@ func _refresh_toolbar_text(_preference: String, _locale: String) -> void:
 	)
 
 
+func _toolbar_text(key: String) -> String:
+	match key:
+		"ACTION_UNDO":
+			return Strings.text("ACTION_UNDO")
+		"ACTION_REDO":
+			return Strings.text("ACTION_REDO")
+		"ACTION_RUN_SELECTION":
+			return Strings.text("ACTION_RUN_SELECTION")
+		"ACTION_EXPORT":
+			return Strings.text("ACTION_EXPORT")
+		"ACTION_INSPECTOR":
+			return Strings.text("ACTION_INSPECTOR")
+		"ACTION_ADD_INPUT":
+			return Strings.text("ACTION_ADD_INPUT")
+		"ACTION_IMPORT_REFERENCE":
+			return Strings.text("ACTION_IMPORT_REFERENCE")
+		_:
+			return Strings.text("ACTION_LIBRARY")
+
+
 func _create_file_dialogs() -> void:
 	_open_dialog = FileDialog.new()
 	DialogScalePolicy.configure_file_dialog(_open_dialog)
-	_open_dialog.title = Strings.DIALOG_OPEN_PROJECT
+	_open_dialog.title = Strings.text("DIALOG_OPEN_PROJECT")
 	_open_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_open_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	_open_dialog.filters = _project_filters
@@ -470,7 +490,7 @@ func _create_file_dialogs() -> void:
 
 	_save_dialog = FileDialog.new()
 	DialogScalePolicy.configure_file_dialog(_save_dialog)
-	_save_dialog.title = Strings.DIALOG_SAVE_PROJECT
+	_save_dialog.title = Strings.text("DIALOG_SAVE_PROJECT")
 	_save_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
 	_save_dialog.filters = _project_filters
@@ -667,7 +687,7 @@ func _on_canvas_selection_changed(selected_ids: Array) -> void:
 
 
 func _on_canvas_graph_connect_failed(reason: String) -> void:
-	_status_label.text = Strings.STATUS_GRAPH_CONNECT_FAILED % reason
+	_status_label.text = Strings.text("STATUS_GRAPH_CONNECT_FAILED") % reason
 
 
 func _on_graph_node_action_requested(graph_id: String, node_id: String, action_id: String) -> void:
@@ -683,7 +703,7 @@ func _on_canvas_graph_status(event: Dictionary) -> void:
 func _apply_cleanup_to_selection(params: Dictionary) -> void:
 	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
 	if snapshots.is_empty():
-		_status_label.text = Strings.STATUS_CLEANUP_EMPTY
+		_status_label.text = Strings.text("STATUS_CLEANUP_EMPTY")
 		return
 
 	var effective_params := _cleanup_params_with_project_style(params)
@@ -696,7 +716,7 @@ func _apply_cleanup_to_selection(params: Dictionary) -> void:
 	task.progress_reported.connect(_on_cleanup_progress)
 	_cleanup_task_id = TaskQueue.submit(task)
 	_cleanup_inspector.set_cleanup_running(true)
-	_status_label.text = Strings.STATUS_CLEANUP_QUEUED
+	_status_label.text = Strings.text("STATUS_CLEANUP_QUEUED")
 
 
 func _cleanup_work(task_ref: Variant) -> Dictionary:
@@ -729,10 +749,10 @@ func _on_cleanup_finished(result: Variant) -> void:
 	_cleanup_inspector.set_cleanup_running(false)
 	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
 	if not (result is Dictionary):
-		_status_label.text = Strings.STATUS_TASK_FAILED
+		_status_label.text = Strings.text("STATUS_TASK_FAILED")
 		return
 	if bool(result.get("canceled", false)):
-		_status_label.text = Strings.STATUS_CLEANUP_CANCELED
+		_status_label.text = Strings.text("STATUS_CLEANUP_CANCELED")
 		return
 
 	var reports := []
@@ -788,26 +808,27 @@ func _on_cleanup_finished(result: Variant) -> void:
 	_preview_token += 1
 	_cancel_preview_task()
 	_canvas.clear_cleanup_preview()
-	_status_label.text = Strings.STATUS_CLEANUP_DONE
+	_status_label.text = Strings.text("STATUS_CLEANUP_DONE")
 
 
 func _on_cleanup_progress(_task_id: String, ratio: float, _message: String) -> void:
 	_status_label.text = (
-		Strings.STATUS_TASK_RUNNING_FORMAT % [Strings.TASK_CLEANUP, int(round(ratio * 100.0))]
+		Strings.text("STATUS_TASK_RUNNING_FORMAT")
+		% [Strings.text("TASK_CLEANUP"), int(round(ratio * 100.0))]
 	)
 
 
 func _on_cleanup_failed(_error: Dictionary) -> void:
 	_cleanup_task_id = ""
 	_cleanup_inspector.set_cleanup_running(false)
-	_status_label.text = Strings.STATUS_TASK_FAILED
+	_status_label.text = Strings.text("STATUS_TASK_FAILED")
 
 
 func _on_cleanup_canceled() -> void:
 	_cleanup_task_id = ""
 	_cleanup_inspector.set_cleanup_running(false)
 	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
-	_status_label.text = Strings.STATUS_CLEANUP_CANCELED
+	_status_label.text = Strings.text("STATUS_CLEANUP_CANCELED")
 
 
 func _cancel_cleanup_task() -> void:
@@ -844,7 +865,7 @@ func _request_cleanup_preview(params: Dictionary) -> void:
 	task.canceled.connect(func() -> void: _on_cleanup_preview_canceled(preview_token))
 	task.progress_reported.connect(_on_cleanup_preview_progress)
 	_preview_task_id = TaskQueue.submit(task)
-	_status_label.text = Strings.STATUS_PREVIEW_QUEUED
+	_status_label.text = Strings.text("STATUS_PREVIEW_QUEUED")
 
 
 func _cancel_preview_task() -> void:
@@ -878,7 +899,7 @@ func _cleanup_preview_work(task_ref: Variant) -> Dictionary:
 func _on_cleanup_preview_finished(result: Variant) -> void:
 	if not (result is Dictionary):
 		_preview_task_id = ""
-		_status_label.text = Strings.STATUS_TASK_FAILED
+		_status_label.text = Strings.text("STATUS_TASK_FAILED")
 		return
 	var token := int(result.get("token", -1))
 	if token == _preview_token:
@@ -890,18 +911,18 @@ func _on_cleanup_preview_finished(result: Variant) -> void:
 		String(result.get("item_id", "")), result["image"], PREVIEW_OPACITY
 	)
 	_cleanup_inspector.show_report(result.get("report", {}))
-	_status_label.text = Strings.STATUS_PREVIEW_DONE
+	_status_label.text = Strings.text("STATUS_PREVIEW_DONE")
 
 
 func _on_cleanup_preview_progress(_task_id: String, ratio: float, _message: String) -> void:
-	_status_label.text = Strings.STATUS_PREVIEW_RUNNING_FORMAT % int(round(ratio * 100.0))
+	_status_label.text = Strings.text("STATUS_PREVIEW_RUNNING_FORMAT") % int(round(ratio * 100.0))
 
 
 func _on_cleanup_preview_canceled(token: int) -> void:
 	if token != _preview_token:
 		return
 	_preview_task_id = ""
-	_status_label.text = Strings.STATUS_PREVIEW_CANCELED
+	_status_label.text = Strings.text("STATUS_PREVIEW_CANCELED")
 
 
 func _on_manual_grid_changed(active: bool, scale: float, offset: Vector2) -> void:
@@ -940,7 +961,7 @@ func _cleanup_params_with_project_style(params: Dictionary) -> Dictionary:
 func _export_selected_png() -> void:
 	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
 	if snapshots.is_empty():
-		_show_status_notice(Strings.STATUS_EXPORT_EMPTY)
+		_show_status_notice(Strings.text("STATUS_EXPORT_EMPTY"))
 		return
 
 	var data: Dictionary = snapshots[0]["data"]
@@ -959,22 +980,24 @@ func _on_files_dropped(files: PackedStringArray) -> void:
 func _show_status_notice(message: String) -> void:
 	_status_label.text = message
 	if DisplayServer.get_name() != "headless":
-		OS.alert(message, Strings.DIALOG_NOTICE)
+		OS.alert(message, Strings.text("DIALOG_NOTICE"))
 
 
 func _show_project_save_failed(path: String, error: Error) -> void:
-	_show_status_notice(Strings.STATUS_PROJECT_SAVE_FAILED_FORMAT % [path, error_string(error)])
+	_show_status_notice(
+		Strings.text("STATUS_PROJECT_SAVE_FAILED_FORMAT") % [path, error_string(error)]
+	)
 
 
 func _show_project_open_failed(path: String, error: Error) -> void:
 	var detail := ContractErrorText.text(
 		String(ProjectService.last_load_error.get("code", "")), error_string(error)
 	)
-	_show_status_notice(Strings.STATUS_PROJECT_OPEN_FAILED_FORMAT % [path, detail])
+	_show_status_notice(Strings.text("STATUS_PROJECT_OPEN_FAILED_FORMAT") % [path, detail])
 
 
 func _on_autosave_failed(error: Error, path: String) -> void:
-	_show_status_notice(Strings.STATUS_AUTOSAVE_FAILED_FORMAT % [path, error_string(error)])
+	_show_status_notice(Strings.text("STATUS_AUTOSAVE_FAILED_FORMAT") % [path, error_string(error)])
 
 
 func _on_recovery_available(autosaves: Array) -> void:
@@ -1003,7 +1026,7 @@ func _perform_recovery(path: String) -> void:
 		_show_project_open_failed(path, error)
 		return
 	_pending_recovery_path = ""
-	_show_status_notice(Strings.STATUS_RECOVERY_COMPLETE)
+	_show_status_notice(Strings.text("STATUS_RECOVERY_COMPLETE"))
 
 
 func _update_window_title() -> void:

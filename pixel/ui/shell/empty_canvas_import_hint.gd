@@ -73,4 +73,14 @@ func _add_action(
 func _refresh_text(_preference: String, _locale: String) -> void:
 	get_node("EmptyContent/HintLabel").text = Strings.text("EMPTY_CANVAS_IMPORT_HINT")
 	for button in get_node("EmptyContent/EmptyActions").get_children():
-		button.text = Strings.text(String(button.get_meta("text_key", "")))
+		button.text = _action_text(String(button.get_meta("text_key", "")))
+
+
+func _action_text(key: String) -> String:
+	match key:
+		"ACTION_ADD_INPUT":
+			return Strings.text("ACTION_ADD_INPUT")
+		"ACTION_IMPORT_REFERENCE":
+			return Strings.text("ACTION_IMPORT_REFERENCE")
+		_:
+			return Strings.text("ACTION_OPEN_EXAMPLE")

@@ -8,12 +8,12 @@ func before_each() -> void:
 	get_tree().root.get_node("ProjectService").new_project("Pixel Operations")
 
 
-func test_cleanup_operation_processes_assets_and_registers_provenance() -> void:
+func test_independent_matting_operation_processes_assets_and_registers_provenance() -> void:
 	var source_id := AssetLibrary.register_image(
 		_make_source_image(), "source", {"origin": "imported"}
 	)
 	var result: Dictionary = PixelOperations.apply_to_assets(
-		[source_id], AssetLibrary, PixelOperations.OP_CLEANUP, _disabled_cleanup_params()
+		[source_id], AssetLibrary, PixelOperations.OP_MATTING, {}
 	)
 
 	assert_false(bool(result.get("canceled", false)))
@@ -26,11 +26,10 @@ func test_cleanup_operation_processes_assets_and_registers_provenance() -> void:
 	var provenance: Dictionary = meta["provenance"]
 
 	assert_eq(meta["origin"], "edited")
-	assert_eq(meta["tags"], ["cleanup"])
+	assert_eq(meta["tags"], ["matting"])
 	assert_eq(provenance["parent_asset"], source_id)
-	assert_eq(provenance["cleanup"]["source_asset"], source_id)
-	assert_true(provenance["cleanup"].has("params"))
-	assert_true(provenance["cleanup"].has("report"))
+	assert_eq(provenance["matting"]["source_asset"], source_id)
+	assert_true(provenance["matting"]["params"].has("mode"))
 
 
 func test_matting_report_is_metadata_safe() -> void:

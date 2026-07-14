@@ -20,34 +20,38 @@ func test_default_size_and_palette_are_module_owned_and_save_keeps_provenance() 
 	var canvas: PFInfiniteCanvas = main._canvas
 	var graph := GraphScript.new()
 	graph.id = "graph-main"
-	graph.add_node(
-		BatchNodeScript.new(),
-		"editor-output",
-		{
-			"label": "Repair",
-			"source_node_id": "",
-			"source_run_id": "",
-			"role": "standalone",
-			"input_snapshots": {},
-			"request_records": [],
-			"result_slots": [
-				{
-					"slot_id": "slot-editor",
-					"run_id": "",
-					"request_id": "",
-					"source_row_id": "",
-					"source_asset_id": "",
-					"input_snapshot_id": "",
-					"planned_size": [8, 8],
-					"status": "succeeded",
-					"asset_id": source_id,
-					"detached": false,
-					"unexpected": false,
-					"error": null,
-				}
-			],
-		},
-		Vector2.ZERO,
+	(
+		graph
+		. add_node(
+			BatchNodeScript.new(),
+			"editor-output",
+			{
+				"label": "Repair",
+				"source_node_id": "",
+				"source_run_id": "",
+				"role": "standalone",
+				"input_snapshots": {},
+				"request_records": [],
+				"result_slots":
+				[
+					{
+						"slot_id": "slot-editor",
+						"run_id": "",
+						"request_id": "",
+						"source_row_id": "",
+						"source_asset_id": "",
+						"input_snapshot_id": "",
+						"planned_size": [8, 8],
+						"status": "succeeded",
+						"asset_id": source_id,
+						"detached": false,
+						"unexpected": false,
+						"error": null,
+					}
+				],
+			},
+			Vector2.ZERO,
+		)
 	)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
 	var card: Node = canvas._add_graph_node_card(
@@ -61,7 +65,9 @@ func test_default_size_and_palette_are_module_owned_and_save_keeps_provenance() 
 	editor.document.dirty = true
 	editor._save(false)
 	var updated_params: Dictionary = (
-		GraphScript.from_json(ProjectService.get_graph_data(graph.id)).get_node_params("editor-output")
+		GraphScript
+		. from_json(ProjectService.get_graph_data(graph.id))
+		. get_node_params("editor-output")
 	)
 	var updated_slots: Array = updated_params["result_slots"]
 	assert_eq(updated_slots.size(), 1)

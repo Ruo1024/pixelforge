@@ -1,4 +1,4 @@
-# gdlint: disable=max-file-lines,max-public-methods
+# gdlint: disable=max-file-lines,max-public-methods,max-returns
 class_name PFM21UiController
 extends Node
 
@@ -58,8 +58,6 @@ const FILE_MENU_OPEN_PIXEL_EDITOR := 13
 const FILE_MENU_PLUGIN_MANAGER := 14
 const FILE_MENU_COMFY_TEMPLATES := 15
 const GRAPH_ADD_MENU_ID_START := 100
-const BATCH_MENU_MATTE := 1
-const BATCH_MENU_OUTLINE := 2
 const BATCH_MENU_EXPORT := 4
 const BATCH_MENU_EDIT := 20
 const SELECTION_TOOLS_VISIBLE := false
@@ -232,9 +230,9 @@ func add_tool_buttons(parent: Control) -> void:
 	if not SELECTION_TOOLS_VISIBLE:
 		return
 	for spec in [
-		{"id": "magic_wand", "text": "W", "tooltip": Strings.TOOL_MAGIC_WAND},
-		{"id": "rectangle", "text": "M", "tooltip": Strings.TOOL_RECTANGLE},
-		{"id": "lasso", "text": "L", "tooltip": Strings.TOOL_LASSO},
+		{"id": "magic_wand", "text": "W", "tooltip": Strings.text("TOOL_MAGIC_WAND")},
+		{"id": "rectangle", "text": "M", "tooltip": Strings.text("TOOL_RECTANGLE")},
+		{"id": "lasso", "text": "L", "tooltip": Strings.text("TOOL_LASSO")},
 	]:
 		var button := Button.new()
 		button.text = String(spec["text"])
@@ -273,7 +271,7 @@ func import_files_at_mouse(files: PackedStringArray) -> void:
 func open_matte_dialog() -> void:
 	var source := _single_selected_image()
 	if source == null:
-		_status_label.text = Strings.STATUS_CLEANUP_EMPTY
+		_status_label.text = Strings.text("STATUS_CLEANUP_EMPTY")
 		return
 	_matte_dialog.set_source_image(source)
 	_matte_dialog.popup_centered()
@@ -282,7 +280,7 @@ func open_matte_dialog() -> void:
 func open_slice_dialog() -> void:
 	var source := _single_selected_image()
 	if source == null:
-		_status_label.text = Strings.STATUS_CLEANUP_EMPTY
+		_status_label.text = Strings.text("STATUS_CLEANUP_EMPTY")
 		return
 	_slice_dialog.set_source_image(source)
 	_slice_dialog.popup_centered()
@@ -291,7 +289,7 @@ func open_slice_dialog() -> void:
 func open_outline_dialog() -> void:
 	var source := _single_selected_image()
 	if source == null:
-		_status_label.text = Strings.STATUS_CLEANUP_EMPTY
+		_status_label.text = Strings.text("STATUS_CLEANUP_EMPTY")
 		return
 	_outline_dialog.set_source_image(source)
 	_outline_dialog.popup_centered()
@@ -561,12 +559,10 @@ func _apply_result_branch(action_id: String, context: Dictionary) -> void:
 		func() -> void: apply_snapshot.call(after, true),
 		func() -> void: apply_snapshot.call(graph_data, false)
 	)
-	_status_label.text = Strings.text(
-		(
-			"STATUS_CANDIDATE_REFERENCE_CREATED"
-			if action_id == "as_reference"
-			else "STATUS_CANDIDATE_BRANCH_CREATED"
-		)
+	_status_label.text = (
+		Strings.text("STATUS_CANDIDATE_REFERENCE_CREATED")
+		if action_id == "as_reference"
+		else Strings.text("STATUS_CANDIDATE_BRANCH_CREATED")
 	)
 
 
@@ -611,20 +607,9 @@ func _add_result_branch_items(graph_id: String, specs: Array) -> void:
 	for spec in specs:
 		var raw_position: Array = spec.get("position", [0, 0])
 		var position := Vector2(float(raw_position[0]), float(raw_position[1]))
-		if String(spec.get("type", "")) == "batch":
-			_canvas._add_batch_card(
-				[],
-				position,
-				Strings.text("BATCH_DEFAULT_LABEL"),
-				String(spec["item_id"]),
-				false,
-				graph_id,
-				String(spec["node_id"])
-			)
-		else:
-			_canvas._add_graph_node_card(
-				graph_id, String(spec["node_id"]), position, String(spec["item_id"]), false
-			)
+		_canvas._add_graph_node_card(
+			graph_id, String(spec["node_id"]), position, String(spec["item_id"]), false
+		)
 		if bool(spec.get("focus", false)):
 			focus_item_id = String(spec["item_id"])
 	if not focus_item_id.is_empty():
@@ -740,14 +725,14 @@ func edit_selected_graph_node() -> void:
 	var binding := _selected_graph_binding()
 	var node_id := String(binding.get("node_id", ""))
 	if binding.is_empty() or node_id.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_EDIT_NEEDS_SELECTION
+		_status_label.text = Strings.text("STATUS_GRAPH_EDIT_NEEDS_SELECTION")
 		return
 	var graph_id := String(binding["graph_id"])
 	var graph_data := ProjectService.get_graph_data(graph_id)
 	var graph := GraphScript.from_json(graph_data)
 	var node: PFNode = graph.get_node(node_id)
 	if node == null or node.is_ghost() or node.get_param_schema().is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_EDIT_NOT_AVAILABLE
+		_status_label.text = Strings.text("STATUS_GRAPH_EDIT_NOT_AVAILABLE")
 		return
 	_graph_node_params_dialog.configure_for_node(
 		graph_id, node_id, node, graph.get_node_params(node_id)
@@ -758,17 +743,17 @@ func edit_selected_graph_node() -> void:
 func apply_graph_node_params(graph_id: String, node_id: String, params: Dictionary) -> bool:
 	var graph_data := ProjectService.get_graph_data(graph_id)
 	if graph_data.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_EDIT_FAILED
+		_status_label.text = Strings.text("STATUS_GRAPH_EDIT_FAILED")
 		return false
 	var graph := GraphScript.from_json(graph_data)
 	var node: PFNode = graph.get_node(node_id)
 	if node == null or node.is_ghost():
-		_status_label.text = Strings.STATUS_GRAPH_EDIT_FAILED
+		_status_label.text = Strings.text("STATUS_GRAPH_EDIT_FAILED")
 		return false
 	var merged_params := graph.get_node_params(node_id)
 	merged_params.merge(params, true)
 	if not graph.set_node_params(node_id, merged_params):
-		_status_label.text = Strings.STATUS_GRAPH_EDIT_FAILED
+		_status_label.text = Strings.text("STATUS_GRAPH_EDIT_FAILED")
 		return false
 
 	var before := graph_data.duplicate(true)
@@ -781,7 +766,7 @@ func apply_graph_node_params(graph_id: String, node_id: String, params: Dictiona
 		func() -> void: apply_snapshot.call(after),
 		func() -> void: apply_snapshot.call(before)
 	)
-	_status_label.text = Strings.STATUS_GRAPH_EDIT_DONE
+	_status_label.text = Strings.text("STATUS_GRAPH_EDIT_DONE")
 	return true
 
 
@@ -794,7 +779,7 @@ func add_graph_node_to_selected_graph(
 	var registry := NodeRegistryScript.new()
 	var node: PFNode = registry.create(type_name)
 	if node == null:
-		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		_status_label.text = Strings.text("STATUS_GRAPH_ADD_FAILED")
 		return ""
 	var graph_data: Dictionary = before_graphs.get(graph_id, {})
 	var graph: PFGraph
@@ -819,26 +804,14 @@ func add_graph_node_to_selected_graph(
 			ProviderService.get_model_descriptors(), preferred_provider
 		)
 	if graph.add_node(node, node_id, resolved_params, world_position).is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		_status_label.text = Strings.text("STATUS_GRAPH_ADD_FAILED")
 		return ""
 
 	var after_graphs := before_graphs.duplicate(true)
 	after_graphs[graph_id] = graph.to_json()
-	var is_batch := node.get_type() == "batch"
 	var do_add := func() -> void:
 		ProjectService.set_graphs_data(after_graphs, true)
-		if is_batch:
-			_canvas._add_batch_card(
-				[],
-				world_position,
-				Strings.text("BATCH_DEFAULT_LABEL"),
-				item_id,
-				false,
-				graph_id,
-				node_id
-			)
-		else:
-			_canvas._add_graph_node_card(graph_id, node_id, world_position, item_id, false)
+		_canvas._add_graph_node_card(graph_id, node_id, world_position, item_id, false)
 		_canvas.select_ids([item_id])
 	var undo_add := func() -> void:
 		_canvas._remove_item_direct(item_id)
@@ -848,7 +821,7 @@ func add_graph_node_to_selected_graph(
 	UndoService.perform_action("Add graph node", do_add, undo_add)
 	_active_graph_id = graph_id
 	_status_label.text = (
-		Strings.text("STATUS_GRAPH_ADD_DONE_FORMAT", Strings.STATUS_GRAPH_ADD_DONE)
+		Strings.text("STATUS_GRAPH_ADD_DONE_FORMAT", Strings.text("STATUS_GRAPH_ADD_DONE"))
 		% _localized_node_display_name(node)
 	)
 	return node_id
@@ -906,7 +879,7 @@ func _add_reference_assets_to_graph(asset_ids: Array, world_positions: Array) ->
 
 func show_graph_quick_add_menu(screen_position: Vector2i) -> bool:
 	if _graph_quick_add_menu == null:
-		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		_status_label.text = Strings.text("STATUS_GRAPH_ADD_FAILED")
 		return false
 	var local_screen_position := Vector2(screen_position) - _canvas.get_screen_position()
 	_graph_quick_add_world_position = _canvas.screen_to_world(local_screen_position).round()
@@ -1016,26 +989,29 @@ func _add_graph_node_submenu(parent_menu: PopupMenu) -> void:
 	parent_menu.add_child(_graph_add_menu)
 	_graph_add_parent_index = parent_menu.item_count
 	parent_menu.add_submenu_item(
-		Strings.text("MENU_ADD_GRAPH_NODE", Strings.MENU_ADD_GRAPH_NODE), _graph_add_menu.name
+		Strings.text("MENU_ADD_GRAPH_NODE", Strings.text("MENU_ADD_GRAPH_NODE")),
+		_graph_add_menu.name
 	)
 
 
 func _localized_node_display_name(node: PFNode) -> String:
-	var key_by_type := {
-		"text_prompt": "NODE_TEXT_PROMPT",
-		"object_list": "NODE_OBJECT_LIST",
-		"prompt_preset": "NODE_PROMPT_PRESET",
-		"image_input": "NODE_IMAGE_INPUT",
-		"pixel_cleanup": "NODE_PIXEL_CLEANUP",
-		"ai_generate": "NODE_AI_GENERATE",
-		"batch": "NODE_BATCH",
-	}
-	var key := String(key_by_type.get(node.get_type(), ""))
-	return (
-		Strings.text(key, node.get_display_name())
-		if not key.is_empty()
-		else node.get_display_name()
-	)
+	match node.get_type():
+		"text_prompt":
+			return Strings.text("NODE_TEXT_PROMPT")
+		"object_list":
+			return Strings.text("NODE_OBJECT_LIST")
+		"prompt_preset":
+			return Strings.text("NODE_PROMPT_PRESET")
+		"image_input":
+			return Strings.text("NODE_IMAGE_INPUT")
+		"pixel_cleanup":
+			return Strings.text("NODE_PIXEL_CLEANUP")
+		"ai_generate":
+			return Strings.text("NODE_AI_GENERATE")
+		"batch":
+			return Strings.text("NODE_BATCH")
+		_:
+			return node.get_display_name()
 
 
 func _on_language_changed(_preference: String, _locale: String) -> void:
@@ -1044,7 +1020,7 @@ func _on_language_changed(_preference: String, _locale: String) -> void:
 	if _graph_add_parent_menu != null and _graph_add_parent_index >= 0:
 		_graph_add_parent_menu.set_item_text(
 			_graph_add_parent_index,
-			Strings.text("MENU_ADD_GRAPH_NODE", Strings.MENU_ADD_GRAPH_NODE)
+			Strings.text("MENU_ADD_GRAPH_NODE", Strings.text("MENU_ADD_GRAPH_NODE"))
 		)
 	var registry := NodeRegistryScript.new()
 	for menu in [_graph_add_menu, _graph_quick_add_menu]:
@@ -1112,7 +1088,7 @@ func _on_file_menu_pressed(id: int) -> void:
 func _on_graph_add_menu_pressed(id: int) -> void:
 	var type_name := String(_graph_add_types.get(id, ""))
 	if type_name.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		_status_label.text = Strings.text("STATUS_GRAPH_ADD_FAILED")
 		return
 	add_graph_node_to_selected_graph(type_name)
 
@@ -1120,7 +1096,7 @@ func _on_graph_add_menu_pressed(id: int) -> void:
 func _on_graph_quick_add_menu_pressed(id: int) -> void:
 	var type_name := String(_graph_add_types.get(id, ""))
 	if type_name.is_empty():
-		_status_label.text = Strings.STATUS_GRAPH_ADD_FAILED
+		_status_label.text = Strings.text("STATUS_GRAPH_ADD_FAILED")
 		return
 	add_graph_node_to_selected_graph(type_name, _graph_quick_add_world_position)
 
@@ -1137,14 +1113,6 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 		BATCH_MENU_EDIT:
 			if not asset_ids.is_empty():
 				_open_pixel_editor(String(asset_ids[0]), _batch_menu_card_id)
-		BATCH_MENU_MATTE:
-			_m2_actions.batch_matte(
-				_batch_menu_card_id, asset_ids, {"mode": "flood", "tolerance": 12.0, "feather": 0}
-			)
-		BATCH_MENU_OUTLINE:
-			_m2_actions.batch_outline(
-				_batch_menu_card_id, asset_ids, {"type": "outer", "color": Color.BLACK}
-			)
 		BATCH_MENU_EXPORT:
 			_emit_batch_export(asset_ids)
 
@@ -1208,19 +1176,20 @@ func _on_tool_changed(tool_id: String) -> void:
 		var button: Button = _tool_buttons[button_id]
 		button.set_pressed_no_signal(String(button_id) == tool_id)
 	if tool_id.is_empty():
-		_status_label.text = Strings.STATUS_TOOL_OFF
+		_status_label.text = Strings.text("STATUS_TOOL_OFF")
 		return
 	var tool: Variant = _tool_manager.get_current_tool()
-	_status_label.text = Strings.STATUS_TOOL_FORMAT % tool.get_name()
+	_status_label.text = Strings.text("STATUS_TOOL_FORMAT") % tool.get_name()
 
 
 func _on_tool_selection_changed(selection: PFSelection) -> void:
 	if selection == null or selection.is_empty():
-		_status_label.text = Strings.STATUS_SELECTION_EMPTY
+		_status_label.text = Strings.text("STATUS_SELECTION_EMPTY")
 		return
 	var bbox := selection.get_bbox()
 	_status_label.text = (
-		Strings.STATUS_SELECTION_FORMAT % [bbox.size.x, bbox.size.y, selection.get_selected_count()]
+		Strings.text("STATUS_SELECTION_FORMAT")
+		% [bbox.size.x, bbox.size.y, selection.get_selected_count()]
 	)
 
 

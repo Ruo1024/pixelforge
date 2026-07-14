@@ -139,8 +139,9 @@ func _notification(what: int) -> void:
 		queue_redraw()
 	elif what in [NOTIFICATION_WM_WINDOW_FOCUS_OUT, NOTIFICATION_APPLICATION_FOCUS_OUT]:
 		cancel_pointer_gestures()
-	elif what == NOTIFICATION_MOUSE_EXIT and not Rect2(Vector2.ZERO, size).has_point(
-		get_local_mouse_position()
+	elif (
+		what == NOTIFICATION_MOUSE_EXIT
+		and not Rect2(Vector2.ZERO, size).has_point(get_local_mouse_position())
 	):
 		cancel_pointer_gestures()
 
@@ -153,7 +154,9 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		var key_event := event as InputEventKey
 		if key_event.keycode == KEY_SPACE:
-			_space_pan_armed = key_event.pressed and not key_event.echo and not _text_input_has_focus()
+			_space_pan_armed = (
+				key_event.pressed and not key_event.echo and not _text_input_has_focus()
+			)
 			accept_event()
 		elif key_event.pressed and not key_event.echo and key_event.keycode == KEY_TAB:
 			graph_quick_add_requested.emit(
@@ -300,45 +303,6 @@ func add_sprite_item(
 		UndoService.perform_action(
 			"Add sprite", do_add, undo_add, ImageMath.estimate_rgba8_bytes(image_copy)
 		)
-	else:
-		do_add.call()
-
-	return _items_by_id.get(String(data["id"]), null)
-
-
-func _add_batch_card(
-	asset_ids: Array,
-	world_position: Vector2 = Vector2.ZERO,
-	label: String = "Batch",
-	item_id: String = "",
-	record_undo: bool = true,
-	graph_id: String = "",
-	node_id: String = ""
-) -> Node:
-	if graph_id.is_empty() or node_id.is_empty():
-		return null
-	var data := {
-		"id": item_id if not item_id.is_empty() else IdUtil.uuid_v4(),
-		"type": "node",
-		"graph_id": graph_id,
-		"node_id": node_id,
-		"position": [int(round(world_position.x)), int(round(world_position.y))],
-		"z_index": _items_by_id.size(),
-		"locked": false,
-	}
-
-	var do_add := func() -> void:
-		_add_batch_direct(data)
-		_select_only([String(data["id"])])
-		_emit_canvas_changed()
-
-	var undo_add := func() -> void:
-		_remove_item_direct(String(data["id"]))
-		_clear_selection()
-		_emit_canvas_changed()
-
-	if record_undo:
-		UndoService.perform_action("Add batch", do_add, undo_add)
 	else:
 		do_add.call()
 
@@ -974,11 +938,7 @@ func detach_all_output_assets(
 
 
 func _detach_output_assets(
-	card_id: String,
-	slot_id: String,
-	start_position: Vector2,
-	confirmed: bool,
-	record_undo: bool
+	card_id: String, slot_id: String, start_position: Vector2, confirmed: bool, record_undo: bool
 ) -> Dictionary:
 	var item: Node = _items_by_id.get(card_id, null)
 	if item == null or item.get_script() != CanvasBatchCardScript or not item.has_graph_binding():
@@ -1220,7 +1180,9 @@ func _replace_asset_reference(old_asset_id: String, new_asset_id: String) -> int
 	return count
 
 
-func _replace_output_slot_asset(card_id: String, old_asset_id: String, new_asset_id: String) -> bool:
+func _replace_output_slot_asset(
+	card_id: String, old_asset_id: String, new_asset_id: String
+) -> bool:
 	var item: Node = _items_by_id.get(card_id, null)
 	if item == null or item.get_script() != CanvasBatchCardScript or not item.has_graph_binding():
 		return false
@@ -1394,7 +1356,7 @@ func _begin_left_interaction(screen_position: Vector2, additive: bool) -> void:
 			return
 		if (
 			String(hit.get("kind", "")) == HitPolicy.KIND_BATCH_THUMBNAIL
-			and hit_item.toggle_asset_at_world(world_position)
+			and hit_item.select_asset_at_world(world_position)
 		):
 			_select_only([hit_item.item_id])
 			_emit_canvas_changed()
@@ -1644,7 +1606,9 @@ func _on_output_action_requested(card_id: String, action_id: String, slot_id: St
 			if not selected_ids.is_empty():
 				asset_edit_requested.emit(String(selected_ids[0]), card_id)
 		"detach":
-			detach_output_slot(card_id, slot_id, item.position + Vector2(item.requested_size.x + 24, 0))
+			detach_output_slot(
+				card_id, slot_id, item.position + Vector2(item.requested_size.x + 24, 0)
+			)
 		"detach_all":
 			detach_all_output_assets(
 				card_id, item.position + Vector2(item.requested_size.x + 24, 0), false

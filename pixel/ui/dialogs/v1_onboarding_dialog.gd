@@ -30,15 +30,15 @@ func _build_ui() -> void:
 	get_label().get_parent().add_child(root)
 	var intro := Label.new()
 	intro.name = "Intro"
-	intro.text = Strings.V1_ONBOARDING_INTRO
+	intro.text = Strings.text("V1_ONBOARDING_INTRO")
 	root.add_child(intro)
 	_provider_setup = CheckButton.new()
 	_provider_setup.name = "ProviderSetup"
-	_provider_setup.text = Strings.V1_ONBOARDING_PROVIDER
+	_provider_setup.text = Strings.text("V1_ONBOARDING_PROVIDER")
 	root.add_child(_provider_setup)
 	_sample = CheckButton.new()
 	_sample.name = "CreateSample"
-	_sample.text = Strings.V1_ONBOARDING_SAMPLE
+	_sample.text = Strings.text("V1_ONBOARDING_SAMPLE")
 	_sample.button_pressed = true
 	root.add_child(_sample)
 

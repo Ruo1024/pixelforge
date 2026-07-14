@@ -1,3 +1,4 @@
+# gdlint: disable=max-returns
 class_name PFCleanupInspector
 extends PanelContainer
 
@@ -402,7 +403,7 @@ func _make_options(label_keys: Array) -> OptionButton:
 	options.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
 	options.set_meta("i18n_keys", label_keys)
 	for key in label_keys:
-		options.add_item(Strings.text(String(key)))
+		options.add_item(_option_text(String(key)))
 	_localized_options.append(options)
 	return options
 
@@ -410,7 +411,7 @@ func _make_options(label_keys: Array) -> OptionButton:
 func _create_palette_dialogs() -> void:
 	_palette_import_dialog = FileDialog.new()
 	DialogScalePolicy.configure_file_dialog(_palette_import_dialog)
-	_palette_import_dialog.title = Strings.DIALOG_IMPORT_PALETTE
+	_palette_import_dialog.title = Strings.text("DIALOG_IMPORT_PALETTE")
 	_palette_import_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_palette_import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	_palette_import_dialog.filters = PackedStringArray(["*.json ; Palette JSON"])
@@ -418,7 +419,7 @@ func _create_palette_dialogs() -> void:
 	add_child(_palette_import_dialog)
 
 	_palette_error_dialog = AcceptDialog.new()
-	_palette_error_dialog.title = Strings.DIALOG_PALETTE_ERROR
+	_palette_error_dialog.title = Strings.text("DIALOG_PALETTE_ERROR")
 	add_child(_palette_error_dialog)
 
 
@@ -446,7 +447,7 @@ func _selected_palette_id() -> String:
 func _on_palette_file_selected(path: String) -> void:
 	var result := PaletteRegistry.import_custom_from_path(path)
 	if not bool(result.get("ok", false)):
-		_show_palette_error(String(result.get("error", Strings.PALETTE_IMPORT_FAILED)))
+		_show_palette_error(String(result.get("error", Strings.text("PALETTE_IMPORT_FAILED"))))
 		return
 
 	var palette: PFPalette = result["palette"]
@@ -567,7 +568,7 @@ func _on_language_changed(_preference: String, _locale: String) -> void:
 	for options in _localized_options:
 		var label_keys: Array = options.get_meta("i18n_keys", [])
 		for index in range(mini(options.item_count, label_keys.size())):
-			options.set_item_text(index, Strings.text(String(label_keys[index])))
+			options.set_item_text(index, _option_text(String(label_keys[index])))
 	_auto_k_strategy_options.tooltip_text = Strings.text("CLEANUP_AUTO_K_TOOLTIP")
 	_selection_label.text = Strings.text("CLEANUP_SELECTED_FORMAT") % _selection_count
 	refresh_palette_options(_selected_palette_id())
@@ -575,3 +576,35 @@ func _on_language_changed(_preference: String, _locale: String) -> void:
 		_report_label.text = Strings.text("CLEANUP_NO_REPORT")
 	else:
 		show_report(_last_report)
+
+
+func _option_text(key: String) -> String:
+	match key:
+		"CLEANUP_RESAMPLE_MODE":
+			return Strings.text("CLEANUP_RESAMPLE_MODE")
+		"CLEANUP_RESAMPLE_CENTER":
+			return Strings.text("CLEANUP_RESAMPLE_CENTER")
+		"CLEANUP_RESAMPLE_MEDIAN":
+			return Strings.text("CLEANUP_RESAMPLE_MEDIAN")
+		"CLEANUP_RESAMPLE_EDGE_AWARE":
+			return Strings.text("CLEANUP_RESAMPLE_EDGE_AWARE")
+		"CLEANUP_QUANTIZE_AUTO_K":
+			return Strings.text("CLEANUP_QUANTIZE_AUTO_K")
+		"CLEANUP_QUANTIZE_FIXED":
+			return Strings.text("CLEANUP_QUANTIZE_FIXED")
+		"CLEANUP_STRATEGY_MEDIAN_CUT":
+			return Strings.text("CLEANUP_STRATEGY_MEDIAN_CUT")
+		"CLEANUP_STRATEGY_KMEANS":
+			return Strings.text("CLEANUP_STRATEGY_KMEANS")
+		"CLEANUP_DITHER_BAYER_2":
+			return Strings.text("CLEANUP_DITHER_BAYER_2")
+		"CLEANUP_DITHER_BAYER_4":
+			return Strings.text("CLEANUP_DITHER_BAYER_4")
+		"CLEANUP_DITHER_BAYER_8":
+			return Strings.text("CLEANUP_DITHER_BAYER_8")
+		"CLEANUP_DITHER_CHROMATIC":
+			return Strings.text("CLEANUP_DITHER_CHROMATIC")
+		"CLEANUP_DITHER_ERROR_DIFFUSION":
+			return Strings.text("CLEANUP_DITHER_ERROR_DIFFUSION")
+		_:
+			return Strings.text("CLEANUP_VALUE_NONE")

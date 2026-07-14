@@ -94,30 +94,6 @@ func outline_selection_with_params(params: Dictionary) -> void:
 	_status_label.text = Strings.text("STATUS_OUTLINE_QUEUED")
 
 
-func batch_matte(card_id: String, asset_ids: Array, params: Dictionary) -> void:
-	_start_batch_task(
-		card_id,
-		asset_ids,
-		"batch_matting",
-		{"params": params},
-		_batch_matte_work,
-		Strings.text("STATUS_MATTING_QUEUED"),
-		Strings.text("STATUS_MATTING_DONE")
-	)
-
-
-func batch_outline(card_id: String, asset_ids: Array, params: Dictionary) -> void:
-	_start_batch_task(
-		card_id,
-		asset_ids,
-		"batch_outline",
-		{"params": params},
-		_batch_outline_work,
-		Strings.text("STATUS_OUTLINE_QUEUED"),
-		Strings.text("STATUS_OUTLINE_DONE")
-	)
-
-
 func cancel_current_task() -> bool:
 	if _task_id.is_empty():
 		return false
@@ -203,40 +179,6 @@ func _outline_work(task_ref: Variant) -> Dictionary:
 	return {"canceled": false, "items": results}
 
 
-func _batch_matte_work(task_ref: Variant) -> Dictionary:
-	var asset_ids: Array = task_ref.payload["asset_ids"]
-	var params: Dictionary = _matte_params(task_ref.payload["extra"].get("params", {}))
-	var result := PixelOperations.apply_to_assets(
-		asset_ids,
-		AssetLibrary,
-		PixelOperations.OP_MATTING,
-		params,
-		func() -> bool: return task_ref.cancel_requested,
-		func(ratio: float, _operation: String) -> void:
-			task_ref.report_progress(ratio, "batch_matting")
-	)
-	result["card_id"] = String(task_ref.payload["card_id"])
-	result["original_asset_ids"] = task_ref.payload.get("original_asset_ids", []).duplicate()
-	return result
-
-
-func _batch_outline_work(task_ref: Variant) -> Dictionary:
-	var asset_ids: Array = task_ref.payload["asset_ids"]
-	var params: Dictionary = _outline_params(task_ref.payload["extra"].get("params", {}))
-	var result := PixelOperations.apply_to_assets(
-		asset_ids,
-		AssetLibrary,
-		PixelOperations.OP_OUTLINE,
-		params,
-		func() -> bool: return task_ref.cancel_requested,
-		func(ratio: float, _operation: String) -> void:
-			task_ref.report_progress(ratio, "batch_outline")
-	)
-	result["card_id"] = String(task_ref.payload["card_id"])
-	result["original_asset_ids"] = task_ref.payload.get("original_asset_ids", []).duplicate()
-	return result
-
-
 func _on_generated_asset_task_finished(result: Variant, done_status: String) -> void:
 	_task_id = ""
 	_cleanup_inspector.set_cleanup_running(false)
@@ -273,86 +215,6 @@ func _on_generated_asset_task_finished(result: Variant, done_status: String) -> 
 		)
 		_canvas.add_sprite_item(output, asset_id, world_position)
 
-	_status_label.text = done_status
-
-
-func _start_batch_task(
-	card_id: String,
-	asset_ids: Array,
-	task_kind: String,
-	extra: Dictionary,
-	work: Callable,
-	queued_status: String,
-	done_status: String
-) -> void:
-	var ids := _string_array(asset_ids)
-	if ids.is_empty():
-		_status_label.text = Strings.text("STATUS_CLEANUP_EMPTY")
-		return
-	var original_ids := _string_array(_canvas._get_batch_asset_ids(card_id, false))
-	var task := (
-		TaskScript
-		. new(
-			task_kind,
-			{
-				"card_id": card_id,
-				"asset_ids": ids,
-				"original_asset_ids": original_ids,
-				"extra": extra,
-			},
-			work
-		)
-	)
-	task.finished.connect(
-		func(result: Variant) -> void: _on_batch_task_finished(result, done_status)
-	)
-	var action_label := Strings.text("TASK_CLEANUP")
-	if task_kind.contains("matting"):
-		action_label = Strings.text("TASK_MATTING")
-	elif task_kind.contains("outline"):
-		action_label = Strings.text("TASK_OUTLINE")
-	_connect_task_feedback(task, action_label)
-	_task_id = TaskQueue.submit(task)
-	_cleanup_inspector.set_cleanup_running(true)
-	_status_label.text = queued_status
-
-
-func _on_batch_task_finished(result: Variant, done_status: String) -> void:
-	_task_id = ""
-	_cleanup_inspector.set_cleanup_running(false)
-	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
-	if not (result is Dictionary):
-		_status_label.text = Strings.text("STATUS_TASK_FAILED")
-		return
-	if bool(result.get("canceled", false)):
-		_status_label.text = Strings.text("STATUS_TASK_CANCELED")
-		return
-
-	var first_warning := _first_warning(result.get("items", []))
-	if not first_warning.is_empty():
-		ErrorHelper.show_matte_error(_dialog_parent, first_warning)
-
-	var replacement_by_parent := {}
-	for item_result in result.get("items", []):
-		var parent_asset_id := String(item_result.get("parent_asset", ""))
-		var asset_id := PixelOperations.register_result_asset(
-			AssetLibrary, parent_asset_id, item_result
-		)
-		replacement_by_parent[parent_asset_id] = asset_id
-
-	var original_asset_ids := _string_array(result.get("original_asset_ids", []))
-	var merged_asset_ids: Array[String] = []
-	for original_asset_id in original_asset_ids:
-		merged_asset_ids.append(
-			String(replacement_by_parent.get(original_asset_id, original_asset_id))
-		)
-	if merged_asset_ids.is_empty():
-		for replacement in replacement_by_parent.values():
-			merged_asset_ids.append(String(replacement))
-
-	_canvas._replace_batch_asset_ids(
-		String(result.get("card_id", "")), merged_asset_ids, true, original_asset_ids
-	)
 	_status_label.text = done_status
 
 

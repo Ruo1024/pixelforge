@@ -11,6 +11,9 @@ func play_in(source_texture: Texture2D = null) -> void:
 	var tween := create_tween()
 	tween.tween_property(self, "color:a", 0.72, 0.08)
 	if source_texture != null:
-		tooltip_text = "Editing %dx%d" % [source_texture.get_width(), source_texture.get_height()]
+		tooltip_text = PFStrings.text(
+			"EDITOR_TRANSITION_TOOLTIP_FORMAT",
+			[source_texture.get_width(), source_texture.get_height()]
+		)
 	tween.tween_property(self, "color:a", 0.0, 0.12)
 	tween.tween_callback(queue_free)

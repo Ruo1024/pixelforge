@@ -336,12 +336,11 @@ func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> vo
 		file_menu.get_popup().get_item_text(controller._graph_add_parent_index),
 		Strings.text("MENU_ADD_GRAPH_NODE")
 	)
-	assert_eq(
-		controller._batch_menu.get_item_text(
-			controller._batch_menu.get_item_index(controller.BATCH_MENU_MATTE)
-		),
-		Strings.text("BATCH_ACTION_MATTE")
-	)
+	var output_menu_texts := []
+	for index in range(controller._batch_menu.item_count):
+		output_menu_texts.append(controller._batch_menu.get_item_text(index))
+	assert_false(output_menu_texts.has(Strings.text("BATCH_ACTION_MATTE")))
+	assert_false(output_menu_texts.has(Strings.text("BATCH_ACTION_OUTLINE")))
 	var graph_menu_texts := []
 	for index in range(controller._graph_add_menu.item_count):
 		graph_menu_texts.append(controller._graph_add_menu.get_item_text(index))

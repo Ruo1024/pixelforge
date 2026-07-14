@@ -46,9 +46,19 @@ const GENERATION_SNAPSHOT_KEYS := [
 	"extra",
 ]
 const CLEANUP_PROVENANCE_KEYS := [
-	"source_asset", "input_source_kind", "input_source_node_id", "source_batch_node_id",
-	"source_slot_id", "cleanup_node_id", "run_id", "request_id", "preset_id",
-	"effective_target_size", "settings", "palette_snapshot", "report",
+	"source_asset",
+	"input_source_kind",
+	"input_source_node_id",
+	"source_batch_node_id",
+	"source_slot_id",
+	"cleanup_node_id",
+	"run_id",
+	"request_id",
+	"preset_id",
+	"effective_target_size",
+	"settings",
+	"palette_snapshot",
+	"report",
 ]
 
 var _metadata := {}
@@ -300,22 +310,53 @@ static func validate_cleanup_provenance(cleanup: Dictionary) -> bool:
 	for key in CLEANUP_PROVENANCE_KEYS:
 		if not cleanup.has(key):
 			return false
-	for key in ["source_asset", "input_source_kind", "input_source_node_id", "source_batch_node_id", "source_slot_id", "cleanup_node_id", "run_id", "request_id", "preset_id"]:
+	for key in [
+		"source_asset",
+		"input_source_kind",
+		"input_source_node_id",
+		"source_batch_node_id",
+		"source_slot_id",
+		"cleanup_node_id",
+		"run_id",
+		"request_id",
+		"preset_id"
+	]:
 		if not (cleanup[key] is String):
 			return false
-	if String(cleanup["source_asset"]).is_empty() or String(cleanup["cleanup_node_id"]).is_empty() or String(cleanup["run_id"]).is_empty() or String(cleanup["request_id"]).is_empty():
+	if (
+		String(cleanup["source_asset"]).is_empty()
+		or String(cleanup["cleanup_node_id"]).is_empty()
+		or String(cleanup["run_id"]).is_empty()
+		or String(cleanup["request_id"]).is_empty()
+	):
 		return false
 	if String(cleanup["input_source_kind"]) not in ["batch", "image_input", "reference_set"]:
 		return false
 	var target: Variant = cleanup["effective_target_size"]
-	if not (target is Array) or target.size() != 2 or not (target[0] is int) or not (target[1] is int) or int(target[0]) < 0 or int(target[1]) < 0:
+	if (
+		not (target is Array)
+		or target.size() != 2
+		or not (target[0] is int)
+		or not (target[1] is int)
+		or int(target[0]) < 0
+		or int(target[1]) < 0
+	):
 		return false
 	if not (cleanup["settings"] is Dictionary):
 		return false
 	var report: Variant = cleanup["report"]
 	if not (report is Dictionary):
 		return false
-	for key in ["input_size", "output_size", "effective_target_size", "detected_grid", "steps", "input_color_count", "output_color_count", "elapsed_ms"]:
+	for key in [
+		"input_size",
+		"output_size",
+		"effective_target_size",
+		"detected_grid",
+		"steps",
+		"input_color_count",
+		"output_color_count",
+		"elapsed_ms"
+	]:
 		if not report.has(key):
 			return false
 	return true

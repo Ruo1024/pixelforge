@@ -37,7 +37,10 @@ static func build(graph: PFGraph, cleanup_node_id: String, asset_source: Variant
 	for index in range(inputs.size()):
 		var item: Dictionary = inputs[index]
 		var asset_id := String(item["asset_id"])
-		if not asset_source.has_asset(asset_id) or asset_source.get_bitmap_status(asset_id) != "ready":
+		if (
+			not asset_source.has_asset(asset_id)
+			or asset_source.get_bitmap_status(asset_id) != "ready"
+		):
 			return _issue("missing_cleanup_input", "assets")
 		var meta: Dictionary = asset_source.get_asset_meta(asset_id)
 		var source_size: Array = Array(meta.get("size", [])).duplicate()
@@ -45,7 +48,11 @@ static func build(graph: PFGraph, cleanup_node_id: String, asset_source: Variant
 			return _issue("missing_cleanup_input", "assets")
 		var target := _effective_target(meta)
 		var settings: Dictionary = Dictionary(params.get("settings", {})).duplicate(true)
-		var planned_size := target if bool(settings.get("resample", {}).get("enabled", false)) and _positive_pair(target) else source_size
+		var planned_size := (
+			target
+			if bool(settings.get("resample", {}).get("enabled", false)) and _positive_pair(target)
+			else source_size
+		)
 		var request_id := IdUtil.uuid_v4()
 		var slot_id := IdUtil.uuid_v4()
 		var snapshot := {
@@ -62,26 +69,50 @@ static func build(graph: PFGraph, cleanup_node_id: String, asset_source: Variant
 			"settings": settings,
 			"palette_snapshot": palette_result.get("snapshot"),
 		}
-		slots.append({
-			"slot_id": slot_id, "request_id": request_id, "source_row_id": "",
-			"source_asset_id": asset_id, "planned_size": planned_size.duplicate(),
-			"input_snapshot": snapshot,
-		})
+		(
+			slots
+			. append(
+				{
+					"slot_id": slot_id,
+					"request_id": request_id,
+					"source_row_id": "",
+					"source_asset_id": asset_id,
+					"planned_size": planned_size.duplicate(),
+					"input_snapshot": snapshot,
+				}
+			)
+		)
 	return {"ok": true, "kind": "cleanup", "run_id": run_id, "slots": slots}
 
 
 static func freeze_palette(quantize: Dictionary) -> Dictionary:
-	if not bool(quantize.get("enabled", false)) or String(quantize.get("mode", "none")) != "fixed_palette":
+	if (
+		not bool(quantize.get("enabled", false))
+		or String(quantize.get("mode", "none")) != "fixed_palette"
+	):
 		return {"ok": true, "snapshot": null}
 	var requested_id := String(quantize.get("palette_id", ""))
 	var palette: PFPalette = PaletteRegistryScript.resolve(quantize, "")
-	if palette == null or requested_id.is_empty() or palette.id != requested_id or palette.colors.is_empty():
+	if (
+		palette == null
+		or requested_id.is_empty()
+		or palette.id != requested_id
+		or palette.colors.is_empty()
+	):
 		return _issue("missing_cleanup_palette", "settings.quantize.palette_id")
 	var colors := []
 	for color in palette.colors:
 		colors.append("#%s" % Color(color).to_html(true).to_upper())
 	var encoded := JSON.stringify(colors, "", false)
-	return {"ok": true, "snapshot": {"palette_id": requested_id, "content_sha256": encoded.sha256_text(), "colors_rgba8": colors}}
+	return {
+		"ok": true,
+		"snapshot":
+		{
+			"palette_id": requested_id,
+			"content_sha256": encoded.sha256_text(),
+			"colors_rgba8": colors
+		}
+	}
 
 
 static func _source_inputs(graph: PFGraph, source_id: String, source_type: String) -> Array:
@@ -89,8 +120,16 @@ static func _source_inputs(graph: PFGraph, source_id: String, source_type: Strin
 	var result := []
 	if source_type == "batch":
 		for slot in params.get("result_slots", []):
-			if String(slot.get("status", "")) == "succeeded" and not bool(slot.get("detached", false)):
-				result.append({"asset_id": String(slot.get("asset_id", "")), "slot_id": String(slot.get("slot_id", ""))})
+			if (
+				String(slot.get("status", "")) == "succeeded"
+				and not bool(slot.get("detached", false))
+			):
+				result.append(
+					{
+						"asset_id": String(slot.get("asset_id", "")),
+						"slot_id": String(slot.get("slot_id", ""))
+					}
+				)
 	elif source_type == "image_input":
 		result.append({"asset_id": String(params.get("asset_id", "")), "slot_id": ""})
 	else:
