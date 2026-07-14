@@ -1,0 +1,38 @@
+{
+	"cleanup_preset_version": 1,
+	"id": "cleanup-16bit-db32",
+	"name_key": "CLEANUP_PRESET_16BIT_DB32",
+	"settings": {
+		"detect_grid": {
+			"enabled": true,
+			"mode": "auto",
+			"scale": 4.0,
+			"offset": [
+				0.0,
+				0.0
+			],
+			"base_size": 32
+		},
+		"resample": {
+			"enabled": true,
+			"mode": "mode",
+			"scale": 4.0,
+			"offset": [
+				0.0,
+				0.0
+			]
+		},
+		"quantize": {
+			"enabled": true,
+			"mode": "fixed_palette",
+			"palette_id": "db32",
+			"auto_k_strategy": "median_cut",
+			"k": 16,
+			"dither": "none",
+			"dither_strength": 0.0,
+			"dither_contrast": 0.0,
+			"dither_chroma": 0.0,
+			"dither_density": 1.0
+		}
+	}
+}

@@ -1,0 +1,6 @@
+{
+	"prompt_preset_version": 1,
+	"id": "prompt-1bit",
+	"name_key": "PROMPT_PRESET_1BIT",
+	"prefix": "1-bit pixel art, black and white, binary monochrome sprite"
+}

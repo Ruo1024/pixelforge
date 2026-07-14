@@ -1,0 +1,6 @@
+{
+	"prompt_preset_version": 1,
+	"id": "prompt-nes",
+	"name_key": "PROMPT_PRESET_NES",
+	"prefix": "NES pixel art sprite, limited hardware palette, 8-bit console sprite"
+}

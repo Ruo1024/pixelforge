@@ -1,9 +1,10 @@
 class_name PFPluginAPI
 extends RefCounted
 
-## Per-plugin registration facade with a reversible ledger for every PLUGIN-API v1 surface.
+## Per-plugin registration facade with a reversible ledger for every PLUGIN-API v2 surface.
 
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
+const SchemaTextResolverScript := preload("res://services/schema_text_resolver.gd")
 
 var _plugin_service: Node = null
 var _provider_service: Node = null
@@ -20,6 +21,17 @@ func _init(
 
 
 func register_node_type(type_name: String, node_script: Script) -> bool:
+	if node_script == null or not node_script.can_instantiate():
+		return false
+	var node: Variant = node_script.new()
+	if (
+		node == null
+		or not node.has_method("get_param_schema")
+		or not bool(
+			SchemaTextResolverScript.validate_schema(node.get_param_schema()).get("ok", false)
+		)
+	):
+		return false
 	if not NodeRegistryScript.register_plugin_type(type_name, node_script):
 		return false
 	_ledger.append(["node_type", type_name])
@@ -27,7 +39,7 @@ func register_node_type(type_name: String, node_script: Script) -> bool:
 
 
 func register_provider(provider: PFProvider) -> bool:
-	if _provider_service == null:
+	if _provider_service == null or provider == null or not _validate_provider_schemas(provider):
 		return false
 	var result: Dictionary = _provider_service.register_provider(provider)
 	if not bool(result.get("ok", false)):
@@ -44,8 +56,12 @@ func register_palette(palette_id: String, palette: Variant) -> bool:
 	return _register_service_capability("palette", palette_id, palette)
 
 
-func register_style_preset(preset_id: String, preset: Dictionary) -> bool:
-	return _register_service_capability("style_preset", preset_id, preset)
+func register_prompt_preset(preset_id: String, preset: Dictionary) -> bool:
+	return _register_service_capability("prompt_preset", preset_id, preset)
+
+
+func register_cleanup_preset(preset_id: String, preset: Dictionary) -> bool:
+	return _register_service_capability("cleanup_preset", preset_id, preset)
 
 
 func register_menu_item(path: String, callback: Callable) -> bool:
@@ -83,4 +99,20 @@ func _register_service_capability(kind: String, capability_id: String, value: Va
 	if not _plugin_service.register_capability(kind, capability_id, value, _plugin_id):
 		return false
 	_ledger.append([kind, capability_id])
+	return true
+
+
+func _validate_provider_schemas(provider: PFProvider) -> bool:
+	if not bool(
+		SchemaTextResolverScript.validate_schema(provider.get_config_schema()).get("ok", false)
+	):
+		return false
+	for descriptor in provider.get_model_descriptors():
+		if not (descriptor is Dictionary):
+			return false
+		var dynamic_params: Variant = descriptor.get("dynamic_params", [])
+		if not (dynamic_params is Array):
+			return false
+		if not bool(SchemaTextResolverScript.validate_schema(dynamic_params).get("ok", false)):
+			return false
 	return true

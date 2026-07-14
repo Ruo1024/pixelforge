@@ -2,7 +2,7 @@
   "id": "bridge_comfyui",
   "name": "ComfyUI Bridge",
   "version": "1.0.0",
-  "api_version": 1,
+  "api_version": 2,
   "min_app_version": "0.1.0-alpha.1",
   "entry": "main.gd",
   "permissions": ["network", "filesystem_read", "filesystem_write"],

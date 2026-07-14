@@ -117,7 +117,7 @@ func _manifest(plugin_id: String, min_version: String = "0.1.0") -> Dictionary:
 		"id": plugin_id,
 		"name": plugin_id.capitalize(),
 		"version": "1.0.0",
-		"api_version": 1,
+		"api_version": 2,
 		"min_app_version": min_version,
 		"entry": "main.gd",
 		"permissions": [],

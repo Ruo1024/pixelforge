@@ -47,11 +47,15 @@ func apply_language(preference: String, system_locale: String = "") -> String:
 	return current_locale
 
 
-func text(key: StringName, fallback: String = "") -> String:
+func text(key: StringName, fallback_or_args: Variant = "") -> String:
 	var translated := TranslationServer.translate(key)
-	if translated != String(key):
-		return translated
-	return fallback if not fallback.is_empty() else String(key)
+	var fallback: String = fallback_or_args if fallback_or_args is String else ""
+	var result: String = translated if translated != String(key) else fallback
+	if result.is_empty():
+		result = String(key)
+	if fallback_or_args is Array and not fallback_or_args.is_empty():
+		return result % fallback_or_args
+	return result
 
 
 func bind_control_text(control: Control, key: String) -> void:

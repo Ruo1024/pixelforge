@@ -7,21 +7,24 @@ signal plugins_changed
 signal plugin_status_changed(plugin_id: String, state: String, reason: String)
 
 const PluginAPIScript := preload("res://services/plugin_api.gd")
+const PromptPresetRegistryScript := preload("res://services/prompt_preset_registry.gd")
+const CleanupPresetRegistryScript := preload("res://services/cleanup_preset_registry.gd")
 const AppInfo := preload("res://core/util/app_info.gd")
 const Log := preload("res://core/util/log_util.gd")
 
-const API_VERSION := 1
+const API_VERSION := 2
 const REQUIRED_FIELDS := ["id", "name", "version", "api_version", "min_app_version", "entry"]
 const BUILTIN_MANIFESTS := [
 	"res://plugins/provider_openai/plugin.json",
 	"res://plugins/provider_retrodiffusion/plugin.json",
-	"res://plugins/bridge_comfyui/plugin.json",
 ]
 
 var plugin_root := "user://plugins"
 var scan_on_ready := true
 var _records := {}
 var _capabilities := {}
+var _prompt_presets := PromptPresetRegistryScript.new()
+var _cleanup_presets := CleanupPresetRegistryScript.new()
 
 
 func _ready() -> void:
@@ -53,8 +56,12 @@ func load_directory_plugin(directory_path: String) -> Dictionary:
 	var manifest_path := directory_path.path_join("plugin.json")
 	var parsed := _read_manifest(manifest_path)
 	if not bool(parsed.get("ok", false)):
+		var failure_reason := String(parsed.get("reason", ""))
+		if failure_reason.is_empty() and String(parsed.get("code", "")).is_empty():
+			failure_reason = "Invalid manifest"
 		return _record_failure(
-			directory_path.get_file(), parsed.get("reason", "Invalid manifest"), directory_path
+			directory_path.get_file(), failure_reason, directory_path,
+			String(parsed.get("code", "")), Dictionary(parsed.get("args", {}))
 		)
 	var manifest: Dictionary = parsed["manifest"]
 	var plugin_id := String(manifest["id"])
@@ -80,7 +87,13 @@ func load_pck_plugin(pck_path: String) -> Dictionary:
 	var root := "res://plugins/%s" % expected_id
 	var parsed := _read_manifest(root.path_join("plugin.json"))
 	if not bool(parsed.get("ok", false)):
-		return _record_failure(expected_id, parsed.get("reason", "Invalid PCK manifest"), pck_path)
+		var failure_reason := String(parsed.get("reason", ""))
+		if failure_reason.is_empty() and String(parsed.get("code", "")).is_empty():
+			failure_reason = "Invalid PCK manifest"
+		return _record_failure(
+			expected_id, failure_reason, pck_path, String(parsed.get("code", "")),
+			Dictionary(parsed.get("args", {}))
+		)
 	var manifest: Dictionary = parsed["manifest"]
 	if String(manifest["id"]) != expected_id:
 		return _record_failure(expected_id, "PCK file name must match manifest id", pck_path)
@@ -179,9 +192,23 @@ func get_plugin_root_absolute() -> String:
 func register_capability(
 	kind: String, capability_id: String, value: Variant, plugin_id: String
 ) -> bool:
+	if kind == "prompt_preset":
+		if not (value is Dictionary) or String(value.get("id", "")) != capability_id:
+			return false
+		if not _prompt_presets.register_preset(value):
+			return false
+	elif kind == "cleanup_preset":
+		if not (value is Dictionary) or String(value.get("id", "")) != capability_id:
+			return false
+		if not _cleanup_presets.register_preset(value):
+			return false
 	if not _capabilities.has(kind):
 		_capabilities[kind] = {}
 	if Dictionary(_capabilities[kind]).has(capability_id):
+		if kind == "prompt_preset":
+			_prompt_presets.unregister_preset(capability_id)
+		elif kind == "cleanup_preset":
+			_cleanup_presets.unregister_preset(capability_id)
 		return false
 	_capabilities[kind][capability_id] = {"plugin_id": plugin_id, "value": value}
 	return true
@@ -192,7 +219,20 @@ func unregister_capability(kind: String, capability_id: String, plugin_id: Strin
 		return false
 	if String(_capabilities[kind][capability_id].get("plugin_id", "")) != plugin_id:
 		return false
-	return _capabilities[kind].erase(capability_id)
+	var removed: bool = _capabilities[kind].erase(capability_id)
+	if removed and kind == "prompt_preset":
+		_prompt_presets.unregister_preset(capability_id)
+	elif removed and kind == "cleanup_preset":
+		_cleanup_presets.unregister_preset(capability_id)
+	return removed
+
+
+func get_prompt_preset(preset_id: String) -> Dictionary:
+	return _prompt_presets.get_preset(preset_id)
+
+
+func get_cleanup_preset(preset_id: String) -> Dictionary:
+	return _cleanup_presets.get_preset(preset_id)
 
 
 func get_capability(kind: String, capability_id: String) -> Variant:
@@ -212,8 +252,14 @@ func validate_manifest(manifest: Dictionary) -> Dictionary:
 	var plugin_id := String(manifest["id"])
 	if plugin_id.is_empty() or plugin_id != plugin_id.to_snake_case():
 		return {"ok": false, "reason": "Plugin id must be non-empty snake_case"}
-	if int(manifest["api_version"]) != API_VERSION:
-		return {"ok": false, "reason": "Plugin API version is incompatible"}
+	if not (manifest["api_version"] is int):
+		return {"ok": false, "code": "invalid_plugin_manifest", "args": {"field": "api_version"}}
+	if manifest["api_version"] != API_VERSION:
+		return {
+			"ok": false,
+			"code": "unsupported_plugin_api_version",
+			"args": {"expected": API_VERSION, "actual": manifest["api_version"]},
+		}
 	if _compare_versions(AppInfo.APP_VERSION, String(manifest["min_app_version"])) < 0:
 		return {"ok": false, "reason": "Plugin requires a newer PixelForge version"}
 	if String(manifest["entry"]).get_extension() != "gd":
@@ -226,7 +272,10 @@ func _activate(
 ) -> Dictionary:
 	var validation := validate_manifest(manifest)
 	if not bool(validation.get("ok", false)):
-		return _record(manifest, "failed", String(validation["reason"]), source, builtin)
+		return _record(
+			manifest, "failed", String(validation.get("reason", "")), source, builtin,
+			String(validation.get("code", "")), Dictionary(validation.get("args", {}))
+		)
 	var plugin_id := String(manifest["id"])
 	if _records.has(plugin_id) and String(_records[plugin_id].get("state", "")) == "loaded":
 		return {"ok": false, "reason": "Plugin id is already loaded", "id": plugin_id}
@@ -258,16 +307,27 @@ func _read_manifest(path: String) -> Dictionary:
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
 	if not (parsed is Dictionary):
 		return {"ok": false, "reason": "plugin.json is invalid JSON"}
+	if parsed.get("api_version") is float:
+		var parsed_version: float = parsed["api_version"]
+		if parsed_version != floorf(parsed_version):
+			return {"ok": false, "code": "invalid_plugin_manifest", "args": {"field": "api_version"}}
+		parsed["api_version"] = int(parsed_version)
 	var validation := validate_manifest(parsed)
 	return (
-		{"ok": false, "reason": validation["reason"]}
+		{
+			"ok": false,
+			"reason": String(validation.get("reason", "")),
+			"code": String(validation.get("code", "")),
+			"args": Dictionary(validation.get("args", {})).duplicate(true),
+		}
 		if not validation["ok"]
 		else {"ok": true, "manifest": parsed}
 	)
 
 
 func _record(
-	manifest: Dictionary, state: String, reason: String, source: String, builtin: bool
+	manifest: Dictionary, state: String, reason: String, source: String, builtin: bool,
+	code: String = "", args: Dictionary = {}
 ) -> Dictionary:
 	var plugin_id := String(manifest.get("id", source.get_file().get_basename()))
 	var record := {
@@ -279,18 +339,34 @@ func _record(
 		"source": source,
 		"builtin": builtin,
 		"state": state,
-		"reason": reason,
+		"code": code,
+		"args": args.duplicate(true),
 		"manifest": manifest.duplicate(true),
 	}
+	if not reason.is_empty():
+		record["reason"] = reason
 	_records[plugin_id] = record
 	if state == "failed":
 		Log.warn("Plugin load isolated", {"plugin_id": plugin_id, "reason": reason})
 	plugin_status_changed.emit(plugin_id, state, reason)
-	return {"ok": state == "loaded", "id": plugin_id, "reason": reason, "record": record}
+	var result := {
+		"ok": state == "loaded",
+		"id": plugin_id,
+		"code": code,
+		"args": args.duplicate(true),
+		"record": record,
+	}
+	if not reason.is_empty():
+		result["reason"] = reason
+	return result
 
 
-func _record_failure(plugin_id: String, reason: String, source: String) -> Dictionary:
-	return _record({"id": plugin_id, "name": plugin_id}, "failed", reason, source, false)
+func _record_failure(
+	plugin_id: String, reason: String, source: String, code: String = "", args: Dictionary = {}
+) -> Dictionary:
+	return _record(
+		{"id": plugin_id, "name": plugin_id}, "failed", reason, source, false, code, args
+	)
 
 
 func _register_builtin_records() -> void:
