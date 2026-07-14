@@ -355,7 +355,7 @@ func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_res
 		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % 0.5
 	)
 	assert_true(controller.cancel_graph_run(graph_id))
-	var canceled_status := Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT % "RD Pro"
+	var canceled_status := Strings.STATUS_PROVIDER_GENERATE_CANCELED_FORMAT % "Retro Diffusion Pro"
 	assert_true(
 		await _wait_until(func() -> bool: return _status_label(main).text == canceled_status)
 	)

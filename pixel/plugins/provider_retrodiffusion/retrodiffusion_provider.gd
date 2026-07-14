@@ -42,9 +42,9 @@ func get_api_version() -> int:
 
 func get_model_descriptors() -> Array[Dictionary]:
 	return [
-		_model_descriptor("rd_plus", "RD Plus", true, 128),
-		_model_descriptor("rd_pro", "RD Pro", false, 256),
-		_model_descriptor("rd_fast", "RD Fast", false, 384),
+		_model_descriptor("rd_plus", "Retro Diffusion Plus", true, 128),
+		_model_descriptor("rd_pro", "Retro Diffusion Pro", false, 256),
+		_model_descriptor("rd_fast", "Retro Diffusion Fast", false, 384),
 	]
 
 
@@ -218,7 +218,6 @@ func decode_success_payload(payload: Dictionary, request: Dictionary) -> Diction
 			continue
 		if image.get_format() != Image.FORMAT_RGBA8:
 			image.convert(Image.FORMAT_RGBA8)
-		var base_seed := int(request.get("seed", -1))
 		var expected_size: Array = request.get("provider_output_size", [])
 		if (
 			expected_size.size() == 2
@@ -235,7 +234,7 @@ func decode_success_payload(payload: Dictionary, request: Dictionary) -> Diction
 					{
 						"index": index,
 						"image": image,
-						"actual_seed": base_seed + index if base_seed >= 0 else null,
+						"actual_seed": null,
 						"error": null,
 					}
 				)
