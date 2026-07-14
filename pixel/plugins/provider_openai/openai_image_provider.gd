@@ -5,10 +5,12 @@ extends PFProvider
 ## contract: 02-contracts/PROVIDER-API.md; credentials stay in memory and redacted headers.
 
 const HttpClientScript := preload("res://infra/http_client.gd")
-const TaskScript := preload("res://services/pf_task.gd")
+const ProviderTaskV2Script := preload("res://core/provider/pf_provider_task_v2.gd")
+const CancelTaskV2Script := preload("res://services/pf_cancel_task_v2.gd")
+const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 
 const PROVIDER_ID := "openai_image"
-const API_VERSION := 1
+const API_VERSION := 2
 const MODEL_ID := "gpt-image-2"
 const GENERATION_URL := "https://api.openai.com/v1/images/generations"
 const EDIT_URL := "https://api.openai.com/v1/images/edits"
@@ -25,33 +27,14 @@ var _api_key := ""
 var _generation_url := GENERATION_URL
 var _edit_url := EDIT_URL
 var _validation_url := VALIDATION_URL
-
-
-func get_id() -> String:
-	return PROVIDER_ID
-
-
-func get_display_name() -> String:
-	return "OpenAI GPT Image 2"
+var _generation_tasks := {}
+var _transport_tasks := {}
+var _cancel_tasks := {}
+var _cancel_requested := {}
 
 
 func get_api_version() -> int:
 	return API_VERSION
-
-
-func get_capabilities() -> Dictionary:
-	return {
-		"txt2img": true,
-		"img2img": true,
-		"inpaint": false,
-		"transparent_bg": false,
-		"native_pixel": false,
-		"max_batch": MAX_BATCH,
-		"sizes": [[16, 16], [512, 512]],
-		"animation": false,
-		"cost_estimate": false,
-		"safe_validation": true,
-	}
 
 
 func get_model_descriptors() -> Array[Dictionary]:
@@ -61,24 +44,64 @@ func get_model_descriptors() -> Array[Dictionary]:
 			"model_id": MODEL_ID,
 			"display_name": "GPT Image 2",
 			"is_default": true,
+			"ui_scope": "main",
+			"provider_meta_keys": ["remote_task_id"],
 			"capabilities":
 			{
 				"txt2img": true,
 				"img2img": true,
 				"max_reference_images": 4,
-				"output_sizes": ["1024x1024", "1536x1024", "1024x1536"],
 				"max_batch": MAX_BATCH,
+				"target_size_constraints":
+				{
+					"min_width": 16,
+					"max_width": 512,
+					"width_step": 1,
+					"min_height": 16,
+					"max_height": 512,
+					"height_step": 1,
+					"allowed_sizes": [],
+				},
+				"provider_output_sizes": [[1024, 1024], [1536, 1024], [1024, 1536]],
+				"native_pixel": false,
+				"native_idempotency": false,
+				"safe_validation": true,
 				"seed": false,
 				"transparent_bg": false,
 				"cost_estimate": false,
-				"safe_validation": true,
-			}
+			},
+			"dynamic_params":
+			[
+				{
+					"key": "quality",
+					"kind": "enum",
+					"default": "low",
+					"required": false,
+					"values": ["auto", "low", "medium", "high"],
+					"min": null,
+					"max": null,
+					"step": null,
+					"label_key": "GEN_PARAM_QUALITY",
+					"help_key": "GEN_PARAM_QUALITY_HELP",
+					"advanced": false,
+					"template_safe": true,
+				}
+			],
 		}
 	]
 
 
 func get_config_schema() -> Array[Dictionary]:
-	return [{"key": "api_key", "label": "OpenAI API key", "kind": "password"}]
+	return [
+		{
+			"key": "api_key",
+			"kind": "password",
+			"label_key": "OPENAI_FIELD_API_KEY",
+			"help_key": "OPENAI_FIELD_API_KEY_HELP",
+			"required": true,
+			"default": "",
+		}
+	]
 
 
 func attach_request_host(host: Node) -> void:
@@ -92,7 +115,7 @@ func attach_request_host(host: Node) -> void:
 func configure(config: Dictionary) -> Variant:
 	var candidate := String(config.get("api_key", "")).strip_edges()
 	if candidate.is_empty():
-		return _error("auth_failed", "Enter an OpenAI API key")
+		return {"code": "auth_failed", "field": "api_key", "args": {}}
 	_api_key = candidate
 	_generation_url = String(config.get("generation_url", GENERATION_URL)).strip_edges()
 	_edit_url = String(config.get("edit_url", EDIT_URL)).strip_edges()
@@ -130,22 +153,48 @@ func validate_credentials() -> Variant:
 				"timeout": REQUEST_TIMEOUT_SECONDS,
 				"retries": 2,
 				"transform": _decode_validation_response,
-				"error_mapper": map_error,
+				"error_mapper": map_error.bind(_validation_request()),
 			}
 		)
 	)
 
 
-func generate(request: Dictionary) -> Variant:
-	var request_error: Variant = validate_generation_request(request)
-	if request_error != null:
-		return _rejected_task(request_error)
+func generate(request: Dictionary) -> PFProviderTaskV2:
+	var wrapper := ProviderTaskV2Script.new(request, ["remote_task_id"])
+	var request_copy := request.duplicate(true)
 	if not _is_ready_for_request():
-		return null
-	var references := get_reference_images(request)
+		call_deferred("_reject_unavailable", wrapper, request_copy)
+		return wrapper
+	var request_id := String(request["request_id"])
+	_generation_tasks[request_id] = wrapper
+	call_deferred("_start_generation", request_copy, wrapper)
+	return wrapper
+
+
+func _start_generation(request: Dictionary, wrapper: PFProviderTaskV2) -> void:
+	var request_id := String(request["request_id"])
+	if wrapper.is_terminal():
+		return
+	if _cancel_requested.has(request_id):
+		_finish_canceled(request_id)
+		return
+	(
+		wrapper
+		. emit_progress(
+			{
+				"phase": "submitting",
+				"determinate": false,
+				"ratio": null,
+				"completed_items": 0,
+				"total_items": request["batch"],
+			}
+		)
+	)
+	var references: Array = request["ref_images"]
+	var transport: PFTask
 	if not references.is_empty():
 		var multipart := build_edit_request(request)
-		return (
+		transport = (
 			_http
 			. request_raw(
 				HTTPClient.METHOD_POST,
@@ -158,57 +207,65 @@ func generate(request: Dictionary) -> Variant:
 					"backoff": RETRY_DELAY_SECONDS,
 					"transform": _decode_raw_generation_response.bind(request),
 					"worker_transform": true,
-					"error_mapper": map_error,
+					"error_mapper": map_error.bind(request),
 				}
 			)
 		)
-	return (
-		_http
-		. request_json(
-			HTTPClient.METHOD_POST,
-			_generation_url,
-			_headers(),
-			build_request_body(request),
-			{
-				"timeout": REQUEST_TIMEOUT_SECONDS,
-				"retries": MAX_NETWORK_RETRIES,
-				"backoff": RETRY_DELAY_SECONDS,
-				"transform": _decode_generation_response.bind(request),
-				"worker_transform": true,
-				"error_mapper": map_error,
-			}
+	else:
+		transport = (
+			_http
+			. request_json(
+				HTTPClient.METHOD_POST,
+				_generation_url,
+				_headers(),
+				build_request_body(request),
+				{
+					"timeout": REQUEST_TIMEOUT_SECONDS,
+					"retries": MAX_NETWORK_RETRIES,
+					"backoff": RETRY_DELAY_SECONDS,
+					"transform": _decode_generation_response.bind(request),
+					"worker_transform": true,
+					"error_mapper": map_error.bind(request),
+				}
+			)
 		)
-	)
+	_transport_tasks[request_id] = transport
+	transport.finished.connect(_on_transport_completed.bind(request_id))
+	transport.failed.connect(_on_transport_failed.bind(request, request_id))
+	transport.canceled.connect(_finish_canceled.bind(request_id))
+	TaskQueue.submit(transport)
 
 
-func estimate_cost(_request: Dictionary) -> float:
+func estimate_cost(_request: Dictionary) -> Variant:
 	# GPT Image 2's official page currently points to a dynamic calculator rather than a stable
 	# per-image table. Unknown is safer than a stale hard-coded amount.
-	return -1.0
+	return null
 
 
-func cancel(task_id: String) -> void:
-	if _http != null:
-		_http.cancel(task_id)
+func cancel(request_id: String) -> PFCancelTaskV2:
+	if _cancel_tasks.has(request_id):
+		return _cancel_tasks[request_id]
+	var wrapper := CancelTaskV2Script.new(request_id, PROVIDER_ID)
+	_cancel_tasks[request_id] = wrapper
+	_cancel_requested[request_id] = true
+	var transport: PFTask = _transport_tasks.get(request_id)
+	if transport != null:
+		transport.cancel()
+	else:
+		call_deferred("_finish_canceled", request_id)
+	return wrapper
 
 
 func build_request_body(request: Dictionary) -> Dictionary:
-	var width := maxi(1, int(request.get("width", 32)))
-	var height := maxi(1, int(request.get("height", 32)))
 	var prompt := String(request.get("prompt", "sprite")).strip_edges()
-	var adapted_prompt := (
-		(
-			"%s. Pixel art game sprite designed for a %dx%d true-pixel target, flat colors, "
-			+ "crisp hard edges and no anti-aliasing."
-		)
-		% [prompt, width, height]
-	)
+	var output_size: Array = request.get("provider_output_size", [1024, 1024])
+	var extra: Dictionary = request.get("extra", {"quality": "low"})
 	return {
-		"model": resolve_model_id(String(request.get("model_id", ""))),
-		"prompt": adapted_prompt,
+		"model": MODEL_ID,
+		"prompt": prompt,
 		"n": clampi(int(request.get("batch", 1)), 1, MAX_BATCH),
-		"size": _output_size(width, height),
-		"quality": "low",
+		"size": "%dx%d" % [output_size[0], output_size[1]],
+		"quality": String(extra.get("quality", "low")),
 		"background": "opaque",
 		"output_format": "png",
 	}
@@ -219,7 +276,7 @@ func build_edit_request(request: Dictionary) -> PackedByteArray:
 	var fields := build_request_body(request)
 	for key in ["model", "prompt", "n", "size", "quality", "background", "output_format"]:
 		_append_multipart_text(body, str(key), str(fields[key]))
-	var references := get_reference_images(request)
+	var references: Array = request["ref_images"]
 	for index in range(references.size()):
 		var image: Image = references[index]
 		_append_utf8(
@@ -240,74 +297,82 @@ func build_edit_request(request: Dictionary) -> PackedByteArray:
 
 
 func decode_success_payload(payload: Dictionary, request: Dictionary) -> Dictionary:
-	var images := []
-	var revised_prompts := []
+	var items := []
 	var data: Variant = payload.get("data", [])
 	if not (data is Array):
-		return _failure("provider_internal", "OpenAI response did not contain an image list")
-	for item_value in data:
+		return _failure("ambiguous_result", request)
+	for index in range(data.size()):
+		var item_value: Variant = data[index]
 		if not (item_value is Dictionary):
+			items.append(_failed_item(index, request, "ambiguous_result"))
 			continue
 		var item: Dictionary = item_value
 		var encoded := String(item.get("b64_json", ""))
 		if encoded.is_empty():
+			items.append(_failed_item(index, request, "ambiguous_result"))
 			continue
 		var bytes := Marshalls.base64_to_raw(encoded)
 		var image := Image.new()
 		if image.load_png_from_buffer(bytes) != OK:
+			items.append(_failed_item(index, request, "ambiguous_result"))
 			continue
 		if image.get_format() != Image.FORMAT_RGBA8:
 			image.convert(Image.FORMAT_RGBA8)
-		images.append(image)
-		revised_prompts.append(String(item.get("revised_prompt", "")))
-	if images.is_empty():
-		return _failure("provider_internal", "OpenAI returned no decodable PNG images")
-	var seeds := []
-	for _image in images:
-		seeds.append(null)
+		var expected_size: Array = request.get("provider_output_size", [])
+		if (
+			expected_size.size() == 2
+			and (
+				image.get_width() != int(expected_size[0])
+				or image.get_height() != int(expected_size[1])
+			)
+		):
+			items.append(_failed_item(index, request, "ambiguous_result"))
+		else:
+			items.append({"index": index, "image": image, "actual_seed": null, "error": null})
+	if items.is_empty():
+		return _failure("ambiguous_result", request)
 	return {
-		"ok": true,
-		"images": images,
-		"raw_pixel": false,
-		"seeds": seeds,
-		"cost": -1.0,
-		"provider_meta": {},
+		"request_id": String(request.get("request_id", "")),
+		"items": items,
+		"actual_cost_usd": null,
+		"charge_id": "",
+		"provider_meta": _provider_meta(payload),
 	}
 
 
-func map_error(result: int, status_code: int, detail: Dictionary = {}) -> Dictionary:
+func map_error(
+	result: int, status_code: int, detail: Dictionary = {}, request: Dictionary = {}
+) -> Dictionary:
 	var code := "provider_internal"
-	var result_message := "OpenAI image generation failed"
 	if result == HTTPRequest.RESULT_TIMEOUT:
 		code = "timeout"
-		result_message = "OpenAI image generation timed out; try again"
 	elif result != HTTPRequest.RESULT_SUCCESS:
 		code = "network"
-		result_message = "Could not reach OpenAI; check the network and try again"
 	if result == HTTPRequest.RESULT_SUCCESS:
 		var provider_code := String(detail.get("provider_code", ""))
 		match status_code:
 			401, 403:
 				code = "auth_failed"
-				result_message = "OpenAI rejected the API key"
 			429:
 				code = "rate_limited"
-				result_message = "OpenAI is rate limited; wait and try again"
 			400:
 				code = (
 					"content_policy"
 					if provider_code in ["moderation_blocked", "content_policy_violation"]
 					else "invalid_request"
 				)
-				result_message = (
-					"The prompt was blocked by OpenAI content policy"
-					if code == "content_policy"
-					else "OpenAI rejected the request"
-				)
-			_:
-				if status_code >= 500:
-					result_message = "OpenAI image service failed; try again"
-	return _error(code, result_message, _safe_error_detail(detail))
+	var normalized := _provider_error(
+		code,
+		"http",
+		request if not request.is_empty() else _validation_request(),
+		maxi(1, int(detail.get("attempts", 1)))
+	)
+	if status_code >= 100 and status_code <= 599:
+		normalized["status_code"] = status_code
+	var provider_code := String(detail.get("provider_code", ""))
+	if provider_code in ["moderation_blocked", "content_policy_violation"]:
+		normalized["provider_code"] = provider_code
+	return normalized
 
 
 func should_retry(result: int, status_code: int, attempt: int) -> bool:
@@ -319,17 +384,17 @@ func should_retry(result: int, status_code: int, attempt: int) -> bool:
 func _decode_generation_response(response: Dictionary, request: Dictionary) -> Dictionary:
 	var payload: Variant = response.get("body", {})
 	if not (payload is Dictionary):
-		return _failure("provider_internal", "OpenAI returned an invalid response")
+		return _failure("ambiguous_result", request)
 	return decode_success_payload(payload, request)
 
 
 func _decode_raw_generation_response(response: Dictionary, request: Dictionary) -> Dictionary:
 	var body: Variant = response.get("body", PackedByteArray())
 	if not (body is PackedByteArray):
-		return _failure("provider_internal", "OpenAI returned an invalid response")
+		return _failure("ambiguous_result", request)
 	var payload: Variant = JSON.parse_string(body.get_string_from_utf8())
 	if not (payload is Dictionary):
-		return _failure("provider_internal", "OpenAI returned invalid JSON")
+		return _failure("ambiguous_result", request)
 	return decode_success_payload(payload, request)
 
 
@@ -337,29 +402,10 @@ func _decode_validation_response(_response: Dictionary) -> Dictionary:
 	return {"ok": true, "provider_id": PROVIDER_ID}
 
 
-func _output_size(width: int, height: int) -> String:
-	if width > height * 1.2:
-		return "1536x1024"
-	if height > width * 1.2:
-		return "1024x1536"
-	return "1024x1024"
-
-
 func _headers(content_type: String = "application/json") -> PackedStringArray:
 	return PackedStringArray(
 		["Authorization: Bearer %s" % _api_key, "Content-Type: %s" % content_type]
 	)
-
-
-func _safe_error_detail(detail: Dictionary) -> Dictionary:
-	var safe := {}
-	for key in ["status_code", "attempts"]:
-		if detail.has(key):
-			safe[key] = detail[key]
-	var provider_code := String(detail.get("provider_code", ""))
-	if provider_code in ["moderation_blocked", "content_policy_violation"]:
-		safe["provider_code"] = provider_code
-	return safe
 
 
 func _append_multipart_text(body: PackedByteArray, field_name: String, value: String) -> void:
@@ -385,15 +431,97 @@ func _is_ready_for_request() -> bool:
 	)
 
 
-func _error(code: String, message: String, detail: Dictionary = {}) -> Dictionary:
-	return {"code": code, "message": message, "detail": detail, "recoverable": true}
+func _on_transport_completed(result: Variant, request_id: String) -> void:
+	var wrapper: PFProviderTaskV2 = _generation_tasks.get(request_id)
+	if wrapper != null and result is Dictionary:
+		wrapper.resolve(result)
+	_clear_active_request(request_id)
 
 
-func _failure(code: String, message: String) -> Dictionary:
-	return {"ok": false, "error": _error(code, message)}
+func _on_transport_failed(error: Dictionary, request: Dictionary, request_id: String) -> void:
+	var wrapper: PFProviderTaskV2 = _generation_tasks.get(request_id)
+	if wrapper != null:
+		wrapper.reject(_normalize_transport_error(error, request))
+	_clear_active_request(request_id)
 
 
-func _rejected_task(error: Dictionary) -> PFTask:
-	var task := TaskScript.new("openai_image_generate", {"provider_id": PROVIDER_ID})
-	task.configure_external(func(task_ref: PFTask) -> void: task_ref.reject(error))
-	return task
+func _finish_canceled(request_id: String) -> void:
+	var generation: PFProviderTaskV2 = _generation_tasks.get(request_id)
+	if generation != null:
+		generation.mark_canceled(request_id)
+	var cancel_task: PFCancelTaskV2 = _cancel_tasks.get(request_id)
+	if cancel_task != null:
+		(
+			cancel_task
+			. resolve(
+				{
+					"request_id": request_id,
+					"local_stopped": true,
+					"remote_cancel_confirmed": false,
+					"billing_update": null,
+				}
+			)
+		)
+	_clear_active_request(request_id)
+
+
+func _reject_unavailable(wrapper: PFProviderTaskV2, request: Dictionary) -> void:
+	wrapper.reject(_provider_error("provider_internal", "queue", request, 0))
+
+
+func _normalize_transport_error(error: Dictionary, request: Dictionary) -> Dictionary:
+	if ContractV2.validate_pf_error(error) == null:
+		return error.duplicate(true)
+	return _provider_error("provider_internal", "http", request, 1)
+
+
+func _provider_error(
+	code: String, stage: String, request: Dictionary, attempts: int, received_count: int = 0
+) -> Dictionary:
+	return {
+		"code": code,
+		"stage": stage,
+		"provider_id": PROVIDER_ID,
+		"retryable": code in ["result_count_mismatch", "interrupted"],
+		"retry_after_seconds": null,
+		"status_code": null,
+		"request_id": String(request.get("request_id", "")),
+		"attempts": attempts,
+		"expected_count": maxi(0, int(request.get("batch", 0))),
+		"received_count": maxi(0, received_count),
+	}
+
+
+func _failed_item(index: int, request: Dictionary, code: String) -> Dictionary:
+	return {
+		"index": index,
+		"image": null,
+		"actual_seed": null,
+		"error": _provider_error(code, "decode", request, 1, index),
+	}
+
+
+func _provider_meta(payload: Dictionary) -> Dictionary:
+	for key in ["remote_task_id", "id"]:
+		var value := String(payload.get(key, ""))
+		var expression := RegEx.new()
+		if (
+			expression.compile("^[A-Za-z0-9._:-]{1,128}$") == OK
+			and expression.search(value) != null
+		):
+			return {"remote_task_id": value}
+	return {}
+
+
+func _clear_active_request(request_id: String) -> void:
+	_generation_tasks.erase(request_id)
+	_transport_tasks.erase(request_id)
+	_cancel_requested.erase(request_id)
+
+
+func _validation_request() -> Dictionary:
+	return {"request_id": "credential-validation", "provider_id": PROVIDER_ID, "batch": 0}
+
+
+func _failure(code: String, request: Dictionary) -> Dictionary:
+	return {"ok": false, "error": _provider_error(code, "decode", request, 1)}

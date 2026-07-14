@@ -11,12 +11,13 @@ signal provider_validation_changed(provider_id: String, state: String, message: 
 
 const PluginAPIScript := preload("res://services/plugin_api.gd")
 const CredentialStoreScript := preload("res://services/credential_store.gd")
+const ProviderContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
+const SCHEMA_TEXT_RESOLVER_PATH := "res://services/schema_text_resolver.gd"
 const BUILTIN_PROVIDER_PLUGINS := [
 	"res://plugins/provider_openai/main.gd",
 	"res://plugins/provider_retrodiffusion/main.gd",
-	"res://plugins/bridge_comfyui/main.gd",
 ]
-const API_VERSION := 1
+const API_VERSION := 2
 const DEFAULT_PROVIDER := "mock"
 const MOCK_MODEL_DESCRIPTOR := {
 	"provider_id": "mock",
@@ -77,22 +78,26 @@ func load_builtin_plugin(script_path: String) -> bool:
 	return true
 
 
-func register_provider(provider: PFProvider) -> bool:
+func register_provider(provider: PFProvider) -> Dictionary:
+	# The version call is deliberately the only operation before the hard gate.
 	if provider == null or provider.get_api_version() != API_VERSION:
-		return false
-	var provider_id := provider.get_id().strip_edges()
-	if provider_id.is_empty() or _providers.has(provider_id):
-		return false
+		return _registration_failure("unsupported_provider_api_version", "api_version")
 	var descriptors := provider.get_model_descriptors()
-	if not descriptors.is_empty() and not _model_descriptors_are_valid(provider_id, descriptors):
-		return false
+	var provider_id := _provider_id_from_descriptors(descriptors)
+	if provider_id.is_empty() or _providers.has(provider_id):
+		return _registration_failure("invalid_provider_descriptor", "provider_id")
+	if not _model_descriptors_are_valid(provider_id, descriptors):
+		return _registration_failure("invalid_provider_descriptor", "model_descriptors")
+	var schema := provider.get_config_schema()
+	if not _config_schema_is_valid(schema) or not _schema_text_is_valid(schema):
+		return _registration_failure("invalid_provider_schema", "config_schema")
 	if provider.has_method("attach_request_host"):
 		provider.attach_request_host(self)
 	_providers[provider_id] = provider
 	_validation_states[provider_id] = {"state": "unconfigured", "message": ""}
 	_configure_from_storage(provider_id)
 	provider_registered.emit(provider_id)
-	return true
+	return {"ok": true, "provider_id": provider_id}
 
 
 func unregister_provider(provider_id: String) -> bool:
@@ -146,7 +151,11 @@ func get_model_descriptor(provider_id: String, model_id: String = "") -> Diction
 			else {}
 		)
 	var provider := get_provider(provider_id)
-	return provider.get_model_descriptor(model_id) if provider != null else {}
+	return (
+		ProviderContractV2.get_model_descriptor(provider.get_model_descriptors(), model_id)
+		if provider != null
+		else {}
+	)
 
 
 func resolve_model_id(provider_id: String, model_id: String = "") -> String:
@@ -158,14 +167,20 @@ func resolve_model_id(provider_id: String, model_id: String = "") -> String:
 			else ""
 		)
 	var provider := get_provider(provider_id)
-	return provider.resolve_model_id(model_id) if provider != null else ""
+	return (
+		ProviderContractV2.resolve_model_id(provider.get_model_descriptors(), model_id)
+		if provider != null
+		else ""
+	)
 
 
 func validate_generation_request(provider_id: String, request: Dictionary) -> Variant:
 	var provider := get_provider(provider_id)
 	if provider == null:
-		return _error("invalid_request", "Provider is not registered")
-	return provider.validate_generation_request(request)
+		return {"code": "invalid_provider", "field": "provider_id", "args": {}}
+	return ProviderContractV2.validate_request_for_provider(
+		request, provider_id, provider.get_model_descriptors()
+	)
 
 
 func get_selectable_provider_ids() -> Array:
@@ -328,9 +343,12 @@ func generate(provider_id: String, request: Dictionary) -> Variant:
 		return null
 	if not _provider_can_generate(provider_id):
 		return null
+	var validation_issue: Variant = validate_generation_request(provider_id, request)
+	if validation_issue != null:
+		return validation_issue
 	var task: Variant = provider.generate(request)
 	if task != null and not _safe_validation(provider):
-		task.finished.connect(
+		task.completed.connect(
 			func(_result: Variant) -> void:
 				SettingsService.set_setting(
 					_provider_settings_section(provider_id), "validated", true
@@ -401,7 +419,8 @@ func _set_validation_state(provider_id: String, state: String, message: String) 
 
 
 func _safe_validation(provider: PFProvider) -> bool:
-	return bool(provider.get_capabilities().get("safe_validation", true))
+	var descriptor := ProviderContractV2.get_model_descriptor(provider.get_model_descriptors())
+	return bool(descriptor.get("capabilities", {}).get("safe_validation", true))
 
 
 func _provider_can_generate(provider_id: String) -> bool:
@@ -423,6 +442,89 @@ func _configured_message(provider: PFProvider) -> String:
 	)
 
 
+func _provider_id_from_descriptors(descriptors: Array[Dictionary]) -> String:
+	if descriptors.is_empty():
+		return ""
+	return String(descriptors[0].get("provider_id", "")).strip_edges()
+
+
+func _registration_failure(code: String, field: String) -> Dictionary:
+	return {
+		"ok": false,
+		"error": {"code": code, "field": field, "args": {"supported": API_VERSION}},
+	}
+
+
+func _config_schema_is_valid(schema: Array[Dictionary]) -> bool:
+	var ids := {}
+	var valid := true
+	for field in schema:
+		var kind := String(field.get("kind", ""))
+		var keys := ["default", "help_key", "key", "kind", "label_key", "required"]
+		if kind == "enum":
+			keys.append("values")
+		if not _has_exact_keys(field, keys):
+			valid = false
+			break
+		var key := String(field.get("key", ""))
+		if not _matches("^[a-z][a-z0-9_]{0,63}$", key) or ids.has(key):
+			valid = false
+			break
+		ids[key] = true
+		if not kind in ["string", "password", "bool", "enum"]:
+			valid = false
+			break
+		if not (field["required"] is bool):
+			valid = false
+			break
+		if not (field["label_key"] is String) or String(field["label_key"]).is_empty():
+			valid = false
+			break
+		if not (field["help_key"] is String) or String(field["help_key"]).is_empty():
+			valid = false
+			break
+		match kind:
+			"string":
+				if not (field["default"] is String):
+					valid = false
+			"password":
+				if not (field["default"] is String) or not String(field["default"]).is_empty():
+					valid = false
+			"bool":
+				if not (field["default"] is bool):
+					valid = false
+			"enum":
+				if not (field["default"] is String) or not (field["values"] is Array):
+					valid = false
+				elif field["values"].is_empty() or not field["values"].has(field["default"]):
+					valid = false
+				else:
+					var values := {}
+					for value in field["values"]:
+						if not (value is String) or values.has(value):
+							valid = false
+							break
+						values[value] = true
+		if not valid:
+			break
+	return valid
+
+
+func _schema_text_is_valid(schema: Array[Dictionary]) -> bool:
+	if not ResourceLoader.exists(SCHEMA_TEXT_RESOLVER_PATH):
+		return true
+	var script: Script = load(SCHEMA_TEXT_RESOLVER_PATH)
+	if script == null:
+		return false
+	var resolver: Variant = script.new()
+	if resolver == null or not resolver.has_method("validate_schema"):
+		return false
+	var result: Variant = resolver.validate_schema(schema)
+	return (
+		result == null or result == true or (result is Dictionary and bool(result.get("ok", false)))
+	)
+
+
 func _provider_settings_section(provider_id: String) -> String:
 	return "provider_%s" % provider_id
 
@@ -430,31 +532,306 @@ func _provider_settings_section(provider_id: String) -> String:
 func _model_descriptors_are_valid(provider_id: String, descriptors: Array[Dictionary]) -> bool:
 	var model_ids := {}
 	var default_count := 0
-	var required_capabilities := [
-		"txt2img",
-		"max_reference_images",
+	var shared_meta_keys: Variant = null
+	var valid := not descriptors.is_empty()
+	var descriptor_keys := [
+		"capabilities",
+		"display_name",
+		"dynamic_params",
+		"is_default",
+		"model_id",
+		"provider_id",
+		"provider_meta_keys",
+		"ui_scope",
+	]
+	var capability_keys := [
+		"cost_estimate",
+		"img2img",
 		"max_batch",
+		"max_reference_images",
+		"native_idempotency",
+		"native_pixel",
+		"provider_output_sizes",
+		"safe_validation",
+		"seed",
+		"target_size_constraints",
+		"transparent_bg",
+		"txt2img",
+	]
+	for descriptor in descriptors:
+		if not _has_exact_keys(descriptor, descriptor_keys):
+			valid = false
+			break
+		if String(descriptor.get("provider_id", "")) != provider_id:
+			valid = false
+			break
+		var model_id := String(descriptor.get("model_id", "")).strip_edges()
+		if model_id.is_empty() or model_ids.has(model_id):
+			valid = false
+			break
+		model_ids[model_id] = true
+		if String(descriptor.get("display_name", "")).strip_edges().is_empty():
+			valid = false
+			break
+		if not (descriptor.get("is_default") is bool) or descriptor.get("ui_scope") != "main":
+			valid = false
+			break
+		default_count += 1 if bool(descriptor.get("is_default", false)) else 0
+		var capabilities: Dictionary = descriptor.get("capabilities", {})
+		if not _has_exact_keys(capabilities, capability_keys):
+			valid = false
+			break
+		if not _capabilities_are_valid(capabilities):
+			valid = false
+			break
+		var meta_keys: Variant = descriptor.get("provider_meta_keys")
+		if not _provider_meta_keys_are_valid(meta_keys):
+			valid = false
+			break
+		if shared_meta_keys == null:
+			shared_meta_keys = meta_keys.duplicate()
+		elif shared_meta_keys != meta_keys:
+			valid = false
+			break
+		if not _dynamic_params_are_valid(descriptor.get("dynamic_params")):
+			valid = false
+			break
+	return valid and default_count == 1
+
+
+func _capabilities_are_valid(capabilities: Dictionary) -> bool:
+	var valid := true
+	for flag in [
+		"txt2img",
+		"img2img",
+		"native_pixel",
+		"native_idempotency",
+		"safe_validation",
 		"seed",
 		"transparent_bg",
 		"cost_estimate",
+	]:
+		if not (capabilities[flag] is bool):
+			valid = false
+			break
+	for count_key in ["max_reference_images", "max_batch"]:
+		if not (capabilities[count_key] is int) or int(capabilities[count_key]) < 0:
+			valid = false
+			break
+	if int(capabilities["max_batch"]) < 1:
+		valid = false
+	var constraints: Variant = capabilities["target_size_constraints"]
+	if not (constraints is Dictionary) or not _target_constraints_are_valid(constraints):
+		valid = false
+	var provider_sizes: Variant = capabilities["provider_output_sizes"]
+	if not (provider_sizes is Array):
+		valid = false
+	else:
+		for size_value in provider_sizes:
+			if not _is_positive_int_pair(size_value):
+				valid = false
+				break
+		valid = valid and provider_sizes.is_empty() == bool(capabilities["native_pixel"])
+	return valid
+
+
+func _target_constraints_are_valid(constraints: Dictionary) -> bool:
+	var keys := [
+		"allowed_sizes",
+		"height_step",
+		"max_height",
+		"max_width",
+		"min_height",
+		"min_width",
+		"width_step",
 	]
-	for descriptor in descriptors:
-		if String(descriptor.get("provider_id", "")) != provider_id:
+	if not _has_exact_keys(constraints, keys):
+		return false
+	for key in keys:
+		if key == "allowed_sizes":
+			continue
+		if not (constraints[key] is int) or int(constraints[key]) < 1:
 			return false
-		var model_id := String(descriptor.get("model_id", "")).strip_edges()
-		if model_id.is_empty() or model_ids.has(model_id):
+	if (
+		int(constraints["min_width"]) > int(constraints["max_width"])
+		or int(constraints["min_height"]) > int(constraints["max_height"])
+	):
+		return false
+	if not (constraints["allowed_sizes"] is Array):
+		return false
+	for size_value in constraints["allowed_sizes"]:
+		if not _is_positive_int_pair(size_value):
 			return false
-		model_ids[model_id] = true
-		if String(descriptor.get("display_name", "")).strip_edges().is_empty():
+	return true
+
+
+func _provider_meta_keys_are_valid(value: Variant) -> bool:
+	if not (value is Array):
+		return false
+	var previous := ""
+	for key_value in value:
+		if not (key_value is String):
 			return false
-		default_count += 1 if bool(descriptor.get("is_default", false)) else 0
-		var capabilities: Dictionary = descriptor.get("capabilities", {})
-		for key in required_capabilities:
-			if not capabilities.has(key):
-				return false
-		if not capabilities.has("output_sizes") and not capabilities.has("output_size_constraints"):
+		var key := String(key_value)
+		if (
+			not _matches("^[a-z][a-z0-9_]{0,63}$", key)
+			or (not previous.is_empty() and key <= previous)
+		):
 			return false
-	return default_count == 1
+		previous = key
+	return true
+
+
+func _dynamic_params_are_valid(value: Variant) -> bool:
+	if not (value is Array):
+		return false
+	var ids := {}
+	var valid := true
+	var required_keys := [
+		"advanced",
+		"default",
+		"help_key",
+		"key",
+		"kind",
+		"label_key",
+		"max",
+		"min",
+		"required",
+		"step",
+		"template_safe",
+		"values",
+	]
+	for raw_spec in value:
+		if not (raw_spec is Dictionary):
+			valid = false
+			break
+		var spec: Dictionary = raw_spec
+		var allowed_keys := required_keys.duplicate()
+		allowed_keys.append("visible_when")
+		if not _has_exact_keys(spec, allowed_keys, required_keys):
+			valid = false
+			break
+		var key := String(spec.get("key", ""))
+		if not _matches("^[a-z][a-z0-9_]{0,63}$", key) or ids.has(key):
+			valid = false
+			break
+		ids[key] = true
+		if not String(spec.get("kind", "")) in ["bool", "int", "float", "enum", "string"]:
+			valid = false
+			break
+		if (
+			not (spec["required"] is bool)
+			or not (spec["advanced"] is bool)
+			or not (spec["template_safe"] is bool)
+		):
+			valid = false
+			break
+		if not (spec["values"] is Array):
+			valid = false
+			break
+		if not (spec["label_key"] is String) or String(spec["label_key"]).is_empty():
+			valid = false
+			break
+		if not (spec["help_key"] is String) or String(spec["help_key"]).is_empty():
+			valid = false
+			break
+		if not _dynamic_param_value_shape_is_valid(spec):
+			valid = false
+			break
+		if spec.has("visible_when") and spec["visible_when"] != {"mode": "img2img"}:
+			valid = false
+			break
+	return valid
+
+
+func _dynamic_param_value_shape_is_valid(spec: Dictionary) -> bool:
+	var values: Array = spec["values"]
+	match String(spec["kind"]):
+		"bool":
+			return (
+				spec["default"] is bool
+				and values.is_empty()
+				and spec["min"] == null
+				and spec["max"] == null
+				and spec["step"] == null
+			)
+		"int":
+			return (
+				spec["default"] is int
+				and values.is_empty()
+				and spec["min"] is int
+				and spec["max"] is int
+				and spec["step"] is int
+				and int(spec["min"]) <= int(spec["default"])
+				and int(spec["default"]) <= int(spec["max"])
+				and int(spec["step"]) > 0
+			)
+		"float":
+			return (
+				(spec["default"] is float or spec["default"] is int)
+				and values.is_empty()
+				and (spec["min"] is float or spec["min"] is int)
+				and (spec["max"] is float or spec["max"] is int)
+				and (spec["step"] is float or spec["step"] is int)
+				and float(spec["min"]) <= float(spec["default"])
+				and float(spec["default"]) <= float(spec["max"])
+				and float(spec["step"]) > 0.0
+			)
+		"enum":
+			return (
+				spec["default"] is String
+				and not values.is_empty()
+				and values.has(spec["default"])
+				and _unique_strings(values)
+				and spec["min"] == null
+				and spec["max"] == null
+				and spec["step"] == null
+			)
+		"string":
+			return (
+				spec["default"] is String
+				and values.is_empty()
+				and spec["min"] == null
+				and spec["max"] == null
+				and spec["step"] == null
+			)
+	return false
+
+
+func _unique_strings(values: Array) -> bool:
+	var seen := {}
+	for value in values:
+		if not (value is String) or seen.has(value):
+			return false
+		seen[value] = true
+	return true
+
+
+func _has_exact_keys(value: Dictionary, allowed_keys: Array, required_keys: Array = []) -> bool:
+	var required := allowed_keys if required_keys.is_empty() else required_keys
+	for key in value.keys():
+		if not allowed_keys.has(String(key)):
+			return false
+	for key in required:
+		if not value.has(key):
+			return false
+	return true
+
+
+func _is_positive_int_pair(value: Variant) -> bool:
+	return (
+		value is Array
+		and value.size() == 2
+		and value[0] is int
+		and value[1] is int
+		and int(value[0]) > 0
+		and int(value[1]) > 0
+	)
+
+
+func _matches(pattern: String, value: String) -> bool:
+	var expression := RegEx.new()
+	return expression.compile(pattern) == OK and expression.search(value) != null
 
 
 func _error(code: String, message: String) -> Dictionary:

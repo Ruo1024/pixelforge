@@ -27,9 +27,12 @@ func register_node_type(type_name: String, node_script: Script) -> bool:
 
 
 func register_provider(provider: PFProvider) -> bool:
-	if _provider_service == null or not _provider_service.register_provider(provider):
+	if _provider_service == null:
 		return false
-	_ledger.append(["provider", provider.get_id()])
+	var result: Dictionary = _provider_service.register_provider(provider)
+	if not bool(result.get("ok", false)):
+		return false
+	_ledger.append(["provider", String(result["provider_id"])])
 	return true
 
 
