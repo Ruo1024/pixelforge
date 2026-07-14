@@ -12,6 +12,7 @@ const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ProviderContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 const ProviderRunProgressScript := preload("res://services/provider_run_progress.gd")
 const MonotonicClockScript := preload("res://infra/monotonic_clock.gd")
+const GenerationRetryPreflightScript := preload("res://services/generation_retry_preflight.gd")
 
 const BUSY_SLOT_STATES := ["queued", "running"]
 const TERMINAL_RECORD_STATES := ["succeeded", "partial", "failed", "canceled"]
@@ -59,6 +60,19 @@ func preflight_plan(
 			"budget_micro_usd": ledger.get_monthly_budget_micro_usd(),
 		}
 	return ledger.preflight(requests, month_key)
+
+
+func prepare_retry_preflight(
+	slots: Array,
+	max_batch: int,
+	run_id: String,
+	reference_source: Variant = null,
+	cost_service: Variant = null,
+	month_key: String = ""
+) -> Dictionary:
+	return GenerationRetryPreflightScript.prepare_failed_slots(
+		slots, max_batch, run_id, reference_source, cost_service, month_key
+	)
 
 
 func prepare_full_run(
@@ -122,6 +136,7 @@ func prepare_retry_run(graph: PFGraph, output_node_id: String, plan: Dictionary)
 	var params := graph.get_node_params(output_node_id)
 	if String(params.get("role", "")) not in ["current", "history"]:
 		return _command_error("retry_source_unavailable")
+	var rollback_token := {"graph": graph.to_json()}
 	var run_id := _plan_run_id(plan)
 	var request_by_slot := _request_ids_by_slot(plan)
 	var target_ids := request_by_slot.keys()
@@ -146,7 +161,12 @@ func prepare_retry_run(graph: PFGraph, output_node_id: String, plan: Dictionary)
 	_run_started_msec[run_id] = _now_msec()
 	_previous_run_ratios[run_id] = 0.0
 	_emit_run_state(run_id, source_node_id, output_node_id, "Queued")
-	return {"ok": true, "run_id": run_id, "output_node_id": output_node_id}
+	return {
+		"ok": true,
+		"run_id": run_id,
+		"output_node_id": output_node_id,
+		"rollback_token": rollback_token,
+	}
 
 
 func mark_submitting(graph: PFGraph, output_node_id: String, request_id: String) -> Dictionary:

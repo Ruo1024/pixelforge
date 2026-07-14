@@ -80,6 +80,69 @@ func run_graph(
 	)
 
 
+func retry_graph(graph: PFGraph, selected_node_id: String) -> void:
+	var output_node_id := _retry_output_node_id(graph, selected_node_id)
+	if output_node_id.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "retry_source_unavailable"
+		return
+	var params := graph.get_node_params(output_node_id)
+	var failed_slots := []
+	for slot_value in params.get("result_slots", []):
+		var slot: Dictionary = slot_value
+		if (
+			String(slot.get("status", "")) != "failed"
+			or not (slot.get("error") is Dictionary)
+			or not bool(slot["error"].get("retryable", false))
+		):
+			continue
+		var retry_slot: Dictionary = slot.duplicate(true)
+		retry_slot["input_snapshot"] = (
+			Dictionary(
+				params.get("input_snapshots", {}).get(String(slot.get("input_snapshot_id", "")), {})
+			)
+			. duplicate(true)
+		)
+		failed_slots.append(retry_slot)
+	if failed_slots.is_empty():
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % "retry_source_unavailable"
+		return
+	var snapshot: Dictionary = failed_slots[0]["input_snapshot"]
+	var provider_id := String(snapshot.get("provider_id", ""))
+	var descriptor: Dictionary = ProviderService.get_model_descriptor(
+		provider_id, String(snapshot.get("model_id", ""))
+	)
+	var max_batch := maxi(1, int(descriptor.get("capabilities", {}).get("max_batch", 1)))
+	var plan: Dictionary = _coordinator.prepare_retry_preflight(
+		failed_slots, max_batch, "run_%s" % IdUtil.uuid_v4(), AssetLibrary
+	)
+	if not bool(plan.get("ok", false)):
+		_status_label.text = (
+			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
+			% String(plan.get("issue", {}).get("code", "retry_source_unavailable"))
+		)
+		return
+	var run_states := _retry_run_states(graph, output_node_id, provider_id, plan)
+	var preflight: Dictionary = plan.get("preflight", {})
+	if String(preflight.get("decision", "blocked")) == "blocked":
+		_status_label.text = (
+			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
+			% String(preflight.get("reason_code", "invalid_estimate"))
+		)
+		return
+	if String(preflight.get("decision", "blocked")) == "needs_confirmation":
+		_pending_budget_run = {"kind": "retry", "runs": run_states, "preflight": preflight}
+		_budget_dialog.dialog_text = (
+			Strings.STATUS_PROVIDER_BUDGET_CONFIRM_FORMAT
+			% [
+				_usd_display(int(preflight.get("estimated_total_micro_usd", 0))),
+				_usd_display(int(preflight.get("budget_micro_usd", 0))),
+			]
+		)
+		_budget_dialog.popup_centered()
+		return
+	_submit_retry_runs(run_states)
+
+
 func cancel_graph(graph_id: String, generate_node_id: String = "") -> bool:
 	var canceled := false
 	for request_id_value in _pending_runs.keys():
@@ -302,6 +365,21 @@ func _submit_provider_runs(run_states: Array) -> void:
 			% String(prepared.get("error", {}).get("code", "output_create_failed"))
 		)
 		return
+	_dispatch_provider_runs(run_states)
+
+
+func _submit_retry_runs(run_states: Array) -> void:
+	var prepared := _prepare_retry_output(run_states)
+	if not bool(prepared.get("ok", false)):
+		_status_label.text = (
+			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
+			% String(prepared.get("error", {}).get("code", "retry_source_unavailable"))
+		)
+		return
+	_dispatch_provider_runs(run_states)
+
+
+func _dispatch_provider_runs(run_states: Array) -> void:
 	var submitted := 0
 	for run_state in run_states:
 		if not _submit_provider_run(run_state):
@@ -309,6 +387,23 @@ func _submit_provider_runs(run_states: Array) -> void:
 				_rollback_pending_output(run_states)
 			return
 		submitted += 1
+
+
+func _prepare_retry_output(run_states: Array) -> Dictionary:
+	if run_states.is_empty():
+		return {"ok": false, "error": {"code": "empty_run"}}
+	var first: Dictionary = run_states[0]
+	var graph: PFGraph = first["graph"]
+	var prepared: Dictionary = _coordinator.prepare_retry_run(
+		graph, String(first["batch_node_id"]), first["plan"]
+	)
+	if not bool(prepared.get("ok", false)):
+		return prepared
+	for run_state_value in run_states:
+		var run_state: Dictionary = run_state_value
+		run_state["rollback_token"] = prepared["rollback_token"]
+	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+	return prepared
 
 
 func _prepare_pending_output(run_states: Array) -> Dictionary:
@@ -405,7 +500,7 @@ func _rollback_pending_output(run_states: Array) -> void:
 		return
 	_coordinator.rollback_pending_run(graph, rollback_token)
 	var card_id := String(first.get("batch_card_id", ""))
-	if not card_id.is_empty():
+	if not bool(first.get("is_retry", false)) and not card_id.is_empty():
 		_canvas._remove_item_direct(card_id)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 
@@ -419,7 +514,10 @@ func _confirm_budget_run() -> void:
 		return
 	var pending := _pending_budget_run
 	_pending_budget_run = {}
-	_submit_provider_runs(pending.get("runs", []))
+	if String(pending.get("kind", "full")) == "retry":
+		_submit_retry_runs(pending.get("runs", []))
+	else:
+		_submit_provider_runs(pending.get("runs", []))
 
 
 func _on_progress(value: Dictionary, request_id: String) -> void:
@@ -850,6 +948,89 @@ func _generate_node_for_batch(graph: PFGraph, batch_node_id: String) -> String:
 		var source: PFNode = graph.get_node(String(from_data[0]))
 		if source != null and source.get_type() in ["ai_generate", "comfyui.run_workflow"]:
 			return String(from_data[0])
+	return ""
+
+
+func _retry_output_node_id(graph: PFGraph, selected_node_id: String) -> String:
+	var selected: PFNode = graph.get_node(selected_node_id)
+	if selected != null and selected.get_type() == "batch":
+		return selected_node_id
+	for node_id_value in graph.nodes.keys():
+		var node_id := String(node_id_value)
+		var node: PFNode = graph.get_node(node_id)
+		if node == null or node.get_type() != "batch":
+			continue
+		var params := graph.get_node_params(node_id)
+		if (
+			String(params.get("source_node_id", "")) == selected_node_id
+			and String(params.get("role", "")) == "current"
+		):
+			return node_id
+	return ""
+
+
+func _retry_run_states(
+	graph: PFGraph, output_node_id: String, provider_id: String, plan: Dictionary
+) -> Array[Dictionary]:
+	var descriptor: Dictionary = ProviderService.get_model_descriptor(
+		provider_id, String(plan["requests"][0].get("model_id", ""))
+	)
+	var display_name := String(descriptor.get("display_name", provider_id))
+	var scope_id := IdUtil.uuid_v4()
+	var card_id := _batch_card_id(graph.id, output_node_id)
+	var result: Array[Dictionary] = []
+	var progress_records := {}
+	for request_value in plan.get("requests", []):
+		var request: Dictionary = request_value
+		var planned_slots := []
+		for slot_value in plan.get("slots", []):
+			if String(slot_value.get("request_id", "")) == String(request["request_id"]):
+				planned_slots.append(Dictionary(slot_value).duplicate(true))
+		(
+			result
+			. append(
+				{
+					"graph": graph,
+					"request": request,
+					"provider_id": provider_id,
+					"provider_name": display_name,
+					"anchor": _canvas.get_mouse_world_position(),
+					"batch_node_id": output_node_id,
+					"batch_card_id": card_id,
+					"generate_node_id":
+					String(graph.get_node_params(output_node_id).get("source_node_id", "")),
+					"run_id": String(request["run_id"]),
+					"scope_id": scope_id,
+					"scope_expected_count": int(plan.get("total_slots", 0)),
+					"estimate_micro_usd": _estimate_micro_usd(provider_id, request),
+					"planned_slots": planned_slots,
+					"plan": plan,
+					"is_retry": true,
+				}
+			)
+		)
+		progress_records[String(request["request_id"])] = {
+			"state": "queued", "attempts": 0, "requested_count": int(request["batch"])
+		}
+	_run_scopes[scope_id] = {
+		"pending": result.size(),
+		"failed": 0,
+		"failed_row_ids": [],
+		"progress_records": progress_records,
+		"previous_ratio": 0.0,
+	}
+	return result
+
+
+func _batch_card_id(graph_id: String, output_node_id: String) -> String:
+	for item_value in _canvas._items_by_id.values():
+		var item: Node = item_value
+		if (
+			item != null
+			and str(item.get("graph_id")) == graph_id
+			and str(item.get("node_id")) == output_node_id
+		):
+			return str(item.get("item_id"))
 	return ""
 
 
