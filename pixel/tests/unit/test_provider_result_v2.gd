@@ -51,6 +51,39 @@ func test_discontinuous_index_is_ambiguous_and_never_retryable() -> void:
 	assert_eq(mapped["slot_updates"], [])
 
 
+func test_ambiguous_vs_retryable_malformed_requires_machine_proof() -> void:
+	var mapper: Script = load(MAPPER_PATH)
+	assert_not_null(mapper)
+	if mapper == null:
+		return
+	var accepted: Dictionary = mapper.map_contract_failure(
+		_request(1),
+		{"provider_accepted": true, "generation_started": null, "billing_possible": true}
+	)
+	assert_eq(accepted["error"]["code"], "ambiguous_result")
+	assert_false(accepted["error"]["retryable"])
+	var unaccepted: Dictionary = mapper.map_contract_failure(
+		_request(1),
+		{"provider_accepted": false, "generation_started": false, "billing_possible": false}
+	)
+	assert_eq(unaccepted["error"]["code"], "malformed_response")
+	assert_true(unaccepted["error"]["retryable"])
+	for guessed in [
+		{},
+		{"provider_accepted": false, "generation_started": false},
+		{"provider_accepted": false, "generation_started": false, "billing_possible": null},
+		{
+			"provider_accepted": false,
+			"generation_started": false,
+			"billing_possible": false,
+			"message": "not billed"
+		},
+	]:
+		var safe: Dictionary = mapper.map_contract_failure(_request(1), guessed)
+		assert_eq(safe["error"]["code"], "ambiguous_result")
+		assert_false(safe["error"]["retryable"])
+
+
 func _request(batch: int) -> Dictionary:
 	return {
 		"run_id": "run-result",

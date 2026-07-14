@@ -2,6 +2,17 @@ extends "res://addons/gut/test.gd"
 
 const PLANNER_PATH := "res://services/generation_request_planner.gd"
 const ProviderContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
+const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
+
+
+class ReferenceSource:
+	extends RefCounted
+
+	var images := {}
+
+	func get_image(asset_id: String) -> Image:
+		var image: Variant = images.get(asset_id)
+		return image.duplicate() if image is Image else null
 
 
 func test_prompt_order_and_999_limit() -> void:
@@ -129,6 +140,68 @@ func test_extra_exact_descriptor_shape_and_reference_boundary() -> void:
 	assert_false(rejected["ok"])
 	assert_eq(rejected["issue"]["code"], "invalid_dynamic_param")
 	assert_eq(rejected["requests"], [])
+
+
+func test_reference_assets_resolve_rgba8_ids_hashes_in_order() -> void:
+	var planner: Script = load(PLANNER_PATH)
+	assert_not_null(planner)
+	if planner == null:
+		return
+	var first := Image.create(2, 1, false, Image.FORMAT_RGB8)
+	first.fill(Color("#ff0000"))
+	var second := Image.create(1, 2, false, Image.FORMAT_RGBA8)
+	second.fill(Color("#00ff0080"))
+	var source := ReferenceSource.new()
+	source.images = {"asset-b": second, "asset-a": first}
+	var resolved: Dictionary = planner.resolve_reference_assets(["asset-a", "asset-b"], source)
+	assert_true(resolved["ok"])
+	assert_eq(resolved["reference_asset_ids"], ["asset-a", "asset-b"])
+	assert_eq(resolved["ref_images"].size(), 2)
+	assert_eq(resolved["ref_images"][0].get_format(), Image.FORMAT_RGBA8)
+	assert_eq(
+		resolved["reference_content_sha256s"],
+		[
+			GraphContextScript.image_content_sha256(resolved["ref_images"][0]),
+			GraphContextScript.image_content_sha256(resolved["ref_images"][1]),
+		]
+	)
+	var missing: Dictionary = planner.resolve_reference_assets(["asset-missing"], source)
+	assert_false(missing["ok"])
+	assert_eq(missing["issue"]["code"], "missing_reference")
+	assert_eq(missing["ref_images"], [])
+
+
+func test_run_request_attempt_row_chunks_and_output_tiebreak() -> void:
+	var planner: Script = load(PLANNER_PATH)
+	assert_not_null(planner)
+	if planner == null:
+		return
+	var rows := _planner_input()
+	rows["provider_id"] = "retrodiffusion"
+	rows["model_id"] = "rd_pro"
+	rows["seed"] = 10
+	rows["extra"] = {"remove_bg": true, "strength": 0.8}
+	rows["rows"] = [
+		{"id": "row-a", "text": "a", "count": 5},
+		{"id": "row-b", "text": "b", "count": 5},
+	]
+	var planned: Dictionary = planner.plan(rows, [_retro_descriptor()])
+	assert_true(planned["ok"])
+	assert_eq(
+		planned["requests"].map(func(request: Dictionary) -> int: return request["batch"]),
+		[4, 1, 4, 1]
+	)
+	assert_eq(
+		planned["slots"].map(func(slot: Dictionary) -> String: return slot["source_row_id"]),
+		["row-a", "row-a", "row-a", "row-a", "row-a", "row-b", "row-b", "row-b", "row-b", "row-b"]
+	)
+	var tie := _planner_input()
+	tie["target_width"] = 32
+	tie["target_height"] = 32
+	var tie_descriptor := _openai_descriptor().duplicate(true)
+	tie_descriptor["capabilities"]["provider_output_sizes"] = [[96, 64], [32, 64]]
+	var tie_result: Dictionary = planner.plan(tie, [tie_descriptor])
+	assert_eq(tie_result["requests"][0]["provider_output_size"], [96, 64])
 
 
 func _planner_input() -> Dictionary:
