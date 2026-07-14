@@ -189,26 +189,44 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 	assert_true(_item_data_for_node(loaded_canvas_items, output_node_id)["collapsed"])
 
 
-func test_offline_example_is_one_undoable_reference_to_batch_workspace() -> void:
+func test_offline_example_is_one_undoable_fitted_graph_without_touching_existing_items() -> void:
 	var main := await _make_main()
+	main.size = Vector2(1280, 720)
 	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
+	var existing_image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	existing_image.fill(Color.DARK_GREEN)
+	var existing_asset_id := AssetLibrary.register_image(existing_image, "existing", {})
+	var existing: Node = canvas.add_sprite_item(existing_image, existing_asset_id, Vector2(-900, -700))
+	var existing_position: Vector2 = existing.position
 	var controller: Node = main.get_node("M21UiController")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
-	assert_eq(canvas.get_item_count(), 5)
+	assert_eq(canvas.get_item_count(), 6)
 	var graph: Dictionary = ProjectService.current_project.graphs.values()[0]
-	assert_eq(_node_type(graph, "reference"), "image_input")
-	assert_true(_has_edge(graph, "reference", "assets", "generate", "references"))
-	var reference_id := String(_node_data(graph, "reference")["params"]["asset_id"])
-	assert_true(AssetLibrary.has_asset(reference_id))
+	assert_eq(_node_type(graph, "prompt_preset"), "prompt_preset")
+	assert_eq(_node_type(graph, "text_prompt"), "text_prompt")
+	assert_eq(_node_type(graph, "reference_set"), "reference_set")
+	assert_eq(_node_type(graph, "generate"), "ai_generate")
+	assert_eq(_node_type(graph, "cleanup"), "pixel_cleanup")
+	assert_eq(_node_data(graph, "reference_set")["params"]["asset_ids"], [])
+	assert_true(_has_edge(graph, "text_prompt", "prompt", "generate", "prompt"))
+	assert_false(_has_incoming_edge(graph, "cleanup"))
+	assert_eq(existing.position, existing_position)
+	var example_positions := _positions_by_node(canvas.export_canvas_data()["items"])
+	assert_eq(example_positions.size(), 5)
+	assert_gte(canvas.camera_zoom, 0.25)
+	var status: Label = main.get_node("Root/BottomBar").get_child(0)
+	assert_eq(status.text, Strings.text("STATUS_EXAMPLE_OPENED"))
 
 	assert_true(UndoService.undo())
-	assert_eq(canvas.get_item_count(), 0)
+	assert_eq(canvas.get_item_count(), 1)
 	assert_true(ProjectService.current_project.graphs.is_empty())
-	assert_true(AssetLibrary.has_asset(reference_id))
+	assert_eq(existing.position, existing_position)
 	assert_true(UndoService.redo())
-	assert_eq(canvas.get_item_count(), 5)
+	assert_eq(canvas.get_item_count(), 6)
 	assert_eq(ProjectService.current_project.graphs.size(), 1)
+	assert_eq(_positions_by_node(canvas.export_canvas_data()["items"]), example_positions)
+	assert_eq(existing.position, existing_position)
 
 
 func test_context_inspector_reuses_cleanup_for_sprite_and_batch() -> void:
@@ -454,3 +472,21 @@ func _has_edge(
 		):
 			return true
 	return false
+
+
+func _has_incoming_edge(graph: Dictionary, node_id: String) -> bool:
+	for edge_value in graph.get("edges", []):
+		var edge: Dictionary = edge_value
+		if String(edge.get("to", ["", ""])[0]) == node_id:
+			return true
+	return false
+
+
+func _positions_by_node(items: Array) -> Dictionary:
+	var result := {}
+	for item_value in items:
+		var item: Dictionary = item_value
+		var node_id := String(item.get("node_id", ""))
+		if not node_id.is_empty():
+			result[node_id] = item.get("position", []).duplicate()
+	return result

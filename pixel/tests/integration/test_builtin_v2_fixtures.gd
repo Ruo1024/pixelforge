@@ -50,9 +50,20 @@ func test_all_default_resources_are_v2() -> void:
 		for graph_data in fixture["graphs"].values():
 			_assert_v2_graph(graph_data, "bundled test fixture")
 
-	var offline_graph: Dictionary = OfflineExample.build("reference-id", "Output").to_json()
+	var offline_graph: Dictionary = OfflineExample.build("A tiny forest shrine", "Starter example").to_json()
 	_assert_v2_graph(offline_graph, "offline example")
-
+	assert_eq(
+		_node_types(offline_graph),
+		["prompt_preset", "text_prompt", "reference_set", "ai_generate", "pixel_cleanup"]
+	)
+	assert_eq(_node_params(offline_graph, "text_prompt")["text"], "A tiny forest shrine")
+	assert_eq(_node_params(offline_graph, "reference_set")["asset_ids"], [])
+	assert_false(_has_node_type(offline_graph, "object_list"))
+	assert_false(_has_node_type(offline_graph, "batch"))
+	assert_true(_has_edge(offline_graph, "prompt_preset", "prefix", "generate", "prefix"))
+	assert_true(_has_edge(offline_graph, "text_prompt", "prompt", "generate", "prompt"))
+	assert_true(_has_edge(offline_graph, "reference_set", "assets", "generate", "references"))
+	assert_false(_has_incoming_edge(offline_graph, "cleanup"))
 	var templates := WorkflowTemplates.builtin_templates()
 	assert_eq(templates.size(), 4)
 	for template in templates:
@@ -95,6 +106,27 @@ func test_all_default_resources_are_v2() -> void:
 			assert_false(preset.has("based_on"), String(file_name))
 
 
+func test_offline_example_layout_uses_effective_bounds_and_output_reservation() -> void:
+	var positions: Dictionary = OfflineExample.layout_positions(
+		{
+			"prompt_preset": Vector2(320, 280),
+			"text_prompt": Vector2(360, 300),
+			"reference_set": Vector2(400, 480),
+			"generate": Vector2(400, 520),
+			"cleanup": Vector2(400, 520),
+		}
+	)
+	assert_eq(positions["prompt_preset"], Vector2(0, 0))
+	assert_eq(positions["text_prompt"], Vector2(0, 360))
+	assert_eq(positions["reference_set"], Vector2(0, 740))
+	assert_eq(positions["generate"], Vector2(480, 350))
+	assert_eq(positions["cleanup"], Vector2(1640, 350))
+	assert_eq(
+		positions["cleanup"].x - (positions["generate"].x + 400.0),
+		80.0 + OfflineExample.RUNTIME_OUTPUT_WIDTH + 80.0
+	)
+
+
 func _assert_v2_graph(graph_data: Dictionary, source_name: String) -> void:
 	assert_eq(graph_data.get("graph_version", 0), 2, source_name)
 	var parsed := Graph.parse_v2(graph_data)
@@ -116,6 +148,43 @@ func _assert_v2_graph(graph_data: Dictionary, source_name: String) -> void:
 					node.get("params", {}).has(legacy_key),
 					"%s batch.%s" % [source_name, legacy_key]
 				)
+
+
+func _node_types(graph_data: Dictionary) -> Array:
+	var result := []
+	for node_value in graph_data.get("nodes", []):
+		result.append(String(node_value.get("type", "")))
+	return result
+
+
+func _node_params(graph_data: Dictionary, node_id: String) -> Dictionary:
+	for node_value in graph_data.get("nodes", []):
+		if String(node_value.get("id", "")) == node_id:
+			return Dictionary(node_value.get("params", {}))
+	return {}
+
+
+func _has_node_type(graph_data: Dictionary, node_type: String) -> bool:
+	return node_type in _node_types(graph_data)
+
+
+func _has_edge(
+	graph_data: Dictionary, from_node: String, from_port: String, to_node: String, to_port: String
+) -> bool:
+	for edge_value in graph_data.get("edges", []):
+		if (
+			edge_value.get("from", []) == [from_node, from_port]
+			and edge_value.get("to", []) == [to_node, to_port]
+		):
+			return true
+	return false
+
+
+func _has_incoming_edge(graph_data: Dictionary, node_id: String) -> bool:
+	for edge_value in graph_data.get("edges", []):
+		if String(edge_value.get("to", ["", ""])[0]) == node_id:
+			return true
+	return false
 
 
 func _assert_no_retired_tokens(value: Variant, source_name: String) -> void:
