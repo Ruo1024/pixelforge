@@ -19,7 +19,14 @@ func test_at_most_one_per_run() -> void:
 	var summary := _terminal_summary([_slot("slot-1", _error("provider_internal", false))])
 	assert_true(bool(policy.evaluate(summary)["show"]))
 	assert_false(bool(policy.evaluate(summary)["show"]))
-	assert_true(bool(policy.evaluate(_terminal_summary([_slot("slot-2", _error("network", true))], "run-2"))["show"]))
+	assert_true(
+		bool(
+			(
+				policy
+				. evaluate(_terminal_summary([_slot("slot-2", _error("network", true))], "run-2"))["show"]
+			)
+		)
+	)
 
 
 func test_no_dialog_preflight_retrying_cancel_or_recovery() -> void:
@@ -40,6 +47,11 @@ func test_no_dialog_preflight_retrying_cancel_or_recovery() -> void:
 		var decision: Dictionary = policy.evaluate(summary)
 		assert_false(bool(decision["show"]), String(summary["mode"]))
 		assert_ne(String(decision["feedback"]), "")
+	var cancel_failed := _terminal_summary(
+		[_slot("cancel-failed", _error("cancel_failed", false))], "cancel-failed", "user_canceled"
+	)
+	cancel_failed["cancel_failed"] = true
+	assert_true(bool(policy.evaluate(cancel_failed)["show"]))
 
 
 func test_update_order_before_dialog() -> void:
@@ -47,8 +59,11 @@ func test_update_order_before_dialog() -> void:
 	if policy == null:
 		return
 	var invalid := _terminal_summary([_slot("slot-1", _error("timeout", false))])
-	invalid["terminal_steps"] = TERMINAL_STEPS.duplicate()
-	invalid["terminal_steps"].swap(0, 1)
+	var reordered := TERMINAL_STEPS.duplicate()
+	var first: Variant = reordered[0]
+	reordered[0] = reordered[1]
+	reordered[1] = first
+	invalid["terminal_steps"] = reordered
 	var rejected: Dictionary = policy.evaluate(invalid)
 	assert_false(bool(rejected["show"]))
 	assert_eq(rejected["feedback"], "invalid_terminal_sequence")
@@ -167,8 +182,10 @@ func test_dialog_never_contains_sensitive_payload() -> void:
 		return
 	var sentinel := "PF_SECRET_SENTINEL_DO_NOT_LEAK"
 	var unsafe_error := _error("provider_internal", false)
+	unsafe_error["provider_id"] = sentinel
+	unsafe_error["provider_code"] = sentinel
 	unsafe_error["request_id"] = "request-safe-12345678"
-	var summary := _terminal_summary([_slot("slot-1", unsafe_error)], "safe-surface")
+	var summary := _terminal_summary([_slot(sentinel, unsafe_error)], "safe-surface")
 	summary["prompt"] = "draw %s" % sentinel
 	summary["headers"] = {"Authorization": sentinel}
 	summary["raw_body"] = "raw %s" % sentinel
