@@ -1,6 +1,10 @@
 extends "res://addons/gut/test.gd"
 
 const MAPPER_PATH := "res://services/provider_result_mapper.gd"
+const OpenAIProviderScript := preload("res://plugins/provider_openai/openai_image_provider.gd")
+const RetroProviderScript := preload(
+	"res://plugins/provider_retrodiffusion/retrodiffusion_provider.gd"
+)
 
 
 func test_expected_unexpected_and_missing_slot_mapping() -> void:
@@ -84,6 +88,34 @@ func test_ambiguous_vs_retryable_malformed_requires_machine_proof() -> void:
 		assert_false(safe["error"]["retryable"])
 
 
+func test_generation_transport_only_retries_when_local_dispatch_is_proven_absent() -> void:
+	var cases := [
+		{"provider": OpenAIProviderScript.new(), "request": _openai_request()},
+		{"provider": RetroProviderScript.new(), "request": _request(1)},
+	]
+	for item in cases:
+		var provider: PFProvider = item["provider"]
+		var request: Dictionary = item["request"]
+		var local_failure: Dictionary = provider.map_error(
+			HTTPRequest.RESULT_CANT_CONNECT,
+			0,
+			{"attempts": 1, "request_dispatched": false},
+			request
+		)
+		assert_eq(local_failure["code"], "network")
+		assert_true(local_failure["retryable"])
+		var uncertain: Dictionary = provider.map_error(
+			HTTPRequest.RESULT_CANT_CONNECT, 0, {"attempts": 1, "request_dispatched": true}, request
+		)
+		assert_eq(uncertain["code"], "ambiguous_result")
+		assert_false(uncertain["retryable"])
+		var server_error: Dictionary = provider.map_error(
+			HTTPRequest.RESULT_SUCCESS, 503, {"attempts": 1, "request_dispatched": true}, request
+		)
+		assert_eq(server_error["code"], "ambiguous_result")
+		assert_false(server_error["retryable"])
+
+
 func _request(batch: int) -> Dictionary:
 	return {
 		"run_id": "run-result",
@@ -101,6 +133,16 @@ func _request(batch: int) -> Dictionary:
 		"ref_images": [],
 		"extra": {"remove_bg": true, "strength": 0.8},
 	}
+
+
+func _openai_request() -> Dictionary:
+	var request := _request(1)
+	request["provider_id"] = "openai_image"
+	request["model_id"] = "gpt-image-2"
+	request["provider_output_size"] = [1024, 1024]
+	request["seed"] = -1
+	request["extra"] = {"quality": "low"}
+	return request
 
 
 func _slot(slot_id: String, index: int) -> Dictionary:
