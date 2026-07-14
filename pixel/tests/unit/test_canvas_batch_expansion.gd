@@ -11,7 +11,7 @@ func test_output_grid_caps_at_four_columns_and_scrolls_after_twelve() -> void:
 	assert_eq(fifty["columns"], 4)
 	assert_eq(fifty["rows"], 13)
 	assert_eq(fifty["natural_height"], 488)
-	assert_gt(fifty["content_height"], fifty["viewport_height"])
+	assert_gt(fifty["content_height"], fifty["grid_height"])
 
 
 func test_output_width_clamps_and_never_grows_a_fifth_column() -> void:

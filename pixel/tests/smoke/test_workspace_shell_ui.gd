@@ -249,7 +249,7 @@ func test_context_inspector_keeps_retired_direct_cleanup_hidden() -> void:
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
 	assert_false(cleanup.visible)
-	assert_eq(context.get_node("ContextRoot/GraphSummary").visible, false)
+	assert_true(context.get_node("ContextRoot/GraphSummary").visible)
 
 
 func test_navigation_buttons_focus_selected_and_all_canvas_content() -> void:
@@ -338,9 +338,9 @@ func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> vo
 	)
 	assert_eq(
 		controller._batch_menu.get_item_text(
-			controller._batch_menu.get_item_index(controller.BATCH_MENU_MARK_KEEP)
+			controller._batch_menu.get_item_index(controller.BATCH_MENU_MATTE)
 		),
-		Strings.text("BATCH_ACTION_MARK_KEEP")
+		Strings.text("BATCH_ACTION_MATTE")
 	)
 	var graph_menu_texts := []
 	for index in range(controller._graph_add_menu.item_count):
