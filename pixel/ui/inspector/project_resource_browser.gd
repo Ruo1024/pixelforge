@@ -1,7 +1,7 @@
 class_name PFProjectResourceBrowser
 extends VBoxContainer
 
-## Searchable project-local asset and built-in style entry point for canvas drops.
+## Searchable project asset, split preset, and workflow entry point for canvas drops.
 
 signal resource_activated(resource: Dictionary)
 
@@ -10,7 +10,8 @@ const Strings := preload("res://ui/shell/strings.gd")
 const WorkflowTemplateService := preload("res://services/workflow_template_service.gd")
 
 const KIND_ASSET := "project_asset"
-const KIND_STYLE := "style_preset"
+const KIND_PROMPT_PRESET := "prompt_preset"
+const KIND_CLEANUP_PRESET := "cleanup_preset"
 const KIND_WORKFLOW := "workflow_template"
 
 var _kind_option: OptionButton = null
@@ -50,10 +51,12 @@ func _ready() -> void:
 	_kind_option.name = "ResourceKind"
 	_kind_option.add_item(Strings.text("RESOURCE_KIND_ASSETS"))
 	_kind_option.set_item_metadata(0, KIND_ASSET)
-	_kind_option.add_item(Strings.text("RESOURCE_KIND_STYLES"))
-	_kind_option.set_item_metadata(1, KIND_STYLE)
+	_kind_option.add_item(Strings.text("RESOURCE_KIND_PROMPT_PRESETS"))
+	_kind_option.set_item_metadata(1, KIND_PROMPT_PRESET)
+	_kind_option.add_item(Strings.text("RESOURCE_KIND_CLEANUP_PRESETS"))
+	_kind_option.set_item_metadata(2, KIND_CLEANUP_PRESET)
 	_kind_option.add_item(Strings.text("RESOURCE_KIND_WORKFLOWS"))
-	_kind_option.set_item_metadata(2, KIND_WORKFLOW)
+	_kind_option.set_item_metadata(3, KIND_WORKFLOW)
 	_kind_option.item_selected.connect(_on_kind_selected)
 	filters.add_child(_kind_option)
 	_category = OptionButton.new()
@@ -95,20 +98,14 @@ func _refresh_categories() -> void:
 	_category.add_item(Strings.text("RESOURCE_CATEGORY_ALL"))
 	_category.set_item_metadata(0, "")
 	var kind := String(_kind_option.get_item_metadata(_kind_option.selected))
-	var categories := (
-		["builtin", "user"]
-		if kind == KIND_WORKFLOW
-		else (
-			["8bit", "16bit", "hibit", "hd2d", "1bit", "gb"]
-			if kind == KIND_STYLE
-			else ["imported", "generated"]
-		)
-	)
+	var categories := ["builtin", "user"] if kind == KIND_WORKFLOW else []
+	if kind == KIND_ASSET:
+		categories = ["imported", "generated"]
 	for category in categories:
 		var key_prefix := (
 			"RESOURCE_SOURCE_"
 			if kind == KIND_WORKFLOW
-			else ("RESOURCE_TIER_" if kind == KIND_STYLE else "RESOURCE_ORIGIN_")
+			else "RESOURCE_ORIGIN_"
 		)
 		_category.add_item(Strings.text("%s%s" % [key_prefix, category.to_upper()]))
 		_category.set_item_metadata(_category.item_count - 1, category)
@@ -128,8 +125,10 @@ func _refresh() -> void:
 	var resources: Array[Dictionary]
 	if kind == KIND_WORKFLOW:
 		resources = Catalog.search_workflows(_search.text, category)
-	elif kind == KIND_STYLE:
-		resources = Catalog.search_styles(_search.text, category)
+	elif kind == KIND_PROMPT_PRESET:
+		resources = Catalog.search_prompt_presets(_search.text)
+	elif kind == KIND_CLEANUP_PRESET:
+		resources = Catalog.search_cleanup_presets(_search.text)
 	else:
 		resources = Catalog.search_assets(_search.text, category)
 	for resource in resources:

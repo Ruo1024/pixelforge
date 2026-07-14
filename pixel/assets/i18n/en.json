@@ -95,6 +95,8 @@
 	"RESOURCE_BROWSER_TITLE": "Project Resources",
 	"RESOURCE_KIND_ASSETS": "Project assets",
 	"RESOURCE_KIND_STYLES": "Styles",
+	"RESOURCE_KIND_PROMPT_PRESETS": "Style prompts",
+	"RESOURCE_KIND_CLEANUP_PRESETS": "Cleanup presets",
 	"RESOURCE_KIND_WORKFLOWS": "Workflows",
 	"RESOURCE_SEARCH_PLACEHOLDER": "Search name or category…",
 	"RESOURCE_EMPTY": "No matching resources.",

@@ -18,8 +18,8 @@ func test_resource_browser_workflow_category_is_searchable_and_draggable() -> vo
 	var browser: Control = add_child_autofree(BrowserScript.new())
 	await wait_process_frames(1)
 	var kind: OptionButton = browser.find_child("ResourceKind", true, false)
-	kind.select(2)
-	kind.item_selected.emit(2)
+	kind.select(3)
+	kind.item_selected.emit(3)
 	await wait_process_frames(1)
 
 	var visible: Array[Dictionary] = browser.get_visible_resources()

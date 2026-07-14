@@ -1,16 +1,10 @@
 class_name PFProjectResourceCatalog
 extends RefCounted
 
-## Read-only project asset and built-in style search; callers keep AssetLibrary and preset JSON as truth.
+## Read-only project asset, split preset, and workflow search facade.
 
-const STYLE_PATHS := [
-	"res://assets/presets/preset_16bit_db32.json",
-	"res://assets/presets/preset_gb.json",
-	"res://assets/presets/preset_nes.json",
-	"res://assets/presets/preset_hibit.json",
-	"res://assets/presets/preset_1bit.json",
-	"res://assets/presets/preset_hd2d_prop.json",
-]
+const PromptPresetRegistry := preload("res://services/prompt_preset_registry.gd")
+const CleanupPresetRegistry := preload("res://services/cleanup_preset_registry.gd")
 const WorkflowTemplateService := preload("res://services/workflow_template_service.gd")
 
 
@@ -52,35 +46,63 @@ static func search_assets(query: String = "", origin: String = "") -> Array[Dict
 	return result
 
 
-static func search_styles(query: String = "", resolution_tier: String = "") -> Array[Dictionary]:
+static func search_prompt_presets(query: String = "") -> Array[Dictionary]:
 	var normalized_query := query.strip_edges().to_lower()
-	var normalized_tier := resolution_tier.strip_edges().to_lower()
 	var result: Array[Dictionary] = []
-	for path in STYLE_PATHS:
-		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
-		if not (parsed is Dictionary):
-			continue
-		var preset: Dictionary = parsed
-		var tier := String(preset.get("resolution_tier", "")).to_lower()
-		if not normalized_tier.is_empty() and tier != normalized_tier:
-			continue
-		var name := String(preset.get("name", preset.get("id", "")))
+	var registry := PromptPresetRegistry.new()
+	for preset_id in registry.get_preset_ids():
+		var preset: Dictionary = registry.get_preset(preset_id)
+		var name := _preset_name(preset)
 		if (
 			not normalized_query.is_empty()
-			and normalized_query not in ("%s %s" % [name, tier]).to_lower()
+			and normalized_query
+			not in (
+				"%s %s %s" % [preset_id, name, String(preset.get("prefix", ""))]
+			).to_lower()
 		):
 			continue
-		(
-			result
-			. append(
-				{
-					"id": String(preset.get("id", "")),
-					"name": name,
-					"resolution_tier": tier,
-					"path": path,
-					"preset": preset.duplicate(true),
-				}
-			)
+		result.append(
+			{
+				"id": String(preset_id),
+				"name": name,
+				"name_key": String(preset.get("name_key", "")),
+				"available": true,
+				"preset": preset.duplicate(true),
+			}
+		)
+	return result
+
+
+static func search_cleanup_presets(query: String = "") -> Array[Dictionary]:
+	var normalized_query := query.strip_edges().to_lower()
+	var result: Array[Dictionary] = []
+	var registry := CleanupPresetRegistry.new()
+	for preset_id in registry.get_preset_ids():
+		var preset: Dictionary = registry.get_preset(preset_id)
+		var name := _preset_name(preset)
+		var settings: Dictionary = preset.get("settings", {})
+		var quantize: Dictionary = settings.get("quantize", {})
+		var detect: Dictionary = settings.get("detect_grid", {})
+		var haystack := (
+			"%s %s %s %s %s"
+			% [
+				preset_id,
+				name,
+				String(quantize.get("palette_id", "")),
+				String(quantize.get("dither", "")),
+				str(detect.get("base_size", "")),
+			]
+		)
+		if not normalized_query.is_empty() and normalized_query not in haystack.to_lower():
+			continue
+		result.append(
+			{
+				"id": String(preset_id),
+				"name": name,
+				"name_key": String(preset.get("name_key", "")),
+				"available": true,
+				"preset": preset.duplicate(true),
+			}
 		)
 	return result
 
@@ -110,3 +132,35 @@ static func search_workflows(query: String = "", source: String = "") -> Array[D
 			)
 		)
 	return result
+
+
+static func _preset_name(preset: Dictionary) -> String:
+	if preset.has("name"):
+		return String(preset["name"])
+	match String(preset.get("name_key", "")):
+		"PROMPT_PRESET_HIBIT":
+			return LocalizationService.text("PROMPT_PRESET_HIBIT")
+		"PROMPT_PRESET_GB":
+			return LocalizationService.text("PROMPT_PRESET_GB")
+		"PROMPT_PRESET_HD2D_PROP":
+			return LocalizationService.text("PROMPT_PRESET_HD2D_PROP")
+		"PROMPT_PRESET_1BIT":
+			return LocalizationService.text("PROMPT_PRESET_1BIT")
+		"PROMPT_PRESET_NES":
+			return LocalizationService.text("PROMPT_PRESET_NES")
+		"PROMPT_PRESET_16BIT_DB32":
+			return LocalizationService.text("PROMPT_PRESET_16BIT_DB32")
+		"CLEANUP_PRESET_HIBIT":
+			return LocalizationService.text("CLEANUP_PRESET_HIBIT")
+		"CLEANUP_PRESET_GB":
+			return LocalizationService.text("CLEANUP_PRESET_GB")
+		"CLEANUP_PRESET_HD2D_PROP":
+			return LocalizationService.text("CLEANUP_PRESET_HD2D_PROP")
+		"CLEANUP_PRESET_1BIT":
+			return LocalizationService.text("CLEANUP_PRESET_1BIT")
+		"CLEANUP_PRESET_NES":
+			return LocalizationService.text("CLEANUP_PRESET_NES")
+		"CLEANUP_PRESET_16BIT_DB32":
+			return LocalizationService.text("CLEANUP_PRESET_16BIT_DB32")
+		_:
+			return String(preset.get("id", ""))
