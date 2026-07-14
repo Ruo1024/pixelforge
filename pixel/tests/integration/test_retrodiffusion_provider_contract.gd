@@ -55,6 +55,12 @@ func test_capabilities_and_schema_match_provider_contract() -> void:
 	assert_eq(_provider.get_config_schema()[0]["kind"], "password")
 
 
+func test_credential_save_and_validation_are_offline_until_user_generation() -> void:
+	assert_false(bool(_provider.get_capabilities().get("safe_validation", true)))
+	assert_null(_provider.validate_credentials())
+	assert_eq(ProviderScript.MAX_RETRIES, 0)
+
+
 func test_request_uses_current_official_fields_and_style_hints() -> void:
 	var hinted := (
 		_provider
@@ -92,7 +98,7 @@ func test_recorded_four_image_fixture_decodes_raw_pixels_cost_and_seeds() -> voi
 	assert_true(result["raw_pixel"])
 	assert_eq(result["seeds"], [50, 51, 52, 53])
 	assert_eq(result["cost"], 1.0)
-	assert_eq(result["provider_meta"]["model"], "rd_plus")
+	assert_eq(result["provider_meta"], {})
 	for image in result["images"]:
 		assert_eq(image.get_format(), Image.FORMAT_RGBA8)
 
@@ -106,7 +112,7 @@ func test_error_mapping_covers_auth_quota_rate_limit_and_internal() -> void:
 			. map_error(
 				HTTPRequest.RESULT_SUCCESS,
 				400,
-				{"response": {"detail": {"code": "insufficient_balance", "message": "low"}}}
+				{"provider_code": "insufficient_balance"}
 			)["code"]
 		),
 		"quota_exceeded"
@@ -153,7 +159,7 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 			. append(
 				{
 					"provider": "retrodiffusion",
-					"model": decoded["provider_meta"]["model"],
+					"model": "rd_pro",
 					"prompt": "barrel",
 					"seed": decoded["seeds"][index],
 					"cost": decoded["cost"] / decoded["images"].size(),
@@ -168,7 +174,7 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 	assert_true(result["ok"])
 	var provenance: Dictionary = AssetLibrary.get_asset_meta(result["asset_ids"][0])["provenance"]
 	assert_eq(provenance["provider"], "retrodiffusion")
-	assert_eq(provenance["provider_meta"]["prompt_style"], "rd_pro__default")
+	assert_eq(provenance["provider_meta"], {})
 	assert_false(JSON.stringify(provenance).contains(TEST_SECRET))
 
 

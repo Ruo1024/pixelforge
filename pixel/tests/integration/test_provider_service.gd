@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
 const ProviderServiceScript := preload("res://services/provider_service.gd")
 const CredentialStoreScript := preload("res://services/credential_store.gd")
 const FakeProviderScript := preload("res://tests/fixtures/providers/fake_provider.gd")
+const SentinelScanner := preload("res://tests/helpers/credential_sentinel_scanner.gd")
 
 const TEST_PATH := "user://tests/m4_provider_service_credentials.cfg"
 
@@ -71,6 +72,54 @@ func test_saved_provider_configuration_decrypts_after_service_restart() -> void:
 	assert_eq(restarted.get_validation_state("fixture_provider"), "configured")
 	assert_eq(restarted.delete_provider_credentials("fixture_provider"), OK)
 	assert_eq(provider.configured_key, "")
+
+
+func test_unsafe_validation_provider_is_offline_until_explicit_first_generation() -> void:
+	var provider: Variant = _service.get_provider("fixture_provider")
+	provider.safe_validation = false
+	var result: Dictionary = _service.save_provider_config(
+		"fixture_provider", {"api_key": "fixture-good-key", "endpoint": "https://local.fixture"}
+	)
+
+	assert_true(result["ok"])
+	assert_eq(_service.get_validation_state("fixture_provider"), "configured")
+	assert_string_contains(_service.get_validation_message("fixture_provider"), "first real generation")
+	assert_null(_service.validate_provider("fixture_provider"))
+	assert_eq(_service.get_selectable_provider_ids(), ["mock", "fixture_provider"])
+	var task: Variant = _service.generate("fixture_provider", {"prompt": "approved user action"})
+	assert_not_null(task)
+	_queue.submit(task)
+	assert_true(await _wait_until(func() -> bool: return _queue.is_idle()))
+	assert_eq(_service.get_validation_state("fixture_provider"), "verified")
+
+
+func test_unsafe_validation_provider_auth_failure_becomes_invalid() -> void:
+	var provider: Variant = _service.get_provider("fixture_provider")
+	provider.safe_validation = false
+	assert_true(
+		_service.save_provider_config(
+			"fixture_provider", {"api_key": "fixture-bad-key", "endpoint": "https://local.fixture"}
+		)["ok"]
+	)
+	var task: Variant = _service.generate("fixture_provider", {"prompt": "approved user action"})
+	assert_not_null(task)
+	_queue.submit(task)
+	assert_true(await _wait_until(func() -> bool: return _queue.is_idle()))
+	assert_eq(_service.get_validation_state("fixture_provider"), "invalid")
+	assert_eq(_service.get_selectable_provider_ids(), ["mock"])
+
+
+func test_unique_credential_sentinel_is_persisted_only_as_ciphertext() -> void:
+	var result: Dictionary = _service.save_provider_config(
+		"fixture_provider",
+		{"api_key": SentinelScanner.VALUE, "endpoint": "https://local.fixture"}
+	)
+
+	assert_true(result["ok"])
+	assert_false(SentinelScanner.file_contains(TEST_PATH, SentinelScanner.VALUE))
+	var encrypted := FileAccess.get_file_as_string(TEST_PATH)
+	assert_false(encrypted.is_empty())
+	assert_false(encrypted.contains(SentinelScanner.VALUE))
 
 
 func _wait_until(check: Callable, timeout_seconds: float = 2.0) -> bool:

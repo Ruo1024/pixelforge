@@ -45,6 +45,10 @@ func test_ui_provider_catalog_declares_reference_support_without_network_request
 	assert_true(TaskQueue.is_idle())
 
 
+func test_generation_post_has_no_automatic_network_retry() -> void:
+	assert_eq(ProviderScript.MAX_NETWORK_RETRIES, 0)
+
+
 func test_capabilities_and_persistent_schema_match_contract() -> void:
 	assert_eq(_provider.get_id(), "openai_image")
 	assert_eq(_provider.get_api_version(), 1)
@@ -97,8 +101,7 @@ func test_recorded_success_fixture_decodes_to_rgba_result() -> void:
 	assert_eq(image.get_format(), Image.FORMAT_RGBA8)
 	assert_false(result["raw_pixel"])
 	assert_eq(result["cost"], -1.0)
-	assert_eq(result["provider_meta"]["model"], "gpt-image-2")
-	assert_eq(result["provider_meta"]["target_size"], [32, 24])
+	assert_eq(result["provider_meta"], {})
 
 
 func test_targeted_request_uses_only_the_requested_generate_branch() -> void:
@@ -238,22 +241,22 @@ func test_structured_rows_split_at_model_limit_and_retry_only_failed_rows() -> v
 	assert_eq(retry["requests"][0]["batch"], 2)
 
 
-func test_error_mapping_and_single_retry_policy_are_stable() -> void:
+func test_error_mapping_and_no_generation_retry_policy_are_stable() -> void:
 	assert_eq(_provider.map_error(HTTPRequest.RESULT_SUCCESS, 401)["code"], "auth_failed")
 	assert_eq(_provider.map_error(HTTPRequest.RESULT_SUCCESS, 429)["code"], "rate_limited")
 	assert_eq(
 		(
 			_provider
 			. map_error(
-				HTTPRequest.RESULT_SUCCESS, 400, {"error": {"code": "content_policy_violation"}}
+				HTTPRequest.RESULT_SUCCESS, 400, {"provider_code": "content_policy_violation"}
 			)["code"]
 		),
 		"content_policy"
 	)
 	assert_eq(_provider.map_error(HTTPRequest.RESULT_SUCCESS, 500)["code"], "provider_internal")
 	assert_eq(_provider.map_error(HTTPRequest.RESULT_TIMEOUT, 0)["code"], "timeout")
-	assert_true(_provider.should_retry(HTTPRequest.RESULT_CANT_CONNECT, 0, 0))
-	assert_true(_provider.should_retry(HTTPRequest.RESULT_SUCCESS, 503, 0))
+	assert_false(_provider.should_retry(HTTPRequest.RESULT_CANT_CONNECT, 0, 0))
+	assert_false(_provider.should_retry(HTTPRequest.RESULT_SUCCESS, 503, 0))
 	assert_false(_provider.should_retry(HTTPRequest.RESULT_SUCCESS, 503, 1))
 	assert_false(_provider.should_retry(HTTPRequest.RESULT_SUCCESS, 429, 0))
 
@@ -284,7 +287,7 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 	assert_eq(provenance["model"], "gpt-image-2")
 	assert_eq(provenance["prompt"], "wooden barrel")
 	assert_eq(provenance["cost"], -1.0)
-	assert_eq(int(provenance["provider_meta"]["usage"]["total_tokens"]), 42)
+	assert_eq(provenance["provider_meta"], {})
 	assert_false(JSON.stringify(meta).contains(SECRET_SENTINEL))
 
 
@@ -321,8 +324,7 @@ func test_generate_uses_shared_http_worker_decode_and_official_response_metadata
 
 	assert_eq(outcome["status"], "finished")
 	assert_eq(outcome["value"]["images"].size(), 2)
-	assert_eq(outcome["value"]["provider_meta"]["background"], "opaque")
-	assert_eq(outcome["value"]["provider_meta"]["output_format"], "png")
+	assert_eq(outcome["value"]["provider_meta"], {})
 	assert_false(JSON.stringify(task.payload).contains(SECRET_SENTINEL))
 
 
@@ -376,11 +378,7 @@ func test_two_references_use_ordered_official_multipart_edit_fields() -> void:
 	assert_true(await _wait_until(func() -> bool: return outcome["status"] != "pending"))
 	assert_eq(outcome["status"], "finished")
 	assert_eq(outcome["value"]["images"].size(), 2)
-	assert_eq(
-		outcome["value"]["provider_meta"]["usage"]["fixture_reference_sha256s"],
-		[_sha256(blue.save_png_to_buffer()), _sha256(red.save_png_to_buffer())]
-	)
-	assert_eq(outcome["value"]["provider_meta"]["background"], "opaque")
+	assert_eq(outcome["value"]["provider_meta"], {})
 
 
 func _load_fixture() -> Dictionary:

@@ -10,6 +10,7 @@ signal request_completed(task_id: String, result: Dictionary)
 
 const TaskScript := preload("res://services/pf_task.gd")
 const Log := preload("res://core/util/log_util.gd")
+const RetrySchedulerScript := preload("res://infra/retry_scheduler.gd")
 
 const DEFAULT_TIMEOUT_SECONDS := 60.0
 const DEFAULT_RETRIES := 0
@@ -17,6 +18,11 @@ const DEFAULT_BACKOFF_SECONDS := 0.5
 const GENERATION_TIMEOUT_SECONDS := 180.0
 
 var _requests := {}
+var _retry_scheduler: RefCounted = RetrySchedulerScript.new()
+
+
+func set_retry_scheduler(scheduler: RefCounted) -> void:
+	_retry_scheduler = scheduler if scheduler != null else RetrySchedulerScript.new()
 
 
 func request_json(
@@ -93,14 +99,15 @@ func _make_task(
 	expect_json: bool,
 	opts: Dictionary
 ) -> Variant:
-	var safe_opts := _normalize_opts(opts)
+	var safe_opts := _normalize_opts(method, opts)
+	var safe_url := _safe_log_url(url)
 	var task := (
 		TaskScript
 		. new(
 			"http_request",
 			{
 				"method": method,
-				"url": url,
+				"url": safe_url,
 				"timeout_seconds": safe_opts["timeout"],
 				"retries": safe_opts["retries"],
 			}
@@ -112,10 +119,12 @@ func _make_task(
 	return task
 
 
-func _normalize_opts(opts: Dictionary) -> Dictionary:
+func _normalize_opts(method: int, opts: Dictionary) -> Dictionary:
+	var requested_retries := maxi(0, int(opts.get("retries", DEFAULT_RETRIES)))
+	var safe_get_retries := mini(requested_retries, 2) if method == HTTPClient.METHOD_GET else 0
 	return {
 		"timeout": maxf(0.01, float(opts.get("timeout", DEFAULT_TIMEOUT_SECONDS))),
-		"retries": maxi(0, int(opts.get("retries", DEFAULT_RETRIES))),
+		"retries": safe_get_retries,
 		"backoff": maxf(0.0, float(opts.get("backoff", DEFAULT_BACKOFF_SECONDS))),
 		"log_requests": bool(opts.get("log_requests", false)),
 		"transform": opts.get("transform", Callable()),
@@ -147,7 +156,7 @@ func _start_request(
 		"opts": opts,
 		"attempt": 0,
 	}
-	request_started.emit(task.id, url, method)
+	request_started.emit(task.id, _safe_log_url(url), method)
 	_attempt_request(task.id)
 
 
@@ -166,14 +175,16 @@ func _attempt_request(task_id: String) -> void:
 	_requests[task_id] = state
 	request.request_completed.connect(_on_request_completed.bind(task_id))
 	var attempt := int(state["attempt"])
-	request_attempted.emit(task_id, attempt, Time.get_ticks_msec())
+	request_attempted.emit(task_id, attempt, _retry_scheduler.monotonic_msec())
 	_log_request_if_enabled(state)
 	var request_error := request.request_raw(
 		String(state["url"]), state["headers"], int(state["method"]), state["body"]
 	)
 	if request_error != OK:
 		_dispose_request(state)
-		_handle_failure(task_id, HTTPRequest.RESULT_REQUEST_FAILED, 0, PackedByteArray())
+		_handle_failure(
+			task_id, HTTPRequest.RESULT_REQUEST_FAILED, 0, PackedStringArray(), PackedByteArray()
+		)
 
 
 func _on_request_completed(
@@ -188,7 +199,7 @@ func _on_request_completed(
 	var state: Dictionary = _requests[task_id]
 	_dispose_request(state)
 	if result != HTTPRequest.RESULT_SUCCESS or status_code < 200 or status_code >= 300:
-		_handle_failure(task_id, result, status_code, body)
+		_handle_failure(task_id, result, status_code, response_headers, body)
 		return
 	var response_body: Variant = body
 	if bool(state["expect_json"]):
@@ -219,6 +230,12 @@ func _on_request_completed(
 			_transform_response_on_worker(task_id, response, transform)
 			return
 		response = _apply_response_transform(response, transform)
+	else:
+		response = {
+			"ok": true,
+			"status_code": status_code,
+			"attempts": int(state["attempt"]) + 1,
+		}
 	_complete_success(task_id, response)
 
 
@@ -260,7 +277,11 @@ func _apply_response_transform(response: Dictionary, transform: Callable) -> Dic
 
 
 func _handle_failure(
-	task_id: String, result: int, status_code: int, response_body: PackedByteArray
+	task_id: String,
+	result: int,
+	status_code: int,
+	response_headers: PackedStringArray,
+	response_body: PackedByteArray
 ) -> void:
 	if not _requests.has(task_id):
 		return
@@ -269,7 +290,9 @@ func _handle_failure(
 	var retries := int(state["opts"]["retries"])
 	if attempt < retries and _is_retryable(result, status_code):
 		var next_attempt := attempt + 1
-		var delay_seconds := float(state["opts"]["backoff"]) * pow(2.0, float(attempt))
+		var delay_seconds: float = float(
+			_retry_scheduler.delay_for(attempt, response_headers)
+		)
 		state["attempt"] = next_attempt
 		_requests[task_id] = state
 		var task: Variant = state["task"]
@@ -277,21 +300,44 @@ func _handle_failure(
 		_retry_after(task_id, delay_seconds)
 		return
 	var detail := {"status_code": status_code, "attempts": attempt + 1}
-	if not response_body.is_empty():
-		var json := JSON.new()
-		if json.parse(response_body.get_string_from_utf8()) == OK and json.data is Dictionary:
-			detail["response"] = json.data
+	var provider_code := _safe_provider_code(response_body)
+	if not provider_code.is_empty():
+		detail["provider_code"] = provider_code
 	var error_mapper: Callable = state["opts"]["error_mapper"]
 	var error: Dictionary = (
 		error_mapper.call(result, status_code, detail)
 		if error_mapper.is_valid()
-		else map_error(result, status_code, detail)
+		else map_error(
+			result,
+			status_code,
+			{"status_code": status_code, "attempts": attempt + 1}
+		)
 	)
 	_finish_failed(task_id, error)
 
 
+func _safe_provider_code(response_body: PackedByteArray) -> String:
+	if response_body.is_empty():
+		return ""
+	var parsed: Variant = JSON.parse_string(response_body.get_string_from_utf8())
+	if not (parsed is Dictionary):
+		return ""
+	var body: Dictionary = parsed
+	var code := String(body.get("code", "")).strip_edges()
+	for container_key in ["error", "detail"]:
+		var container: Variant = body.get(container_key, {})
+		if code.is_empty() and container is Dictionary:
+			code = String(container.get("code", "")).strip_edges()
+	if code.is_empty() or code.length() > 64:
+		return ""
+	var allowed := RegEx.new()
+	if allowed.compile("^[A-Za-z0-9._:-]{1,64}$") != OK or allowed.search(code) == null:
+		return ""
+	return code
+
+
 func _retry_after(task_id: String, delay_seconds: float) -> void:
-	await get_tree().create_timer(delay_seconds).timeout
+	await _retry_scheduler.wait(delay_seconds)
 	if _requests.has(task_id):
 		_attempt_request(task_id)
 
@@ -337,7 +383,7 @@ func _log_request_if_enabled(state: Dictionary) -> void:
 			"HTTP request",
 			{
 				"method": state["method"],
-				"url": state["url"],
+				"url": _safe_log_url(String(state["url"])),
 				"headers": _redacted_headers(state["headers"]),
 				"attempt": state["attempt"],
 			}
@@ -355,11 +401,43 @@ func _redacted_headers(headers: PackedStringArray) -> PackedStringArray:
 	for header in headers:
 		var separator := header.find(":")
 		var name := header.substr(0, separator).strip_edges() if separator >= 0 else header
-		if name.to_lower() in ["authorization", "proxy-authorization", "x-api-key", "api-key"]:
+		var normalized := name.to_lower()
+		if _is_sensitive_header_name(normalized):
 			redacted.append("%s: [REDACTED]" % name)
 		else:
 			redacted.append(header)
 	return redacted
+
+
+func _is_sensitive_header_name(normalized_name: String) -> bool:
+	if normalized_name in [
+		"authorization",
+		"proxy-authorization",
+		"x-api-key",
+		"api-key",
+		"x-rd-token",
+		"cookie",
+		"set-cookie",
+	]:
+		return true
+	for marker in ["token", "secret", "credential", "api-key"]:
+		if normalized_name.contains(marker):
+			return true
+	return false
+
+
+func _safe_log_url(url: String) -> String:
+	var expression := RegEx.new()
+	if expression.compile("^(https?)://([^/?#]+)([^?#]*)") != OK:
+		return "[invalid-url]"
+	var match_result := expression.search(url.strip_edges())
+	if match_result == null:
+		return "[invalid-url]"
+	var authority := match_result.get_string(2)
+	if authority.contains("@"):
+		authority = authority.get_slice("@", authority.get_slice_count("@") - 1)
+	var path := match_result.get_string(3)
+	return "%s://%s%s" % [match_result.get_string(1), authority, path]
 
 
 func _error(code: String, message: String, detail: Dictionary = {}) -> Dictionary:

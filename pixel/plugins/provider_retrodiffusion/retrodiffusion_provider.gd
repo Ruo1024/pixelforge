@@ -15,7 +15,7 @@ const DEFAULT_STYLE_STANDARD := "rd_pro__default"
 const DEFAULT_STYLE_LARGE := "rd_fast__default"
 const REQUEST_TIMEOUT_SECONDS := 180.0
 const MAX_BATCH := 4
-const MAX_RETRIES := 3
+const MAX_RETRIES := 0
 const RETRY_BACKOFF_SECONDS := 0.5
 const DOCUMENTED_RD_PRO_UNIT_COST := 0.25
 const MODEL_STYLES := {
@@ -53,6 +53,7 @@ func get_capabilities() -> Dictionary:
 		"sizes": [[16, 16], [384, 384]],
 		"animation": false,
 		"cost_estimate": true,
+		"safe_validation": false,
 	}
 
 
@@ -113,31 +114,7 @@ func has_session_credentials() -> bool:
 
 
 func validate_credentials() -> Variant:
-	if not _is_ready_for_request():
-		return null
-	var body := {
-		"width": 64,
-		"height": 64,
-		"prompt": "credential validation",
-		"prompt_style": DEFAULT_STYLE_LOW_RES,
-		"num_images": 1,
-		"check_cost": true,
-	}
-	return (
-		_http
-		. request_json(
-			HTTPClient.METHOD_POST,
-			_endpoint,
-			_headers(),
-			body,
-			{
-				"timeout": REQUEST_TIMEOUT_SECONDS,
-				"retries": 0,
-				"transform": _decode_validation_response,
-				"error_mapper": map_error,
-			}
-		)
-	)
+	return null
 
 
 func generate(request: Dictionary) -> Variant:
@@ -224,13 +201,7 @@ func decode_success_payload(payload: Dictionary, request: Dictionary) -> Diction
 		"raw_pixel": true,
 		"seeds": seeds,
 		"cost": float(payload.get("balance_cost", -1.0)),
-		"provider_meta":
-		{
-			"model": String(payload.get("model", "")),
-			"remaining_balance": payload.get("remaining_balance", null),
-			"created_at": payload.get("created_at", null),
-			"prompt_style": _style_for_request(request),
-		},
+		"provider_meta": {},
 	}
 
 
@@ -243,11 +214,8 @@ func map_error(result: int, status_code: int, detail: Dictionary = {}) -> Dictio
 	elif result != HTTPRequest.RESULT_SUCCESS:
 		code = "network"
 		result_message = "Could not reach RetroDiffusion; check the network"
-	var response: Dictionary = detail.get("response", {})
-	var api_detail: Dictionary = response.get("detail", {})
-	var api_code := String(api_detail.get("code", "")).to_lower()
-	var api_message := String(api_detail.get("message", "")).strip_edges()
 	if result == HTTPRequest.RESULT_SUCCESS:
+		var provider_code := String(detail.get("provider_code", "")).to_lower()
 		match status_code:
 			401, 403:
 				code = "auth_failed"
@@ -256,25 +224,17 @@ func map_error(result: int, status_code: int, detail: Dictionary = {}) -> Dictio
 				code = "rate_limited"
 				result_message = "RetroDiffusion is rate limited; retry later"
 			400:
-				var insufficient := (
-					"credit" in api_code
-					or "balance" in api_code
-					or "insufficient" in api_message.to_lower()
-				)
+				var insufficient := "credit" in provider_code or "balance" in provider_code
 				code = "quota_exceeded" if insufficient else "invalid_request"
 				result_message = (
 					"RetroDiffusion balance is insufficient"
 					if insufficient
-					else (
-						api_message
-						if not api_message.is_empty()
-						else "RetroDiffusion rejected the request"
-					)
+					else "RetroDiffusion rejected the request"
 				)
 			_:
 				if status_code >= 500:
 					result_message = "RetroDiffusion inference failed"
-	return _error(code, result_message, detail)
+	return _error(code, result_message, _safe_error_detail(detail))
 
 
 func _decode_generation_response(response: Dictionary, request: Dictionary) -> Dictionary:
@@ -282,16 +242,6 @@ func _decode_generation_response(response: Dictionary, request: Dictionary) -> D
 	if not (payload is Dictionary):
 		return _failure("provider_internal", "RetroDiffusion returned an invalid response")
 	return decode_success_payload(payload, request)
-
-
-func _decode_validation_response(response: Dictionary) -> Dictionary:
-	var payload: Dictionary = response.get("body", {})
-	return {
-		"ok": true,
-		"provider_id": PROVIDER_ID,
-		"estimated_cost": float(payload.get("balance_cost", -1.0)),
-		"remaining_balance": payload.get("remaining_balance", null),
-	}
 
 
 func _style_for_request(request: Dictionary) -> String:
@@ -325,6 +275,17 @@ func _legacy_model_for_request(request: Dictionary) -> String:
 
 func _headers() -> PackedStringArray:
 	return PackedStringArray(["X-RD-Token: %s" % _api_key, "Content-Type: application/json"])
+
+
+func _safe_error_detail(detail: Dictionary) -> Dictionary:
+	var safe := {}
+	for key in ["status_code", "attempts"]:
+		if detail.has(key):
+			safe[key] = detail[key]
+	var provider_code := String(detail.get("provider_code", "")).to_lower()
+	if "credit" in provider_code or "balance" in provider_code:
+		safe["provider_code"] = provider_code
+	return safe
 
 
 func _is_ready_for_request() -> bool:
@@ -362,6 +323,7 @@ func _model_descriptor(
 			"seed": true,
 			"transparent_bg": true,
 			"cost_estimate": model_id == "rd_pro",
+			"safe_validation": false,
 		}
 	}
 

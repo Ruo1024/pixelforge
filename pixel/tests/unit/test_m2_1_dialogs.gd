@@ -6,6 +6,9 @@ const OutlineDialogScript := preload("res://ui/dialogs/outline_dialog.gd")
 const GraphNodeParamsDialogScript := preload("res://ui/dialogs/graph_node_params_dialog.gd")
 const OpenAISessionDialogScript := preload("res://ui/dialogs/openai_session_dialog.gd")
 const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_settings_dialog.gd")
+const OpenAIGenerationControllerScript := preload(
+	"res://ui/shell/openai_generation_controller.gd"
+)
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
@@ -127,6 +130,28 @@ func test_provider_settings_dialog_masks_schema_password_and_shows_capabilities(
 	var secret: LineEdit = dialog.get_field_control("api_key")
 	assert_not_null(secret)
 	assert_true(secret.secret)
+	assert_true(dialog.is_validation_available())
+	dialog._select_provider("retrodiffusion")
+	assert_false(dialog.is_validation_available())
+
+
+func test_legacy_openai_session_action_redirects_to_unified_provider_settings() -> void:
+	var provider_dialog: ConfirmationDialog = ProviderSettingsDialogScript.new()
+	add_child_autofree(provider_dialog)
+	var controller: Node = OpenAIGenerationControllerScript.new()
+	add_child_autofree(controller)
+	var canvas := Control.new()
+	add_child_autofree(canvas)
+	var status_label := Label.new()
+	add_child_autofree(status_label)
+	controller.setup(canvas, status_label, null, provider_dialog)
+	await wait_process_frames(1)
+
+	controller.configure_session()
+	await wait_process_frames(1)
+	assert_true(provider_dialog.visible)
+	assert_eq(provider_dialog.get_current_provider_id(), "openai_image")
+	assert_null(controller.get_node_or_null("OpenAISessionDialog"))
 
 
 func test_ai_generate_provider_field_only_lists_verified_providers_plus_mock() -> void:

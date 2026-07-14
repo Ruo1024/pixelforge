@@ -1,11 +1,9 @@
 class_name PFOpenAIGenerationController
 extends Node
 
-## 云端 Provider 会话与异步生成闭环。
-## 保留 M4-V1 OpenAI 会话入口，同时执行所有已验证的非 mock Provider graph。
+## 云端 Provider 异步生成闭环；配置统一进入 ProviderSettingsDialog。
 
 const Strings := preload("res://ui/shell/strings.gd")
-const OpenAISessionDialogScript := preload("res://ui/dialogs/openai_session_dialog.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const ObjectListNodeScript := preload("res://core/graph/nodes/object_list_node.gd")
 const SizeSpecNodeScript := preload("res://core/graph/nodes/size_spec_node.gd")
@@ -18,21 +16,23 @@ const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
 var _canvas: Control = null
 var _status_label: Label = null
 var _cost_label: Label = null
-var _session_dialog: ConfirmationDialog = null
+var _provider_settings_dialog: ConfirmationDialog = null
 var _budget_dialog: ConfirmationDialog = null
 var _pending_runs := {}
 var _pending_budget_run := {}
 var _run_scopes := {}
 
 
-func setup(canvas: Control, status_label: Label, cost_label: Label = null) -> void:
+func setup(
+	canvas: Control,
+	status_label: Label,
+	cost_label: Label = null,
+	provider_settings_dialog: ConfirmationDialog = null
+) -> void:
 	_canvas = canvas
 	_status_label = status_label
 	_cost_label = cost_label
-	_session_dialog = OpenAISessionDialogScript.new()
-	_session_dialog.name = "OpenAISessionDialog"
-	_session_dialog.session_configured.connect(_on_session_configured)
-	add_child(_session_dialog)
+	_provider_settings_dialog = provider_settings_dialog
 	_budget_dialog = ConfirmationDialog.new()
 	_budget_dialog.name = "ProviderBudgetDialog"
 	_budget_dialog.title = Strings.DIALOG_PROVIDER_BUDGET_TITLE
@@ -47,7 +47,8 @@ func setup(canvas: Control, status_label: Label, cost_label: Label = null) -> vo
 
 
 func configure_session() -> void:
-	_session_dialog.popup_for_session()
+	if _provider_settings_dialog != null:
+		_provider_settings_dialog.show_settings("openai_image")
 
 
 func generate_batch() -> void:
@@ -239,10 +240,6 @@ func _submit_provider_run(run_state: Dictionary) -> void:
 	_status_label.text = Strings.STATUS_PROVIDER_GENERATE_QUEUED_FORMAT % display_name
 
 
-func get_session_dialog() -> ConfirmationDialog:
-	return _session_dialog
-
-
 func get_budget_dialog() -> ConfirmationDialog:
 	return _budget_dialog
 
@@ -253,15 +250,6 @@ func _confirm_budget_run() -> void:
 	var pending := _pending_budget_run
 	_pending_budget_run = {}
 	_submit_provider_runs(pending.get("runs", []))
-
-
-func _on_session_configured(api_key: String) -> void:
-	var error: Variant = ProviderService.configure_session("openai_image", {"api_key": api_key})
-	_status_label.text = (
-		Strings.STATUS_OPENAI_SESSION_READY
-		if error == null
-		else Strings.STATUS_OPENAI_SESSION_REQUIRED
-	)
 
 
 func _on_progress(_task_id: String, ratio: float, message: String) -> void:
@@ -464,13 +452,16 @@ func _metadata(result: Dictionary, request: Dictionary, count: int, provider_id:
 	var seeds: Array = result.get("seeds", [])
 	var provider_meta: Dictionary = result.get("provider_meta", {})
 	var total_cost := float(result.get("cost", -1.0))
+	var model_id := ProviderService.resolve_model_id(
+		provider_id, String(request.get("model_id", ""))
+	)
 	for index in range(count):
 		(
 			metadata
 			. append(
 				{
 					"provider": provider_id,
-					"model": String(provider_meta.get("model", request.get("model_id", ""))),
+					"model": model_id,
 					"prompt": request.get("prompt", ""),
 					"seed": seeds[index] if index < seeds.size() else null,
 					"cost": total_cost / count if total_cost >= 0.0 and count > 0 else -1.0,
@@ -485,7 +476,7 @@ func _metadata(result: Dictionary, request: Dictionary, count: int, provider_id:
 					_generation_snapshot(
 						request,
 						provider_id,
-						String(provider_meta.get("model", request.get("model_id", ""))),
+						model_id,
 						seeds[index] if index < seeds.size() else null,
 						total_cost / count if total_cost >= 0.0 and count > 0 else -1.0
 					),

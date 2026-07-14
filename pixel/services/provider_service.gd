@@ -131,7 +131,7 @@ func get_model_descriptors(provider_id: String = "") -> Array[Dictionary]:
 func get_selectable_model_descriptors() -> Array[Dictionary]:
 	var descriptors: Array[Dictionary] = [MOCK_MODEL_DESCRIPTOR.duplicate(true)]
 	for provider_id in get_provider_ids():
-		if get_validation_state(String(provider_id)) != "verified":
+		if not _provider_can_generate(String(provider_id)):
 			continue
 		descriptors.append_array(get_model_descriptors(String(provider_id)))
 	return descriptors
@@ -171,7 +171,7 @@ func validate_generation_request(provider_id: String, request: Dictionary) -> Va
 func get_selectable_provider_ids() -> Array:
 	var ids := [DEFAULT_PROVIDER]
 	for provider_id in get_provider_ids():
-		if get_validation_state(String(provider_id)) == "verified":
+		if _provider_can_generate(String(provider_id)):
 			ids.append(String(provider_id))
 	return ids
 
@@ -229,7 +229,7 @@ func save_provider_config(provider_id: String, config: Dictionary) -> Dictionary
 	if configure_error != null:
 		return configure_error
 	SettingsService.set_setting(_provider_settings_section(provider_id), "validated", false)
-	_set_validation_state(provider_id, "configured", "Saved; validate before use")
+	_set_validation_state(provider_id, "configured", _configured_message(provider))
 	provider_config_changed.emit(provider_id)
 	return {"ok": true}
 
@@ -240,33 +240,54 @@ func delete_provider_credentials(provider_id: String) -> Error:
 	if provider != null and provider.has_method("clear_session_config"):
 		provider.clear_session_config()
 	SettingsService.set_setting(_provider_settings_section(provider_id), "validated", false)
-	_set_validation_state(provider_id, "unconfigured", "Credentials removed")
+	_set_validation_state(
+		provider_id,
+		"unconfigured",
+		LocalizationService.text("PROVIDER_STATUS_CREDENTIALS_REMOVED", "Credentials removed")
+	)
 	provider_config_changed.emit(provider_id)
 	return error
 
 
 func validate_provider(provider_id: String) -> Variant:
 	var provider := get_provider(provider_id)
-	if provider == null:
+	if provider == null or not _safe_validation(provider):
 		return null
 	var task: Variant = provider.validate_credentials()
 	if task == null:
 		return null
-	_set_validation_state(provider_id, "validating", "Validating credentials…")
+	_set_validation_state(
+		provider_id,
+		"validating",
+		LocalizationService.text("PROVIDER_STATUS_VALIDATING", "Validating credentials…")
+	)
 	task.finished.connect(
 		func(_result: Variant) -> void:
 			SettingsService.set_setting(_provider_settings_section(provider_id), "validated", true)
-			_set_validation_state(provider_id, "verified", "Credentials verified")
+			_set_validation_state(
+				provider_id,
+				"verified",
+				LocalizationService.text("PROVIDER_STATUS_VERIFIED", "Credentials verified")
+			)
 	)
 	task.failed.connect(
 		func(error: Dictionary) -> void:
 			SettingsService.set_setting(_provider_settings_section(provider_id), "validated", false)
 			_set_validation_state(
-				provider_id, "failed", String(error.get("message", "Validation failed"))
+				provider_id,
+				"invalid",
+				LocalizationService.text("PROVIDER_STATUS_INVALID", "Credentials are invalid")
 			)
 	)
 	task.canceled.connect(
-		func() -> void: _set_validation_state(provider_id, "configured", "Validation canceled")
+		func() -> void:
+			_set_validation_state(
+				provider_id,
+				"configured",
+				LocalizationService.text(
+					"PROVIDER_STATUS_VALIDATION_CANCELED", "Validation canceled"
+				)
+			)
 	)
 	return task
 
@@ -305,7 +326,36 @@ func generate(provider_id: String, request: Dictionary) -> Variant:
 	var provider := get_provider(provider_id)
 	if provider == null:
 		return null
-	return provider.generate(request)
+	if not _provider_can_generate(provider_id):
+		return null
+	var task: Variant = provider.generate(request)
+	if task != null and not _safe_validation(provider):
+		task.finished.connect(
+			func(_result: Variant) -> void:
+				SettingsService.set_setting(
+					_provider_settings_section(provider_id), "validated", true
+				)
+				_set_validation_state(
+					provider_id,
+					"verified",
+					LocalizationService.text("PROVIDER_STATUS_VERIFIED", "Credentials verified")
+				)
+		)
+		task.failed.connect(
+			func(error: Dictionary) -> void:
+				if String(error.get("code", "")) == "auth_failed":
+					SettingsService.set_setting(
+						_provider_settings_section(provider_id), "validated", false
+					)
+					_set_validation_state(
+						provider_id,
+						"invalid",
+						LocalizationService.text(
+							"PROVIDER_STATUS_INVALID", "Credentials are invalid"
+						)
+					)
+		)
+	return task
 
 
 func _configure_from_storage(provider_id: String) -> Variant:
@@ -335,15 +385,42 @@ func _configure_from_storage(provider_id: String) -> Variant:
 		if bool(
 			SettingsService.get_setting(_provider_settings_section(provider_id), "validated", false)
 		):
-			_set_validation_state(provider_id, "verified", "Credentials verified previously")
+			_set_validation_state(
+				provider_id,
+				"verified",
+				LocalizationService.text("PROVIDER_STATUS_VERIFIED", "Credentials verified")
+			)
 		else:
-			_set_validation_state(provider_id, "configured", "Saved; validate before use")
+			_set_validation_state(provider_id, "configured", _configured_message(provider))
 	return error
 
 
 func _set_validation_state(provider_id: String, state: String, message: String) -> void:
 	_validation_states[provider_id] = {"state": state, "message": message}
 	provider_validation_changed.emit(provider_id, state, message)
+
+
+func _safe_validation(provider: PFProvider) -> bool:
+	return bool(provider.get_capabilities().get("safe_validation", true))
+
+
+func _provider_can_generate(provider_id: String) -> bool:
+	var provider := get_provider(provider_id)
+	if provider == null:
+		return false
+	var state := get_validation_state(provider_id)
+	return state == "verified" or (state == "configured" and not _safe_validation(provider))
+
+
+func _configured_message(provider: PFProvider) -> String:
+	if _safe_validation(provider):
+		return LocalizationService.text(
+			"PROVIDER_STATUS_SAVED_VALIDATE", "Saved; validate before use"
+		)
+	return LocalizationService.text(
+		"PROVIDER_STATUS_SAVED_FIRST_GENERATION",
+		"Saved; credentials will be verified on the first real generation"
+	)
 
 
 func _provider_settings_section(provider_id: String) -> String:

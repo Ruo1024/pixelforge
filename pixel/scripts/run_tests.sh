@@ -33,4 +33,4 @@ if [[ ! -s "${http_port_file}" ]]; then
 fi
 export PF_HTTP_MOCK_URL="http://127.0.0.1:$(<"${http_port_file}")"
 
-"${GODOT}" --headless -s addons/gut/gut_cmdln.gd -gdir=res://tests -ginclude_subdirs -gno_error_tracking -gexit
+"${GODOT}" --headless -s addons/gut/gut_cmdln.gd -gdir=res://tests -ginclude_subdirs -gno_error_tracking -gexit "$@"

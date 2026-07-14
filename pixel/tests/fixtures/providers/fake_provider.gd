@@ -4,6 +4,7 @@ const TaskScript := preload("res://services/pf_task.gd")
 
 var configured_key := ""
 var configured_endpoint := ""
+var safe_validation := true
 
 
 func get_id() -> String:
@@ -21,6 +22,7 @@ func get_capabilities() -> Dictionary:
 		"transparent_bg": false,
 		"native_pixel": false,
 		"max_batch": 2,
+		"safe_validation": safe_validation,
 	}
 
 
@@ -46,6 +48,18 @@ func configure(config: Dictionary) -> Variant:
 
 func validate_credentials() -> Variant:
 	var task := TaskScript.new("fixture_validate", {"provider_id": get_id()})
+	task.configure_external(
+		func(task_ref: Variant) -> void:
+			if configured_key == "fixture-good-key":
+				task_ref.resolve({"ok": true})
+			else:
+				task_ref.reject({"code": "auth_failed", "message": "Fixture key rejected"})
+	)
+	return task
+
+
+func generate(_request: Dictionary) -> Variant:
+	var task := TaskScript.new("fixture_generate", {"provider_id": get_id()})
 	task.configure_external(
 		func(task_ref: Variant) -> void:
 			if configured_key == "fixture-good-key":

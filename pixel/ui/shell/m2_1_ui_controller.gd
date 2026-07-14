@@ -149,13 +149,13 @@ func setup(
 	_offline_example_flow.name = "OfflineExampleController"
 	add_child(_offline_example_flow)
 	_offline_example_flow.setup(_canvas, _status_label)
-	_openai_flow = OpenAIGenerationControllerScript.new()
-	_openai_flow.name = "OpenAIGenerationController"
-	add_child(_openai_flow)
-	_openai_flow.setup(_canvas, _status_label, _cost_label)
 	_provider_settings_dialog = ProviderSettingsDialogScript.new()
 	_provider_settings_dialog.name = "ProviderSettingsDialog"
 	add_child(_provider_settings_dialog)
+	_openai_flow = OpenAIGenerationControllerScript.new()
+	_openai_flow.name = "OpenAIGenerationController"
+	add_child(_openai_flow)
+	_openai_flow.setup(_canvas, _status_label, _cost_label, _provider_settings_dialog)
 	_board_editor = BoardEditorScript.new()
 	_board_editor.name = "BoardEditor"
 	add_child(_board_editor)
@@ -1677,10 +1677,9 @@ func _route_provider_graph_run(
 	if provider == null:
 		_status_label.text = _graph_run_failure_status({"message": "Provider is unavailable"})
 		return true
-	if (
-		provider_id != "openai_image"
-		and ProviderService.get_validation_state(provider_id) != "verified"
-	):
+	var validation_state := ProviderService.get_validation_state(provider_id)
+	var safe_validation := bool(provider.get_capabilities().get("safe_validation", true))
+	if validation_state != "verified" and (safe_validation or validation_state != "configured"):
 		_status_label.text = (
 			Strings.STATUS_PROVIDER_CREDENTIALS_REQUIRED_FORMAT % provider.get_display_name()
 		)

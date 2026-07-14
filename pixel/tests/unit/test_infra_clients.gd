@@ -8,7 +8,7 @@ func test_http_client_builds_external_task_without_leaking_request_headers() -> 
 	var client := HttpClientScript.new()
 	var task: Variant = client.request_json(
 		HTTPClient.METHOD_POST,
-		"https://example.test/api",
+		"https://user:credential@example.test/api?token=credential",
 		PackedStringArray(["Content-Type: application/json"]),
 		{"hello": "world"},
 		{"timeout": 5.0, "retries": 2}
@@ -18,7 +18,7 @@ func test_http_client_builds_external_task_without_leaking_request_headers() -> 
 	assert_eq(task.payload["url"], "https://example.test/api")
 	assert_eq(task.payload["method"], HTTPClient.METHOD_POST)
 	assert_eq(task.payload["timeout_seconds"], 5.0)
-	assert_eq(task.payload["retries"], 2)
+	assert_eq(task.payload["retries"], 0)
 	assert_false(task.payload.has("headers"))
 	assert_false(task.payload.has("body"))
 	client.free()

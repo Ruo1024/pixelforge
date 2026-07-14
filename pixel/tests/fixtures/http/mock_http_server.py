@@ -6,18 +6,45 @@ import hashlib
 import re
 import sys
 import time
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 
 class Handler(BaseHTTPRequestHandler):
     retry_count = 0
+    safe_retry_count = 0
+    credential_sentinel_received = False
+    request_counts = {}
     comfy_prompt = {}
     comfy_interrupts = 0
     openai_edit = {}
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
-        if self.path == "/openai-model":
+        parsed_path = urlparse(self.path)
+        if parsed_path.path == "/request-count":
+            target = parse_qs(parsed_path.query).get("path", [""])[0]
+            self._json(200, {"count": Handler.request_counts.get(target, 0)})
+        elif self.path == "/retry-three":
+            Handler.retry_count += 1
+            if Handler.retry_count <= 3:
+                self._json(429, {"error": "retry", "attempt": Handler.retry_count})
+            else:
+                self._json(200, {"ok": True, "attempt": Handler.retry_count})
+        elif self.path == "/safe-retry":
+            Handler.safe_retry_count += 1
+            if Handler.safe_retry_count <= 2:
+                self._json(
+                    429,
+                    {"error": "retry", "attempt": Handler.safe_retry_count},
+                    {"Retry-After": "3600"},
+                )
+            else:
+                self._json(200, {"ok": True, "attempt": Handler.safe_retry_count})
+        elif self.path == "/credential-sentinel-status":
+            self._json(200, {"received": Handler.credential_sentinel_received})
+        elif self.path == "/openai-model":
             self._json(200, {"id": "gpt-image-2", "object": "model"})
         elif self.path == "/system_stats":
             self._json(200, {"system": {"os": "fixture"}, "devices": []})
@@ -46,6 +73,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": {"message": "missing"}})
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
+        request_path = urlparse(self.path).path
+        Handler.request_counts[request_path] = Handler.request_counts.get(request_path, 0) + 1
         content_length = int(self.headers.get("Content-Length", "0"))
         request_body = {}
         raw_body = b""
@@ -117,15 +146,28 @@ class Handler(BaseHTTPRequestHandler):
             })
         elif self.path == "/auth":
             self._json(401, {"error": "bad credentials"})
-        elif self.path == "/rate-limit":
+        elif self.path in {"/rate-limit", "/post-rate-limit"}:
             self._json(429, {"error": "slow down"})
+        elif self.path in {"/server-error", "/post-server-error"}:
+            self._json(503, {"error": "temporary failure"})
+        elif self.path == "/network-drop":
+            self.connection.shutdown(socket.SHUT_RDWR)
+            self.connection.close()
+        elif self.path.startswith("/credential-sentinel?"):
+            sentinel = "PF_B7_CREDENTIAL_SENTINEL_7B1E9C42"
+            Handler.credential_sentinel_received = self.headers.get("X-RD-Token") == sentinel
+            self._json(401, {"error": {"code": sentinel, "message": sentinel}})
+        elif self.path == "/credential-sentinel-success":
+            sentinel = "PF_B7_CREDENTIAL_SENTINEL_7B1E9C42"
+            Handler.credential_sentinel_received = self.headers.get("X-RD-Token") == sentinel
+            self._json(200, {"echo": sentinel})
         elif self.path == "/retry-three":
             Handler.retry_count += 1
             if Handler.retry_count <= 3:
                 self._json(429, {"error": "retry", "attempt": Handler.retry_count})
             else:
                 self._json(200, {"ok": True, "attempt": Handler.retry_count})
-        elif self.path == "/timeout":
+        elif self.path in {"/timeout", "/post-timeout"}:
             time.sleep(0.3)
             self._json(200, {"ok": True})
         elif self.path == "/malformed":
@@ -141,10 +183,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
-    def _json(self, status: int, body: dict) -> None:
+    def _json(self, status: int, body: dict, headers=None) -> None:
         payload = json.dumps(body).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         try:

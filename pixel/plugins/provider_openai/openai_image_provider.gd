@@ -15,7 +15,7 @@ const EDIT_URL := "https://api.openai.com/v1/images/edits"
 const VALIDATION_URL := "https://api.openai.com/v1/models/gpt-image-2"
 const MULTIPART_BOUNDARY := "----PixelForgeImageBoundary7MA4YWxkTrZu0gW"
 const REQUEST_TIMEOUT_SECONDS := 180.0
-const MAX_NETWORK_RETRIES := 1
+const MAX_NETWORK_RETRIES := 0
 const RETRY_DELAY_SECONDS := 0.25
 const MAX_BATCH := 4
 
@@ -50,6 +50,7 @@ func get_capabilities() -> Dictionary:
 		"sizes": [[16, 16], [512, 512]],
 		"animation": false,
 		"cost_estimate": false,
+		"safe_validation": true,
 	}
 
 
@@ -70,6 +71,7 @@ func get_model_descriptors() -> Array[Dictionary]:
 				"seed": false,
 				"transparent_bg": false,
 				"cost_estimate": false,
+				"safe_validation": true,
 			}
 		}
 	]
@@ -126,7 +128,7 @@ func validate_credentials() -> Variant:
 			null,
 			{
 				"timeout": REQUEST_TIMEOUT_SECONDS,
-				"retries": 0,
+				"retries": 2,
 				"transform": _decode_validation_response,
 				"error_mapper": map_error,
 			}
@@ -269,23 +271,7 @@ func decode_success_payload(payload: Dictionary, request: Dictionary) -> Diction
 		"raw_pixel": false,
 		"seeds": seeds,
 		"cost": -1.0,
-		"provider_meta":
-		{
-			"model": MODEL_ID,
-			"usage": payload.get("usage", {}),
-			"revised_prompts": revised_prompts,
-			"target_size": [int(request.get("width", 32)), int(request.get("height", 32))],
-			"output_size":
-			String(
-				payload.get(
-					"size",
-					_output_size(int(request.get("width", 32)), int(request.get("height", 32)))
-				)
-			),
-			"quality": String(payload.get("quality", "low")),
-			"background": String(payload.get("background", "opaque")),
-			"output_format": String(payload.get("output_format", "png")),
-		},
+		"provider_meta": {},
 	}
 
 
@@ -298,13 +284,8 @@ func map_error(result: int, status_code: int, detail: Dictionary = {}) -> Dictio
 	elif result != HTTPRequest.RESULT_SUCCESS:
 		code = "network"
 		result_message = "Could not reach OpenAI; check the network and try again"
-	var response: Dictionary = detail.get("response", detail)
-	var api_error: Dictionary = (
-		response.get("error", {}) if response.get("error", {}) is Dictionary else {}
-	)
-	var api_code := String(api_error.get("code", ""))
-	var message := String(api_error.get("message", "")).strip_edges()
 	if result == HTTPRequest.RESULT_SUCCESS:
+		var provider_code := String(detail.get("provider_code", ""))
 		match status_code:
 			401, 403:
 				code = "auth_failed"
@@ -315,20 +296,18 @@ func map_error(result: int, status_code: int, detail: Dictionary = {}) -> Dictio
 			400:
 				code = (
 					"content_policy"
-					if api_code in ["moderation_blocked", "content_policy_violation"]
+					if provider_code in ["moderation_blocked", "content_policy_violation"]
 					else "invalid_request"
 				)
 				result_message = (
 					"The prompt was blocked by OpenAI content policy"
 					if code == "content_policy"
-					else message if not message.is_empty() else "OpenAI rejected the request"
+					else "OpenAI rejected the request"
 				)
 			_:
 				if status_code >= 500:
 					result_message = "OpenAI image service failed; try again"
-				elif not message.is_empty():
-					result_message = message
-	return _error(code, result_message, detail)
+	return _error(code, result_message, _safe_error_detail(detail))
 
 
 func should_retry(result: int, status_code: int, attempt: int) -> bool:
@@ -370,6 +349,17 @@ func _headers(content_type: String = "application/json") -> PackedStringArray:
 	return PackedStringArray(
 		["Authorization: Bearer %s" % _api_key, "Content-Type: %s" % content_type]
 	)
+
+
+func _safe_error_detail(detail: Dictionary) -> Dictionary:
+	var safe := {}
+	for key in ["status_code", "attempts"]:
+		if detail.has(key):
+			safe[key] = detail[key]
+	var provider_code := String(detail.get("provider_code", ""))
+	if provider_code in ["moderation_blocked", "content_policy_violation"]:
+		safe["provider_code"] = provider_code
+	return safe
 
 
 func _append_multipart_text(body: PackedByteArray, field_name: String, value: String) -> void:

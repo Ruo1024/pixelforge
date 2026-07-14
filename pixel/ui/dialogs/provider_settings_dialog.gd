@@ -15,6 +15,7 @@ var _provider_options: OptionButton = null
 var _capabilities_label: Label = null
 var _form: VBoxContainer = null
 var _status_label: Label = null
+var _validate_button: Button = null
 var _budget_spin: SpinBox = null
 var _fields := {}
 var _provider_id := ""
@@ -40,6 +41,10 @@ func get_field_control(key: String) -> Control:
 
 func get_current_provider_id() -> String:
 	return _provider_id
+
+
+func is_validation_available() -> bool:
+	return _validate_button != null and _validate_button.visible
 
 
 func save_current_config() -> Dictionary:
@@ -107,10 +112,10 @@ func _build() -> void:
 	save_button.text = Strings.ACTION_SAVE_PROVIDER
 	save_button.pressed.connect(save_current_config)
 	actions.add_child(save_button)
-	var validate_button := Button.new()
-	validate_button.text = Strings.ACTION_VALIDATE_PROVIDER
-	validate_button.pressed.connect(validate_current_provider)
-	actions.add_child(validate_button)
+	_validate_button = Button.new()
+	_validate_button.text = Strings.ACTION_VALIDATE_PROVIDER
+	_validate_button.pressed.connect(validate_current_provider)
+	actions.add_child(_validate_button)
 	root.add_child(actions)
 
 	_status_label = Label.new()
@@ -158,6 +163,7 @@ func _render_provider(provider_id: String) -> void:
 	if provider == null:
 		return
 	_capabilities_label.text = _capabilities_text(provider.get_capabilities())
+	_validate_button.visible = bool(provider.get_capabilities().get("safe_validation", true))
 	var values := ProviderService.get_provider_config(provider_id)
 	for field in provider.get_config_schema():
 		_add_field(field, values)

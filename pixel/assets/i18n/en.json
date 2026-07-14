@@ -398,4 +398,12 @@
 	,"BATCH_FACE_EXPORT": "Export"
 	,"ACTION_RENAME": "Rename"
 	,"ACTION_RESET_CARD_SIZE": "Reset Size"
+	,"PROVIDER_STATUS_SAVED_VALIDATE": "Saved; validate before use"
+	,"PROVIDER_STATUS_SAVED_FIRST_GENERATION": "Saved; credentials will be verified on the first real generation"
+	,"PROVIDER_STATUS_VALIDATION_UNAVAILABLE": "This provider has no safe validation endpoint"
+	,"PROVIDER_STATUS_VALIDATING": "Validating credentials…"
+	,"PROVIDER_STATUS_VERIFIED": "Credentials verified"
+	,"PROVIDER_STATUS_INVALID": "Credentials are invalid"
+	,"PROVIDER_STATUS_VALIDATION_CANCELED": "Validation canceled"
+	,"PROVIDER_STATUS_CREDENTIALS_REMOVED": "Credentials removed"
 }
