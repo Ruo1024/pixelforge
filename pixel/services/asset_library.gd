@@ -45,6 +45,11 @@ const GENERATION_SNAPSHOT_KEYS := [
 	"reference_content_sha256s",
 	"extra",
 ]
+const CLEANUP_PROVENANCE_KEYS := [
+	"source_asset", "input_source_kind", "input_source_node_id", "source_batch_node_id",
+	"source_slot_id", "cleanup_node_id", "run_id", "request_id", "preset_id",
+	"effective_target_size", "settings", "palette_snapshot", "report",
+]
 
 var _metadata := {}
 var _png_bytes := {}
@@ -97,6 +102,9 @@ func register_image(image: Image, name: String, extra_meta: Dictionary = {}) -> 
 		"generation_snapshot", null
 	)
 	if raw_snapshot is Dictionary and not validate_generation_snapshot(raw_snapshot):
+		return ""
+	var raw_cleanup: Variant = Dictionary(meta.get("provenance", {})).get("cleanup", null)
+	if raw_cleanup is Dictionary and not validate_cleanup_provenance(raw_cleanup):
 		return ""
 	var safe_meta := _meta_for_persistence(meta)
 	_metadata[asset_id] = safe_meta
@@ -161,6 +169,10 @@ func _meta_for_persistence(source: Dictionary) -> Dictionary:
 	if not (provenance is Dictionary):
 		return result
 	var provenance_copy: Dictionary = provenance
+	var cleanup: Variant = provenance_copy.get("cleanup", null)
+	if cleanup is Dictionary:
+		provenance_copy["cleanup"] = _safe_persisted_value(cleanup)
+		result["provenance"] = provenance_copy
 	var snapshot: Variant = provenance_copy.get("generation_snapshot", null)
 	if not (snapshot is Dictionary):
 		return result
@@ -278,6 +290,33 @@ static func validate_generation_snapshot(snapshot: Dictionary) -> bool:
 			or String(snapshot["reference_asset_ids"][index]).is_empty()
 			or not _is_lower_sha256(String(snapshot["reference_content_sha256s"][index]))
 		):
+			return false
+	return true
+
+
+static func validate_cleanup_provenance(cleanup: Dictionary) -> bool:
+	if cleanup.size() != CLEANUP_PROVENANCE_KEYS.size():
+		return false
+	for key in CLEANUP_PROVENANCE_KEYS:
+		if not cleanup.has(key):
+			return false
+	for key in ["source_asset", "input_source_kind", "input_source_node_id", "source_batch_node_id", "source_slot_id", "cleanup_node_id", "run_id", "request_id", "preset_id"]:
+		if not (cleanup[key] is String):
+			return false
+	if String(cleanup["source_asset"]).is_empty() or String(cleanup["cleanup_node_id"]).is_empty() or String(cleanup["run_id"]).is_empty() or String(cleanup["request_id"]).is_empty():
+		return false
+	if String(cleanup["input_source_kind"]) not in ["batch", "image_input", "reference_set"]:
+		return false
+	var target: Variant = cleanup["effective_target_size"]
+	if not (target is Array) or target.size() != 2 or not (target[0] is int) or not (target[1] is int) or int(target[0]) < 0 or int(target[1]) < 0:
+		return false
+	if not (cleanup["settings"] is Dictionary):
+		return false
+	var report: Variant = cleanup["report"]
+	if not (report is Dictionary):
+		return false
+	for key in ["input_size", "output_size", "effective_target_size", "detected_grid", "steps", "input_color_count", "output_color_count", "elapsed_ms"]:
+		if not report.has(key):
 			return false
 	return true
 

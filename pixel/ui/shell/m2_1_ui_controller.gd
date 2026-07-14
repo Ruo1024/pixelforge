@@ -20,6 +20,7 @@ const GenerationModelPolicyScript := preload("res://services/generation_model_po
 const ImportFlowControllerScript := preload("res://ui/shell/import_flow_controller.gd")
 const MenuBuilder := preload("res://ui/shell/m2_menu_builder.gd")
 const GenerationRunControllerScript := preload("res://ui/shell/generation_run_controller.gd")
+const CleanupRunControllerScript := preload("res://ui/shell/cleanup_run_controller.gd")
 const ProviderSettingsDialogScript := preload("res://ui/dialogs/provider_settings_dialog.gd")
 const BoardEditorScript := preload("res://ui/board/board_editor.gd")
 const PixelEditorScript := preload("res://ui/editor/pixel_editor.gd")
@@ -91,6 +92,7 @@ var _batch_menu: PopupMenu = null
 var _batch_menu_card_id := ""
 var _import_flow: Node = null
 var _generation_flow: Node = null
+var _cleanup_flow: Node = null
 var _offline_example_flow: Node = null
 var _provider_settings_dialog: ConfirmationDialog = null
 var _board_editor: ConfirmationDialog = null
@@ -137,6 +139,10 @@ func setup(
 	_generation_flow.name = "GenerationRunController"
 	add_child(_generation_flow)
 	_generation_flow.setup(_canvas, _status_label, _cost_label, _provider_settings_dialog)
+	_cleanup_flow = CleanupRunControllerScript.new()
+	_cleanup_flow.name = "CleanupRunController"
+	add_child(_cleanup_flow)
+	_cleanup_flow.setup(_canvas, _status_label, _generation_flow.get_run_coordinator())
 	_board_editor = BoardEditorScript.new()
 	_board_editor.name = "BoardEditor"
 	add_child(_board_editor)
@@ -322,7 +328,8 @@ func handle_graph_node_action(graph_id: String, node_id: String, action_id: Stri
 		"retry", "retry_failed":
 			_run_graph_node(graph_id, node_id, action_id)
 		"cancel":
-			cancel_graph_run(graph_id, node_id)
+			if not _cleanup_flow.cancel_graph(graph_id, node_id):
+				cancel_graph_run(graph_id, node_id)
 		"fix_input":
 			edit_selected_graph_node()
 		"import_reference":
@@ -715,6 +722,13 @@ func _run_bound_graph(graph: PFGraph, selected_node_id: String, action_id: Strin
 	var edge_errors := graph.validate_edges()
 	if not edge_errors.is_empty():
 		_status_label.text = _graph_run_failure_status(edge_errors[0])
+		return
+	var cleanup_node_id := _target_cleanup_node_id(graph, selected_node_id)
+	if not cleanup_node_id.is_empty():
+		if action_id in ["retry", "retry_failed"]:
+			_cleanup_flow.retry_graph(graph, selected_node_id)
+		else:
+			_cleanup_flow.run_graph(graph, cleanup_node_id)
 		return
 	var generate_node_id := _target_generate_node_id(graph, selected_node_id)
 	if generate_node_id.is_empty():
@@ -1270,6 +1284,18 @@ func _target_generate_node_id(graph: PFGraph, selected_node_id: String) -> Strin
 		var node: PFNode = graph.get_node(String(node_id))
 		if node != null and node.get_type() == "ai_generate":
 			return String(node_id)
+	return ""
+
+
+func _target_cleanup_node_id(graph: PFGraph, selected_node_id: String) -> String:
+	var selected: PFNode = graph.get_node(selected_node_id)
+	if selected != null and selected.get_type() == "pixel_cleanup":
+		return selected_node_id
+	if selected != null and selected.get_type() == "batch":
+		var source_id := String(graph.get_node_params(selected_node_id).get("source_node_id", ""))
+		var source: PFNode = graph.get_node(source_id)
+		if source != null and source.get_type() == "pixel_cleanup":
+			return source_id
 	return ""
 
 

@@ -34,6 +34,7 @@ func test_manual_policy_and_valid_sources() -> void:
 		var plan: Dictionary = builder.build(fixture.graph, "cleanup", fixture.assets)
 		assert_true(plan.get("ok", false), source_type)
 	var generated := _fixture("ai_generate")
+	generated.graph.edges.append({"from": ["source", "assets"], "to": ["cleanup", "assets"]})
 	var rejected: Dictionary = builder.build(generated.graph, "cleanup", generated.assets)
 	assert_false(rejected.get("ok", false))
 	assert_eq(rejected.get("issue", {}).get("code"), "cleanup_requires_output_source")

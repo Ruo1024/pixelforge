@@ -187,6 +187,7 @@ static func validate_v2_domain(params: Dictionary) -> Dictionary:
 		for slot in slots:
 			if (
 				referenced_slots.has(String(slot["slot_id"]))
+				and String(slot["request_id"]) == String(record["request_id"])
 				and String(slot["status"]) == "succeeded"
 			):
 				successful_count += 1

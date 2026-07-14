@@ -52,7 +52,7 @@ func test_cancel_is_deduped_and_resolves_only_after_worker_canceled_terminal() -
 	assert_same(first, second)
 	first.resolved.connect(func(_result: Dictionary) -> void: events.append("wrapper"))
 	assert_false(first.is_terminal())
-	assert_true(await _wait_until(func() -> bool: return TaskQueue.is_idle()))
+	assert_true(await _wait_until(func() -> bool: return TaskQueue.is_idle() and first.is_terminal()))
 	assert_eq(events, ["operation", "wrapper"])
 
 

@@ -174,8 +174,44 @@ func apply_cleanup_failure(graph: PFGraph, output_node_id: String, request_id: S
 	return _finish_cleanup_operation(graph, output_node_id, request_id, "failed", "", error)
 
 
-func apply_cleanup_success(graph: PFGraph, output_node_id: String, request_id: String, asset_id: String, report: Dictionary) -> Dictionary:
-	if asset_id.is_empty() or report.is_empty():
+func apply_cleanup_success(graph: PFGraph, output_node_id: String, request_id: String, image: Image, report: Dictionary, asset_library: Variant = null) -> Dictionary:
+	if image == null or report.is_empty():
+		return _command_error("invalid_cleanup_result")
+	var params := graph.get_node_params(output_node_id)
+	var slot := {}
+	for value in params.get("result_slots", []):
+		if String(value.get("request_id", "")) == request_id:
+			slot = value
+			break
+	if slot.is_empty():
+		return _command_error("invalid_cleanup_result")
+	var snapshot: Dictionary = params.get("input_snapshots", {}).get(String(slot.get("input_snapshot_id", "")), {})
+	var library: Variant = asset_library if asset_library != null else AssetLibrary
+	var cleanup := {
+		"source_asset": String(snapshot.get("source_asset_id", "")),
+		"input_source_kind": String(snapshot.get("input_source_kind", "")),
+		"input_source_node_id": String(snapshot.get("input_source_node_id", "")),
+		"source_batch_node_id": String(snapshot.get("source_batch_node_id", "")),
+		"source_slot_id": String(snapshot.get("source_slot_id", "")),
+		"cleanup_node_id": String(snapshot.get("source_node_id", "")),
+		"run_id": String(slot.get("run_id", "")),
+		"request_id": request_id,
+		"preset_id": String(snapshot.get("preset_id", "")),
+		"effective_target_size": Array(snapshot.get("effective_target_size", [0, 0])).duplicate(),
+		"settings": Dictionary(snapshot.get("settings", {})).duplicate(true),
+		"palette_snapshot": snapshot.get("palette_snapshot"),
+		"report": report.duplicate(true),
+	}
+	var asset_id: String = library.register_image(image, "Cleaned", {
+		"origin": "cleaned", "tags": ["cleanup"],
+		"palette_ref": cleanup["palette_snapshot"],
+		"provenance": {
+			"provider": null, "model": null, "prompt": "", "seed": null,
+			"parent_asset": cleanup["source_asset"], "graph_id": snapshot.get("graph_id"),
+			"created_at": IdUtil.utc_now_iso(), "cleanup": cleanup,
+		},
+	})
+	if asset_id.is_empty():
 		return _command_error("invalid_cleanup_result")
 	return _finish_cleanup_operation(graph, output_node_id, request_id, "succeeded", asset_id, null)
 
@@ -202,24 +238,24 @@ func prepare_cleanup_retry(graph: PFGraph, output_node_id: String, run_id: Strin
 		var error: Variant = slot.get("error")
 		if String(slot.get("status", "")) != "failed" or not (error is Dictionary) or String(error.get("code", "")) != "interrupted":
 			continue
-		var old_request := String(slot.get("request_id", ""))
 		var request_id := IdUtil.uuid_v4()
 		slot["run_id"] = run_id
 		slot["request_id"] = request_id
 		slot["status"] = "queued"
 		slot["error"] = null
-		for record in params["request_records"]:
-			if String(record.get("request_id", "")) == old_request:
-				record["run_id"] = run_id
-				record["request_id"] = request_id
-				record["attempts"] = 0
-				record["state"] = "queued"
-				record["error"] = null
-				record["remote_cancel_confirmed"] = null
+		params["request_records"].append({
+			"kind": "cleanup", "provider_id": "", "run_id": run_id,
+			"request_id": request_id, "source_row_id": "", "slot_ids": [String(slot["slot_id"])],
+			"requested_count": 1, "received_count": 0, "attempts": 0, "state": "queued",
+			"actual_cost_usd": null, "charge_id": "", "provider_meta": {},
+			"remote_cancel_confirmed": null, "error": null,
+		})
 		retried += 1
 	if retried == 0:
 		return _command_error("retry_source_unavailable")
 	params["source_run_id"] = run_id
+	if not bool(BatchNodeScript.validate_v2_domain(params).get("ok", false)):
+		return _command_error("invalid_cleanup_retry")
 	graph.set_node_params(output_node_id, params)
 	return {"ok": true, "run_id": run_id, "output_node_id": output_node_id}
 

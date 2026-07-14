@@ -83,6 +83,10 @@ func configure_session() -> void:
 		_provider_settings_dialog.show_settings("openai_image")
 
 
+func get_run_coordinator() -> PFGenerationRunCoordinator:
+	return _coordinator
+
+
 func generate_batch() -> void:
 	_queue_graph(_make_graph(), "batch_1", "", "generate", "openai_image")
 

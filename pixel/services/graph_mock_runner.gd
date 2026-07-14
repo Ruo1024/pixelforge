@@ -18,6 +18,7 @@ func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "
 	var inputs_by_node := {}
 	var outputs_by_node := {}
 	var terminal_items: Array[Dictionary] = []
+	var ready_node_ids := []
 	var context := GraphContextScript.new(asset_library)
 	for node_id in order_result["order"]:
 		var run_result := _run_node(
@@ -28,10 +29,12 @@ func run_to_batch(graph: PFGraph, asset_library: Node, batch_node_id: String = "
 		for item in run_result.get("terminal_items", []):
 			if item is Dictionary:
 				terminal_items.append(Dictionary(item).duplicate(true))
+		if not String(run_result.get("ready_node_id", "")).is_empty():
+			ready_node_ids.append(String(run_result["ready_node_id"]))
 
-	if terminal_items.is_empty():
+	if terminal_items.is_empty() and ready_node_ids.is_empty():
 		return _error("empty_batch", "No generated images reached a batch node")
-	return {"ok": true, "terminal_items": terminal_items, "graph": graph.to_json()}
+	return {"ok": true, "terminal_items": terminal_items, "ready_node_ids": ready_node_ids, "graph": graph.to_json()}
 
 
 func _validate_run_setup(graph: PFGraph, asset_library: Node) -> Dictionary:
@@ -66,6 +69,8 @@ func _run_node(
 		return required_inputs
 	var outputs := {}
 	var terminal_items: Array[Dictionary] = []
+	if node.has_method("get_execution_policy") and String(node.get_execution_policy()) == "manual":
+		return {"ok": true, "terminal_items": [], "ready_node_id": node_id}
 	if node.get_type() == "batch":
 		if batch_node_id.is_empty() or batch_node_id == node_id:
 			terminal_items.assign(
