@@ -170,6 +170,15 @@ func test_visible_dialog_rerenders_en_zh_en_without_changing_safe_model() -> voi
 	assert_eq(presenter.get_active_model_for_test(), safe_model)
 
 
+func test_generation_runtime_wires_terminal_summary_and_safe_actions_to_presenter() -> void:
+	var source := FileAccess.get_file_as_string("res://ui/shell/generation_run_controller.gd")
+	assert_true(source.contains("GenerationErrorDialogPresenterScript.new()"))
+	assert_true(source.contains("_error_presenter.action_requested.connect("))
+	assert_true(source.contains("_error_presenter.present("))
+	assert_true(source.contains("func _present_terminal_error("))
+	assert_true(source.contains("func _on_error_dialog_action("))
+
+
 func _new_presenter() -> Variant:
 	assert_true(
 		FileAccess.file_exists(PRESENTER_PATH),
