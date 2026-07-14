@@ -44,7 +44,15 @@
   `syntax_error` 和既有 7-resource 退出提示。
 - B7-4 的最终 GenerationRunCoordinator/history 和 B7-5 的最终 Output UI 仍待各自
   red→green，B7-2 没有提前完成或弱化它们。
-- 当前下一卡：B7-3 Provider 请求规划、成本、并发与幂等纯后端收口；继续按
+- B7-3 已完成：真实红灯提交 `d8be104`，实现提交 `ca2e740`。请求规划在任何凭据、
+  预算、Output 或网络副作用前完成本地验证；OpenAI Image 与 RetroDiffusion 的 mock
+  transport 覆盖成功、Partial、超时、鉴权失败、取消和显式重试；费用统一使用整数
+  micro USD 并按 charge/request 去重；失败槽重试与完整重新生成共用 plan→预算预检→
+  明确授权门，未确认或被阻止时不产生请求。独立只读复核未发现剩余 B7-3 blocker。
+- B7-3 全量：542/542 tests、9995 assertions、1 个既有 orphan，exit 0；lint 292 文件
+  无问题。三张受保护 fixture 按固定 hash 临时恢复，测试后立即删除，未暂存 raster。
+- 当前下一卡：B7-4 GenerationRunCoordinator、新 Output/history、生成卡、运行边和错误
+  对话框收口；继续按
   “真实红灯→最小实现→定向/相关/静态/
   全量绿色→范围检查→分卡提交”执行，红灯不得弱化测试或带入下一卡。
 
@@ -71,8 +79,8 @@
 
 ## 下一步
 
-1. 从 B7-3 开始依序完成至 B7-8，每卡先保存真实红灯，再全量转绿并独立提交；
-2. B7-3 不提前实现 B7-4 协调器或 B7-5 Output UI；
+1. 从 B7-4 开始依序完成至 B7-8，每卡先保存真实红灯，再全量转绿并独立提交；
+2. B7-4 删除临时 legacy adapter，以唯一协调器建立新 Output/history 与运行状态；
 3. B7-8 后只报告工程状态并停止，不执行 B7-9 或候选构建。
 
 ## 禁止宣称
