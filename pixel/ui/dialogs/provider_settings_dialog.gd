@@ -17,7 +17,7 @@ var _capabilities_label: Label = null
 var _form: VBoxContainer = null
 var _status_label: Label = null
 var _validate_button: Button = null
-var _budget_spin: SpinBox = null
+var _budget_edit: LineEdit = null
 var _fields := {}
 var _provider_id := ""
 
@@ -30,7 +30,7 @@ func _ready() -> void:
 
 func show_settings(provider_id: String = "") -> void:
 	_refresh_provider_list()
-	_budget_spin.value = CostService.get_monthly_budget()
+	_refresh_budget_text()
 	if not provider_id.is_empty():
 		_select_provider(provider_id)
 	popup_centered()
@@ -49,7 +49,13 @@ func is_validation_available() -> bool:
 
 
 func save_current_config() -> Dictionary:
-	CostService.set_monthly_budget(_budget_spin.value)
+	var budget_micro: Variant = CostService.parse_usd_to_micro(_budget_edit.text.strip_edges())
+	if budget_micro == null or not CostService.set_monthly_budget_micro_usd(budget_micro):
+		_status_label.text = Strings.PROVIDER_SETTINGS_SAVE_FAILED
+		return {
+			"ok": false,
+			"error": {"code": "invalid_budget", "field": "monthly_budget", "args": {}},
+		}
 	var config := {}
 	for key in _fields.keys():
 		config[String(key)] = _control_value(_fields[key])
@@ -91,13 +97,11 @@ func _build() -> void:
 	var budget_label := Label.new()
 	budget_label.text = Strings.PROVIDER_MONTHLY_BUDGET
 	root.add_child(budget_label)
-	_budget_spin = SpinBox.new()
-	_budget_spin.min_value = 0.0
-	_budget_spin.max_value = 1000000.0
-	_budget_spin.step = 0.01
-	_budget_spin.value = CostService.get_monthly_budget()
-	_budget_spin.custom_minimum_size.y = CONTROL_HEIGHT
-	root.add_child(_budget_spin)
+	_budget_edit = LineEdit.new()
+	_budget_edit.name = "MonthlyBudget"
+	_budget_edit.custom_minimum_size.y = CONTROL_HEIGHT
+	root.add_child(_budget_edit)
+	_refresh_budget_text()
 
 	_capabilities_label = Label.new()
 	_capabilities_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -236,6 +240,13 @@ func _capabilities_text(capabilities: Dictionary) -> String:
 
 func _yes_no(value: bool) -> String:
 	return Strings.VALUE_YES if value else Strings.VALUE_NO
+
+
+func _refresh_budget_text() -> void:
+	if _budget_edit == null:
+		return
+	var budget := CostService.get_monthly_budget_micro_usd()
+	_budget_edit.text = "0" if budget == 0 else String(CostService.format_micro_usd(budget))
 
 
 func _on_provider_validation_changed(provider_id: String, _state: String, message: String) -> void:

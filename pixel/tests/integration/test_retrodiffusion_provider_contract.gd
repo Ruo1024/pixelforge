@@ -39,7 +39,7 @@ func before_each() -> void:
 func after_each() -> void:
 	_provider.clear_session_config()
 	ProviderService.delete_provider_credentials("retrodiffusion")
-	CostService.set_monthly_budget(0.0)
+	CostService.set_monthly_budget_micro_usd(0)
 	CostService.reset_month_for_tests(CostService.get_month_key())
 
 
@@ -254,7 +254,7 @@ func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
 		)
 	)
 	ProviderService._set_validation_state("retrodiffusion", "verified", "Fixture verified")
-	CostService.set_monthly_budget(0.1)
+	CostService.set_monthly_budget_micro_usd(100000)
 
 	var canvas_items: Array = canvas.export_canvas_data()["items"]
 	var batch_item_id := _item_id_for_node(canvas_items, "batch_1")
@@ -338,7 +338,7 @@ func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_res
 		)
 	)
 	ProviderService._set_validation_state("retrodiffusion", "verified", "Fixture verified")
-	CostService.set_monthly_budget(10.0)
+	CostService.set_monthly_budget_micro_usd(10000000)
 	var items: Array = canvas.export_canvas_data()["items"]
 	var batch_item_id := _item_id_for_node(items, "batch_1")
 	var generate_item_id := _item_id_for_node(items, "generate")

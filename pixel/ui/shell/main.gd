@@ -302,7 +302,10 @@ func _build_ui() -> void:
 	bottom_bar.add_child(_status_label)
 	_cost_label = Label.new()
 	_cost_label.name = "CostLabel"
-	_cost_label.text = Strings.text("COST_MONTH_FORMAT") % CostService.get_month_total()
+	_cost_label.text = (
+		Strings.text("COST_MONTH_FORMAT")
+		% (float(CostService.get_month_total_micro_usd()) / 1000000.0)
+	)
 	_cost_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_cost_label.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
 	bottom_bar.add_child(_cost_label)
@@ -449,7 +452,10 @@ func _refresh_toolbar_text(_preference: String, _locale: String) -> void:
 	_recovery_dialog.title = Strings.text("DIALOG_RECOVERY_TITLE")
 	_recovery_dialog.ok_button_text = Strings.text("ACTION_RECOVER")
 	_recovery_dialog.cancel_button_text = Strings.text("ACTION_CANCEL")
-	_cost_label.text = Strings.text("COST_MONTH_FORMAT") % CostService.get_month_total()
+	_cost_label.text = (
+		Strings.text("COST_MONTH_FORMAT")
+		% (float(CostService.get_month_total_micro_usd()) / 1000000.0)
+	)
 
 
 func _create_file_dialogs() -> void:

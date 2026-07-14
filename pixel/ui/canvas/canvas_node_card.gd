@@ -1100,23 +1100,29 @@ func _sync_model_controls() -> void:
 		% [String(descriptor.get("provider_id", "")), output_summary, max_batch, references]
 	)
 	var provider_id := String(descriptor.get("provider_id", ""))
-	var estimate := (
-		0.0
-		if provider_id == "mock"
-		else (
+	var estimate_micro: Variant = 0 if provider_id == "mock" else null
+	var provider: PFProvider = ProviderService.get_provider(provider_id)
+	if provider != null and provider_id != "mock":
+		estimate_micro = (
 			CostService
-			. estimate_request(
-				provider_id,
-				{
-					"model_id": String(descriptor.get("model_id", "")),
-					"batch": int(_batch_size_spin.value),
-				}
+			. parse_usd_to_micro(
+				(
+					provider
+					. estimate_cost(
+						{
+							"model_id": String(descriptor.get("model_id", "")),
+							"batch": int(_batch_size_spin.value),
+						}
+					)
+				)
 			)
 		)
-	)
 	_cost_estimate_label.text = (
-		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % estimate
-		if estimate >= 0.0
+		(
+			Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT")
+			% (float(int(estimate_micro)) / 1000000.0)
+		)
+		if estimate_micro is int
 		else Strings.text("CONTENT_COST_UNKNOWN")
 	)
 

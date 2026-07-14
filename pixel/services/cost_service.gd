@@ -4,14 +4,9 @@ extends Node
 ## Provider spend ledger and preflight budget policy.
 ## v2 amounts are persisted and calculated only as integer micro-USD.
 
-signal cost_changed(month_key: String, total: float)
-signal budget_changed(limit: float)
 signal cost_changed_v2(month_key: String, total_micro_usd: int)
 signal budget_changed_v2(limit_micro_usd: int)
 
-const UNKNOWN_COST := -1.0
-const BUDGET_SECTION := "provider_budget"
-const LEDGER_SECTION_PREFIX := "provider_cost_"
 const BUDGET_SECTION_V2 := "provider_budget_v2"
 const LEDGER_SECTION_PREFIX_V2 := "provider_cost_v2_"
 const MONTHLY_MICRO_USD_KEY := "monthly_micro_usd"
@@ -191,69 +186,11 @@ func preflight_with_providers(
 	}
 
 
-# Legacy float methods remain isolated for the pre-B7-4 UI. They never read or migrate v2 data.
-func record_cost(provider_id: String, cost: float, month_key: String = "") -> bool:
-	if provider_id.is_empty() or cost < 0.0:
-		return false
-	var bucket := month_key if not month_key.is_empty() else get_month_key()
-	var section := _ledger_section(bucket)
-	var provider_total := float(SettingsService.get_setting(section, provider_id, 0.0)) + cost
-	var month_total := float(SettingsService.get_setting(section, "total", 0.0)) + cost
-	SettingsService.set_setting(section, provider_id, provider_total, false)
-	SettingsService.set_setting(section, "total", month_total)
-	cost_changed.emit(bucket, month_total)
-	return true
-
-
-func get_month_total(month_key: String = "") -> float:
-	var bucket := month_key if not month_key.is_empty() else get_month_key()
-	return float(SettingsService.get_setting(_ledger_section(bucket), "total", 0.0))
-
-
-func get_provider_total(provider_id: String, month_key: String = "") -> float:
-	var bucket := month_key if not month_key.is_empty() else get_month_key()
-	return float(SettingsService.get_setting(_ledger_section(bucket), provider_id, 0.0))
-
-
-func set_monthly_budget(limit: float) -> void:
-	var normalized := maxf(0.0, limit)
-	SettingsService.set_setting(BUDGET_SECTION, "monthly_usd", normalized)
-	budget_changed.emit(normalized)
-
-
-func get_monthly_budget() -> float:
-	return maxf(0.0, float(SettingsService.get_setting(BUDGET_SECTION, "monthly_usd", 0.0)))
-
-
-func estimate_request(provider_id: String, request: Dictionary) -> float:
-	var provider: PFProvider = ProviderService.get_provider(provider_id)
-	return estimate_with_provider(provider, request)
-
-
-func estimate_with_provider(provider: PFProvider, request: Dictionary) -> float:
-	if provider == null:
-		return UNKNOWN_COST
-	var estimate: Variant = provider.estimate_cost(request)
-	return UNKNOWN_COST if estimate == null else float(estimate)
-
-
-func requires_confirmation(estimate: float) -> bool:
-	var limit := get_monthly_budget()
-	return limit > 0.0 and estimate >= 0.0 and get_month_total() + estimate > limit
-
-
-func format_month_total() -> String:
-	return "This month: $%.2f" % get_month_total()
-
-
 func reset_month_for_tests(month_key: String) -> void:
 	# Tests need to clear persisted dedupe entries as well as totals between runs.
 	if SettingsService._config.has_section(_ledger_section_v2(month_key)):
 		SettingsService._config.erase_section(_ledger_section_v2(month_key))
-	if SettingsService._config.has_section(_ledger_section(month_key)):
-		SettingsService._config.erase_section(_ledger_section(month_key))
 	SettingsService.set_setting(_ledger_section_v2(month_key), TOTAL_MICRO_USD_KEY, 0, false)
-	SettingsService.set_setting(_ledger_section(month_key), "total", 0.0, false)
 
 
 func _blocked_preflight(month_total: int, budget: int, reason_code: String) -> Dictionary:
@@ -288,10 +225,6 @@ func _is_canonical_usd(value: Variant) -> bool:
 	if not (value is String):
 		return false
 	return RegEx.create_from_string(CANONICAL_USD_PATTERN).search(String(value)) != null
-
-
-func _ledger_section(month_key: String) -> String:
-	return "%s%s" % [LEDGER_SECTION_PREFIX, month_key]
 
 
 func _ledger_section_v2(month_key: String) -> String:

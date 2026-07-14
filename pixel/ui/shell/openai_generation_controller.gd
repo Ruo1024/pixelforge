@@ -39,10 +39,12 @@ func setup(
 	_budget_dialog.confirmed.connect(_confirm_budget_run)
 	_budget_dialog.canceled.connect(func() -> void: _pending_budget_run.clear())
 	add_child(_budget_dialog)
-	CostService.cost_changed.connect(
-		func(_month: String, _total: float) -> void: _refresh_cost_label()
+	CostService.cost_changed_v2.connect(
+		func(_month: String, _total_micro_usd: int) -> void: _refresh_cost_label()
 	)
-	CostService.budget_changed.connect(func(_limit: float) -> void: _refresh_cost_label())
+	CostService.budget_changed_v2.connect(
+		func(_limit_micro_usd: int) -> void: _refresh_cost_label()
+	)
 	_refresh_cost_label()
 
 
@@ -92,6 +94,7 @@ func cancel_graph(graph_id: String, generate_node_id: String = "") -> bool:
 	return canceled
 
 
+# gdlint: disable=max-returns
 func _queue_graph(
 	graph: PFGraph,
 	batch_node_id: String,
@@ -139,8 +142,6 @@ func _queue_graph(
 		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % reference_error
 		return
 	var requests: Array = request_result["requests"]
-	var estimate := 0.0
-	var estimate_known := true
 	for request in requests:
 		var validation_message := _cloud_request_validation_message(
 			provider_id, request, display_name
@@ -150,11 +151,14 @@ func _queue_graph(
 			_set_batch_run_state(target_state, "failed", validation_message)
 			_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % validation_message
 			return
-		var request_estimate := CostService.estimate_request(provider_id, request)
-		if request_estimate < 0.0:
-			estimate_known = false
-		else:
-			estimate += request_estimate
+	var preflight: Dictionary = CostService.preflight(requests)
+	if String(preflight.get("decision", "blocked")) == "blocked":
+		var reason := String(preflight.get("reason_code", "invalid_estimate"))
+		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", reason)
+		_set_batch_run_state(target_state, "failed", reason)
+		_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % reason
+		return
+	var estimate_micro: Variant = preflight.get("estimated_total_micro_usd")
 	var scope_id := IdUtil.uuid_v4()
 	var expected_count := int(request_result["result_count"])
 	var run_states: Array[Dictionary] = []
@@ -176,7 +180,7 @@ func _queue_graph(
 					"run_id": run_id,
 					"scope_id": scope_id,
 					"scope_expected_count": expected_count,
-					"estimate": CostService.estimate_request(provider_id, request),
+					"estimate_micro_usd": _estimate_micro_usd(provider_id, request),
 					"provenance_inputs": request_result.get("provenance_inputs", {}),
 				}
 			)
@@ -187,12 +191,15 @@ func _queue_graph(
 		"failed_row_ids": [],
 	}
 	_set_batch_run_state(run_states[0], "waiting", "")
-	_refresh_cost_label(estimate if estimate_known else -1.0)
-	if estimate_known and CostService.requires_confirmation(estimate):
-		_pending_budget_run = {"runs": run_states, "estimate": estimate}
+	_refresh_cost_label(estimate_micro)
+	if String(preflight["decision"]) == "needs_confirmation":
+		_pending_budget_run = {"runs": run_states, "preflight": preflight.duplicate(true)}
 		_budget_dialog.dialog_text = (
 			Strings.STATUS_PROVIDER_BUDGET_CONFIRM_FORMAT
-			% [estimate, CostService.get_monthly_budget()]
+			% [
+				_usd_display(int(estimate_micro)),
+				_usd_display(int(preflight["budget_micro_usd"])),
+			]
 		)
 		_status_label.text = _budget_dialog.dialog_text
 		_set_graph_status(run_states[0], "CONTENT_STATUS_WAITING", _budget_dialog.dialog_text)
@@ -236,9 +243,11 @@ func _submit_provider_run(run_state: Dictionary) -> void:
 		return
 	var request_id := String(request["request_id"])
 	_pending_runs[request_id] = run_state
-	var estimate := float(run_state.get("estimate", -1.0))
+	var estimate_micro: Variant = run_state.get("estimate_micro_usd")
 	var detail := (
-		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % estimate if estimate >= 0.0 else ""
+		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % _usd_display(int(estimate_micro))
+		if estimate_micro is int
+		else ""
 	)
 	_set_graph_status(run_state, "CONTENT_STATUS_RUNNING", detail)
 	_set_batch_run_state(run_state, "running", detail)
@@ -300,7 +309,15 @@ func _on_finished(result: Variant, task_id: String) -> void:
 		if raw_item is Dictionary and raw_item.get("image") is Image:
 			images.append(raw_item["image"])
 	var actual_cost: Variant = result.get("actual_cost_usd", null)
-	CostService.record_cost(provider_id, float(actual_cost) if actual_cost != null else -1.0)
+	var actual_micro: Variant = CostService.parse_usd_to_micro(actual_cost)
+	if actual_micro is int:
+		var charge_id := String(result.get("charge_id", ""))
+		var ledger_key := (
+			"%s:charge:%s" % [provider_id, charge_id]
+			if not charge_id.is_empty()
+			else "%s:request:%s" % [provider_id, String(request["request_id"])]
+		)
+		CostService.record_once(ledger_key, int(actual_micro))
 	var runner := GraphRunnerScript.new()
 	var materialized := runner.materialize_provider_batch(
 		graph,
@@ -423,15 +440,26 @@ func _set_batch_run_state(
 	_canvas._refresh_graph_batch_card(graph.id, batch_node_id)
 
 
-func _refresh_cost_label(estimate: float = -1.0) -> void:
+func _refresh_cost_label(estimate_micro: Variant = null) -> void:
 	if _cost_label == null:
 		return
-	var total := CostService.get_month_total()
+	var total := _usd_display(CostService.get_month_total_micro_usd())
 	_cost_label.text = (
-		Strings.text("COST_MONTH_ESTIMATE_FORMAT") % [total, estimate]
-		if estimate >= 0.0
+		Strings.text("COST_MONTH_ESTIMATE_FORMAT") % [total, _usd_display(int(estimate_micro))]
+		if estimate_micro is int
 		else Strings.text("COST_MONTH_FORMAT") % total
 	)
+
+
+func _estimate_micro_usd(provider_id: String, request: Dictionary) -> Variant:
+	var provider: PFProvider = ProviderService.get_provider(provider_id)
+	if provider == null:
+		return null
+	return CostService.parse_usd_to_micro(provider.estimate_cost(request))
+
+
+func _usd_display(micro_usd: int) -> float:
+	return float(micro_usd) / 1000000.0
 
 
 func _metadata(
