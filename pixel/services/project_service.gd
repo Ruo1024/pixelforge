@@ -1,4 +1,4 @@
-# gdlint: disable=max-returns
+# gdlint: disable=max-returns,max-public-methods
 class_name PFProjectService
 extends Node
 

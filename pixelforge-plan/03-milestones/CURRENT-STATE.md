@@ -42,8 +42,9 @@
   全量 lint 274 文件无问题。三张受保护 fixture 复核固定 hash 后临时恢复，
   测试后立即删除，无 `.import`、无 raster 暂存。日志仅含预期故障注入
   `syntax_error` 和既有 7-resource 退出提示。
-- B7-4 的最终 GenerationRunCoordinator/history 和 B7-5 的最终 Output UI 仍待各自
-  red→green，B7-2 没有提前完成或弱化它们。
+- B7-4 已完成：最终 `GenerationRunCoordinator` 是 run/record/slot/Output 唯一 writer；
+  完整运行创建新 current Output 并保留 history，失败项 retry 复用原快照与同一 Output；
+  进度、取消、恢复、生成卡、运行边、错误框和自动摆放已接入真实运行路径。
 - B7-3 已完成：真实红灯提交 `d8be104`，实现提交 `ca2e740`。请求规划在任何凭据、
   预算、Output 或网络副作用前完成本地验证；OpenAI Image 与 RetroDiffusion 的 mock
   transport 覆盖成功、Partial、超时、鉴权失败、取消和显式重试；费用统一使用整数
@@ -51,8 +52,9 @@
   明确授权门，未确认或被阻止时不产生请求。独立只读复核未发现剩余 B7-3 blocker。
 - B7-3 全量：542/542 tests、9995 assertions、1 个既有 orphan，exit 0；lint 292 文件
   无问题。三张受保护 fixture 按固定 hash 临时恢复，测试后立即删除，未暂存 raster。
-- 当前下一卡：B7-4 GenerationRunCoordinator、新 Output/history、生成卡、运行边和错误
-  对话框收口；继续按
+- B7-4 全量：114 scripts、594/594 tests、10493 assertions、1 个既有 orphan，exit 0；
+  三张受保护 fixture 按固定 hash 临时恢复并在测试后删除，未暂存 raster。
+- 当前下一卡：B7-5 最终 Output 卡、滚动、选择、拆出、预览与旧临时状态移除；继续按
   “真实红灯→最小实现→定向/相关/静态/
   全量绿色→范围检查→分卡提交”执行，红灯不得弱化测试或带入下一卡。
 
@@ -79,8 +81,8 @@
 
 ## 下一步
 
-1. 从 B7-4 开始依序完成至 B7-8，每卡先保存真实红灯，再全量转绿并独立提交；
-2. B7-4 删除临时 legacy adapter，以唯一协调器建立新 Output/history 与运行状态；
+1. 从 B7-5 开始依序完成至 B7-8，每卡先保存真实红灯，再全量转绿并独立提交；
+2. B7-5 完成最终 Output 卡与临时交互，不恢复任何 legacy review/focus/compare schema；
 3. B7-8 后只报告工程状态并停止，不执行 B7-9 或候选构建。
 
 ## 禁止宣称

@@ -1,3 +1,4 @@
+# gdlint: disable=max-file-lines
 class_name PFGenerationRunController
 extends Node
 
