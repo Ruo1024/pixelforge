@@ -114,7 +114,7 @@ func show_context(context: Dictionary) -> void:
 	var kind := String(context.get("kind", "none"))
 	var is_graph_node := kind == "node"
 	_graph_summary.visible = is_graph_node or kind == "none"
-	cleanup_inspector.visible = kind in ["sprite", "batch", "multiple", "candidate"]
+	cleanup_inspector.visible = false
 	_candidate_panel.visible = kind == "candidate"
 
 	_title_label.text = String(context.get("title", Strings.text("INSPECTOR_TITLE")))

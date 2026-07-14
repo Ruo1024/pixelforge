@@ -94,18 +94,6 @@ func outline_selection_with_params(params: Dictionary) -> void:
 	_status_label.text = Strings.text("STATUS_OUTLINE_QUEUED")
 
 
-func batch_cleanup(card_id: String, asset_ids: Array, params: Dictionary) -> void:
-	_start_batch_task(
-		card_id,
-		asset_ids,
-		"batch_cleanup",
-		{"params": params},
-		_batch_cleanup_work,
-		Strings.text("STATUS_CLEANUP_QUEUED"),
-		Strings.text("STATUS_CLEANUP_DONE")
-	)
-
-
 func batch_matte(card_id: String, asset_ids: Array, params: Dictionary) -> void:
 	_start_batch_task(
 		card_id,
@@ -213,23 +201,6 @@ func _outline_work(task_ref: Variant) -> Dictionary:
 		results.append(operation_result)
 		task_ref.report_progress(float(index + 1) / float(items.size()), "outline")
 	return {"canceled": false, "items": results}
-
-
-func _batch_cleanup_work(task_ref: Variant) -> Dictionary:
-	var asset_ids: Array = task_ref.payload["asset_ids"]
-	var params: Dictionary = task_ref.payload["extra"].get("params", {})
-	var result := PixelOperations.apply_to_assets(
-		asset_ids,
-		AssetLibrary,
-		PixelOperations.OP_CLEANUP,
-		params,
-		func() -> bool: return task_ref.cancel_requested,
-		func(ratio: float, _operation: String) -> void:
-			task_ref.report_progress(ratio, "batch_cleanup")
-	)
-	result["card_id"] = String(task_ref.payload["card_id"])
-	result["original_asset_ids"] = task_ref.payload.get("original_asset_ids", []).duplicate()
-	return result
 
 
 func _batch_matte_work(task_ref: Variant) -> Dictionary:

@@ -502,7 +502,6 @@ func _create_file_dialogs() -> void:
 func _connect_services() -> void:
 	_canvas.canvas_changed.connect(_on_canvas_changed)
 	_canvas.selection_changed.connect(_on_canvas_selection_changed)
-	_canvas.cleanup_grid_changed.connect(_on_cleanup_grid_changed)
 	_canvas.graph_connect_failed.connect(_on_canvas_graph_connect_failed)
 	_canvas.graph_status.connect(_on_canvas_graph_status)
 	_canvas.graph_node_params_commit_requested.connect(_m2_1_ui.apply_graph_node_params)
@@ -515,11 +514,6 @@ func _connect_services() -> void:
 		func(resource: Dictionary) -> void:
 			_m2_1_ui._handle_project_resource_drop(resource, _canvas.get_mouse_world_position())
 	)
-	_cleanup_inspector.apply_requested.connect(_apply_cleanup_to_selection)
-	_cleanup_inspector.preview_requested.connect(_request_cleanup_preview)
-	_cleanup_inspector.cancel_requested.connect(_cancel_cleanup_task)
-	_cleanup_inspector.manual_grid_changed.connect(_on_manual_grid_changed)
-	_cleanup_inspector.custom_palettes_changed.connect(_on_custom_palettes_changed)
 	ProjectService.project_loaded.connect(_on_project_loaded)
 	ProjectService.project_saved.connect(_on_project_saved)
 	ProjectService.dirty_changed.connect(_on_dirty_changed)

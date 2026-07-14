@@ -49,7 +49,7 @@ func test_single_candidate_maps_safe_snapshot_and_emits_safe_action_context() ->
 	assert_eq(_row_value(panel, "CreatedAt"), "2026-07-13T08:00:00Z")
 	assert_eq(_row_value(panel, "Source"), "generate-cloud")
 	assert_false(_all_label_text(panel).contains("must-not-leak"))
-	assert_true(inspector.get_node("ContextRoot/CleanupInspector").visible)
+	assert_false(inspector.get_node("ContextRoot/CleanupInspector").visible)
 
 	watch_signals(inspector)
 	(panel.get_node("CandidateActions/CopySettingsButton") as Button).pressed.emit()

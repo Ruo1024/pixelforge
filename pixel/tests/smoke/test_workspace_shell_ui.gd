@@ -231,7 +231,7 @@ func test_offline_example_is_one_undoable_fitted_graph_without_touching_existing
 	assert_eq(existing.position, existing_position)
 
 
-func test_context_inspector_reuses_cleanup_for_sprite_and_batch() -> void:
+func test_context_inspector_keeps_retired_direct_cleanup_hidden() -> void:
 	var main := await _make_main()
 	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var context: Control = main.get_node("Root/Content/Workspace/ContextInspector")
@@ -242,12 +242,13 @@ func test_context_inspector_reuses_cleanup_for_sprite_and_batch() -> void:
 
 	canvas.add_sprite_item(image, asset_id, Vector2.ZERO)
 	await wait_process_frames(1)
-	assert_true(cleanup.visible)
+	assert_false(cleanup.visible)
 	assert_eq(context.get_node("ContextRoot/ContextTitle").text, "reference")
 
-	canvas._add_batch_card([asset_id], Vector2(420, 0), "Output")
-	await wait_process_frames(1)
-	assert_true(cleanup.visible)
+	var controller: Node = main.get_node("M21UiController")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+	assert_false(cleanup.visible)
 	assert_eq(context.get_node("ContextRoot/GraphSummary").visible, false)
 
 
@@ -381,11 +382,6 @@ func test_language_switch_refreshes_workspace_chrome_and_content_modules() -> vo
 	assert_eq(
 		cleanup.find_child("ResampleOptions", true, false).get_item_text(0),
 		Strings.text("CLEANUP_RESAMPLE_MODE")
-	)
-	controller._m2_actions.batch_cleanup("", [], {})
-	assert_eq(
-		(main.get_node("Root/BottomBar").get_child(0) as Label).text,
-		Strings.text("STATUS_CLEANUP_EMPTY")
 	)
 
 

@@ -28,7 +28,6 @@ const PluginManagerDialogScript := preload("res://ui/dialogs/plugin_manager_dial
 const ComfyUITemplateDialogScript := preload("res://ui/dialogs/comfyui_template_dialog.gd")
 const V1OnboardingDialogScript := preload("res://ui/dialogs/v1_onboarding_dialog.gd")
 const PixelEditorFlowControllerScript := preload("res://ui/shell/pixel_editor_flow_controller.gd")
-const Pipeline := preload("res://core/pixel/pipeline.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const OfflineExampleControllerScript := preload("res://ui/shell/offline_example_controller.gd")
@@ -350,10 +349,6 @@ func _handle_batch_run_action(graph_id: String, node_id: String, action_id: Stri
 
 func handle_batch_face_action(card_id: String, action_id: String, asset_ids: Array) -> void:
 	match action_id:
-		"process", "process_all":
-			_m2_actions.batch_cleanup(
-				card_id, asset_ids, Pipeline.normalize_params(_cleanup_inspector.get_params())
-			)
 		"export":
 			_emit_batch_export(asset_ids)
 		"continue":
@@ -1143,12 +1138,6 @@ func _on_batch_menu_id_pressed(id: int) -> void:
 		BATCH_MENU_EDIT:
 			if not asset_ids.is_empty():
 				_open_pixel_editor(String(asset_ids[0]), _batch_menu_card_id)
-		BATCH_MENU_CLEANUP:
-			_m2_actions.batch_cleanup(
-				_batch_menu_card_id,
-				asset_ids,
-				Pipeline.normalize_params(_cleanup_inspector.get_params())
-			)
 		BATCH_MENU_MATTE:
 			_m2_actions.batch_matte(
 				_batch_menu_card_id, asset_ids, {"mode": "flood", "tolerance": 12.0, "feather": 0}

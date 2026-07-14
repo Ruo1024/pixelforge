@@ -113,7 +113,8 @@ func _fixture(source_type: String, count: int = 1) -> Dictionary:
 			_slot("source-slot-detached", "plain", true),
 		]
 		graph.add_node(BatchNodeScript.new(), "source", params)
-	assert_true(graph.add_edge("source", "assets", "cleanup", "assets")["ok"])
+	var connected: Dictionary = graph.add_edge("source", "assets", "cleanup", "assets")
+	assert_eq(bool(connected["ok"]), source_type != "ai_generate")
 	return {"graph": graph, "assets": assets}
 
 
