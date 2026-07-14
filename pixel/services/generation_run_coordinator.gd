@@ -39,6 +39,28 @@ func configure_clock(clock: RefCounted) -> void:
 	_clock = clock
 
 
+func preflight_plan(
+	plan: Dictionary, offline: bool = false, cost_service: Variant = null, month_key: String = ""
+) -> Dictionary:
+	var requests: Array = plan.get("requests", [])
+	if not bool(plan.get("ok", false)) or requests.is_empty():
+		return {
+			"decision": "blocked",
+			"reason_code": "invalid_request",
+			"estimated_total_micro_usd": null,
+			"budget_micro_usd": null,
+		}
+	var ledger: Variant = cost_service if cost_service != null else CostService
+	if offline:
+		return {
+			"decision": "allowed",
+			"reason_code": "within_budget",
+			"estimated_total_micro_usd": 0,
+			"budget_micro_usd": ledger.get_monthly_budget_micro_usd(),
+		}
+	return ledger.preflight(requests, month_key)
+
+
 func prepare_full_run(
 	graph: PFGraph, source_node_id: String, output_node_id: String, plan: Dictionary
 ) -> Dictionary:

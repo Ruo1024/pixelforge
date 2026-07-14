@@ -164,13 +164,17 @@ func test_float_cost_api_and_active_ui_paths_are_absent() -> void:
 	assert_false(dialog_source.contains("SpinBox.new()"))
 	assert_true(dialog_source.contains("parse_usd_to_micro"))
 	var controller_source := FileAccess.get_file_as_string(
-		"res://ui/shell/openai_generation_controller.gd"
+		"res://ui/shell/generation_run_controller.gd"
 	)
 	for forbidden in [
 		"estimate_request", "requires_confirmation", "record_cost", "get_month_total()"
 	]:
 		assert_false(controller_source.contains(forbidden), forbidden)
-	assert_true(controller_source.contains("CostService.preflight("))
+	var coordinator_source := FileAccess.get_file_as_string(
+		"res://services/generation_run_coordinator.gd"
+	)
+	assert_true(controller_source.contains("_coordinator.preflight_plan("))
+	assert_true(coordinator_source.contains("return ledger.preflight("))
 	assert_true(controller_source.contains("CostService.record_once("))
 
 

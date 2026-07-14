@@ -173,16 +173,7 @@ func _queue_graph(
 			_refresh_output_card(target_state)
 			_status_label.text = Strings.STATUS_GRAPH_RUN_FAILED_DETAIL % validation_message
 			return
-	var preflight: Dictionary = (
-		{
-			"decision": "allowed",
-			"reason_code": "within_budget",
-			"estimated_total_micro_usd": 0,
-			"budget_micro_usd": CostService.get_monthly_budget_micro_usd(),
-		}
-		if provider_id == "mock"
-		else CostService.preflight(requests)
-	)
+	var preflight: Dictionary = _coordinator.preflight_plan(request_result, provider_id == "mock")
 	if String(preflight.get("decision", "blocked")) == "blocked":
 		var reason := String(preflight.get("reason_code", "invalid_estimate"))
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", reason)
@@ -281,6 +272,7 @@ func _submit_mock_runs(run_states: Array) -> void:
 		_coordinator
 	)
 	if not bool(executed.get("ok", false)):
+		_rollback_pending_output(run_states)
 		_status_label.text = (
 			Strings.STATUS_GRAPH_RUN_FAILED_DETAIL
 			% String(executed.get("error", {}).get("code", "mock_failed"))
@@ -310,8 +302,13 @@ func _submit_provider_runs(run_states: Array) -> void:
 			% String(prepared.get("error", {}).get("code", "output_create_failed"))
 		)
 		return
+	var submitted := 0
 	for run_state in run_states:
-		_submit_provider_run(run_state)
+		if not _submit_provider_run(run_state):
+			if submitted == 0:
+				_rollback_pending_output(run_states)
+			return
+		submitted += 1
 
 
 func _prepare_pending_output(run_states: Array) -> Dictionary:
@@ -367,7 +364,7 @@ func _cloud_request_validation_message(
 	return String(error.get("code", "")) if error is Dictionary else ""
 
 
-func _submit_provider_run(run_state: Dictionary) -> void:
+func _submit_provider_run(run_state: Dictionary) -> bool:
 	var provider_id := String(run_state["provider_id"])
 	var display_name := String(run_state["provider_name"])
 	var request: Dictionary = run_state["request"]
@@ -379,7 +376,7 @@ func _submit_provider_run(run_state: Dictionary) -> void:
 		)
 		_set_graph_status(run_state, "CONTENT_STATUS_FAILED", unavailable)
 		_refresh_output_card(run_state)
-		return
+		return false
 	var request_id := String(request["request_id"])
 	_pending_runs[request_id] = run_state
 	var estimate_micro: Variant = run_state.get("estimate_micro_usd")
@@ -395,6 +392,22 @@ func _submit_provider_run(run_state: Dictionary) -> void:
 	task.failed.connect(_on_failed.bind(request_id))
 	task.canceled.connect(_on_canceled)
 	_status_label.text = Strings.STATUS_PROVIDER_GENERATE_QUEUED_FORMAT % display_name
+	return true
+
+
+func _rollback_pending_output(run_states: Array) -> void:
+	if run_states.is_empty():
+		return
+	var first: Dictionary = run_states[0]
+	var graph: PFGraph = first.get("graph")
+	var rollback_token: Dictionary = first.get("rollback_token", {})
+	if graph == null or rollback_token.is_empty():
+		return
+	_coordinator.rollback_pending_run(graph, rollback_token)
+	var card_id := String(first.get("batch_card_id", ""))
+	if not card_id.is_empty():
+		_canvas._remove_item_direct(card_id)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 
 
 func get_budget_dialog() -> ConfirmationDialog:
@@ -913,10 +926,7 @@ func _canvas_item_bounds(graph: PFGraph, source_node_id: String) -> Dictionary:
 			continue
 		var item_bounds: Rect2 = item.get_canvas_bounds()
 		existing.append(item_bounds)
-		if (
-			str(item.get("graph_id")) == graph.id
-			and str(item.get("node_id")) == source_node_id
-		):
+		if str(item.get("graph_id")) == graph.id and str(item.get("node_id")) == source_node_id:
 			source = item_bounds
 	return {"source": source, "existing": existing}
 
