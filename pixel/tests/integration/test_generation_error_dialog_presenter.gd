@@ -27,13 +27,7 @@ func test_real_dialog_has_exact_safe_sections_and_is_at_most_once_per_run() -> v
 		return
 	var sentinel := "PF_SECRET_SENTINEL_DO_NOT_LEAK"
 	var summary := _terminal_summary(
-		[
-			_slot(
-				"slot-a",
-				_error("provider_internal", false, "request-safe-12345678")
-			)
-		],
-		"run-safe"
+		[_slot("slot-a", _error("provider_internal", false, "request-safe-12345678"))], "run-safe"
 	)
 	summary["prompt"] = "draw %s" % sentinel
 	summary["headers"] = {"Authorization": sentinel}
@@ -145,9 +139,12 @@ func test_visible_dialog_rerenders_en_zh_en_without_changing_safe_model() -> voi
 	if presenter == null:
 		return
 	assert_true(
-		presenter.present(
-			_terminal_summary([_slot("slot-auth", _error("auth_failed", false))], "locale")
-		)["show"]
+		(
+			presenter
+			. present(
+				_terminal_summary([_slot("slot-auth", _error("auth_failed", false))], "locale")
+			)["show"]
+		)
 	)
 	var dialog: Window = presenter.get_dialog()
 	var english_title := dialog.title
@@ -174,15 +171,14 @@ func test_generation_runtime_wires_terminal_summary_and_safe_actions_to_presente
 	var source := FileAccess.get_file_as_string("res://ui/shell/generation_run_controller.gd")
 	assert_true(source.contains("GenerationErrorDialogPresenterScript.new()"))
 	assert_true(source.contains("_error_presenter.action_requested.connect("))
-	assert_true(source.contains("_error_presenter.present("))
+	assert_true(source.contains(". present("))
 	assert_true(source.contains("func _present_terminal_error("))
 	assert_true(source.contains("func _on_error_dialog_action("))
 
 
 func _new_presenter() -> Variant:
 	assert_true(
-		FileAccess.file_exists(PRESENTER_PATH),
-		"real generation error dialog presenter is missing"
+		FileAccess.file_exists(PRESENTER_PATH), "real generation error dialog presenter is missing"
 	)
 	if not FileAccess.file_exists(PRESENTER_PATH):
 		return null

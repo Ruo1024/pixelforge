@@ -17,6 +17,9 @@ const ProviderRunProgressScript := preload("res://services/provider_run_progress
 const OutputAutoPlacementScript := preload("res://services/output_auto_placement.gd")
 const CardContractScript := preload("res://ui/canvas/canvas_card_contract.gd")
 const MonotonicClockScript := preload("res://infra/monotonic_clock.gd")
+const GenerationErrorDialogPresenterScript := preload(
+	"res://ui/dialogs/generation_error_dialog_presenter.gd"
+)
 const IdUtil := preload("res://core/util/id_util.gd")
 
 var _canvas: Control = null
@@ -28,7 +31,11 @@ var _pending_runs := {}
 var _pending_budget_run := {}
 var _run_scopes := {}
 var _canceling_runs := {}
+var _terminal_run_targets := {}
+var _pending_regenerate := {}
 var _coordinator: PFGenerationRunCoordinator
+var _error_presenter: PFGenerationErrorDialogPresenter
+var _regenerate_dialog: ConfirmationDialog
 
 
 func setup(
@@ -45,6 +52,15 @@ func setup(
 	var clock: RefCounted = MonotonicClockScript.new()
 	_coordinator.configure_clock(clock)
 	_canvas.configure_run_edge_renderer(_coordinator, clock)
+	_error_presenter = GenerationErrorDialogPresenterScript.new()
+	_error_presenter.name = "GenerationErrorDialogPresenter"
+	_error_presenter.action_requested.connect(_on_error_dialog_action)
+	add_child(_error_presenter)
+	_regenerate_dialog = ConfirmationDialog.new()
+	_regenerate_dialog.name = "GenerationRegenerateConfirmDialog"
+	_regenerate_dialog.confirmed.connect(_confirm_regenerate_from_error)
+	_regenerate_dialog.canceled.connect(func() -> void: _pending_regenerate.clear())
+	add_child(_regenerate_dialog)
 	_budget_dialog = ConfirmationDialog.new()
 	_budget_dialog.name = "ProviderBudgetDialog"
 	_budget_dialog.title = Strings.DIALOG_PROVIDER_BUDGET_TITLE
@@ -636,6 +652,8 @@ func _on_finished(result: Variant, task_id: String) -> void:
 	else:
 		_refresh_output_card(state)
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+	if scope_done and int(scope_result.get("failed", 0)) > 0:
+		_present_terminal_error(state, graph)
 	if not batch_card_id.is_empty():
 		_canvas._replace_batch_asset_ids(batch_card_id, asset_ids, false)
 		_status_label.text = Strings.STATUS_GRAPH_RUN_DONE % asset_ids.size()
@@ -684,6 +702,7 @@ func _on_failed(error: Dictionary, task_id: String) -> void:
 	if bool(scope_result.get("done", true)):
 		_set_graph_status(state, "CONTENT_STATUS_FAILED", message)
 		_refresh_output_card(state)
+		_present_terminal_error(state, graph)
 	_status_label.text = (
 		Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
 		% [String(state.get("provider_name", "Provider")), message]
@@ -756,6 +775,7 @@ func _on_cancel_rejected(error: Dictionary, request_id: String) -> void:
 			state, "CONTENT_STATUS_FAILED", String(error.get("code", "cancel_failed"))
 		)
 		_refresh_output_card(state)
+		_present_terminal_error(state, graph, "user_canceled")
 		_status_label.text = (
 			Strings.STATUS_PROVIDER_GENERATE_FAILED_FORMAT
 			% [
@@ -763,6 +783,97 @@ func _on_cancel_rejected(error: Dictionary, request_id: String) -> void:
 				String(error.get("code", "cancel_failed"))
 			]
 		)
+
+
+func _present_terminal_error(state: Dictionary, graph: PFGraph, mode: String = "terminal") -> void:
+	var output_node_id := String(state.get("batch_node_id", ""))
+	if graph == null or graph.get_node(output_node_id) == null:
+		return
+	var params := graph.get_node_params(output_node_id)
+	var run_id := String(state.get("run_id", params.get("source_run_id", "")))
+	var failed_slots := []
+	var succeeded_count := 0
+	for slot_value in params.get("result_slots", []):
+		var slot: Dictionary = slot_value
+		if bool(slot.get("unexpected", false)):
+			continue
+		if String(slot.get("status", "")) == "succeeded":
+			succeeded_count += 1
+		elif (
+			String(slot.get("run_id", "")) == run_id
+			and String(slot.get("status", "")) == "failed"
+			and slot.get("error") is Dictionary
+		):
+			failed_slots.append(slot.duplicate(true))
+	if failed_slots.is_empty():
+		return
+	_terminal_run_targets[run_id] = {
+		"graph_id": graph.id,
+		"output_node_id": output_node_id,
+		"source_node_id": String(params.get("source_node_id", "")),
+		"provider_id": String(state.get("provider_id", "")),
+	}
+	(
+		_error_presenter
+		. present(
+			{
+				"mode": mode,
+				"run_id": run_id,
+				"settled": true,
+				"succeeded_count": succeeded_count,
+				"failed_slots": failed_slots,
+				"cancel_failed": mode == "user_canceled",
+				"terminal_steps":
+				[
+					"edge_stopped",
+					"successes_saved",
+					"failed_slots_updated",
+					"safe_errors_recorded",
+					"dialog_ready",
+				],
+			}
+		)
+	)
+
+
+func _on_error_dialog_action(run_id: String, action_id: String, _context: Dictionary) -> void:
+	var target: Dictionary = _terminal_run_targets.get(run_id, {})
+	if target.is_empty():
+		return
+	match action_id:
+		"retry_failed":
+			var graph_data := ProjectService.get_graph_data(String(target["graph_id"]))
+			if not graph_data.is_empty():
+				retry_graph(GraphScript.from_json(graph_data), String(target["output_node_id"]))
+		"open_provider_settings":
+			if _provider_settings_dialog != null:
+				_provider_settings_dialog.show_settings(String(target["provider_id"]))
+		"regenerate_confirm":
+			_pending_regenerate = target.duplicate(true)
+			_regenerate_dialog.title = LocalizationService.text(
+				"GEN_ERROR_ACTION_REGENERATE_CONFIRM"
+			)
+			_regenerate_dialog.dialog_text = LocalizationService.text(
+				"GEN_ERROR_ACTION_REGENERATE_CONFIRM"
+			)
+			_regenerate_dialog.popup_centered()
+		"edit_prompt", "return_generation_card":
+			_canvas._refresh_graph_node_card(
+				String(target["graph_id"]), String(target["source_node_id"])
+			)
+		_:
+			return
+
+
+func _confirm_regenerate_from_error() -> void:
+	var target := _pending_regenerate
+	_pending_regenerate = {}
+	if target.is_empty():
+		return
+	var graph_data := ProjectService.get_graph_data(String(target["graph_id"]))
+	if graph_data.is_empty():
+		return
+	run_graph(GraphScript.from_json(graph_data), "", "", String(target["source_node_id"]))
 
 
 func _record_billing_update(provider_id: String, request_id: String, value: Variant) -> void:
