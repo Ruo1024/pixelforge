@@ -52,6 +52,10 @@ func test_capabilities_and_schema_match_provider_contract() -> void:
 		descriptors.map(func(descriptor: Dictionary) -> String: return descriptor["model_id"]),
 		["rd_plus", "rd_pro", "rd_fast"]
 	)
+	assert_eq(
+		descriptors.map(func(descriptor: Dictionary) -> String: return descriptor["display_name"]),
+		["Retro Diffusion Plus", "Retro Diffusion Pro", "Retro Diffusion Fast"]
+	)
 	var capabilities: Dictionary = descriptors[0]["capabilities"]
 	assert_true(capabilities["txt2img"])
 	assert_true(capabilities["img2img"])
@@ -81,6 +85,9 @@ func test_request_uses_current_official_fields_and_style_hints() -> void:
 	assert_eq(hinted["num_images"], 4)
 	assert_eq(hinted["seed"], 123)
 	assert_false(hinted["remove_bg"])
+	assert_false(
+		hinted.has("strength"), "txt2img keeps canonical extra but omits conditional transport"
+	)
 	assert_false(JSON.stringify(hinted).contains(TEST_SECRET))
 	var pro := _provider.build_request_body(_request("request-pro", "rd_pro", 1, [64, 64]))
 	assert_eq(pro["prompt_style"], "rd_pro__default")
@@ -94,8 +101,9 @@ func test_recorded_four_image_fixture_decodes_raw_pixels_cost_and_seeds() -> voi
 	assert_eq(result["request_id"], "decode")
 	assert_eq(result["items"].size(), 4)
 	assert_eq(
-		result["items"].map(func(item: Dictionary) -> int: return item["actual_seed"]),
-		[50, 51, 52, 53]
+		result["items"].map(func(item: Dictionary) -> Variant: return item["actual_seed"]),
+		[null, null, null, null],
+		"requested seed must never be guessed as the Provider's actual seed",
 	)
 	assert_eq(result["actual_cost_usd"], "1.000000")
 	assert_eq(result["provider_meta"], {})

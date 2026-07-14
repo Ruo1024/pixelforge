@@ -85,6 +85,10 @@ func test_request_body_is_sanitized_and_adapts_target_size() -> void:
 	assert_eq(body["background"], "opaque")
 	assert_eq(body["output_format"], "png")
 	assert_eq(body["prompt"], "wooden barrel")
+	assert_false(body.has("seed"), "seed=false omits only the remote transport field")
+	assert_false(
+		body.has("idempotency_key"), "native_idempotency=false never claims remote idempotency"
+	)
 	assert_false(JSON.stringify(body).contains(SECRET_SENTINEL))
 	assert_false(JSON.stringify(request).contains(SECRET_SENTINEL))
 	assert_false(JSON.stringify(ProjectService.current_project.manifest).contains(SECRET_SENTINEL))

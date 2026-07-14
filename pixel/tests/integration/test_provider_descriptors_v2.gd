@@ -54,6 +54,10 @@ func test_retro_exact_descriptors_and_schema() -> void:
 		["rd_plus", "rd_pro", "rd_fast"]
 	)
 	assert_eq(
+		descriptors.map(func(value: Dictionary) -> String: return value["display_name"]),
+		["Retro Diffusion Plus", "Retro Diffusion Pro", "Retro Diffusion Fast"]
+	)
+	assert_eq(
 		descriptors.filter(func(value: Dictionary) -> bool: return value["is_default"]).size(), 1
 	)
 	for descriptor in descriptors:
