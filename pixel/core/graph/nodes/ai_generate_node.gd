@@ -10,8 +10,10 @@ const DEFAULT_PROVIDER_ID := "openai_image"
 const DEFAULT_MODEL_ID := "gpt-image-2"
 const DEFAULT_BATCH_SIZE := 4
 const DEFAULT_SEED := -1
-const DEFAULT_SIZE := 32
-const DEFAULT_EXTRA := {"quality": "low"}
+const DEFAULT_RESOLUTION_PRESET := "1080p"
+const DEFAULT_ORIENTATION := "square"
+const DEFAULT_EXTRA := {}
+const DeliveryPolicy := preload("res://services/generation_delivery_policy.gd")
 
 
 func get_type() -> String:
@@ -54,20 +56,18 @@ func get_param_schema() -> Array[Dictionary]:
 			"default": DEFAULT_MODEL_ID,
 		},
 		{
-			"key": "target_width",
-			"label_key": "GRAPH_PARAM_TARGET_WIDTH",
-			"kind": KIND_INT,
-			"default": DEFAULT_SIZE,
-			"min": 1,
-			"max": 16384,
+			"key": "resolution_preset",
+			"label_key": "GRAPH_PARAM_RESOLUTION_PRESET",
+			"kind": KIND_ENUM,
+			"default": DEFAULT_RESOLUTION_PRESET,
+			"options": DeliveryPolicy.RESOLUTION_PRESETS,
 		},
 		{
-			"key": "target_height",
-			"label_key": "GRAPH_PARAM_TARGET_HEIGHT",
-			"kind": KIND_INT,
-			"default": DEFAULT_SIZE,
-			"min": 1,
-			"max": 16384,
+			"key": "orientation",
+			"label_key": "GRAPH_PARAM_ORIENTATION",
+			"kind": KIND_ENUM,
+			"default": DEFAULT_ORIENTATION,
+			"options": DeliveryPolicy.ORIENTATIONS,
 		},
 		{
 			"key": "batch_size",
@@ -75,7 +75,7 @@ func get_param_schema() -> Array[Dictionary]:
 			"kind": KIND_INT,
 			"default": DEFAULT_BATCH_SIZE,
 			"min": 1,
-			"max": 999,
+			"max": 16,
 		},
 		{
 			"key": "seed",
@@ -83,7 +83,7 @@ func get_param_schema() -> Array[Dictionary]:
 			"kind": KIND_SEED,
 			"default": DEFAULT_SEED,
 			"min": -1,
-			"max": 2147483647,
+			"max": -1,
 		},
 	]
 
@@ -108,8 +108,14 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 			},
 		}
 
-	var width := maxi(1, int(params.get("target_width", DEFAULT_SIZE)))
-	var height := maxi(1, int(params.get("target_height", DEFAULT_SIZE)))
+	var delivery := DeliveryPolicy.delivery_size(
+		String(params.get("resolution_preset", DEFAULT_RESOLUTION_PRESET)),
+		String(params.get("orientation", DEFAULT_ORIENTATION))
+	)
+	if delivery.is_empty():
+		return {"__error": {"code": "invalid_delivery_size"}}
+	var width := int(delivery[0])
+	var height := int(delivery[1])
 	var batch_size := maxi(1, int(params.get("batch_size", 1)))
 	var seed := int(params.get("seed", DEFAULT_SEED))
 	var subjects := _subject_rows_from_inputs(inputs, batch_size)
@@ -150,7 +156,7 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 							"target_height": height,
 							"provider_output_size": [width, height],
 							"batch_size": int(subject.get("count", batch_size)),
-							"requested_seed": item_seed,
+							"requested_seed": -1,
 							"reference_asset_ids": reference_asset_ids.duplicate(),
 							"reference_content_sha256s": reference_hashes.duplicate(),
 							"source_row_id": String(subject.get("id", "")),
@@ -208,15 +214,25 @@ func _make_mock_image(
 	var primary := _color_from_seed(hash_subject, seed, 0)
 	var secondary := _color_from_seed(hash_subject, seed, 83)
 	var accent := _color_from_seed(hash_subject, seed, 191)
-	var block := maxi(1, mini(width, height) / 4)
-
-	for y in range(height):
-		for x in range(width):
-			var checker := (int(x / block) + int(y / block) + seed) % 2
-			var color := primary if checker == 0 else secondary
-			if x == y or x == width - y - 1:
-				color = accent
-			image.set_pixel(x, y, color)
+	image.fill(primary)
+	var block_width := ceili(float(width) / 4.0)
+	var block_height := ceili(float(height) / 4.0)
+	for row in range(4):
+		for column in range(4):
+			if (column + row + seed) % 2 == 0:
+				continue
+			image.fill_rect(
+				Rect2i(
+					column * block_width,
+					row * block_height,
+					mini(block_width, width - column * block_width),
+					mini(block_height, height - row * block_height)
+				),
+				secondary
+			)
+	var stripe := maxi(1, mini(width, height) / 64)
+	image.fill_rect(Rect2i(0, 0, width, stripe), accent)
+	image.fill_rect(Rect2i(0, height - stripe, width, stripe), accent)
 	return image
 
 

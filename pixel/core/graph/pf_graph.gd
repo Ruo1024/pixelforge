@@ -19,7 +19,15 @@ const PARAM_KEYS := {
 	"image_input": ["asset_id"],
 	"reference_set": ["asset_ids"],
 	"ai_generate":
-	["provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"],
+	[
+		"provider_id",
+		"model_id",
+		"resolution_preset",
+		"orientation",
+		"batch_size",
+		"seed",
+		"extra",
+	],
 	"pixel_cleanup": ["preset_id", "settings"],
 	"batch":
 	[
@@ -410,10 +418,7 @@ static func _validate_v2_data(data: Dictionary) -> Dictionary:
 				descriptor = ProviderService.MOCK_MODEL_DESCRIPTOR
 			if descriptor.is_empty():
 				return _load_error("invalid_provider_model", "nodes[%d].params.model_id" % index)
-			var extra_issue: Variant = ProviderContractV2._validate_dynamic_params(
-				params.get("extra", {}), descriptor.get("dynamic_params", [])
-			)
-			if extra_issue != null:
+			if params.get("extra", {}) != {}:
 				return _load_error("invalid_dynamic_param", "nodes[%d].params.extra" % index)
 	for index in range(edges_value.size()):
 		var raw_edge: Variant = edges_value[index]

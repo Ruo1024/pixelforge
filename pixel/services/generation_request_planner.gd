@@ -5,11 +5,9 @@ extends RefCounted
 
 const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 const GraphContextScript := preload("res://core/graph/pf_graph_context.gd")
-const MAX_RESULTS_PER_RUN := 999
-const SEED_MODULUS := 2147483648
-const TECHNICAL_SUFFIX := (
-	"pixel art designed for a %dx%d true-pixel target, flat colors, " + "crisp edges"
-)
+const DeliveryPolicy := preload("res://services/generation_delivery_policy.gd")
+const PromptBuilder := preload("res://services/generation_prompt_builder.gd")
+const MAX_RESULTS_PER_RUN := 16
 
 
 static func resolve_reference_assets(asset_ids: Array, asset_source: Variant) -> Dictionary:
@@ -50,26 +48,21 @@ static func plan(input: Dictionary, descriptors: Array) -> Dictionary:
 	if descriptor.is_empty():
 		return _failure("invalid_provider_model", "model_id")
 	var capabilities: Dictionary = descriptor.get("capabilities", {})
-	var target_width_value: Variant = input.get("target_width")
-	var target_height_value: Variant = input.get("target_height")
-	if not (target_width_value is int) or not (target_height_value is int):
-		return _failure("invalid_target_size", "target_width")
-	var target_width := int(target_width_value)
-	var target_height := int(target_height_value)
-	if not _target_is_valid(target_width, target_height, capabilities):
-		return _failure("invalid_target_size", "target_width")
+	var resolution_preset := String(input.get("resolution_preset", ""))
+	var orientation := String(input.get("orientation", ""))
+	var delivery_size := DeliveryPolicy.delivery_size(resolution_preset, orientation)
+	var provider_output_size := DeliveryPolicy.request_size(resolution_preset, orientation)
+	if delivery_size.is_empty() or provider_output_size.is_empty():
+		return _failure("invalid_delivery_size", "resolution_preset")
+	var target_width := int(delivery_size[0])
+	var target_height := int(delivery_size[1])
 	var seed_value: Variant = input.get("seed", -1)
-	if not (seed_value is int) or int(seed_value) < -1 or int(seed_value) > 2147483647:
+	if not (seed_value is int) or int(seed_value) != -1:
 		return _failure("invalid_seed", "seed")
 	var extra_value: Variant = input.get("extra", {})
-	if not (extra_value is Dictionary):
+	if not (extra_value is Dictionary) or not Dictionary(extra_value).is_empty():
 		return _failure("invalid_dynamic_param", "extra")
 	var extra: Dictionary = extra_value
-	var extra_issue: Variant = ContractV2._validate_dynamic_params(
-		extra, descriptor.get("dynamic_params", [])
-	)
-	if extra_issue != null:
-		return {"ok": false, "issue": extra_issue, "requests": [], "slots": []}
 	var reference_issue := _reference_issue(input, capabilities)
 	if not reference_issue.is_empty():
 		return _failure(String(reference_issue["code"]), String(reference_issue["field"]))
@@ -81,13 +74,9 @@ static func plan(input: Dictionary, descriptors: Array) -> Dictionary:
 		total_slots += int(group["count"])
 	if total_slots > MAX_RESULTS_PER_RUN:
 		return _failure("result_limit_exceeded", "batch_size")
-	var provider_output_size := _provider_output_size(target_width, target_height, capabilities)
-	if provider_output_size.is_empty():
-		return _failure("invalid_provider_output_size", "provider_output_size")
 	var run_id := String(input.get("run_id", "")).strip_edges()
 	if run_id.is_empty():
 		return _failure("invalid_request_field", "run_id")
-	var supports_seed := bool(capabilities.get("seed", false))
 	var max_batch := maxi(1, int(capabilities.get("max_batch", 1)))
 	var prefix := String(input.get("prefix", "")).strip_edges()
 	var prompt := String(input.get("prompt", "")).strip_edges()
@@ -100,23 +89,13 @@ static func plan(input: Dictionary, descriptors: Array) -> Dictionary:
 		if semantic_prompt.is_empty():
 			return _failure("missing_prompt_input", "prompt")
 		var final_prompt := semantic_prompt
-		if not bool(capabilities.get("native_pixel", false)):
-			final_prompt = (
-				"%s, %s" % [semantic_prompt, TECHNICAL_SUFFIX % [target_width, target_height]]
-			)
 		var remaining := int(group["count"])
 		while remaining > 0:
 			var request_seed := -1
 			var chunk := mini(max_batch, remaining)
-			if supports_seed and int(seed_value) >= 0:
-				request_seed = int((int(seed_value) + logical_index) % SEED_MODULUS)
-				chunk = mini(chunk, SEED_MODULUS - request_seed)
 			var request_id := "%s-request-%03d" % [run_id, request_index]
 			for offset in range(chunk):
 				var slot_id := "%s-slot-%03d" % [run_id, logical_index + offset]
-				var requested_seed := -1
-				if supports_seed and int(seed_value) >= 0:
-					requested_seed = int((int(seed_value) + logical_index + offset) % SEED_MODULUS)
 				slots.append(
 					_slot(
 						input,
@@ -125,8 +104,9 @@ static func plan(input: Dictionary, descriptors: Array) -> Dictionary:
 						request_id,
 						String(group["id"]),
 						final_prompt,
+						delivery_size,
 						provider_output_size,
-						requested_seed,
+						-1,
 						extra
 					)
 				)
@@ -172,13 +152,19 @@ static func group_retry_slots(slots: Array, max_batch: int) -> Array:
 		var snapshot: Dictionary = Dictionary(slot.get("input_snapshot", {})).duplicate(true)
 		var seed := int(snapshot.get("requested_seed", -1))
 		var can_append := false
-		if not groups.is_empty() and seed >= 0:
+		if not groups.is_empty():
 			var current: Dictionary = groups[-1]
 			can_append = (
 				current["slot_ids"].size() < maxi(1, max_batch)
 				and String(current["source_row_id"]) == String(slot.get("source_row_id", ""))
-				and int(current["last_seed"]) < 2147483647
-				and seed == int(current["last_seed"]) + 1
+				and (
+					(seed == -1 and int(current["last_seed"]) == -1)
+					or (
+						seed >= 0
+						and int(current["last_seed"]) < 2147483647
+						and seed == int(current["last_seed"]) + 1
+					)
+				)
 				and (
 					_snapshot_without_seed(current["input_snapshot"])
 					== _snapshot_without_seed(snapshot)
@@ -316,12 +302,7 @@ static func _groups(input: Dictionary) -> Array[Dictionary]:
 
 
 static func _semantic_prompt(prefix: String, prompt: String, row_text: String) -> String:
-	var parts: Array[String] = []
-	for value in [prefix, prompt, row_text]:
-		var text := String(value).strip_edges()
-		if not text.is_empty():
-			parts.append(text)
-	return ", ".join(parts)
+	return PromptBuilder.build(prefix, prompt, row_text)
 
 
 static func _reference_issue(input: Dictionary, capabilities: Dictionary) -> Dictionary:
@@ -352,54 +333,6 @@ static func _reference_issue(input: Dictionary, capabilities: Dictionary) -> Dic
 	return {}
 
 
-static func _target_is_valid(width: int, height: int, capabilities: Dictionary) -> bool:
-	var constraints: Dictionary = capabilities.get("target_size_constraints", {})
-	var allowed: Array = constraints.get("allowed_sizes", [])
-	if not allowed.is_empty():
-		return allowed.has([width, height])
-	return (
-		width >= int(constraints.get("min_width", 1))
-		and width <= int(constraints.get("max_width", 0))
-		and height >= int(constraints.get("min_height", 1))
-		and height <= int(constraints.get("max_height", 0))
-		and (
-			(
-				(width - int(constraints.get("min_width", 1)))
-				% maxi(1, int(constraints.get("width_step", 1)))
-			)
-			== 0
-		)
-		and (
-			(
-				(height - int(constraints.get("min_height", 1)))
-				% maxi(1, int(constraints.get("height_step", 1)))
-			)
-			== 0
-		)
-	)
-
-
-static func _provider_output_size(
-	target_width: int, target_height: int, capabilities: Dictionary
-) -> Array:
-	if bool(capabilities.get("native_pixel", false)):
-		return [target_width, target_height]
-	var sizes: Array = capabilities.get("provider_output_sizes", [])
-	if sizes.is_empty():
-		return []
-	var best: Array = sizes[0]
-	var best_error := absi(int(best[0]) * target_height - target_width * int(best[1]))
-	for index in range(1, sizes.size()):
-		var candidate: Array = sizes[index]
-		var candidate_error := absi(
-			int(candidate[0]) * target_height - target_width * int(candidate[1])
-		)
-		if candidate_error * int(best[1]) < best_error * int(candidate[1]):
-			best = candidate
-			best_error = candidate_error
-	return best.duplicate()
-
-
 static func _slot(
 	input: Dictionary,
 	descriptor: Dictionary,
@@ -407,6 +340,7 @@ static func _slot(
 	request_id: String,
 	row_id: String,
 	prompt: String,
+	delivery_size: Array,
 	provider_output_size: Array,
 	requested_seed: int,
 	extra: Dictionary
@@ -415,6 +349,7 @@ static func _slot(
 		"slot_id": slot_id,
 		"request_id": request_id,
 		"source_row_id": row_id,
+		"planned_size": delivery_size.duplicate(),
 		"input_snapshot":
 		{
 			"kind": "generation",
@@ -430,8 +365,8 @@ static func _slot(
 			"reference_asset_ids": Array(input.get("reference_asset_ids", [])).duplicate(),
 			"reference_content_sha256s":
 			Array(input.get("reference_content_sha256s", [])).duplicate(),
-			"target_width": int(input["target_width"]),
-			"target_height": int(input["target_height"]),
+			"target_width": int(delivery_size[0]),
+			"target_height": int(delivery_size[1]),
 			"provider_output_size": provider_output_size.duplicate(),
 			"requested_seed": requested_seed,
 			"extra": extra.duplicate(true),

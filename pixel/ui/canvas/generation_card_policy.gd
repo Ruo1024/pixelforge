@@ -4,7 +4,8 @@ extends RefCounted
 
 ## Pure B7-4 generation-card presentation policy. It never writes run or Output state.
 
-const Planner := preload("res://services/generation_request_planner.gd")
+const DeliveryPolicy := preload("res://services/generation_delivery_policy.gd")
+const PromptBuilder := preload("res://services/generation_prompt_builder.gd")
 
 const GROUP_IDS := [
 	"run_status", "provider", "input_summary", "core_params", "dynamic_params", "footer"
@@ -24,16 +25,12 @@ const NON_RETRYABLE_PRIORITY := [
 
 func prompt_preview(snapshot: Dictionary) -> Dictionary:
 	var params: Dictionary = snapshot.get("params", {})
-	var descriptor: Dictionary = snapshot.get("descriptor", {})
-	var capabilities: Dictionary = descriptor.get("capabilities", {})
 	var prefix := String(snapshot.get("prefix", "")).strip_edges()
 	var prompt := String(snapshot.get("prompt", "")).strip_edges()
-	var width := int(params.get("target_width", 0))
-	var height := int(params.get("target_height", 0))
 	var rows := _valid_rows(snapshot.get("rows", []))
 	var entries: Array[Dictionary] = []
 	if rows.is_empty():
-		var single := _final_prompt(prefix, prompt, "", capabilities, width, height)
+		var single := PromptBuilder.build(prefix, prompt)
 		if not single.is_empty():
 			entries.append(
 				{"id": "", "label": "", "count": int(params.get("batch_size", 1)), "prompt": single}
@@ -47,10 +44,7 @@ func prompt_preview(snapshot: Dictionary) -> Dictionary:
 						"id": String(row["id"]),
 						"label": String(row["text"]),
 						"count": int(row["count"]),
-						"prompt":
-						_final_prompt(
-							prefix, prompt, String(row["text"]), capabilities, width, height
-						),
+						"prompt": PromptBuilder.build(prefix, prompt, String(row["text"])),
 					}
 				)
 			)
@@ -66,27 +60,8 @@ func prompt_preview(snapshot: Dictionary) -> Dictionary:
 	}
 
 
-func visible_dynamic_params(snapshot: Dictionary) -> Dictionary:
-	var descriptor: Dictionary = snapshot.get("descriptor", {})
-	var capabilities: Dictionary = descriptor.get("capabilities", {})
-	var mode := "img2img" if int(snapshot.get("reference_count", 0)) > 0 else "txt2img"
-	var basic: Array[Dictionary] = []
-	var advanced: Array[Dictionary] = []
-	for value in descriptor.get("dynamic_params", []):
-		if not (value is Dictionary):
-			continue
-		var spec: Dictionary = value
-		if spec.has("visible_when") and String(spec["visible_when"].get("mode", "")) != mode:
-			continue
-		if bool(spec.get("advanced", false)):
-			advanced.append(spec.duplicate(true))
-		else:
-			basic.append(spec.duplicate(true))
-	return {
-		"basic": basic,
-		"advanced": advanced,
-		"show_seed": bool(capabilities.get("seed", false)),
-	}
+func visible_dynamic_params(_snapshot: Dictionary) -> Dictionary:
+	return {"basic": [], "advanced": [], "show_seed": false}
 
 
 func footer_action(context: Dictionary) -> Dictionary:
@@ -132,46 +107,12 @@ func footer_action(context: Dictionary) -> Dictionary:
 
 func provider_output_size(snapshot: Dictionary) -> Vector2i:
 	var params: Dictionary = snapshot.get("params", {})
-	var descriptor: Dictionary = snapshot.get("descriptor", {})
-	var capabilities: Dictionary = descriptor.get("capabilities", {})
-	if bool(capabilities.get("native_pixel", false)):
-		return Vector2i(int(params.get("target_width", 0)), int(params.get("target_height", 0)))
-	var sizes: Array = capabilities.get("provider_output_sizes", [])
-	if sizes.is_empty():
-		return Vector2i.ZERO
-	var target_ratio := (
-		float(params.get("target_width", 1)) / maxf(float(params.get("target_height", 1)), 1.0)
+	var size := DeliveryPolicy.request_size(
+		String(params.get("resolution_preset", "")), String(params.get("orientation", ""))
 	)
-	var selected := Vector2i(int(sizes[0][0]), int(sizes[0][1]))
-	var best_error := absf(float(selected.x) / float(selected.y) - target_ratio)
-	for value in sizes.slice(1):
-		if not (value is Array) or value.size() != 2:
-			continue
-		var candidate := Vector2i(int(value[0]), int(value[1]))
-		var error := absf(float(candidate.x) / float(candidate.y) - target_ratio)
-		if error < best_error:
-			selected = candidate
-			best_error = error
-	return selected
-
-
-func _final_prompt(
-	prefix: String,
-	prompt: String,
-	row_text: String,
-	capabilities: Dictionary,
-	width: int,
-	height: int
-) -> String:
-	var parts := []
-	for value in [prefix, prompt, row_text]:
-		var normalized := String(value).strip_edges()
-		if not normalized.is_empty():
-			parts.append(normalized)
-	var semantic := ", ".join(parts)
-	if semantic.is_empty() or bool(capabilities.get("native_pixel", false)):
-		return semantic
-	return "%s, %s" % [semantic, Planner.TECHNICAL_SUFFIX % [width, height]]
+	if size.is_empty():
+		return Vector2i.ZERO
+	return Vector2i(int(size[0]), int(size[1]))
 
 
 func _valid_rows(value: Variant) -> Array[Dictionary]:

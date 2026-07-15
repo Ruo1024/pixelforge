@@ -29,7 +29,15 @@ const PARAM_WHITELIST := {
 	"image_input": ["asset_id"],
 	"reference_set": ["asset_ids"],
 	"ai_generate":
-	["provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"],
+	[
+		"provider_id",
+		"model_id",
+		"resolution_preset",
+		"orientation",
+		"batch_size",
+		"seed",
+		"extra",
+	],
 	"pixel_cleanup": ["preset_id", "settings"],
 	"batch": ["label"],
 }

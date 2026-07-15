@@ -160,7 +160,16 @@ func test_size_spec_removed_from_production() -> void:
 		var parsed := Graph.parse_v2(_graph_with_node(retired_type, {}))
 		assert_false(parsed.get("ok", false))
 		assert_eq(parsed.get("error", {}).get("code", ""), "retired_graph_node")
-	for legacy_param in ["width", "height", "per_subject", "preset_ref"]:
+	for legacy_param in [
+		"width",
+		"height",
+		"per_subject",
+		"preset_ref",
+		"target_width",
+		"target_height",
+		"ratio_lock",
+		"quality",
+	]:
 		var params := _generate_params()
 		params[legacy_param] = 1
 		var parsed := Graph.parse_v2(_graph_with_node("ai_generate", params))
@@ -180,10 +189,10 @@ func test_generate_params_roundtrip() -> void:
 				"batch_size",
 				"extra",
 				"model_id",
+				"orientation",
 				"provider_id",
+				"resolution_preset",
 				"seed",
-				"target_height",
-				"target_width"
 			]
 		)
 
@@ -193,11 +202,11 @@ func test_generate_params_roundtrip() -> void:
 		{
 			"provider_id": "openai_image",
 			"model_id": "gpt-image-2",
-			"target_width": 32,
-			"target_height": 32,
+			"resolution_preset": "1080p",
+			"orientation": "square",
 			"batch_size": 4,
 			"seed": -1,
-			"extra": {"quality": "low"},
+			"extra": {},
 		}
 	)
 
@@ -258,10 +267,12 @@ func test_known_node_params_fail_closed_instead_of_coercing() -> void:
 		_graph_with_node(
 			"pixel_cleanup", {"preset_id": "cleanup", "settings": {"detect_grid": {}}}
 		),
-		_graph_with_node("ai_generate", _generate_params().merged({"target_width": "32"}, true)),
 		_graph_with_node(
-			"ai_generate",
-			_generate_params().merged({"extra": {"quality": "low", "legacy_quality": "high"}}, true)
+			"ai_generate", _generate_params().merged({"resolution_preset": "custom"}, true)
+		),
+		_graph_with_node("ai_generate", _generate_params().merged({"seed": 3}, true)),
+		_graph_with_node(
+			"ai_generate", _generate_params().merged({"extra": {"quality": "high"}}, true)
 		),
 	]
 	for graph_data in invalid_nodes:
@@ -325,11 +336,11 @@ func _generate_params() -> Dictionary:
 	return {
 		"provider_id": "openai_image",
 		"model_id": "gpt-image-2",
-		"target_width": 32,
-		"target_height": 32,
+		"resolution_preset": "1080p",
+		"orientation": "square",
 		"batch_size": 4,
 		"seed": -1,
-		"extra": {"quality": "low"},
+		"extra": {},
 	}
 
 

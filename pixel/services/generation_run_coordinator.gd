@@ -11,6 +11,7 @@ const GraphScript := preload("res://core/graph/pf_graph.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const ProviderContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 const ProviderRunProgressScript := preload("res://services/provider_run_progress.gd")
+const DeliveryPolicy := preload("res://services/generation_delivery_policy.gd")
 const MonotonicClockScript := preload("res://infra/monotonic_clock.gd")
 const GenerationRetryPreflightScript := preload("res://services/generation_retry_preflight.gd")
 const IdUtil := preload("res://core/util/id_util.gd")
@@ -41,38 +42,18 @@ func configure_clock(clock: RefCounted) -> void:
 	_clock = clock
 
 
-func preflight_plan(
-	plan: Dictionary, offline: bool = false, cost_service: Variant = null, month_key: String = ""
-) -> Dictionary:
+func preflight_plan(plan: Dictionary, _offline: bool = false) -> Dictionary:
 	var requests: Array = plan.get("requests", [])
 	if not bool(plan.get("ok", false)) or requests.is_empty():
-		return {
-			"decision": "blocked",
-			"reason_code": "invalid_request",
-			"estimated_total_micro_usd": null,
-			"budget_micro_usd": null,
-		}
-	var ledger: Variant = cost_service if cost_service != null else CostService
-	if offline:
-		return {
-			"decision": "allowed",
-			"reason_code": "within_budget",
-			"estimated_total_micro_usd": 0,
-			"budget_micro_usd": ledger.get_monthly_budget_micro_usd(),
-		}
-	return ledger.preflight(requests, month_key)
+		return {"decision": "blocked", "reason_code": "invalid_request"}
+	return {"decision": "allowed", "reason_code": "validated"}
 
 
 func prepare_retry_preflight(
-	slots: Array,
-	max_batch: int,
-	run_id: String,
-	reference_source: Variant = null,
-	cost_service: Variant = null,
-	month_key: String = ""
+	slots: Array, max_batch: int, run_id: String, reference_source: Variant = null
 ) -> Dictionary:
 	return GenerationRetryPreflightScript.prepare_failed_slots(
-		slots, max_batch, run_id, reference_source, cost_service, month_key
+		slots, max_batch, run_id, reference_source
 	)
 
 
@@ -541,7 +522,6 @@ func apply_provider_mapping(
 				"state": String(_run_states.get(run_id, output_terminal_state(params, run_id))),
 				"registered_asset_ids": [],
 			}
-	var registered := {}
 	var updates := []
 	for value in mapped.get("slot_updates", []):
 		if not (value is Dictionary):
@@ -555,6 +535,7 @@ func apply_provider_mapping(
 		update["error"] = null
 		update["unexpected"] = true
 		updates.append(update)
+	var materialized_images := {}
 	for update_value in updates:
 		var update: Dictionary = update_value
 		if String(update.get("status", "")) != "succeeded":
@@ -563,6 +544,20 @@ func apply_provider_mapping(
 		var snapshot: Dictionary = update.get("input_snapshot", {})
 		if image == null or snapshot.is_empty():
 			return _command_error("invalid_provider_mapping")
+		var delivery := [
+			int(snapshot.get("target_width", 0)), int(snapshot.get("target_height", 0))
+		]
+		var materialized: Image = DeliveryPolicy.center_crop_to_delivery(image, delivery)
+		if materialized == null:
+			return _command_error("invalid_provider_mapping")
+		materialized_images[String(update["slot_id"])] = materialized
+	var registered := {}
+	for update_value in updates:
+		var update: Dictionary = update_value
+		if String(update.get("status", "")) != "succeeded":
+			continue
+		var snapshot: Dictionary = update.get("input_snapshot", {})
+		var image: Image = materialized_images[String(update["slot_id"])]
 		var asset_id: String = asset_library.register_image(
 			image,
 			"%s_%s" % [String(request.get("provider_id", "provider")), String(update["slot_id"])],

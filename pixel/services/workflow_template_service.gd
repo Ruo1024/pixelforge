@@ -19,7 +19,15 @@ const PARAM_WHITELIST := {
 	"image_input": ["asset_id"],
 	"reference_set": ["asset_ids"],
 	"ai_generate":
-	["provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"],
+	[
+		"provider_id",
+		"model_id",
+		"resolution_preset",
+		"orientation",
+		"batch_size",
+		"seed",
+		"extra",
+	],
 	"pixel_cleanup": ["preset_id", "settings"],
 	"batch": ["label"],
 }
@@ -463,11 +471,11 @@ static func _generate_params() -> Dictionary:
 	return {
 		"provider_id": "openai_image",
 		"model_id": "gpt-image-2",
-		"target_width": 64,
-		"target_height": 64,
+		"resolution_preset": "1080p",
+		"orientation": "square",
 		"batch_size": 1,
 		"seed": -1,
-		"extra": {"quality": "low"},
+		"extra": {},
 	}
 
 
@@ -538,7 +546,8 @@ static func _sanitize_node(node: Dictionary) -> Dictionary:
 	elif node_type == "reference_set":
 		sanitized["asset_ids"] = []
 	elif node_type == "ai_generate":
-		sanitized["extra"] = _template_safe_extra(params)
+		sanitized["seed"] = -1
+		sanitized["extra"] = {}
 	elif node_type == "batch":
 		sanitized = {
 			"label": String(params.get("label", "Results")),
@@ -550,23 +559,6 @@ static func _sanitize_node(node: Dictionary) -> Dictionary:
 			"result_slots": [],
 		}
 	return {"ok": true, "params": sanitized}
-
-
-static func _template_safe_extra(params: Dictionary) -> Dictionary:
-	var descriptor: Dictionary = ProviderService.get_model_descriptor(
-		String(params.get("provider_id", "")), String(params.get("model_id", ""))
-	)
-	var safe_keys: Array[String] = []
-	for raw_spec in descriptor.get("dynamic_params", []):
-		if raw_spec is Dictionary and bool(raw_spec.get("template_safe", false)):
-			safe_keys.append(String(raw_spec.get("key", "")))
-	var extra: Variant = params.get("extra", {})
-	var result := {}
-	if extra is Dictionary:
-		for key in safe_keys:
-			if extra.has(key):
-				result[key] = extra[key]
-	return result
 
 
 static func _palette_requirements(nodes: Array) -> Dictionary:

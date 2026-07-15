@@ -12,6 +12,7 @@ const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.g
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const GenerationRunCoordinatorScript := preload("res://services/generation_run_coordinator.gd")
 const GraphGenerationPlanBuilderScript := preload("res://services/graph_generation_plan_builder.gd")
+const GenerationCountPolicyScript := preload("res://services/generation_count_policy.gd")
 const MockGenerationExecutorScript := preload("res://services/mock_generation_executor.gd")
 const ProviderResultMapperScript := preload("res://services/provider_result_mapper.gd")
 const ProviderRunProgressScript := preload("res://services/provider_run_progress.gd")
@@ -25,11 +26,10 @@ const IdUtil := preload("res://core/util/id_util.gd")
 
 var _canvas: Control = null
 var _status_label: Label = null
-var _cost_label: Label = null
 var _provider_settings_dialog: ConfirmationDialog = null
-var _budget_dialog: ConfirmationDialog = null
+var _count_dialog: ConfirmationDialog = null
 var _pending_runs := {}
-var _pending_budget_run := {}
+var _pending_count_run := {}
 var _run_scopes := {}
 var _canceling_runs := {}
 var _terminal_run_targets := {}
@@ -42,12 +42,11 @@ var _regenerate_dialog: ConfirmationDialog
 func setup(
 	canvas: Control,
 	status_label: Label,
-	cost_label: Label = null,
+	_retired_bottom_label: Label = null,
 	provider_settings_dialog: ConfirmationDialog = null
 ) -> void:
 	_canvas = canvas
 	_status_label = status_label
-	_cost_label = cost_label
 	_provider_settings_dialog = provider_settings_dialog
 	_coordinator = GenerationRunCoordinatorScript.new()
 	var clock: RefCounted = MonotonicClockScript.new()
@@ -63,19 +62,12 @@ func setup(
 	_regenerate_dialog.confirmed.connect(_confirm_regenerate_from_error)
 	_regenerate_dialog.canceled.connect(func() -> void: _pending_regenerate.clear())
 	add_child(_regenerate_dialog)
-	_budget_dialog = ConfirmationDialog.new()
-	_budget_dialog.name = "ProviderBudgetDialog"
-	_budget_dialog.title = Strings.text("DIALOG_PROVIDER_BUDGET_TITLE")
-	_budget_dialog.confirmed.connect(_confirm_budget_run)
-	_budget_dialog.canceled.connect(func() -> void: _pending_budget_run.clear())
-	add_child(_budget_dialog)
-	CostService.cost_changed_v2.connect(
-		func(_month: String, _total_micro_usd: int) -> void: _refresh_cost_label()
-	)
-	CostService.budget_changed_v2.connect(
-		func(_limit_micro_usd: int) -> void: _refresh_cost_label()
-	)
-	_refresh_cost_label()
+	_count_dialog = ConfirmationDialog.new()
+	_count_dialog.name = "GenerationCountConfirmDialog"
+	_count_dialog.title = Strings.text("DIALOG_GENERATION_COUNT_TITLE")
+	_count_dialog.confirmed.connect(_confirm_count_run)
+	_count_dialog.canceled.connect(func() -> void: _pending_count_run.clear())
+	add_child(_count_dialog)
 
 
 func configure_session() -> void:
@@ -156,19 +148,8 @@ func retry_graph(graph: PFGraph, selected_node_id: String) -> void:
 	if String(preflight.get("decision", "blocked")) == "blocked":
 		_status_label.text = (
 			Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL")
-			% String(preflight.get("reason_code", "invalid_estimate"))
+			% String(preflight.get("reason_code", "invalid_request"))
 		)
-		return
-	if String(preflight.get("decision", "blocked")) == "needs_confirmation":
-		_pending_budget_run = {"kind": "retry", "runs": run_states, "preflight": preflight}
-		_budget_dialog.dialog_text = (
-			Strings.text("STATUS_PROVIDER_BUDGET_CONFIRM_FORMAT")
-			% [
-				_usd_display(int(preflight.get("estimated_total_micro_usd", 0))),
-				_usd_display(int(preflight.get("budget_micro_usd", 0))),
-			]
-		)
-		_budget_dialog.popup_centered()
 		return
 	_submit_retry_runs(run_states)
 
@@ -268,12 +249,11 @@ func _queue_graph(
 			return
 	var preflight: Dictionary = _coordinator.preflight_plan(request_result, provider_id == "mock")
 	if String(preflight.get("decision", "blocked")) == "blocked":
-		var reason := String(preflight.get("reason_code", "invalid_estimate"))
+		var reason := String(preflight.get("reason_code", "invalid_request"))
 		_set_graph_status(target_state, "CONTENT_STATUS_FAILED", reason)
 		_refresh_output_card(target_state)
 		_status_label.text = Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL") % reason
 		return
-	var estimate_micro: Variant = preflight.get("estimated_total_micro_usd")
 	var scope_id := IdUtil.uuid_v4()
 	var output_node_id := (
 		batch_node_id if not batch_node_id.is_empty() else "batch_%s" % IdUtil.uuid_v4().left(8)
@@ -301,13 +281,28 @@ func _queue_graph(
 					"run_id": run_id,
 					"scope_id": scope_id,
 					"scope_expected_count": expected_count,
-					"estimate_micro_usd": _estimate_micro_usd(provider_id, request),
 					"provenance_inputs": request_result.get("provenance_inputs", {}),
 					"planned_slots": planned_slots,
 					"plan": request_result,
 				}
 			)
 		)
+	if bool(GenerationCountPolicyScript.validate(expected_count)["requires_confirmation"]):
+		_pending_count_run = {"runs": run_states, "provider_id": provider_id}
+		_count_dialog.dialog_text = (
+			Strings.text("DIALOG_GENERATION_COUNT_CONFIRM_FORMAT") % expected_count
+		)
+		_status_label.text = _count_dialog.dialog_text
+		_count_dialog.popup_centered()
+		return
+	_start_full_runs(run_states, provider_id)
+
+
+func _start_full_runs(run_states: Array, provider_id: String) -> void:
+	if run_states.is_empty():
+		return
+	var first: Dictionary = run_states[0]
+	var scope_id := String(first.get("scope_id", ""))
 	var progress_records := {}
 	for run_state in run_states:
 		var request: Dictionary = run_state["request"]
@@ -323,25 +318,10 @@ func _queue_graph(
 		"progress_records": progress_records,
 		"previous_ratio": 0.0,
 	}
-	_refresh_output_card(run_states[0])
-	_refresh_cost_label(estimate_micro)
-	if String(preflight["decision"]) == "needs_confirmation":
-		_pending_budget_run = {"runs": run_states, "preflight": preflight.duplicate(true)}
-		_budget_dialog.dialog_text = (
-			Strings.text("STATUS_PROVIDER_BUDGET_CONFIRM_FORMAT")
-			% [
-				_usd_display(int(estimate_micro)),
-				_usd_display(int(preflight["budget_micro_usd"])),
-			]
-		)
-		_status_label.text = _budget_dialog.dialog_text
-		_set_graph_status(run_states[0], "CONTENT_STATUS_WAITING", _budget_dialog.dialog_text)
-		_budget_dialog.popup_centered()
-		return
 	if provider_id == "mock":
 		_submit_mock_runs(run_states)
-		return
-	_submit_provider_runs(run_states)
+	else:
+		_submit_provider_runs(run_states)
 
 
 func _submit_mock_runs(run_states: Array) -> void:
@@ -500,13 +480,7 @@ func _submit_provider_run(run_state: Dictionary) -> bool:
 		return false
 	var request_id := String(request["request_id"])
 	_pending_runs[request_id] = run_state
-	var estimate_micro: Variant = run_state.get("estimate_micro_usd")
-	var detail := (
-		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % _usd_display(int(estimate_micro))
-		if estimate_micro is int
-		else ""
-	)
-	_set_graph_status(run_state, "CONTENT_STATUS_RUNNING", detail)
+	_set_graph_status(run_state, "CONTENT_STATUS_RUNNING", "")
 	_refresh_output_card(run_state)
 	task.progress.connect(_on_progress.bind(request_id))
 	task.completed.connect(_on_finished.bind(request_id))
@@ -531,19 +505,16 @@ func _rollback_pending_output(run_states: Array) -> void:
 	ProjectService.set_graph_data(graph.id, graph.to_json(), true)
 
 
-func get_budget_dialog() -> ConfirmationDialog:
-	return _budget_dialog
+func get_count_confirmation_dialog() -> ConfirmationDialog:
+	return _count_dialog
 
 
-func _confirm_budget_run() -> void:
-	if _pending_budget_run.is_empty():
+func _confirm_count_run() -> void:
+	if _pending_count_run.is_empty():
 		return
-	var pending := _pending_budget_run
-	_pending_budget_run = {}
-	if String(pending.get("kind", "full")) == "retry":
-		_submit_retry_runs(pending.get("runs", []))
-	else:
-		_submit_provider_runs(pending.get("runs", []))
+	var pending := _pending_count_run
+	_pending_count_run = {}
+	_start_full_runs(pending.get("runs", []), String(pending.get("provider_id", "")))
 
 
 func _on_progress(value: Dictionary, request_id: String) -> void:
@@ -602,7 +573,6 @@ func _on_finished(result: Variant, task_id: String) -> void:
 	)
 	state["graph"] = graph
 	var request: Dictionary = state["request"]
-	var provider_id := String(state["provider_id"])
 	var display_name := String(state["provider_name"])
 	var batch_node_id := String(state["batch_node_id"])
 	var batch_card_id := String(state["batch_card_id"])
@@ -619,7 +589,6 @@ func _on_finished(result: Variant, task_id: String) -> void:
 			% [display_name, invalid_response]
 		)
 		return
-	_record_billing_update(provider_id, String(request["request_id"]), result)
 	var materialized := _coordinator.apply_provider_mapping(
 		graph, batch_node_id, request, mapped, AssetLibrary
 	)
@@ -738,14 +707,12 @@ func _finalize_canceled(task_id: String) -> void:
 			Strings.text("STATUS_PROVIDER_GENERATE_CANCELED_FORMAT")
 			% String(state.get("provider_name", "Provider"))
 		)
-	_refresh_cost_label()
 
 
-func _on_cancel_resolved(result: Dictionary, provider_id: String, request_id: String) -> void:
+func _on_cancel_resolved(result: Dictionary, _provider_id: String, request_id: String) -> void:
 	if not _pending_runs.has(request_id):
 		return
 	var state: Dictionary = _pending_runs[request_id]
-	_record_billing_update(provider_id, request_id, result.get("billing_update"))
 	var graph := _latest_graph_for_state(state)
 	if graph == null:
 		_finalize_canceled(request_id)
@@ -886,21 +853,6 @@ func _confirm_regenerate_from_error() -> void:
 	run_graph(GraphScript.from_json(graph_data), "", "", String(target["source_node_id"]))
 
 
-func _record_billing_update(provider_id: String, request_id: String, value: Variant) -> void:
-	if not (value is Dictionary):
-		return
-	var actual_micro: Variant = CostService.parse_usd_to_micro(value.get("actual_cost_usd"))
-	if not (actual_micro is int):
-		return
-	var charge_id := String(value.get("charge_id", ""))
-	var ledger_key := (
-		"%s:charge:%s" % [provider_id, charge_id]
-		if not charge_id.is_empty()
-		else "%s:request:%s" % [provider_id, request_id]
-	)
-	CostService.record_once(ledger_key, int(actual_micro))
-
-
 func _finish_scope_task(state: Dictionary, failed: bool, terminal_state: String = "") -> Dictionary:
 	var scope_id := String(state.get("scope_id", ""))
 	if scope_id.is_empty() or not _run_scopes.has(scope_id):
@@ -959,28 +911,6 @@ func _refresh_output_card(state: Dictionary) -> void:
 	_canvas._refresh_graph_batch_card(graph.id, batch_node_id)
 
 
-func _refresh_cost_label(estimate_micro: Variant = null) -> void:
-	if _cost_label == null:
-		return
-	var total := _usd_display(CostService.get_month_total_micro_usd())
-	_cost_label.text = (
-		Strings.text("COST_MONTH_ESTIMATE_FORMAT") % [total, _usd_display(int(estimate_micro))]
-		if estimate_micro is int
-		else Strings.text("COST_MONTH_FORMAT") % total
-	)
-
-
-func _estimate_micro_usd(provider_id: String, request: Dictionary) -> Variant:
-	var provider: PFProvider = ProviderService.get_provider(provider_id)
-	if provider == null:
-		return null
-	return CostService.parse_usd_to_micro(provider.estimate_cost(request))
-
-
-func _usd_display(micro_usd: int) -> float:
-	return float(micro_usd) / 1000000.0
-
-
 func _make_graph() -> PFGraph:
 	var graph := GraphScript.new()
 	graph.id = "graph_openai_%s" % IdUtil.uuid_v4().left(8)
@@ -1018,10 +948,10 @@ func _make_graph() -> PFGraph:
 			{
 				"provider_id": "openai_image",
 				"model_id": "gpt-image-2",
-				"target_width": 32,
-				"target_height": 32,
+				"resolution_preset": "1080p",
+				"orientation": "square",
 				"batch_size": 2,
-				"seed": 1,
+				"seed": -1,
 				"extra": {},
 			},
 			Vector2(280, 75)
@@ -1127,7 +1057,6 @@ func _retry_run_states(
 					"run_id": String(request["run_id"]),
 					"scope_id": scope_id,
 					"scope_expected_count": int(plan.get("total_slots", 0)),
-					"estimate_micro_usd": _estimate_micro_usd(provider_id, request),
 					"planned_slots": planned_slots,
 					"plan": plan,
 					"is_retry": true,

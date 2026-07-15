@@ -11,11 +11,11 @@ static func default_params(descriptors: Array, preferred_provider_id: String = "
 	return {
 		"provider_id": String(descriptor["provider_id"]),
 		"model_id": String(descriptor["model_id"]),
-		"target_width": 32,
-		"target_height": 32,
+		"resolution_preset": "1080p",
+		"orientation": "square",
 		"batch_size": 4,
 		"seed": -1,
-		"extra": _extra_defaults(descriptor),
+		"extra": {},
 	}
 
 
@@ -38,10 +38,10 @@ static func transition(
 	result["provider_id"] = provider_id
 	result["model_id"] = model_id
 	if model_changed:
-		result["extra"] = _extra_defaults(descriptor)
+		result["extra"] = {}
 	elif not (result.get("extra", {}) is Dictionary):
-		result["extra"] = _extra_defaults(descriptor)
-	for field in ["target_width", "target_height", "batch_size", "seed"]:
+		result["extra"] = {}
+	for field in ["resolution_preset", "orientation", "batch_size", "seed"]:
 		if not result.has(field):
 			return {
 				"ok": false,
@@ -49,6 +49,8 @@ static func transition(
 				"params": current.duplicate(true),
 				"undo_units": 0,
 			}
+	result["seed"] = -1
+	result["extra"] = {}
 	return {"ok": true, "issue": null, "params": result, "undo_units": 1}
 
 
@@ -81,11 +83,3 @@ static func _find_descriptor(
 		):
 			return descriptor.duplicate(true)
 	return {}
-
-
-static func _extra_defaults(descriptor: Dictionary) -> Dictionary:
-	var result := {}
-	for value in descriptor.get("dynamic_params", []):
-		if value is Dictionary:
-			result[String(value.get("key", ""))] = value.get("default")
-	return result

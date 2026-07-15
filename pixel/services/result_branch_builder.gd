@@ -10,6 +10,7 @@ const TextPromptNodeScript := preload("res://core/graph/nodes/text_prompt_node.g
 const PromptPresetNodeScript := preload("res://core/graph/nodes/prompt_preset_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+const DeliveryPolicy := preload("res://services/generation_delivery_policy.gd")
 
 
 static func build(
@@ -63,15 +64,7 @@ static func _build_continue_branch(
 		graph,
 		AiGenerateNodeScript.new(),
 		"generate",
-		{
-			"provider_id": String(snapshot.get("provider_id", "mock")),
-			"model_id": String(snapshot.get("model_id", "")),
-			"target_width": maxi(1, int(snapshot.get("target_width", 32))),
-			"target_height": maxi(1, int(snapshot.get("target_height", 32))),
-			"batch_size": maxi(1, int(snapshot.get("batch_size", 1))),
-			"seed": int(snapshot.get("requested_seed", -1)),
-			"extra": Dictionary(snapshot.get("extra", {})).duplicate(true),
-		},
+		_generation_params(snapshot),
 		anchor + Vector2(580, 180)
 	)
 	var batch_id := _add_node(
@@ -111,6 +104,21 @@ static func _build_continue_branch(
 			generate_id: _position_array(anchor + Vector2(580, 180)),
 			batch_id: _position_array(anchor + Vector2(940, 180)),
 		},
+	}
+
+
+static func _generation_params(snapshot: Dictionary) -> Dictionary:
+	var delivery := DeliveryPolicy.preset_for_delivery(
+		int(snapshot.get("target_width", 0)), int(snapshot.get("target_height", 0))
+	)
+	return {
+		"provider_id": String(snapshot.get("provider_id", "mock")),
+		"model_id": String(snapshot.get("model_id", "")),
+		"resolution_preset": String(delivery["resolution_preset"]),
+		"orientation": String(delivery["orientation"]),
+		"batch_size": 1,
+		"seed": -1,
+		"extra": {},
 	}
 
 

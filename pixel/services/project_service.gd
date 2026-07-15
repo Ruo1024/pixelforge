@@ -648,9 +648,7 @@ func _normalize_graph_json_integer_fields(graph_data: Dictionary) -> void:
 					):
 						raw_row["count"] = int(raw_row["count"])
 			"ai_generate":
-				_normalize_known_ints(
-					params, ["target_width", "target_height", "batch_size", "seed"]
-				)
+				_normalize_known_ints(params, ["batch_size", "seed"])
 			"prompt_preset":
 				var preset: Variant = params.get("preset", null)
 				if preset is Dictionary:
