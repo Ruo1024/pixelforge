@@ -1,105 +1,63 @@
 # PixelForge 当前真实状态
 
-> 本页只记录当前可由 Git、批准执行书和自动化重现的事实。工程通过、人工通过和
-> 发布通过必须分开；历史细节留在旧计划、reports 与 Git。
+> 本页只记录可由 Git、批准计划和自动化重现的当前事实。工程通过、人工通过、候选通过和
+> 发布通过必须分开；历史细节留在旧计划与 reports。
 
-## 当前基线与授权
+## 当前基线与执行任务
 
-- 日期：2026-07-14。
-- 唯一写入分支/worktree：本地 `main`，
-  `/Users/ruo/Desktop/pixelforge/scratch/worktrees/main-integration`。
-- Beta 0.6 beta.2 工程基线：`26a60708233f75cad7673cb9f80d9532f00c9d25`。
-- 阶段 A 的 ancestry、工程报告、clean committed state 与测试证据确认：
-  `codex/beta0-6-adaptive-shell-repair` 是唯一最小必要 tip；`0a746ce`、旧 Beta 0.2、
-  B3/B4 等已被它完整包含，实验/否决分支未合并。main 从 `bdfeafc` 正常 fast-forward
-  到 `26a6070`；未 reset/rebase/force，未删除分支/worktree，未 push。
-- 基线全量：396/396 tests、7718 assertions、1 个已知 orphan，exit 0。三张受保护
-  real fixture 只按既有批准流程临时恢复并核 hash，测试后立即删除；不在 Git、候选、
-  截图或外发物中常驻。
+- 日期：2026-07-15。
+- 唯一代码执行任务：`PF · E · Beta 0.7 Fix 执行`。
+- 独立本地分支：`codex/beta0-7-fix-execution`；起点精确为
+  `1b3f93481be5e8fc517344d2460abc6df2c6ad1c`。
+- 批准计划：`BETA-0.7-FIX-PLAN.md`；SHA-256 为
+  `8113a8ed40737bcc5d14cc663fd4222a9e27b45c7f96cea75e39143a054b789c`。
+- B7F-0 至 B7F-8 的产品代码、测试、相关契约、i18n 和固定截图脚本已实现并提交；
+  工程报告与人工清单已建立，最终 `verify_beta_0_7.sh` 已通过。
+- 本任务未 merge 到 `main`、未 push、未构建候选、未签名/公证、未发布。
 
-## 当前执行任务
+## Beta 0.7 Fix 已实现结果
 
-- 角色：唯一执行任务 E。
-- Goal：审计并集成有效本地分支后，在 main 连续完成批准的 Beta 0.7 B7-0 至 B7-8，
-  保持相关和全量自动化绿色并按卡提交。
-- 批准执行书：`BETA-0.7-PLAN.md`，固定 SHA-256
-  `655597660e21acdf7a4d5e2bab388bdf54586875ee59921211cdc1dad2f073f4`。
-- B7-0 已完成并提交：`c476c2a` 固定八份契约、228 条 requirement manifest、旧测试
-  替换台账与本地 main 文档基线；批准计划字节与固定 SHA 保持不变。
-- B7-1 已完成并提交：`9fcac09`。敏感 Header/URL/错误表面脱敏；生成 POST
-  强制单次尝试；OpenAI 安全 GET 最多三次且使用可注入 RetryScheduler；删除 Retro
-  哑元生成验证，configured 状态只在用户明确首次真实生成后转 verified/invalid；Provider
-  meta 改为显式白名单；en/zh_CN 同步。凭据 sentinel 确认原始 mock transport 收到，
-  log/task/PFError/当前持久化表面均未收到。
-- B7-1 全量：406/406 tests、7805 assertions、1 个既有 orphan，exit 0；三张受保护
-  fixture 再次按固定 hash 临时恢复并在测试后删除。i18n 与 v1 security 静态守护绿色。
-- B7-2 已完成并分片提交，最终代码收口为 `aaf3ae2`。按 `B7-DEC-OWNER-01`
-  完成 v2 hard cut：Project/Graph/Provider/Plugin/Template/Clipboard 不接受 v1，不保留
-  alias；PromptPreset 与 CleanupPreset 拆分；旧 batch UI 仅从 `result_slots` 的
-  `succeeded && !detached` 唯一投影读取。生产 Provider 目录仅暴露 OpenAI Image 与
-  RetroDiffusion，mock 仅供内部自动化。
-- B7-2 全量：98 scripts、493/493 tests、9391 assertions、1 个既有 orphan，exit 0；
-  全量 lint 274 文件无问题。三张受保护 fixture 复核固定 hash 后临时恢复，
-  测试后立即删除，无 `.import`、无 raster 暂存。日志仅含预期故障注入
-  `syntax_error` 和既有 7-resource 退出提示。
-- B7-4 已完成：最终 `GenerationRunCoordinator` 是 run/record/slot/Output 唯一 writer；
-  完整运行创建新 current Output 并保留 history，失败项 retry 复用原快照与同一 Output；
-  进度、取消、恢复、生成卡、运行边、错误框和自动摆放已接入真实运行路径。
-- B7-3 已完成：真实红灯提交 `d8be104`，实现提交 `ca2e740`。请求规划在任何凭据、
-  预算、Output 或网络副作用前完成本地验证；OpenAI Image 与 RetroDiffusion 的 mock
-  transport 覆盖成功、Partial、超时、鉴权失败、取消和显式重试；费用统一使用整数
-  micro USD 并按 charge/request 去重；失败槽重试与完整重新生成共用 plan→预算预检→
-  明确授权门，未确认或被阻止时不产生请求。独立只读复核未发现剩余 B7-3 blocker。
-- B7-3 全量：542/542 tests、9995 assertions、1 个既有 orphan，exit 0；lint 292 文件
-  无问题。三张受保护 fixture 按固定 hash 临时恢复，测试后立即删除，未暂存 raster。
-- B7-4 全量：114 scripts、594/594 tests、10493 assertions、1 个既有 orphan，exit 0；
-  三张受保护 fixture 按固定 hash 临时恢复并在测试后删除，未暂存 raster。
-- B7-5 已完成：Graph-bound Output 卡成为唯一结果 UI，具备固定槽、内部滚动、单选、
-  预览/编辑/下载、拆出与 Undo；旧 review/filter/focus/compare、独立 batch card 和
-  `_add_batch_card` 兼容入口已移除。结果编辑保留 slot 身份与原素材，不恢复覆盖语义。
-- B7-6 已完成：Cleanup Footer 通过共享协调器进入真实 Pipeline/TaskQueue，逐项单并发、
-  失败继续、取消收敛、retry 原快照、完整 provenance/report 与每次新 Output 已连通；
-  Inspector/Output 菜单旧直接清洗和原位替换入口已退役，独立抠图/切片/描边仍保留。
-- B7-7 已完成：默认离线示例只插入 text/preset/reference/generate/cleanup 五节点，不预建
-  Output、不自动连接 cleanup、不自动执行；布局为运行时 Output 预留固定通道，插入和
-  Undo 均不碰既有画布内容。
-- B7-8 已完成并提交至 `f7b278b`：用户可见文案迁到 en/zh_CN key 目录，运行时
-  en→zh→en 切换、18 组几何矩阵、Provider/node schema key 与源代码静态守护均通过；
-  旧 Output 创建入口和旧原位处理菜单在最终回归中一并清零。
-- 最终全量：130 scripts、621/621 tests、14818 assertions、1 个既有 orphan，exit 0；
-  唯一脚本解析错误来自故意损坏插件的隔离负向测试。全量 lint、i18n catalog、UI scaling、
-  `git diff --check` 绿色；受保护 fixture 按固定 SHA 临时恢复并在测试后删除。
+1. 卡片内层滚动在上下边界仍拥有滚轮；点击卡片临时进入选中层，视觉与命中同步置顶，
+   不修改项目 z-order 或 Undo。
+2. 生成卡固定显示 GPT Image 2、API 主机、720p/1080p/2K/4K、横/竖/方和 1–16 数量；
+   5–16 在任何 Output 槽、Provider 或 task 创建前确认。1080p 只在请求层使用 1088，
+   交付层仍为标准 1080 并居中裁切。
+3. API 设置和开发者模式位于顶栏；Key 使用安全凭据存储。所有自动化网络验证只连本地
+   mock，没有真实 Ping、生成或编辑请求。
+4. 长提示词换行；风格预设具备选择、复制、编辑、保存和删除；最终前缀只注入一次，
+   开发者预览只在开发者模式出现。
+5. Reference 与 Output 共用大图虚拟化网格、动态列和最多三行滚动；Reference 支持真实
+   指针排序与 Undo，并可按顺序原子直通空白 Output，网络和生成任务计数为零。
+6. 像素清晰卡压缩为摘要与唯一 Footer 运行入口；完整参数由右侧检查器读写并进入 Undo，
+   运行中禁用编辑。
+7. 预算、估价、费用 UI、月累计和 `CostService` 已删除；`actual_cost_usd`、`charge_id`、
+   `provider_meta` 仅作为隐藏审计字段保留。
 
-## Beta 0.7 固定产品边界
+## 固定边界
 
-1. Project/Graph/Provider/Plugin/Template/Clipboard 一次性硬切 v2；不迁移 v1、不留
-   adapter/alias。PromptPreset 与 CleanupPreset 各为 v1 新对象。
-2. 生成与清洗主路径只有 text_prompt、object_list、prompt_preset、image_input、
-   reference_set、ai_generate、pixel_cleanup、batch（用户名“结果”/“Output”）。
-3. StylePreset 和 size_spec 从主路径退役；编辑器、地图、palette、抠图、切片、描边等
-   独立能力不能因此删除或重设计。
-4. 每次完整生成/清洗创建新 Output；最多显示 3 行结果并在卡内滚动；历史保留；清洗
-   是显式手动、逐张单并发且不覆盖源素材。
-5. Provider v2 生产范围只有 OpenAI Image 与 RetroDiffusion；ComfyUI 和其他实验后端
-   保持禁用/不注册。
+- Fix 未覆盖的 1A / 2B 含义保持冻结；PF-SEC-01 不变。
+- 生成 POST 自动重试仍为 0；timeout、429、5xx 或不确定提交不得静默重发。
+- Output 的预览、编辑、下载、拆出、Undo、历史与重试动作继续保留。
+- Provider v2 生产范围仍只有 OpenAI Image 与 RetroDiffusion；ComfyUI 和其他实验后端
+  保持禁用/不注册。
+- 受保护真实图片只允许项目所有者显式 opt-in；本任务不读取、不复制、不散列、不提交。
 
-## 工程、人工与发布状态
+## 工程、人工、候选与发布状态
 
-- Beta 0.6 beta.1 已被项目所有者否决，只保留历史证据。
-- beta.2 自动化工程基线已集成本地 main；这不把 Beta 0.6 改写为人工通过或发布通过。
-- Beta 0.7 B7-0 至 B7-8 已工程通过；尚未人工通过或发布通过。
-- 本 Goal 禁止真实付费 API、Computer Use、未许可图片、B7-9、候选构建、push、发布、
-  强制改写历史和删除分支/worktree。
+- **工程状态**：B7F-0 至 B7F-8 工程通过；最终门禁为 134 scripts、637/637 tests、
+  14,221 assertions、Risky/Pending=0、1 个既有 orphan；lint、i18n、UI scaling、18 组
+  几何、9 张固定截图、export-template 存在性、diff 与 raster 守护通过。
+- **人工状态**：未验收；自动化和脚本截图不构成人工签收。
+- **候选状态**：未构建。
+- **发布状态**：未 merge、未 push、未签名/公证、未发布。
 
 ## 下一步
 
-1. 停止产品开发并把 B7-0 至 B7-8 工程结果交回 P/项目所有者；
-2. 等待项目所有者统一人工验收，不把自动化结果冒充人工签收；
-3. 未获新授权不得执行 B7-9、候选构建、push、发布或删除旧分支/worktree。
+1. 将工程报告与 `BETA-0.7-FIX-MANUAL-CHECKLIST.md` 交回 P / 项目所有者；
+2. 等待项目所有者统一人工验收。未获新授权不得构建候选、merge、push 或发布。
 
 ## 禁止宣称
 
-- 不得称任何 Beta、alpha、RC 或 v1.0 已人工通过或已发布；
-- 不得把自动化、agent 审查或脚本截图冒充项目所有者人工签收；
-- 不得把 beta.1 的 SHA、截图或旧测试数字冒充当前证据；
-- 不得把账号/协作/版本历史、ComfyUI、M8 或延期 Graph 节点改写为本轮欠债或能力。
+- 不得称 Beta 0.7 Fix 已人工通过、候选通过或发布；
+- 不得把自动化、agent 审查或脚本截图冒充项目所有者签收；
+- 不得把旧 Beta 0.7 候选、SHA、费用 UI 或旧截图冒充当前 Fix 证据。
