@@ -4,6 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 readonly BASELINE="1b3f93481be5e8fc517344d2460abc6df2c6ad1c"
+test_log="$(mktemp)"
+trap 'rm -f "${test_log}"' EXIT
 
 run_single_gut() {
   local test_path="$1"
@@ -23,7 +25,19 @@ echo "[1/10] lint / format"
 ./pixel/scripts/lint.sh
 
 echo "[2/10] full GUT with local mock HTTP"
-./pixel/scripts/run_tests.sh
+./pixel/scripts/run_tests.sh | tee "${test_log}"
+if python3 - "${test_log}" <<'PY'
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+raise SystemExit(0 if re.search(r"Risky/Pending\s+[1-9][0-9]*", text) else 1)
+PY
+then
+  echo "Full GUT contains pending or risky tests." >&2
+  exit 1
+fi
 
 echo "[3/10] i18n catalog"
 ./pixel/scripts/check_i18n_catalogs.sh

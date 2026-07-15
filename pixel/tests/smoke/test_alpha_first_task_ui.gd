@@ -106,47 +106,13 @@ func test_multi_image_import_creates_reference_grid_as_one_undo_action() -> void
 	assert_eq(canvas.get_item_count(), 4)
 
 
-func test_1254_preview_reaches_running_and_done_instead_of_stale_queued() -> void:
+func test_retired_direct_cleanup_preview_is_absent_and_footer_coordinator_is_mounted() -> void:
 	var main := await _make_main()
-	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
-	var image := _solid_image(Vector2i(1254, 1254), Color(0.2, 0.4, 0.7, 1.0))
-	var asset_id: String = AssetLibrary.register_image(image, "large", {"origin": "imported"})
-	canvas.add_sprite_item(image, asset_id, Vector2.ZERO)
-
-	main.call("_request_cleanup_preview", {"steps": []})
-	await wait_process_frames(1)
-	assert_ne(_status_label(main).text, "Preview queued")
-	var deadline := Time.get_ticks_msec() + 10000
-	while not TaskQueue.is_idle() and Time.get_ticks_msec() < deadline:
-		await wait_process_frames(1)
+	assert_false(main.has_method("_request_cleanup_preview"))
+	assert_false(main.has_method("_on_cleanup_finished"))
+	assert_false(main.has_method("_on_cleanup_preview_canceled"))
+	assert_not_null(main.get_node("M21UiController/CleanupRunController"))
 	assert_true(TaskQueue.is_idle())
-	assert_eq(_status_label(main).text, "Cleanup preview ready")
-	var source_data: Dictionary = canvas.export_canvas_data()["items"][0]
-	(
-		main
-		. call(
-			"_on_cleanup_finished",
-			{
-				"canceled": false,
-				"items":
-				[
-					{
-						"source_data": source_data,
-						"image": _solid_image(Vector2i(16, 16), Color.BLUE),
-						"report": {},
-						"params": {},
-					},
-				],
-			}
-		)
-	)
-	await wait_seconds(0.4)
-	assert_eq(_status_label(main).text, "Cleanup complete")
-
-	main.call("_on_cleanup_preview_canceled", int(main.get("_preview_token")))
-	assert_eq(_status_label(main).text, "Cleanup preview canceled")
-	main.get("_m2_actions")._on_task_canceled()
-	assert_eq(_status_label(main).text, "Processing canceled")
 
 
 func test_export_overwrite_choices_and_result_summary() -> void:
