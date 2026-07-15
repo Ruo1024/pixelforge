@@ -18,6 +18,7 @@ const Strings := preload("res://ui/shell/strings.gd")
 const UIFont := preload("res://ui/widgets/ui_font.gd")
 const AssetRefFieldScript := preload("res://ui/widgets/asset_ref_field.gd")
 const ObjectListEditorScript := preload("res://ui/canvas/object_list_editor.gd")
+const PromptPresetCardViewScript := preload("res://ui/canvas/prompt_preset_card_view.gd")
 const GenerationCardViewScript := preload("res://ui/canvas/generation_card_view.gd")
 const CleanupCardViewScript := preload("res://ui/canvas/cleanup_card_view.gd")
 const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
@@ -66,6 +67,7 @@ var _content_root: Control = null
 var _text_prompt_edit: TextEdit = null
 var _prompt_count_label: Label = null
 var _prompt_draft_label: Label = null
+var _prompt_preset_view: Control = null
 var _generation_view: Control = null
 var _cleanup_view: Control = null
 var _reference_field: Control = null
@@ -494,6 +496,7 @@ func _rebuild_content_controls() -> void:
 	_text_prompt_edit = null
 	_prompt_count_label = null
 	_prompt_draft_label = null
+	_prompt_preset_view = null
 	_generation_view = null
 	_cleanup_view = null
 	_reference_field = null
@@ -687,16 +690,17 @@ func _build_text_prompt_controls() -> void:
 func _build_prompt_preset_controls() -> void:
 	var preset_value: Variant = _params_snapshot.get("preset", {})
 	var preset: Dictionary = preset_value if preset_value is Dictionary else {}
-	var name_label := Label.new()
-	name_label.name = "PresetName"
-	name_label.text = String(preset.get("name", preset.get("name_key", "")))
-	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_content_root.add_child(name_label)
-	var prefix_label := Label.new()
-	prefix_label.name = "PresetPrefix"
-	prefix_label.text = String(preset.get("prefix", ""))
-	prefix_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_content_root.add_child(prefix_label)
+	_prompt_preset_view = PromptPresetCardViewScript.new()
+	_prompt_preset_view.name = "PromptPresetCardView"
+	_prompt_preset_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_prompt_preset_view.preset_commit_requested.connect(_commit_prompt_preset)
+	_prompt_preset_view.configure(preset)
+	_content_root.add_child(_prompt_preset_view)
+
+
+func _commit_prompt_preset(preset: Dictionary) -> void:
+	_params_snapshot = {"preset": preset.duplicate(true)}
+	params_commit_requested.emit(graph_id, node_id, _params_snapshot.duplicate(true))
 
 
 func _build_cleanup_shell_controls() -> void:
@@ -1057,6 +1061,8 @@ func _capture_content_interaction_state() -> Dictionary:
 			state["text_scroll"] = [focus_owner.scroll_horizontal, focus_owner.scroll_vertical]
 	var scrolls: Dictionary = state["scrolls"]
 	_capture_scroll_offsets(_content_root, scrolls)
+	if _prompt_preset_view != null:
+		state["prompt_preset_view"] = _prompt_preset_view.export_interaction_state()
 	if _text_prompt_edit != null:
 		_prompt_draft_cache = _text_prompt_edit.text
 		_prompt_draft_cached = (_prompt_draft_cache != String(_params_snapshot.get("text", "")))
@@ -1075,6 +1081,8 @@ func _capture_scroll_offsets(node: Node, result: Dictionary) -> void:
 func _restore_content_interaction_state(state: Dictionary) -> void:
 	if state.is_empty() or _content_root == null:
 		return
+	if _prompt_preset_view != null and state.has("prompt_preset_view"):
+		_prompt_preset_view.import_interaction_state(state["prompt_preset_view"])
 	var focus_path: NodePath = state.get("focus_path", NodePath(""))
 	if not focus_path.is_empty():
 		var focus_owner := _content_root.get_node_or_null(focus_path) as Control

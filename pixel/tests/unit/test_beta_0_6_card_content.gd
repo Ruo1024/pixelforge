@@ -70,8 +70,12 @@ func test_prompt_and_cleanup_preset_snapshots_are_visible_without_execution() ->
 			}
 		}
 	)
-	assert_eq(prompt["card"].get_content_control("PresetName").text, "Original")
-	assert_eq(prompt["card"].get_content_control("PresetPrefix").text, "clean 16-bit pixel art")
+	var preset_option: OptionButton = prompt["card"].get_content_control("PresetOption")
+	assert_eq(preset_option.get_item_text(preset_option.selected), "Original")
+	assert_eq(
+		prompt["card"].get_content_control("PresetPrefixEdit").text,
+		"clean 16-bit pixel art",
+	)
 	var cleanup := await _card(
 		PixelCleanupNodeScript.new(),
 		"cleanup",

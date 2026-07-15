@@ -3,7 +3,7 @@ extends RefCounted
 
 ## Read-only project asset, split preset, and workflow search facade.
 
-const PromptPresetRegistry := preload("res://services/prompt_preset_registry.gd")
+const PromptPresetLibrary := preload("res://services/prompt_preset_library.gd")
 const CleanupPresetRegistry := preload("res://services/cleanup_preset_registry.gd")
 const WorkflowTemplateService := preload("res://services/workflow_template_service.gd")
 
@@ -49,10 +49,10 @@ static func search_assets(query: String = "", origin: String = "") -> Array[Dict
 static func search_prompt_presets(query: String = "") -> Array[Dictionary]:
 	var normalized_query := query.strip_edges().to_lower()
 	var result: Array[Dictionary] = []
-	var registry := PromptPresetRegistry.new()
-	for preset_id in registry.get_preset_ids():
-		var preset: Dictionary = registry.get_preset(preset_id)
-		var name := _preset_name(preset)
+	for entry in PromptPresetLibrary.list_entries():
+		var preset: Dictionary = entry["preset"]
+		var preset_id := String(entry["id"])
+		var name := String(entry["name"])
 		if (
 			not normalized_query.is_empty()
 			and (
@@ -68,6 +68,8 @@ static func search_prompt_presets(query: String = "") -> Array[Dictionary]:
 					"id": String(preset_id),
 					"name": name,
 					"name_key": String(preset.get("name_key", "")),
+					"source": String(entry.get("source", "builtin")),
+					"read_only": bool(entry.get("read_only", true)),
 					"available": true,
 					"preset": preset.duplicate(true),
 				}
