@@ -134,7 +134,7 @@ func execute(inputs: Dictionary, params: Dictionary, _ctx: Variant) -> Dictionar
 	for subject in subjects:
 		var subject_text := String(subject.get("text", "sprite"))
 		for _index in range(int(subject.get("count", batch_size))):
-			var item_seed := seed + images.size()
+			var item_seed := images.size() if seed == DEFAULT_SEED else seed + images.size()
 			images.append(
 				_make_mock_image(subject_text, width, height, item_seed, combined_reference_hash)
 			)

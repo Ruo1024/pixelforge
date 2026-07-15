@@ -67,17 +67,18 @@ func test_graph_node_params_dialog_builds_controls_from_node_schema() -> void:
 			{
 				"provider_id": "mock",
 				"model_id": "pixel_mock_v1",
-				"target_width": 32,
-				"target_height": 24,
+				"resolution_preset": "1080p",
+				"orientation": "square",
 				"batch_size": 2,
 				"seed": -1,
 				"extra": {},
 			}
 		)
 	)
-	assert_true(dialog.set_param_value("target_width", 48))
-	assert_eq(dialog.get_params()["target_width"], 48)
-	assert_eq(dialog.get_params()["target_height"], 24)
+	assert_true(dialog.set_param_value("resolution_preset", "2K"))
+	assert_true(dialog.set_param_value("orientation", "portrait"))
+	assert_eq(dialog.get_params()["resolution_preset"], "2K")
+	assert_eq(dialog.get_params()["orientation"], "portrait")
 
 	var original_language: String = LocalizationService.current_preference
 	LocalizationService.set_language("zh_CN")
@@ -85,7 +86,9 @@ func test_graph_node_params_dialog_builds_controls_from_node_schema() -> void:
 		dialog.title,
 		Strings.text("DIALOG_GRAPH_NODE_PARAMS_TITLE_FORMAT") % Strings.text("NODE_AI_GENERATE")
 	)
-	assert_eq(dialog._root.get_child(2).get_child(0).text, Strings.text("GRAPH_PARAM_TARGET_WIDTH"))
+	assert_eq(
+		dialog._root.get_child(2).get_child(0).text, Strings.text("GRAPH_PARAM_RESOLUTION_PRESET")
+	)
 	assert_eq(dialog.get_ok_button().text, Strings.text("ACTION_APPLY"))
 	LocalizationService.set_language(original_language)
 
@@ -130,7 +133,7 @@ func test_legacy_openai_session_action_redirects_to_unified_provider_settings() 
 	add_child_autofree(canvas)
 	var status_label := Label.new()
 	add_child_autofree(status_label)
-	controller.setup(canvas, status_label, null, provider_dialog)
+	controller.setup(canvas, status_label, provider_dialog)
 	await wait_process_frames(1)
 
 	controller.configure_session()
@@ -144,11 +147,22 @@ func test_ai_generate_provider_field_does_not_inject_production_mock() -> void:
 	var dialog: ConfirmationDialog = GraphNodeParamsDialogScript.new()
 	add_child_autofree(dialog)
 	await wait_process_frames(1)
-	dialog.configure_for_node(
-		"graph_test",
-		"generate",
-		AiGenerateNodeScript.new(),
-		{"provider_id": "openai_image", "batch_size": 1, "seed": 1}
+	(
+		dialog
+		. configure_for_node(
+			"graph_test",
+			"generate",
+			AiGenerateNodeScript.new(),
+			{
+				"provider_id": "openai_image",
+				"model_id": "gpt-image-2",
+				"resolution_preset": "1080p",
+				"orientation": "square",
+				"batch_size": 1,
+				"seed": -1,
+				"extra": {},
+			}
+		)
 	)
 
 	assert_eq(dialog.get_param_value("provider_id"), "openai_image")

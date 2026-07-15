@@ -99,8 +99,8 @@ func test_content_nodes_roundtrip_as_registered_nodes_with_edge_contracts() -> v
 				{
 					"provider_id": "mock",
 					"model_id": "pixel_mock_v1",
-					"target_width": 32,
-					"target_height": 32,
+					"resolution_preset": "1080p",
+					"orientation": "square",
 					"batch_size": 1,
 					"seed": -1,
 					"extra": {},

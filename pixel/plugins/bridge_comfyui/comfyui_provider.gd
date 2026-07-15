@@ -48,7 +48,6 @@ func get_capabilities() -> Dictionary:
 		"max_batch": 1,
 		"sizes": [[64, 64], [2048, 2048]],
 		"animation": false,
-		"cost_estimate": false,
 	}
 
 
@@ -113,10 +112,6 @@ func generate(request: Dictionary) -> Variant:
 	var task := TaskScript.new("comfyui_generate", {"endpoint": _endpoint})
 	task.configure_external(_start_generation.bind(request), _cancel_task)
 	return task
-
-
-func estimate_cost(_request: Dictionary) -> float:
-	return 0.0
 
 
 func cancel(task_id: String) -> void:
@@ -304,7 +299,6 @@ func _download_history_images(
 		"images": images,
 		"raw_pixel": false,
 		"seeds": seeds,
-		"cost": 0.0,
 		"provider_meta":
 		{
 			"prompt_id": prompt_id,

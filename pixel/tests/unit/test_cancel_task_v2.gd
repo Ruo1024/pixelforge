@@ -6,7 +6,6 @@ const ManualSchedulerScript := preload(
 	"res://tests/fixtures/providers/manual_deadline_scheduler.gd"
 )
 const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
-const ShellControllerScript := preload("res://ui/shell/generation_run_controller.gd")
 
 
 func test_cancel_order_deadlines_and_dedupe() -> void:
@@ -195,48 +194,8 @@ func test_built_in_providers_use_the_deadline_settlement_boundary() -> void:
 		"res://ui/shell/generation_run_controller.gd"
 	)
 	assert_string_contains(controller_source, "cancel_task.resolved.connect")
-	assert_string_contains(controller_source, "_record_billing_update(")
-
-
-func test_cancel_billing_is_recorded_before_controller_terminalizes() -> void:
-	var month := CostService.get_month_key()
-	CostService.reset_month_for_tests(month)
-	var controller := ShellControllerScript.new()
-	add_child_autofree(controller)
-	var status_label := Label.new()
-	controller.add_child(status_label)
-	controller._status_label = status_label
-	controller._pending_runs["request-billing"] = {
-		"provider_name": "Retro Diffusion",
-		"request": {"request_id": "request-billing"},
-		"scope_id": "",
-	}
-	var observed := {"pending_when_recorded": false}
-	var observe := func(_month: String, _total: int) -> void:
-		observed["pending_when_recorded"] = controller._pending_runs.has("request-billing")
-	CostService.cost_changed_v2.connect(observe, CONNECT_ONE_SHOT)
-	(
-		controller
-		. _on_cancel_resolved(
-			{
-				"request_id": "request-billing",
-				"local_stopped": true,
-				"remote_cancel_confirmed": false,
-				"billing_update":
-				{
-					"actual_cost_usd": "0.250000",
-					"charge_id": "charge-billing",
-					"provider_meta": {"remote_task_id": "remote-billing"},
-				},
-			},
-			"retrodiffusion",
-			"request-billing",
-		)
-	)
-	assert_true(observed["pending_when_recorded"])
-	assert_false(controller._pending_runs.has("request-billing"))
-	assert_eq(CostService.get_month_total_micro_usd(month), 250000)
-	CostService.reset_month_for_tests(month)
+	assert_false(controller_source.contains("CostService"))
+	assert_false(controller_source.contains("_record_billing_update"))
 
 
 func _generation_task(request_id: String) -> PFProviderTaskV2:

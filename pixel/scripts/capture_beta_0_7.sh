@@ -24,6 +24,7 @@ scenarios=(
   "1440x900-en-100-running-output-edge.png|en|running_output_edge|1.0"
   "1440x900-zh-100-output-12.png|zh_CN|output_12|1.0"
   "1440x900-en-100-output-13-50-scroll.png|en|output_13_50_scroll|1.0"
+  "2560x1440-en-100-reference-12.png|en|reference_12|1.0"
   "1440x900-zh-100-detached-sprite.png|zh_CN|detached_sprite|1.0"
   "1440x900-en-100-cleanup-running.png|en|cleanup_running|1.0"
   "1080x560-zh-150-partial-dialog.png|zh_CN|partial_dialog|1.5"

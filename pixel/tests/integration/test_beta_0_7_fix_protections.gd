@@ -72,13 +72,21 @@ func test_clicked_card_uses_ephemeral_selected_item_layer() -> void:
 	assert_not_null(canvas.get_node_or_null("ItemLayer/SelectedItemLayer"))
 
 
-func test_cost_product_path_is_absent_from_generation_surface_and_coordinator() -> void:
+func test_cost_product_path_is_absent_but_hidden_provider_audit_is_preserved() -> void:
 	var combined := (
 		_source("res://ui/canvas/generation_card_view.gd")
-		+ _source("res://services/generation_run_coordinator.gd")
+		+ _source("res://ui/shell/main.gd")
+		+ _source("res://ui/dialogs/provider_settings_dialog.gd")
+		+ _source("res://services/provider_service.gd")
+		+ _source("res://core/provider/pf_provider.gd")
 	)
 	assert_false(combined.contains("CostService"))
 	assert_false(combined.contains("estimate_cost"))
+	assert_false(combined.contains("MonthlyBudget"))
+	assert_false(FileAccess.file_exists("res://services/cost_service.gd"))
+	var coordinator := _source("res://services/generation_run_coordinator.gd")
+	assert_true(coordinator.contains('record["actual_cost_usd"]'))
+	assert_true(coordinator.contains('record["charge_id"]'))
 
 
 func _source(path: String) -> String:

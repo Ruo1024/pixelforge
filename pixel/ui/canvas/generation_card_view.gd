@@ -197,7 +197,7 @@ func _group(parent: VBoxContainer, group_name: String, title_key: String) -> HBo
 	var group := HBoxContainer.new()
 	group.name = group_name
 	var title := Label.new()
-	title.text = Strings.text(title_key)
+	title.text = _group_title(title_key)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	group.add_child(title)
 	parent.add_child(group)
@@ -225,16 +225,23 @@ func _final_prompt_preview() -> String:
 
 
 func _state_text(state: String) -> String:
-	var keys := {
-		"Queued": "CONTENT_STATUS_QUEUED",
-		"Running": "CONTENT_STATUS_RUNNING",
-		"Canceling": "CONTENT_STATUS_CANCELING",
-		"Partial": "CONTENT_STATUS_PARTIAL",
-		"Failed": "CONTENT_STATUS_FAILED",
-		"Complete": "CONTENT_STATUS_COMPLETE",
-		"Canceled": "CONTENT_STATUS_CANCELED",
-	}
-	return Strings.text(String(keys.get(state, "CONTENT_STATUS_READY")))
+	match state:
+		"Queued":
+			return Strings.text("CONTENT_STATUS_QUEUED")
+		"Running":
+			return Strings.text("CONTENT_STATUS_RUNNING")
+		"Canceling":
+			return Strings.text("CONTENT_STATUS_CANCELING")
+		"Partial":
+			return Strings.text("CONTENT_STATUS_PARTIAL")
+		"Failed":
+			return Strings.text("CONTENT_STATUS_FAILED")
+		"Complete":
+			return Strings.text("CONTENT_STATUS_COMPLETE")
+		"Canceled":
+			return Strings.text("CONTENT_STATUS_CANCELED")
+		_:
+			return Strings.text("CONTENT_STATUS_READY")
 
 
 func _progress_text(value: Variant) -> String:
@@ -247,25 +254,54 @@ func _progress_text(value: Variant) -> String:
 
 
 func _footer_action_text(action: Dictionary) -> String:
-	var keys := {
-		"generate": "GEN_CARD_ACTION_GENERATE",
-		"cancel": "GEN_CARD_ACTION_CANCEL",
-		"regenerate": "GEN_CARD_ACTION_REGENERATE",
-		"cancel_failed": "GEN_CARD_ACTION_CANCEL_FAILED",
-		"retry_failed": "GEN_CARD_ACTION_RETRY_FAILED",
-		"provider_settings": "GEN_CARD_ACTION_PROVIDER_SETTINGS",
-		"edit_prompt": "GEN_CARD_ACTION_EDIT_PROMPT",
-		"focus_generation": "GEN_CARD_ACTION_RETURN_GENERATION",
-		"regenerate_confirm": "GEN_CARD_ACTION_REGENERATE_CONFIRM",
-	}
 	var action_id := String(action.get("action_id", ""))
 	if action_id == "retry_wait":
 		return LocalizationService.text("GEN_CARD_ACTION_RETRY_WAIT", action.get("args", []))
-	return Strings.text(String(keys.get(action_id, "GEN_CARD_ACTION_CANCELING")))
+	match action_id:
+		"generate":
+			return Strings.text("GEN_CARD_ACTION_GENERATE")
+		"cancel":
+			return Strings.text("GEN_CARD_ACTION_CANCEL")
+		"regenerate":
+			return Strings.text("GEN_CARD_ACTION_REGENERATE")
+		"cancel_failed":
+			return Strings.text("GEN_CARD_ACTION_CANCEL_FAILED")
+		"retry_failed":
+			return Strings.text("GEN_CARD_ACTION_RETRY_FAILED")
+		"provider_settings":
+			return Strings.text("GEN_CARD_ACTION_PROVIDER_SETTINGS")
+		"edit_prompt":
+			return Strings.text("GEN_CARD_ACTION_EDIT_PROMPT")
+		"focus_generation":
+			return Strings.text("GEN_CARD_ACTION_RETURN_GENERATION")
+		"regenerate_confirm":
+			return Strings.text("GEN_CARD_ACTION_REGENERATE_CONFIRM")
+		_:
+			return Strings.text("GEN_CARD_ACTION_CANCELING")
 
 
 func _orientation_text(value: String) -> String:
-	return Strings.text("GEN_CARD_ORIENTATION_%s" % value.to_upper())
+	match value:
+		"landscape":
+			return Strings.text("GEN_CARD_ORIENTATION_LANDSCAPE")
+		"portrait":
+			return Strings.text("GEN_CARD_ORIENTATION_PORTRAIT")
+		_:
+			return Strings.text("GEN_CARD_ORIENTATION_SQUARE")
+
+
+func _group_title(key: String) -> String:
+	match key:
+		"GEN_CARD_MODEL":
+			return Strings.text("GEN_CARD_MODEL")
+		"GEN_CARD_RESOLUTION":
+			return Strings.text("GEN_CARD_RESOLUTION")
+		"GEN_CARD_ORIENTATION":
+			return Strings.text("GEN_CARD_ORIENTATION")
+		"GEN_CARD_COUNT":
+			return Strings.text("GEN_CARD_COUNT")
+		_:
+			return Strings.text("GEN_CARD_DEVELOPER_PROMPT")
 
 
 func _on_language_changed(_preference: String, _locale: String) -> void:

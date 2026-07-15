@@ -14,13 +14,11 @@ const ROOT_SEPARATION := 8
 
 var _provider_options: OptionButton = null
 var _provider_label: Label = null
-var _budget_label: Label = null
 var _capabilities_label: Label = null
 var _form: VBoxContainer = null
 var _status_label: Label = null
 var _validate_button: Button = null
 var _save_button: Button = null
-var _budget_edit: LineEdit = null
 var _fields := {}
 var _provider_id := ""
 var _provider_service: Node = null
@@ -42,7 +40,6 @@ func set_services(provider_service: Node, task_queue: Node) -> void:
 
 func show_settings(provider_id: String = "") -> void:
 	_refresh_provider_list()
-	_refresh_budget_text()
 	if not provider_id.is_empty():
 		_select_provider(provider_id)
 	popup_centered()
@@ -61,13 +58,6 @@ func is_validation_available() -> bool:
 
 
 func save_current_config() -> Dictionary:
-	var budget_micro: Variant = CostService.parse_usd_to_micro(_budget_edit.text.strip_edges())
-	if budget_micro == null or not CostService.set_monthly_budget_micro_usd(budget_micro):
-		_status_label.text = Strings.text("PROVIDER_SETTINGS_SAVE_FAILED")
-		return {
-			"ok": false,
-			"error": {"code": "invalid_budget", "field": "monthly_budget", "args": {}},
-		}
 	var result: Dictionary = _provider_api().save_provider_config(_provider_id, _draft_config())
 	_status_label.text = (
 		Strings.text("PROVIDER_SETTINGS_SAVED")
@@ -112,15 +102,6 @@ func _build() -> void:
 	_provider_options.custom_minimum_size.y = CONTROL_HEIGHT
 	_provider_options.item_selected.connect(_on_provider_selected)
 	root.add_child(_provider_options)
-	_budget_label = Label.new()
-	_budget_label.text = Strings.text("PROVIDER_MONTHLY_BUDGET")
-	root.add_child(_budget_label)
-	_budget_edit = LineEdit.new()
-	_budget_edit.name = "MonthlyBudget"
-	_budget_edit.custom_minimum_size.y = CONTROL_HEIGHT
-	root.add_child(_budget_edit)
-	_refresh_budget_text()
-
 	_capabilities_label = Label.new()
 	_capabilities_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(_capabilities_label)
@@ -262,13 +243,6 @@ func _yes_no(value: bool) -> String:
 	return Strings.text("VALUE_YES") if value else Strings.text("VALUE_NO")
 
 
-func _refresh_budget_text() -> void:
-	if _budget_edit == null:
-		return
-	var budget := CostService.get_monthly_budget_micro_usd()
-	_budget_edit.text = "0" if budget == 0 else String(CostService.format_micro_usd(budget))
-
-
 func _draft_config() -> Dictionary:
 	var config := {}
 	for key in _fields.keys():
@@ -314,7 +288,6 @@ func _on_language_changed(_preference: String, _locale: String) -> void:
 	ok_button_text = Strings.text("ACTION_SAVE_PROVIDER")
 	cancel_button_text = Strings.text("ACTION_CANCEL")
 	_provider_label.text = Strings.text("PROVIDER_SETTINGS_PROVIDER")
-	_budget_label.text = Strings.text("PROVIDER_MONTHLY_BUDGET")
 	_save_button.text = Strings.text("ACTION_SAVE_PROVIDER")
 	_validate_button.text = Strings.text("ACTION_VALIDATE_PROVIDER")
 	if not _provider_id.is_empty():

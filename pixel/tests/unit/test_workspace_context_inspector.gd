@@ -45,7 +45,7 @@ func test_single_candidate_maps_safe_snapshot_and_emits_safe_action_context() ->
 	assert_eq(_row_value(panel, "Seed"), "0")
 	assert_eq(_row_value(panel, "Size"), "1024×1024")
 	assert_true(_row_value(panel, "References").contains("reference-a, reference-b"))
-	assert_false(panel.get_node("CostRow").visible)
+	assert_null(panel.get_node_or_null("CostRow"))
 	assert_eq(_row_value(panel, "CreatedAt"), "2026-07-13T08:00:00Z")
 	assert_eq(_row_value(panel, "Source"), "generate-cloud")
 	assert_false(_all_label_text(panel).contains("must-not-leak"))
@@ -102,7 +102,6 @@ func test_missing_snapshot_degrades_without_empty_detail_rows() -> void:
 		"SeedRow",
 		"SizeRow",
 		"ReferencesRow",
-		"CostRow",
 		"CreatedAtRow",
 		"SourceRow",
 	]:

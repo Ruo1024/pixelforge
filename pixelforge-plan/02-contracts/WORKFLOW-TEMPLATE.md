@@ -36,13 +36,14 @@ PROJECT-FORMAT；locked 不保存，新实例默认未锁。未知字段 fail cl
 | prompt_preset | preset |
 | image_input | asset_id；保存时清空 |
 | reference_set | asset_ids；保存时清空 |
-| ai_generate | provider_id, model_id, target_width, target_height, batch_size, seed, extra |
+| ai_generate | provider_id, model_id, resolution_preset, orientation, batch_size, seed, extra |
 | pixel_cleanup | preset_id, settings |
 | batch | label |
 
 `size_spec/style_preset`、幽灵、插件和实验节点全部拒绝。object_list rows 严格沿用
 Graph v2，不读 items。pixel_cleanup 不保存 target_size 或 palette colors。
-ai_generate.extra 只保留当前 model descriptor 中 `template_safe=true` 的键。
+ai_generate 只允许固定档位与方向，seed 必须为 -1，extra 必须为 `{}`；旧宽高、
+ratio_lock、quality、用户 seed 和非空 extra 都使模板验证失败。
 
 所有字典递归禁止键名含 api_key/authorization/credential/header/password/response/
 secret/token；禁止绝对路径、run/task/request/progress/error、result_slots、input

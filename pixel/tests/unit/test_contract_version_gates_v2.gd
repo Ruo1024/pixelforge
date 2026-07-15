@@ -18,10 +18,6 @@ class LegacyProvider:
 		side_effect_calls += 1
 		return []
 
-	func estimate_cost(_request: Dictionary) -> Variant:
-		side_effect_calls += 1
-		return null
-
 	func generate(_request: Dictionary) -> PFProviderTaskV2:
 		side_effect_calls += 1
 		return null

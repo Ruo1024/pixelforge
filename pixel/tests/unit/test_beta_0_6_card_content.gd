@@ -86,7 +86,7 @@ func test_prompt_and_cleanup_preset_snapshots_are_visible_without_execution() ->
 	)
 	var cleanup_view: Control = cleanup["card"].get_content_control("CleanupCardView")
 	assert_not_null(cleanup_view)
-	assert_eq(cleanup_view.call("get_group_ids")[2], "preset")
+	assert_eq(cleanup_view.call("get_group_ids")[2], "settings")
 	var cleanup_params: Dictionary = (
 		ProjectService.get_graph_data(cleanup["card"].graph_id)["nodes"][0]["params"]
 	)
@@ -101,17 +101,16 @@ func test_generate_card_has_one_primary_action_for_every_v2_state() -> void:
 		{
 			"provider_id": "mock",
 			"model_id": "pixel_mock_v1",
-			"target_width": 32,
-			"target_height": 32,
+			"resolution_preset": "1080p",
+			"orientation": "square",
 			"batch_size": 2,
-			"seed": 1,
+			"seed": -1,
 			"extra": {},
 		}
 	)
 	var card: Node = fixture["card"]
 	assert_not_null(card.get_content_control("PrimaryAction"))
 	assert_null(card.get_content_control("CancelButton"))
-	assert_false(card.get_content_control("AdvancedParams").visible)
 	var cases := [
 		[{"state": "Ready", "errors": []}, "Generate", "run", false],
 		[{"state": "Queued", "errors": []}, "Cancel", "cancel", false],

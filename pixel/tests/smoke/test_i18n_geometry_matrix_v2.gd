@@ -62,7 +62,11 @@ func test_eighteen_cases() -> void:
 
 func _assert_card_regions(card: Control, label: String) -> void:
 	var status: Control = card.get_node("RunStatusGroup")
-	var body: Control = card.get_node("BodyScroll")
+	var body: Control = (
+		card.get_node("BodyGroups")
+		if card.has_node("BodyGroups")
+		else card.get_node("SummaryGroup")
+	)
 	var footer: Control = card.get_node("Footer")
 	_assert_rect_inside(Rect2(status.position, status.size), Rect2(Vector2.ZERO, card.size), label)
 	_assert_rect_inside(Rect2(body.position, body.size), Rect2(Vector2.ZERO, card.size), label)
@@ -71,9 +75,8 @@ func _assert_card_regions(card: Control, label: String) -> void:
 	assert_lte(body.position.y + body.size.y, footer.position.y + 0.5, label + " body/footer")
 	_assert_container_children_do_not_overlap(status, label + " status")
 	_assert_container_children_do_not_overlap(footer, label + " footer")
-	var body_groups: Control = body.get_node("BodyGroups")
-	_assert_container_children_do_not_overlap(body_groups, label + " body groups")
-	assert_lte(body_groups.size.x, body.size.x + 0.5, label + " body must not overflow sideways")
+	_assert_container_children_do_not_overlap(body, label + " body groups")
+	assert_lte(body.size.x, card.size.x + 0.5, label + " body must not overflow sideways")
 
 
 func _assert_output_geometry(output: Control, label: String) -> void:
@@ -102,7 +105,7 @@ func _assert_output_geometry(output: Control, label: String) -> void:
 		assert_gte(slot_rect.position.x, 0.0, label + " slot %d left" % index)
 		assert_lte(slot_rect.end.x, grid.size.x + 0.5, label + " slot %d right" % index)
 		if index < 12:
-			assert_gte(slot_rect.size.x, 96.0, label + " slot %d minimum" % index)
+			assert_gte(slot_rect.size.x, 176.0, label + " slot %d minimum" % index)
 
 
 func _assert_key_text_fits(root: Node, label: String) -> void:
@@ -157,27 +160,27 @@ func _collect_text_controls(node: Node, result: Array[Control]) -> void:
 
 func _generation_view() -> Control:
 	var view: Control = GenerationCardViewScript.new()
-	view.size = Vector2(400, 520)
+	view.size = Vector2(420, 520)
 	return view
 
 
 func _output_view() -> Control:
 	var view: Control = OutputCardControllerScript.new()
-	view.size = Vector2(600, 488)
+	view.size = Vector2(720, 520)
 	return view
 
 
 func _cleanup_view() -> Control:
 	var view: Control = CleanupCardViewScript.new()
-	view.size = Vector2(420, 680)
+	view.size = Vector2(420, 360)
 	return view
 
 
 func _generation_snapshot() -> Dictionary:
 	var descriptor := {
 		"provider_id": "openai_image",
-		"model_id": "gpt-image-1",
-		"display_name": "gpt-image-1",
+		"model_id": "gpt-image-2",
+		"display_name": "GPT Image 2",
 		"capabilities":
 		{
 			"txt2img": true,
@@ -204,11 +207,11 @@ func _generation_snapshot() -> Dictionary:
 		"params":
 		{
 			"provider_id": "openai_image",
-			"model_id": "gpt-image-1",
-			"target_width": 32,
-			"target_height": 32,
+			"model_id": "gpt-image-2",
+			"resolution_preset": "1080p",
+			"orientation": "square",
 			"batch_size": 4,
-			"seed": 7,
+			"seed": -1,
 			"extra": {},
 		},
 		"descriptor": descriptor,
@@ -229,7 +232,6 @@ func _generation_snapshot() -> Dictionary:
 				"ratio": 0.5,
 				"elapsed_ms": 3200
 			},
-			"cost": {"kind": "estimate", "micro_usd": 250000},
 		},
 	}
 

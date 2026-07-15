@@ -71,7 +71,6 @@ func get_model_descriptors() -> Array[Dictionary]:
 				"safe_validation": safe_validation,
 				"seed": true,
 				"transparent_bg": false,
-				"cost_estimate": true,
 			},
 			"dynamic_params": [],
 		}
@@ -105,7 +104,7 @@ func generate(request: Dictionary) -> PFProviderTaskV2:
 	return task
 
 
-func estimate_cost(request: Dictionary) -> Variant:
+func _fixture_actual_cost(request: Dictionary) -> Variant:
 	var micro_usd := 250000 * maxi(1, int(request.get("batch", 1)))
 	return "%d.%06d" % [micro_usd / 1000000, micro_usd % 1000000]
 
@@ -153,7 +152,7 @@ func _finish_generation(task: PFProviderTaskV2, request: Dictionary) -> void:
 			{
 				"request_id": String(request.get("request_id", "")),
 				"items": items,
-				"actual_cost_usd": estimate_cost(request),
+				"actual_cost_usd": _fixture_actual_cost(request),
 				"charge_id": "",
 				"provider_meta": {},
 			}

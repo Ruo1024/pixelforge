@@ -40,10 +40,7 @@ var _regenerate_dialog: ConfirmationDialog
 
 
 func setup(
-	canvas: Control,
-	status_label: Label,
-	_retired_bottom_label: Label = null,
-	provider_settings_dialog: ConfirmationDialog = null
+	canvas: Control, status_label: Label, provider_settings_dialog: ConfirmationDialog = null
 ) -> void:
 	_canvas = canvas
 	_status_label = status_label

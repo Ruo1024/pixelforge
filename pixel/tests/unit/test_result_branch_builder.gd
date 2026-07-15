@@ -34,8 +34,8 @@ func test_multiple_results_build_runnable_independent_continue_branch() -> void:
 				"prompt": "small observatory",
 				"prompt_preset_id": "prompt-16bit-db32",
 				"prompt_prefix": "pixel art",
-				"target_width": 48,
-				"target_height": 32,
+				"target_width": 1280,
+				"target_height": 720,
 				"batch_size": 3,
 				"requested_seed": 17,
 				"extra": {},
@@ -52,9 +52,11 @@ func test_multiple_results_build_runnable_independent_continue_branch() -> void:
 	assert_eq(graph.get_node_params(type_ids["text_prompt"])["text"], "small observatory")
 	assert_eq(graph.get_node_params(type_ids["prompt_preset"])["preset"]["prefix"], "pixel art")
 	assert_eq(graph.get_node_params(type_ids["ai_generate"])["model_id"], "gpt-image-2")
-	assert_eq(graph.get_node_params(type_ids["ai_generate"])["target_width"], 48)
-	assert_eq(graph.get_node_params(type_ids["ai_generate"])["target_height"], 32)
-	assert_eq(graph.get_node_params(type_ids["ai_generate"])["batch_size"], 3)
+	assert_eq(graph.get_node_params(type_ids["ai_generate"])["resolution_preset"], "720p")
+	assert_eq(graph.get_node_params(type_ids["ai_generate"])["orientation"], "landscape")
+	assert_eq(graph.get_node_params(type_ids["ai_generate"])["batch_size"], 1)
+	assert_eq(graph.get_node_params(type_ids["ai_generate"])["seed"], -1)
+	assert_eq(graph.get_node_params(type_ids["ai_generate"])["extra"], {})
 	assert_true(graph.get_node_params(type_ids["batch"])["result_slots"].is_empty())
 	assert_eq(graph.validate_edges(), [])
 	assert_eq(

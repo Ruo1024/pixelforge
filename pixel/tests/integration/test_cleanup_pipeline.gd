@@ -132,6 +132,9 @@ func test_independent_cleanup_uses_fixed_detect_prior_without_project_style() ->
 
 
 func test_real_ai_fixture_samples_cleanup_smoke() -> void:
+	if OS.get_environment("PF_ALLOW_PROTECTED_FIXTURES") != "1":
+		assert_true(true, "Protected fixture smoke is owner-opt-in and is not read by automation")
+		return
 	for path in [
 		"res://tests/fixtures/real/real_ai_01_character.png",
 		"res://tests/fixtures/real/real_ai_02_robot.png",

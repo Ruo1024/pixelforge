@@ -40,6 +40,7 @@ const PORT_OUT := Color(0.24, 0.85, 0.58, 1.0)
 const PORT_VISIBLE_SCREEN_RADIUS := 6.0
 const PORT_HIT_SCREEN_RADIUS := 20.0
 const OBJECT_EDITOR_MIN_SIZE := Vector2(0, 116)
+const REFERENCE_GRID_MIN_SIZE := Vector2(0, 224)
 const FLEXIBLE_WIDTH := 0
 
 var item_id := ""
@@ -815,7 +816,7 @@ func _build_reference_set_controls() -> void:
 	_content_root.add_child(summary)
 	var grid: Control = MediaTileGridScript.new()
 	grid.name = "ReferenceMediaGrid"
-	grid.custom_minimum_size = Vector2(0, 224)
+	grid.custom_minimum_size = REFERENCE_GRID_MIN_SIZE
 	grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var media_items: Array[Dictionary] = []
 	for index in range(asset_ids.size()):

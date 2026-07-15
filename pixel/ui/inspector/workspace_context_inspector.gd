@@ -225,9 +225,7 @@ func _build_candidate_panel(root: VBoxContainer) -> void:
 	_candidate_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_candidate_panel.add_child(_candidate_summary)
 
-	for field_id in [
-		"prompt", "model", "seed", "size", "references", "cost", "created_at", "source"
-	]:
+	for field_id in ["prompt", "model", "seed", "size", "references", "created_at", "source"]:
 		_add_candidate_row(field_id)
 
 	var actions := HFlowContainer.new()
@@ -312,7 +310,6 @@ func _show_single_candidate(snapshot: Dictionary, created_at: String) -> void:
 			else ""
 		),
 	)
-	_set_candidate_row("cost", "")
 	_set_candidate_row("created_at", created_at if not snapshot.is_empty() else "")
 	_set_candidate_row("source", snapshot.get("source_node_id", ""))
 	_set_action_visibility(false)
@@ -361,8 +358,6 @@ func _candidate_field_text(field_id: String) -> String:
 			return Strings.text("INSPECTOR_CANDIDATE_SIZE")
 		"references":
 			return Strings.text("INSPECTOR_CANDIDATE_REFERENCES")
-		"cost":
-			return Strings.text("INSPECTOR_CANDIDATE_COST")
 		"created_at":
 			return Strings.text("INSPECTOR_CANDIDATE_CREATED_AT")
 		_:

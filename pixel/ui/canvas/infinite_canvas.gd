@@ -179,6 +179,16 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 
 
+func _input(event: InputEvent) -> void:
+	if (
+		event is InputEventMouseButton
+		and event.button_index == MOUSE_BUTTON_LEFT
+		and not event.pressed
+		and _selection.is_dragging_items
+	):
+		_finish_left_interaction(event.position - get_global_rect().position)
+
+
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return

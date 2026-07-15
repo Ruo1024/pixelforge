@@ -412,11 +412,11 @@ func test_project_open_rejects_malformed_graph_edge_schema_without_partial_open(
 				{
 					"provider_id": "openai_image",
 					"model_id": "gpt-image-2",
-					"target_width": 64,
-					"target_height": 64,
+					"resolution_preset": "1080p",
+					"orientation": "square",
 					"batch_size": 1,
 					"seed": -1,
-					"extra": {"quality": "low"}
+					"extra": {}
 				}
 			},
 		],

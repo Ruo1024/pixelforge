@@ -61,7 +61,7 @@ func test_openai_descriptor_and_validation_reject_unsupported_requests() -> void
 	assert_eq(capabilities["max_batch"], 4)
 	assert_false(capabilities["seed"])
 	assert_false(capabilities["transparent_bg"])
-	assert_eq(capabilities["provider_output_sizes"].size(), 3)
+	assert_eq(capabilities["provider_output_sizes"].size(), 12)
 
 	assert_null(_service.validate_generation_request("openai_image", _openai_request()))
 	assert_eq(
@@ -157,13 +157,13 @@ func _openai_request(overrides: Dictionary = {}) -> Dictionary:
 		"mode": "txt2img",
 		"model_id": "gpt-image-2",
 		"prompt": "barrel",
-		"target_width": 32,
-		"target_height": 32,
-		"provider_output_size": [1024, 1024],
+		"target_width": 1080,
+		"target_height": 1080,
+		"provider_output_size": [1088, 1088],
 		"batch": 1,
 		"seed": -1,
 		"ref_images": [],
-		"extra": {"quality": "low"},
+		"extra": {},
 	}
 	request.merge(overrides, true)
 	return request

@@ -120,14 +120,14 @@ static func _prompt_preset(id: String) -> Dictionary:
 	}
 
 
-static func _generate_params(seed: int) -> Dictionary:
+static func _generate_params(_seed: int) -> Dictionary:
 	return {
 		"provider_id": "mock",
 		"model_id": "pixel_mock_v1",
-		"target_width": 32,
-		"target_height": 32,
+		"resolution_preset": "720p",
+		"orientation": "square",
 		"batch_size": 1,
-		"seed": seed,
+		"seed": -1,
 		"extra": {},
 	}
 

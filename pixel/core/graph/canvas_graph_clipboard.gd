@@ -255,6 +255,9 @@ static func _sanitize_node(source: Dictionary) -> Dictionary:
 			var safe_value: Variant = _safe_value(params[key])
 			if safe_value != null or params[key] == null:
 				safe_params[key] = safe_value
+	if node_type == "ai_generate":
+		safe_params["seed"] = -1
+		safe_params["extra"] = {}
 	result["params"] = safe_params
 	return result
 

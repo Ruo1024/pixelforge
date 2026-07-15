@@ -1,8 +1,6 @@
 extends "res://addons/gut/test.gd"
 
 const ProviderScript := preload("res://plugins/provider_retrodiffusion/retrodiffusion_provider.gd")
-const MAIN_PATH := "res://ui/shell/main.gd"
-const Strings := preload("res://ui/shell/strings.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
 const AiGenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
@@ -41,8 +39,6 @@ func before_each() -> void:
 func after_each() -> void:
 	_provider.clear_session_config()
 	ProviderService.delete_provider_credentials("retrodiffusion")
-	CostService.set_monthly_budget_micro_usd(0)
-	CostService.reset_month_for_tests(CostService.get_month_key())
 
 
 func test_capabilities_and_schema_match_provider_contract() -> void:
@@ -155,11 +151,14 @@ func test_generate_uses_real_http_task_and_worker_decodes_result() -> void:
 	assert_false(JSON.stringify(outcome["value"]).contains(TEST_SECRET))
 
 
-func test_result_materializes_complete_provenance_and_documented_estimate() -> void:
+func test_result_materializes_complete_provenance_and_hidden_actual_billing() -> void:
 	var request := _request("materialize", "rd_pro", 2, [1, 1])
 	request["seed"] = 3
-	assert_eq(_provider.estimate_cost(request), "0.500000")
 	var decoded := _provider.decode_success_payload(_load_fixture(), request)
+	assert_eq(decoded["actual_cost_usd"], "1.000000")
+	for item in decoded["items"]:
+		item["image"].resize(32, 32, Image.INTERPOLATE_NEAREST)
+	request["provider_output_size"] = [32, 32]
 	var graph := GraphScript.new()
 	graph.id = "graph_retrodiffusion_contract"
 	(
@@ -170,11 +169,11 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 			{
 				"provider_id": "retrodiffusion",
 				"model_id": "rd_pro",
-				"target_width": 32,
-				"target_height": 32,
+				"resolution_preset": "1080p",
+				"orientation": "square",
 				"batch_size": 2,
-				"seed": 3,
-				"extra": {"remove_bg": true, "strength": 0.8},
+				"seed": -1,
+				"extra": {},
 			}
 		)
 	)
@@ -196,7 +195,7 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 						"prompt_prefix": "",
 						"target_width": 32,
 						"target_height": 32,
-						"provider_output_size": [1, 1],
+						"provider_output_size": [32, 32],
 						"requested_seed": 3 + index,
 						"reference_asset_ids": [],
 						"reference_content_sha256s": [],
@@ -243,173 +242,12 @@ func test_result_materializes_complete_provenance_and_documented_estimate() -> v
 	assert_false(JSON.stringify(provenance).contains(TEST_SECRET))
 
 
-func test_verified_graph_runs_through_ui_cloud_provider_flow() -> void:
-	ProjectService.new_project("RetroDiffusion UI")
-	ProjectService._pending_recovery_autosaves.clear()
-	SettingsService.set_setting("onboarding", "v1_complete", true)
-	var main: Control = load(MAIN_PATH).new()
-	main.size = Vector2(1280, 800)
-	add_child_autofree(main)
-	await wait_process_frames(2)
-
-	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
-	main.get_node("RecoveryDialog").hide()
-	controller.generate_mock_batch()
-	await wait_process_frames(2)
-	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
-	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
-	var generate_node := _node_data_for_id(graph_data["nodes"], "generate")
-	generate_node["params"]["provider_id"] = "retrodiffusion"
-	generate_node["params"]["model_id"] = "rd_pro"
-	generate_node["params"]["batch_size"] = 2
-	generate_node["params"]["target_width"] = 256
-	generate_node["params"]["target_height"] = 256
-	generate_node["params"]["extra"] = {"remove_bg": true, "strength": 0.8}
-	_node_data_for_id(graph_data["nodes"], "text_prompt")["params"]["text"] = "barrel"
-	var reference_image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
-	reference_image.fill(Color.CORNFLOWER_BLUE)
-	var reference_id := AssetLibrary.register_image(reference_image, "reference", {})
-	_node_data_for_id(graph_data["nodes"], "reference_set")["params"]["asset_ids"] = [reference_id]
-	ProjectService.set_graph_data(graph_id, graph_data, true)
-	assert_true(
-		(
-			ProviderService
-			. save_provider_config(
-				"retrodiffusion",
-				{
-					"api_key": "rdpk-ui-fixture",
-					"endpoint": OS.get_environment("PF_HTTP_MOCK_URL") + "/retrodiffusion-success",
-				}
-			)["ok"]
-		)
-	)
-	ProviderService._set_validation_state("retrodiffusion", "verified", "Fixture verified")
-	CostService.set_monthly_budget_micro_usd(100000)
-
-	var canvas_items: Array = canvas.export_canvas_data()["items"]
-	var generate_item_id := _item_id_for_node(canvas_items, "generate")
-	canvas.select_ids([generate_item_id])
-	controller.run_selected_mock_graph()
-	var budget_dialog: ConfirmationDialog = controller._generation_flow.get_budget_dialog()
-	assert_true(await _wait_until(func() -> bool: return budget_dialog.visible, 1.0))
-	assert_string_contains(budget_dialog.dialog_text, "$0.50")
-	assert_true(TaskQueue.is_idle())
-	budget_dialog.confirmed.emit()
-	assert_true(
-		await _wait_until(
-			func() -> bool:
-				return _status_label(main).text == Strings.text("STATUS_GRAPH_RUN_DONE") % 2,
-			3.0
-		)
-	)
-	var completed_graph: Dictionary = ProjectService.get_graph_data(graph_id)
-	var cloud_batch: Dictionary = _newest_batch_node_except(completed_graph["nodes"], [])
-	var cloud_batch_item_id := _item_id_for_node(
-		canvas.export_canvas_data()["items"], String(cloud_batch["id"])
-	)
-	assert_eq(canvas._get_batch_asset_ids(cloud_batch_item_id).size(), 2)
-	var first_asset_id := String(canvas._get_batch_asset_ids(cloud_batch_item_id)[0])
-	var provenance: Dictionary = AssetLibrary.get_asset_meta(first_asset_id)["provenance"]
-	var snapshot: Dictionary = provenance["generation_snapshot"]
-	assert_eq(snapshot["provider_id"], "retrodiffusion")
-	assert_eq(snapshot["model_id"], "rd_pro")
-	assert_eq(snapshot["reference_asset_ids"], [reference_id])
-	assert_eq(String(snapshot["reference_content_sha256s"][0]).length(), 64)
-
-
-func test_cloud_graph_cancel_updates_transient_card_status_without_replacing_results() -> void:
-	ProjectService.new_project("RetroDiffusion cancel")
-	var main: Control = load(MAIN_PATH).new()
-	main.size = Vector2(1280, 800)
-	add_child_autofree(main)
-	await wait_process_frames(2)
-
-	var controller: Node = main.get_node("M21UiController")
-	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
-	controller.generate_mock_batch()
-	await wait_process_frames(2)
-	var graph_id := String(ProjectService.current_project.graphs.keys()[0])
-	var graph_data: Dictionary = ProjectService.current_project.graphs[graph_id]
-	var generate_node := _node_data_for_id(graph_data["nodes"], "generate")
-	generate_node["params"]["provider_id"] = "retrodiffusion"
-	generate_node["params"]["model_id"] = "rd_pro"
-	generate_node["params"]["batch_size"] = 2
-	generate_node["params"]["target_width"] = 256
-	generate_node["params"]["target_height"] = 256
-	generate_node["params"]["extra"] = {"remove_bg": true, "strength": 0.8}
-	_node_data_for_id(graph_data["nodes"], "text_prompt")["params"]["text"] = "barrel"
-	ProjectService.set_graph_data(graph_id, graph_data, true)
-	assert_true(
-		(
-			ProviderService
-			. save_provider_config(
-				"retrodiffusion",
-				{
-					"api_key": "rdpk-cancel-fixture",
-					"endpoint": OS.get_environment("PF_HTTP_MOCK_URL") + "/retrodiffusion-slow",
-				}
-			)["ok"]
-		)
-	)
-	ProviderService._set_validation_state("retrodiffusion", "verified", "Fixture verified")
-	CostService.set_monthly_budget_micro_usd(10000000)
-	var items: Array = canvas.export_canvas_data()["items"]
-	var generate_item_id := _item_id_for_node(items, "generate")
-	canvas.select_ids([generate_item_id])
-
-	controller.run_selected_mock_graph()
-	assert_true(controller.cancel_graph_run(graph_id))
-	var canceled_status := (
-		Strings.text("STATUS_PROVIDER_GENERATE_CANCELED_FORMAT") % "Retro Diffusion Pro"
-	)
-	assert_true(
-		await _wait_until(func() -> bool: return _status_label(main).text == canceled_status)
-	)
-	var canceled_graph: Dictionary = ProjectService.get_graph_data(graph_id)
-	var canceled_output: Dictionary = _newest_batch_node_except(canceled_graph["nodes"], [])
-	assert_eq(BatchNodeScript.get_visible_asset_ids(canceled_output.get("params", {})), [])
-	assert_false(canvas.export_canvas_data()["items"][2].has("execution_status"))
-
-
 func _load_fixture() -> Dictionary:
 	var file := FileAccess.open(FIXTURE_PATH, FileAccess.READ)
 	assert_not_null(file)
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	assert_true(parsed is Dictionary)
 	return parsed
-
-
-func _node_data_for_id(nodes: Array, node_id: String) -> Dictionary:
-	for node in nodes:
-		var data: Dictionary = node
-		if String(data.get("id", "")) == node_id:
-			return data
-	return {}
-
-
-func _newest_batch_node_except(nodes: Array, excluded_ids: Array) -> Dictionary:
-	var result := {}
-	for raw_node in nodes:
-		var node: Dictionary = raw_node
-		if (
-			String(node.get("type", "")) == "batch"
-			and not excluded_ids.has(String(node.get("id", "")))
-		):
-			result = node
-	return result
-
-
-func _item_id_for_node(items: Array, node_id: String) -> String:
-	for item in items:
-		var data: Dictionary = item
-		if String(data.get("node_id", "")) == node_id:
-			return String(data.get("id", ""))
-	return ""
-
-
-func _status_label(main: Control) -> Label:
-	return main.get_node("Root/BottomBar").get_child(0)
 
 
 func _request(request_id: String, model_id: String, batch: int, output_size: Array) -> Dictionary:

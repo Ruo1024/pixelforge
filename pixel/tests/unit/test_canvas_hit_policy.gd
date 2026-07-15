@@ -459,8 +459,8 @@ func _graph_node(node_id: String, node_type: String) -> Dictionary:
 		else {
 			"provider_id": "mock",
 			"model_id": "pixel_mock_v1",
-			"target_width": 32,
-			"target_height": 32,
+			"resolution_preset": "1080p",
+			"orientation": "square",
 			"batch_size": 1,
 			"seed": -1,
 			"extra": {},

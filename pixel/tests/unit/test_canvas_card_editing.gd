@@ -14,10 +14,10 @@ func test_graph_card_defaults_are_contract_values_and_survive_lod() -> void:
 		"text_prompt": Vector2(360, 300),
 		"object_list": Vector2(400, 520),
 		"prompt_preset": Vector2(320, 280),
-		"pixel_cleanup": Vector2(420, 680),
+		"pixel_cleanup": Vector2(420, 360),
 		"image_input": Vector2(320, 380),
-		"reference_set": Vector2(400, 480),
-		"ai_generate": Vector2(400, 520),
+		"reference_set": Vector2(720, 520),
+		"ai_generate": Vector2(420, 520),
 	}
 	for node_type in expectations:
 		var card := _card(node_type, {})
@@ -356,27 +356,28 @@ func _assert_title_input_contract(
 ) -> void:
 	await wait_process_frames(1)
 	var title: Button = item.get_node("TitleButton")
-	assert_eq(title.mouse_filter, Control.MOUSE_FILTER_PASS)
+	var context := String(item.item_id)
+	assert_eq(title.mouse_filter, Control.MOUSE_FILTER_PASS, context)
 	var local_position: Vector2 = canvas.world_to_screen(
 		item.position + title.position + title.size * 0.5
 	)
 	canvas._clear_selection()
 	_send_viewport_mouse_button(canvas, local_position, true)
 	await wait_process_frames(1)
-	assert_eq(canvas.get_selected_ids(), [item.item_id])
-	assert_true(canvas._selection.is_dragging_items)
+	assert_eq(canvas.get_selected_ids(), [item.item_id], "%s selected" % context)
+	assert_true(canvas._selection.is_dragging_items, "%s dragging" % context)
 	_send_viewport_mouse_button(canvas, local_position, false)
 	await wait_process_frames(1)
-	assert_false(canvas._selection.is_dragging_items)
+	assert_false(canvas._selection.is_dragging_items, "%s drag ended" % context)
 
 	canvas._clear_selection()
 	quick_add_requests.clear()
 	asset_edit_requests.clear()
 	_send_viewport_mouse_button(canvas, local_position, true, true)
 	await wait_process_frames(1)
-	assert_true(item.get_node("TitleEdit").visible)
-	assert_true(quick_add_requests.is_empty())
-	assert_true(asset_edit_requests.is_empty())
+	assert_true(item.get_node("TitleEdit").visible, "%s title edit" % context)
+	assert_true(quick_add_requests.is_empty(), "%s no quick add" % context)
+	assert_true(asset_edit_requests.is_empty(), "%s no asset edit" % context)
 	_send_viewport_mouse_button(canvas, local_position, false)
 
 

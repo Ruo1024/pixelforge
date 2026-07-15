@@ -31,30 +31,41 @@ func test_object_list_outputs_only_valid_enabled_subject_rows() -> void:
 
 func test_generate_target_and_subject_counts_are_unique_truth() -> void:
 	var node := AiGenerateNodeScript.new()
-	var params := node.validate_params(
-		{"provider_id": "mock", "target_width": 16, "target_height": 24, "batch_size": 3}
+	var params := (
+		node
+		. validate_params(
+			{
+				"provider_id": "mock",
+				"resolution_preset": "720p",
+				"orientation": "square",
+				"batch_size": 3,
+				"seed": -1,
+				"extra": {},
+			}
+		)
 	)
 	var result: Dictionary = node.execute(
 		{"subjects": [{"id": "barrel", "text": "barrel", "count": 2}]}, params, {}
 	)
 	assert_eq(result["assets"].size(), 2)
-	assert_eq(result["assets"][0].get_size(), Vector2i(16, 24))
+	assert_eq(result["assets"][0].get_size(), Vector2i(720, 720))
 	assert_false(params.has("width"))
 	assert_false(params.has("height"))
 	assert_false(params.has("per_subject"))
 
 
-func test_ai_generate_mock_is_deterministic_and_uses_incrementing_seeds() -> void:
+func test_ai_generate_mock_is_deterministic_with_random_request_seed() -> void:
 	var node := AiGenerateNodeScript.new()
 	var params := (
 		node
 		. validate_params(
 			{
 				"provider_id": "mock",
-				"target_width": 8,
-				"target_height": 8,
+				"resolution_preset": "720p",
+				"orientation": "square",
 				"batch_size": 2,
-				"seed": 100,
+				"seed": -1,
+				"extra": {},
 			}
 		)
 	)
@@ -72,13 +83,13 @@ func test_ai_generate_mock_is_deterministic_and_uses_incrementing_seeds() -> voi
 	assert_eq(first["assets"].size(), 4)
 	assert_eq(
 		first["metadata"].map(func(entry: Dictionary) -> int: return int(entry["actual_seed"])),
-		[100, 101, 102, 103]
+		[0, 1, 2, 3]
 	)
 	var requested_seeds := []
 	for entry in first["metadata"]:
 		requested_seeds.append(int(entry["generation_snapshot"]["requested_seed"]))
 		assert_false(entry.has("seed"))
-	assert_eq(requested_seeds, [100, 101, 102, 103])
+	assert_eq(requested_seeds, [-1, -1, -1, -1])
 	assert_eq(_sample_color(first["assets"][0]), _sample_color(second["assets"][0]))
 	assert_ne(_sample_color(first["assets"][0]), _sample_color(first["assets"][1]))
 
@@ -91,9 +102,11 @@ func test_ai_generate_mock_rejects_non_mock_provider() -> void:
 			{},
 			{
 				"provider_id": "real_api",
-				"target_width": 8,
-				"target_height": 8,
+				"resolution_preset": "720p",
+				"orientation": "square",
 				"batch_size": 1,
+				"seed": -1,
+				"extra": {},
 			},
 			{}
 		)

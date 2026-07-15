@@ -134,10 +134,10 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 				{
 					"provider_id": "mock",
 					"model_id": "pixel_mock_v1",
-					"target_width": 32,
-					"target_height": 32,
+					"resolution_preset": "720p",
+					"orientation": "square",
 					"batch_size": 3,
-					"seed": 42,
+					"seed": -1,
 					"extra": {},
 				}
 			)
@@ -152,6 +152,12 @@ func test_blank_workspace_can_build_and_run_reference_to_result_chain() -> void:
 	var batch_item_id := _item_id_for_node(canvas.export_canvas_data()["items"], batch_node_id)
 	canvas.select_ids([batch_item_id])
 	controller.run_selected_mock_graph()
+	var count_dialog: ConfirmationDialog = main.get_node(
+		"M21UiController/GenerationRunController/GenerationCountConfirmDialog"
+	)
+	await wait_process_frames(1)
+	assert_true(count_dialog.visible)
+	count_dialog.confirmed.emit()
 	await wait_process_frames(2)
 
 	var saved_graph: Dictionary = ProjectService.get_graph_data(graph_id)
@@ -231,7 +237,7 @@ func test_offline_example_is_one_undoable_fitted_graph_without_touching_existing
 	assert_eq(existing.position, existing_position)
 
 
-func test_context_inspector_keeps_retired_direct_cleanup_hidden() -> void:
+func test_context_inspector_shows_cleanup_parameters_for_cleanup_selection() -> void:
 	var main := await _make_main()
 	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
 	var context: Control = main.get_node("Root/Content/Workspace/ContextInspector")
@@ -248,8 +254,8 @@ func test_context_inspector_keeps_retired_direct_cleanup_hidden() -> void:
 	var controller: Node = main.get_node("M21UiController")
 	controller.generate_mock_batch()
 	await wait_process_frames(2)
-	assert_false(cleanup.visible)
-	assert_true(context.get_node("ContextRoot/GraphSummary").visible)
+	assert_true(cleanup.visible)
+	assert_false(context.get_node("ContextRoot/GraphSummary").visible)
 
 
 func test_navigation_buttons_focus_selected_and_all_canvas_content() -> void:
@@ -389,6 +395,9 @@ func _make_main() -> Control:
 	main.size = Vector2(1280, 800)
 	add_child_autofree(main)
 	await wait_process_frames(2)
+	var recovery_dialog: Window = main.get_node("RecoveryDialog")
+	if recovery_dialog.visible:
+		recovery_dialog.hide()
 	return main
 
 

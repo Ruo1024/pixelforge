@@ -8,6 +8,7 @@ const SCENARIOS := {
 	"running_output_edge": Vector2i(1440, 900),
 	"output_12": Vector2i(1440, 900),
 	"output_13_50_scroll": Vector2i(1440, 900),
+	"reference_12": Vector2i(2560, 1440),
 	"detached_sprite": Vector2i(1440, 900),
 	"cleanup_running": Vector2i(1440, 900),
 	"partial_dialog": Vector2i(1080, 560),
@@ -45,6 +46,8 @@ class EvidenceSurface:
 				_draw_output_twelve()
 			"output_13_50_scroll":
 				_draw_output_scroll()
+			"reference_12":
+				_draw_reference_twelve()
 			"detached_sprite":
 				_draw_detached()
 			"cleanup_running":
@@ -64,41 +67,37 @@ class EvidenceSurface:
 		)
 		_card(Rect2(90, 430, 230, 130), _label("References", "参考集合"), ["Optional", "0 images"])
 		_card(
-			Rect2(400, 220, 300, 280),
+			Rect2(370, 130, 420, 520),
 			_label("AI Generate", "AI 生成"),
-			["OpenAI Image", "32 × 32", "4 results", "Ready"]
+			["GPT Image 2", "api.openai.com", "1080p · Square", "4 results", "Ready"]
 		)
 		_card(
-			Rect2(960, 220, 270, 300),
-			_label("Pixel Cleanup", "像素清洗"),
-			["Manual", "Ready", "No automatic run"]
+			Rect2(840, 210, 380, 360),
+			_label("Pixel Cleanup", "像素清晰"),
+			[_label("12 inputs", "12 张输入"), _label("Ready", "就绪"), _label("Open settings", "打开设置")]
 		)
-		_connection(Vector2(320, 175), Vector2(400, 300), false)
-		_connection(Vector2(320, 335), Vector2(400, 340), false)
-		_connection(Vector2(320, 495), Vector2(400, 380), false)
-		draw_rect(Rect2(750, 190, 160, 350), Color(0.15, 0.19, 0.27, 0.5), false, 2)
-		_text(
-			Vector2(770, 212), _label("Runtime Output lane", "运行时 Output 通道"), 15, Color("8aa0bb")
-		)
+		_connection(Vector2(320, 175), Vector2(370, 270), false)
+		_connection(Vector2(320, 335), Vector2(370, 330), false)
+		_connection(Vector2(320, 495), Vector2(370, 390), false)
+		draw_rect(Rect2(800, 180, 24, 420), Color(0.15, 0.19, 0.27, 0.5), false, 2)
+		_text(Vector2(804, 170), _label("Output", "输出"), 15, Color("8aa0bb"))
 
 	func _draw_generation(running: bool) -> void:
 		var state := "Running" if running else "Ready"
 		_card(
-			Rect2(150, 105, 430, 700),
+			Rect2(150, 105, 420, 520),
 			_label("AI Generate", "AI 生成"),
 			[
-				_label("Provider · OpenAI Image", "Provider · OpenAI Image"),
-				"gpt-image-1",
-				_label("Prompt · forest shrine", "提示词 · 森林神龛"),
-				_label("Target · 32 × 32", "目标 · 32 × 32"),
+				"GPT Image 2",
+				"api.openai.com",
+				_label("Resolution · 1080p", "分辨率 · 1080p"),
+				_label("Orientation · Square", "方向 · 正方形"),
 				_label("Results · 4", "结果 · 4"),
-				"Seed · 42",
-				_label("Estimated cost · $0.250000", "预估费用 · $0.250000"),
 				_label("State · ", "状态 · ") + state,
 			]
 		)
 		_button(
-			Rect2(190, 735, 350, 44),
+			Rect2(185, 550, 350, 44),
 			_label("Cancel", "取消") if running else _label("Generate", "生成")
 		)
 		_card(
@@ -113,17 +112,17 @@ class EvidenceSurface:
 
 	func _draw_running() -> void:
 		_card(
-			Rect2(100, 170, 360, 500),
+			Rect2(100, 170, 420, 520),
 			"AI Generate",
-			["OpenAI Image", "4 results", "Running · 2 / 4", "3.2 s"]
+			["GPT Image 2", "1080p · Square", "4 results", "Running · 2 / 4", "3.2 s"]
 		)
-		_output_card(Rect2(780, 150, 560, 520), "Output · Running", 4, 2, false)
-		_connection(Vector2(460, 360), Vector2(780, 360), true)
+		_output_card(Rect2(780, 150, 560, 520), "Output · Running", 4, 2, true)
+		_connection(Vector2(520, 360), Vector2(780, 360), true)
 		_text(Vector2(560, 330), "active phase 0.375", 16, Color("78d9ff"))
 
 	func _draw_output_twelve() -> void:
 		_output_card(
-			Rect2(380, 100, 680, 700), _label("Output · Complete", "Output · 已完成"), 12, 12, false
+			Rect2(360, 100, 720, 700), _label("Output · Complete", "Output · 已完成"), 12, 12, true
 		)
 
 	func _draw_output_scroll() -> void:
@@ -133,6 +132,35 @@ class EvidenceSurface:
 			Vector2(100, 810),
 			"Three visible rows · internal scroll · stable slot identity",
 			17,
+			Color("9fb4cc")
+		)
+
+	func _draw_reference_twelve() -> void:
+		_text(Vector2(92, 104), _label("Reference media grid", "参考图媒体网格"), 28)
+		var rect := Rect2(140, 150, 2280, 1160)
+		draw_rect(rect, Color("202a3a"), true)
+		draw_rect(rect, Color("5e7697"), false, 2)
+		_text(rect.position + Vector2(24, 42), _label("References · 12", "参考图 · 12 张"), 22)
+		var gap := 16.0
+		var tile := 320.0
+		var grid_width := tile * 5.0 + gap * 4.0
+		var origin := rect.position + Vector2((rect.size.x - grid_width) * 0.5, 72)
+		for index in range(12):
+			var column := index % 5
+			var row := int(index / 5)
+			var slot := Rect2(
+				origin + Vector2(column * (tile + gap), row * (tile + gap)), Vector2(tile, tile)
+			)
+			_pixel_art(slot.grow(-10))
+			draw_rect(slot, Color("9ab0c9"), false, 2)
+			_text(slot.position + Vector2(14, 28), "%02d" % (index + 1), 16)
+		_text(
+			Vector2(148, 1360),
+			_label(
+				"2560×1440 · 100% canvas · drag to reorder · Undo available",
+				"2560×1440 · 画布 100% · 拖动排序 · 可撤销"
+			),
+			18,
 			Color("9fb4cc")
 		)
 
@@ -148,27 +176,35 @@ class EvidenceSurface:
 		_card(
 			Rect2(820, 220, 400, 390),
 			_label("Detached image", "已拆出图片"),
-			["origin_slot_id · slot-04", "32 × 32 RGBA"]
+			["origin_slot_id · slot-04", "1080 × 1080 RGBA"]
 		)
 		_pixel_art(Rect2(890, 330, 260, 210))
 
 	func _draw_cleanup() -> void:
+		_output_card(Rect2(60, 220, 420, 480), "Output · 12", 12, 4, true)
 		_card(
-			Rect2(130, 90, 460, 730),
-			"pixel_cleanup",
+			Rect2(520, 240, 420, 360),
+			_label("Pixel Cleanup", "像素清晰"),
 			[
 				"Running · 4 / 12",
 				_label("Input · Output · 12 images", "输入 · Output · 12 张"),
 				_label("Preset · 16-bit DB32", "预设 · 16-bit DB32"),
-				"Grid · Auto · base 16",
-				"Resample · enabled · nearest",
-				"Quantize · fixed palette · dither off",
-				_label("Single concurrency · source unchanged", "单并发 · 源素材保持不变"),
+				_label("Settings are in the inspector", "参数位于右侧检查器"),
 			]
 		)
-		_button(Rect2(170, 750, 380, 44), _label("Cancel cleanup", "取消清洗"))
-		_output_card(Rect2(760, 170, 560, 520), "Output · Running", 12, 4, false)
-		_connection(Vector2(590, 390), Vector2(760, 390), true)
+		_button(Rect2(555, 530, 350, 44), _label("Cancel cleanup", "取消清洗"))
+		_card(
+			Rect2(980, 100, 400, 700),
+			_label("Cleanup settings", "像素清晰设置"),
+			[
+				"Grid · Auto · base 16",
+				"Resample · enabled · nearest",
+				"Quantize · fixed palette",
+				"Dither · off",
+				_label("Disabled while running", "运行中不可编辑"),
+			]
+		)
+		_connection(Vector2(480, 410), Vector2(520, 410), true)
 
 	func _draw_partial() -> void:
 		_card(
@@ -183,9 +219,7 @@ class EvidenceSurface:
 			_label("2 items failed. Successful images are kept.", "2 项失败，成功图片已保留。"),
 			17
 		)
-		_text(
-			Vector2(265, 266), _label("No automatic retry or hidden charge.", "不会自动重试，也不会隐藏费用。"), 17
-		)
+		_text(Vector2(265, 266), _label("No automatic retry.", "不会自动重试。"), 17)
 		_button(Rect2(265, 330, 260, 46), _label("Retry failed only", "仅重试失败项"))
 		_button(Rect2(550, 330, 150, 46), _label("Close", "关闭"))
 
@@ -194,10 +228,13 @@ class EvidenceSurface:
 		draw_rect(rect, Color("5e7697"), false, 2)
 		_text(rect.position + Vector2(18, 30), title, 20)
 		_text(rect.position + Vector2(rect.size.x - 110, 30), "%d / %d" % [succeeded, total], 15)
-		var columns := 4
+		var columns := clampi(int(floor((rect.size.x - 36.0 + 8.0) / 184.0)), 1, 5)
+		columns = mini(columns, maxi(total, 1))
 		var gap := 8.0
-		var tile := minf(112.0, (rect.size.x - 44.0 - gap * 3.0) / 4.0)
-		var visible := mini(total, 12)
+		var tile := minf(224.0, (rect.size.x - 44.0 - gap * (columns - 1)) / columns)
+		var visible_rows := maxi(1, int(floor((rect.size.y - 72.0 + gap) / (tile + gap))))
+		visible_rows = mini(visible_rows, 3)
+		var visible := mini(total, columns * visible_rows)
 		for index in range(visible):
 			var column := index % columns
 			var row := int(index / columns)
@@ -329,10 +366,11 @@ func _save_metadata(
 	var component_map := {
 		"example_reflow":
 		["prompt_preset", "text_prompt", "reference_set", "ai_generate", "pixel_cleanup"],
-		"generation_ready": ["ai_generate", "input_summary", "cost_estimate"],
+		"generation_ready": ["ai_generate", "resolution", "orientation", "batch_size"],
 		"running_output_edge": ["ai_generate", "batch", "active_edge"],
 		"output_12": ["batch", "result_slots"],
 		"output_13_50_scroll": ["batch_13", "batch_50", "internal_scroll"],
+		"reference_12": ["reference_set", "media_tile_grid", "drag_reorder", "undo"],
 		"detached_sprite": ["batch", "sprite", "origin_triplet"],
 		"cleanup_running": ["pixel_cleanup", "batch", "active_edge"],
 		"partial_dialog": ["batch", "partial_error_dialog", "retry_failed"],
@@ -341,6 +379,7 @@ func _save_metadata(
 		"running_output_edge": 4,
 		"output_12": 12,
 		"output_13_50_scroll": 63,
+		"reference_12": 12,
 		"detached_sprite": 4,
 		"cleanup_running": 12,
 		"partial_dialog": 4,

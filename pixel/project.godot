@@ -29,7 +29,6 @@ TaskQueue="*res://services/task_queue.gd"
 ProjectService="*res://services/project_service.gd"
 ProviderService="*res://services/provider_service.gd"
 PluginService="*res://services/plugin_service.gd"
-CostService="*res://services/cost_service.gd"
 
 [display]
 

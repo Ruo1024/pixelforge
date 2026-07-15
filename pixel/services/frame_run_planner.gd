@@ -46,8 +46,6 @@ static func plan(graph_data: Dictionary, canvas_data: Dictionary, frame_id: Stri
 	var included_edges: Array[Dictionary] = []
 	var request_count := 0
 	var result_count := 0
-	var known_cost := 0.0
-	var cost_known := true
 	for target_id in targets:
 		var closure := _upstream_closure(graph, target_id)
 		for node_id in closure:
@@ -62,10 +60,6 @@ static func plan(graph_data: Dictionary, canvas_data: Dictionary, frame_id: Stri
 		var counts := _target_counts(graph, target_id)
 		request_count += int(counts["requests"])
 		result_count += int(counts["results"])
-		if bool(counts["cost_known"]):
-			known_cost += float(counts["cost"])
-		else:
-			cost_known = false
 	var included_node_ids: Array = included_nodes.keys()
 	included_node_ids.sort()
 	return {
@@ -77,7 +71,6 @@ static func plan(graph_data: Dictionary, canvas_data: Dictionary, frame_id: Stri
 		"included_edges": included_edges,
 		"request_count": request_count,
 		"result_count": result_count,
-		"known_cost": known_cost if cost_known else -1.0,
 		"invalid_targets": invalid_targets,
 	}
 
@@ -134,14 +127,7 @@ static func _target_counts(graph: PFGraph, target_id: String) -> Dictionary:
 				if row is Dictionary and bool(row.get("enabled", true)):
 					results += maxi(1, int(row.get("count", 1)))
 	var requests := ceili(float(results) / float(max_batch))
-	if provider_id == "mock":
-		return {"requests": requests, "results": results, "cost": 0.0, "cost_known": true}
-	return {
-		"requests": requests,
-		"results": results,
-		"cost": -1.0,
-		"cost_known": false,
-	}
+	return {"requests": requests, "results": results}
 
 
 static func _item(canvas_data: Dictionary, item_id: String) -> Dictionary:

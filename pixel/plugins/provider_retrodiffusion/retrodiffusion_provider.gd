@@ -20,7 +20,6 @@ const REQUEST_TIMEOUT_SECONDS := 180.0
 const MAX_BATCH := 4
 const MAX_RETRIES := 0
 const RETRY_BACKOFF_SECONDS := 0.5
-const DOCUMENTED_RD_PRO_UNIT_COST_MICRO_USD := 250000
 const MODEL_STYLES := {
 	"rd_plus": DEFAULT_STYLE_LOW_RES,
 	"rd_pro": DEFAULT_STYLE_STANDARD,
@@ -175,13 +174,6 @@ func _start_generation(request: Dictionary, wrapper: PFProviderTaskV2) -> void:
 			}
 		)
 	)
-
-
-func estimate_cost(request: Dictionary) -> Variant:
-	if String(request.get("model_id", "")) != "rd_pro":
-		return null
-	var micro_usd := DOCUMENTED_RD_PRO_UNIT_COST_MICRO_USD * int(request.get("batch", 0))
-	return "%d.%06d" % [micro_usd / 1000000, micro_usd % 1000000]
 
 
 func cancel(request_id: String) -> PFCancelTaskV2:
@@ -507,7 +499,6 @@ func _model_descriptor(
 			"safe_validation": false,
 			"seed": true,
 			"transparent_bg": true,
-			"cost_estimate": model_id == "rd_pro",
 		},
 		"dynamic_params":
 		[

@@ -10,7 +10,15 @@ const EXPECTED_WHITELIST := {
 	"image_input": ["asset_id"],
 	"reference_set": ["asset_ids"],
 	"ai_generate":
-	["provider_id", "model_id", "target_width", "target_height", "batch_size", "seed", "extra"],
+	[
+		"provider_id",
+		"model_id",
+		"resolution_preset",
+		"orientation",
+		"batch_size",
+		"seed",
+		"extra",
+	],
 	"pixel_cleanup": ["preset_id", "settings"],
 	"batch": ["label"],
 }
@@ -107,7 +115,7 @@ func test_palette_hash_mismatch_rejects_insertion_atomically() -> void:
 	assert_eq(canvas, canvas_before)
 
 
-func test_extra_only_template_safe() -> void:
+func test_generation_template_hard_cuts_dynamic_params() -> void:
 	var graph := _generate_graph()
 	var params: Dictionary = graph["nodes"][1]["params"]
 	params["extra"] = {
@@ -120,7 +128,7 @@ func test_extra_only_template_safe() -> void:
 	if not result.get("ok", false):
 		return
 	var generate: Dictionary = _node(result["template"], "generate")
-	assert_eq(generate["params"]["extra"], {"quality": "low"})
+	assert_eq(generate["params"]["extra"], {})
 	assert_false(JSON.stringify(result["template"]).contains("private_debug"))
 	assert_false(JSON.stringify(result["template"]).contains("provider_internal"))
 
@@ -267,11 +275,11 @@ func _generate_graph() -> Dictionary:
 				{
 					"provider_id": "openai_image",
 					"model_id": "gpt-image-2",
-					"target_width": 32,
-					"target_height": 32,
+					"resolution_preset": "1080p",
+					"orientation": "square",
 					"batch_size": 1,
 					"seed": -1,
-					"extra": {"quality": "low"}
+					"extra": {}
 				}
 			},
 		],

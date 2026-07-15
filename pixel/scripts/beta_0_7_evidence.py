@@ -19,6 +19,7 @@ EXPECTED = {
     "1440x900-en-100-running-output-edge.png": "running_output_edge",
     "1440x900-zh-100-output-12.png": "output_12",
     "1440x900-en-100-output-13-50-scroll.png": "output_13_50_scroll",
+    "2560x1440-en-100-reference-12.png": "reference_12",
     "1440x900-zh-100-detached-sprite.png": "detached_sprite",
     "1440x900-en-100-cleanup-running.png": "cleanup_running",
     "1080x560-zh-150-partial-dialog.png": "partial_dialog",
@@ -141,7 +142,7 @@ def verify(args: argparse.Namespace) -> None:
         raise SystemExit("credential sentinel manifest guard failed")
     entries = {entry["filename"]: entry for entry in manifest.get("entries", [])}
     if set(entries) != set(EXPECTED):
-        raise SystemExit("manifest does not contain exactly eight screenshots")
+        raise SystemExit("manifest does not contain the exact screenshot set")
     digests = set()
     for filename, scenario in EXPECTED.items():
         path = output / filename

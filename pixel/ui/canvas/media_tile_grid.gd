@@ -10,6 +10,7 @@ signal replace_requested(item_id: String)
 signal remove_requested(item_id: String)
 
 const Layout := preload("res://ui/canvas/output_layout_calculator.gd")
+const ACTION_MIN_SIZE := Vector2(32, 28)
 const STATE_COLORS := {
 	"queued": Color(0.24, 0.27, 0.32),
 	"running": Color(0.22, 0.42, 0.62),
@@ -231,7 +232,7 @@ func _acquire_tile() -> Button:
 		var action := Button.new()
 		action.name = String(spec[0])
 		action.text = String(spec[1])
-		action.custom_minimum_size = Vector2(32, 28)
+		action.custom_minimum_size = ACTION_MIN_SIZE
 		action.pressed.connect(_on_action_pressed.bind(String(spec[0]), tile))
 		actions.add_child(action)
 	tile.add_child(actions)

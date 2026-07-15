@@ -148,7 +148,7 @@ func test_invalid_completed_shape_becomes_one_safe_failed_terminal() -> void:
 	assert_false(task.resolve({}))
 
 
-func test_provider_base_has_only_v2_six_method_surface_and_no_runtime_owners() -> void:
+func test_provider_base_has_only_v2_five_method_surface_and_no_runtime_owners() -> void:
 	var base_source := FileAccess.get_file_as_string("res://core/provider/pf_provider.gd")
 	var expression := RegEx.new()
 	assert_eq(expression.compile("(?m)^func ([a-z_]+)"), OK)
@@ -161,7 +161,6 @@ func test_provider_base_has_only_v2_six_method_surface_and_no_runtime_owners() -
 			"get_api_version",
 			"get_config_schema",
 			"get_model_descriptors",
-			"estimate_cost",
 			"generate",
 			"cancel",
 		]

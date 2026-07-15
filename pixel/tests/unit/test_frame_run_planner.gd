@@ -10,7 +10,7 @@ func test_frame_plan_includes_external_dependencies_and_excludes_unrelated_branc
 	assert_eq(plan["target_generate_ids"], ["generate-a", "generate-b"])
 	assert_eq(plan["result_count"], 9)
 	assert_eq(plan["request_count"], 2)
-	assert_eq(plan["known_cost"], 0.0)
+	assert_false(plan.has("known_cost"))
 	assert_has(plan["included_node_ids"], "outside-prompt")
 	assert_does_not_have(plan["included_node_ids"], "unrelated-bad")
 

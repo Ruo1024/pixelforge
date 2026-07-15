@@ -44,11 +44,12 @@ func test_openai_exact_descriptor_and_schema() -> void:
 	assert_eq(descriptor["model_id"], "gpt-image-2")
 	assert_eq(descriptor["ui_scope"], "main")
 	assert_eq(descriptor["provider_meta_keys"], ["remote_task_id"])
-	assert_eq(descriptor["dynamic_params"].size(), 1)
+	assert_eq(descriptor["dynamic_params"], [])
 	assert_eq(
-		descriptor["capabilities"]["provider_output_sizes"],
-		[[1024, 1024], [1536, 1024], [1024, 1536]]
+		descriptor["capabilities"]["target_size_constraints"]["allowed_sizes"],
+		_fixed_openai_delivery_sizes()
 	)
+	assert_eq(descriptor["capabilities"]["provider_output_sizes"], _fixed_openai_request_sizes())
 	assert_false(descriptor["capabilities"]["native_pixel"])
 
 
@@ -58,9 +59,9 @@ func test_retro_exact_descriptors_and_schema() -> void:
 	assert_eq(
 		provider.get_model_descriptors(),
 		[
-			_retro_descriptor("rd_plus", "Retro Diffusion Plus", true, 128, false),
-			_retro_descriptor("rd_pro", "Retro Diffusion Pro", false, 256, true),
-			_retro_descriptor("rd_fast", "Retro Diffusion Fast", false, 384, false),
+			_retro_descriptor("rd_plus", "Retro Diffusion Plus", true, 128),
+			_retro_descriptor("rd_pro", "Retro Diffusion Pro", false, 256),
+			_retro_descriptor("rd_fast", "Retro Diffusion Fast", false, 384),
 		]
 	)
 	assert_eq(provider.get_config_schema().size(), 2)
@@ -87,9 +88,8 @@ func test_retro_exact_descriptors_and_schema() -> void:
 		assert_true(descriptor["capabilities"]["native_pixel"])
 		assert_eq(descriptor["capabilities"]["provider_output_sizes"], [])
 		assert_eq(descriptor["dynamic_params"].size(), 2)
-	assert_true(descriptors[1]["capabilities"]["cost_estimate"])
-	assert_false(descriptors[0]["capabilities"]["cost_estimate"])
-	assert_false(descriptors[2]["capabilities"]["cost_estimate"])
+	for descriptor in descriptors:
+		assert_false(descriptor["capabilities"].has("cost_estimate"))
 
 
 func test_service_rejects_nonexact_descriptor_and_config_schema_types() -> void:
@@ -109,9 +109,9 @@ func test_service_rejects_nonexact_descriptor_and_config_schema_types() -> void:
 	var wrong_flag := descriptors.duplicate(true)
 	wrong_flag[0]["capabilities"]["safe_validation"] = "true"
 	assert_false(service._model_descriptors_are_valid("openai_image", wrong_flag))
-	var wrong_dynamic_default := descriptors.duplicate(true)
-	wrong_dynamic_default[0]["dynamic_params"][0]["default"] = 1
-	assert_false(service._model_descriptors_are_valid("openai_image", wrong_dynamic_default))
+	var wrong_count := descriptors.duplicate(true)
+	wrong_count[0]["capabilities"]["max_batch"] = "4"
+	assert_false(service._model_descriptors_are_valid("openai_image", wrong_count))
 	var service_source := FileAccess.get_file_as_string("res://services/provider_service.gd")
 	assert_string_contains(service_source, "res://services/schema_text_resolver.gd")
 	assert_string_contains(service_source, "validate_schema")
@@ -232,7 +232,6 @@ func test_zero_item_provider_payloads_remain_normalized_results() -> void:
 
 func test_mock_partial_then_manual_retry_targets_only_missing_slot() -> void:
 	for provider_id in ["openai_image", "retrodiffusion"]:
-		CostService.set_monthly_budget_micro_usd(0)
 		var host := Node.new()
 		add_child_autofree(host)
 		var provider: PFProvider
@@ -293,20 +292,6 @@ func test_mock_partial_then_manual_retry_targets_only_missing_slot() -> void:
 		assert_false(invalid_retry["ok"])
 		assert_eq(invalid_retry["requests"], [])
 		assert_eq(await _mock_post_count(endpoint_path), requests_before + 1)
-		if provider_id == "retrodiffusion":
-			CostService.set_monthly_budget_micro_usd(1)
-			var confirmation: Dictionary = RetryPreflightScript.prepare_failed_slots(
-				failed_slots, 4, "%s-confirm" % request["run_id"]
-			)
-			assert_eq(confirmation["preflight"]["decision"], "needs_confirmation")
-			var canceled: Dictionary = RetryPreflightScript.authorize(confirmation, false)
-			assert_false(canceled["ok"])
-			assert_eq(canceled["requests"], [])
-			assert_eq(await _mock_post_count(endpoint_path), requests_before + 1)
-			CostService.set_monthly_budget_micro_usd(0)
-			retry_plan = RetryPreflightScript.prepare_failed_slots(
-				failed_slots, 4, "%s-retry" % request["run_id"]
-			)
 		var authorized: Dictionary = RetryPreflightScript.authorize(retry_plan)
 		assert_true(authorized["ok"])
 		var retry_request: Dictionary = authorized["requests"][0]
@@ -318,7 +303,6 @@ func test_mock_partial_then_manual_retry_targets_only_missing_slot() -> void:
 		assert_null(retried["value"]["items"][0]["error"])
 		assert_eq(await _mock_post_count(endpoint_path), requests_before + 2)
 		provider.clear_session_config()
-		CostService.set_monthly_budget_micro_usd(0)
 
 
 func test_mock_generation_timeout_is_terminal_and_never_auto_retries() -> void:
@@ -447,13 +431,13 @@ func _openai_request() -> Dictionary:
 		"mode": "txt2img",
 		"model_id": "gpt-image-2",
 		"prompt": "barrel",
-		"target_width": 32,
-		"target_height": 32,
-		"provider_output_size": [1024, 1024],
+		"target_width": 1080,
+		"target_height": 1080,
+		"provider_output_size": [1088, 1088],
 		"batch": 1,
 		"seed": -1,
 		"ref_images": [],
-		"extra": {"quality": "low"},
+		"extra": {},
 	}
 
 
@@ -481,22 +465,17 @@ func _planner_input(provider_id: String, batch: int) -> Dictionary:
 		"run_id": "run-mock-%s" % provider_id,
 		"provider_id": provider_id,
 		"model_id": "gpt-image-2" if provider_id == "openai_image" else "rd_plus",
-		"target_width": 32,
-		"target_height": 32,
+		"resolution_preset": "1080p",
+		"orientation": "square",
 		"batch_size": batch,
-		"seed": -1 if provider_id == "openai_image" else 7,
+		"seed": -1,
 		"prefix": "",
 		"prompt": "barrel",
 		"rows": [],
 		"reference_asset_ids": [],
 		"reference_content_sha256s": [],
 		"ref_images": [],
-		"extra":
-		(
-			{"quality": "low"}
-			if provider_id == "openai_image"
-			else {"remove_bg": true, "strength": 0.8}
-		),
+		"extra": {},
 	}
 
 
@@ -566,44 +545,61 @@ func _openai_descriptor() -> Dictionary:
 			"max_batch": 4,
 			"target_size_constraints":
 			{
-				"min_width": 16,
-				"max_width": 512,
+				"min_width": 720,
+				"max_width": 3840,
 				"width_step": 1,
-				"min_height": 16,
-				"max_height": 512,
+				"min_height": 720,
+				"max_height": 3840,
 				"height_step": 1,
-				"allowed_sizes": [],
+				"allowed_sizes": _fixed_openai_delivery_sizes(),
 			},
-			"provider_output_sizes": [[1024, 1024], [1536, 1024], [1024, 1536]],
+			"provider_output_sizes": _fixed_openai_request_sizes(),
 			"native_pixel": false,
 			"native_idempotency": false,
 			"safe_validation": true,
 			"seed": false,
 			"transparent_bg": false,
-			"cost_estimate": false,
 		},
-		"dynamic_params":
-		[
-			{
-				"key": "quality",
-				"kind": "enum",
-				"default": "low",
-				"required": false,
-				"values": ["auto", "low", "medium", "high"],
-				"min": null,
-				"max": null,
-				"step": null,
-				"label_key": "GEN_PARAM_QUALITY",
-				"help_key": "GEN_PARAM_QUALITY_HELP",
-				"advanced": false,
-				"template_safe": true,
-			}
-		],
+		"dynamic_params": [],
 	}
 
 
+func _fixed_openai_delivery_sizes() -> Array:
+	return [
+		[1280, 720],
+		[720, 1280],
+		[720, 720],
+		[1920, 1080],
+		[1080, 1920],
+		[1080, 1080],
+		[2560, 1440],
+		[1440, 2560],
+		[1440, 1440],
+		[3840, 2160],
+		[2160, 3840],
+		[2160, 2160],
+	]
+
+
+func _fixed_openai_request_sizes() -> Array:
+	return [
+		[1280, 720],
+		[720, 1280],
+		[720, 720],
+		[1920, 1088],
+		[1088, 1920],
+		[1088, 1088],
+		[2560, 1440],
+		[1440, 2560],
+		[1440, 1440],
+		[3840, 2160],
+		[2160, 3840],
+		[2160, 2160],
+	]
+
+
 func _retro_descriptor(
-	model_id: String, display_name: String, is_default: bool, max_side: int, cost_estimate: bool
+	model_id: String, display_name: String, is_default: bool, max_side: int
 ) -> Dictionary:
 	return {
 		"provider_id": "retrodiffusion",
@@ -634,7 +630,6 @@ func _retro_descriptor(
 			"safe_validation": false,
 			"seed": true,
 			"transparent_bg": true,
-			"cost_estimate": cost_estimate,
 		},
 		"dynamic_params":
 		[

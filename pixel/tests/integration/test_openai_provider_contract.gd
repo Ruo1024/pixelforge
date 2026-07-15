@@ -85,8 +85,12 @@ func test_capabilities_and_persistent_schema_match_contract() -> void:
 	assert_true(capabilities["img2img"])
 	assert_false(capabilities["native_pixel"])
 	assert_eq(capabilities["max_batch"], 4)
-	assert_false(capabilities["cost_estimate"])
-	assert_eq(capabilities["provider_output_sizes"], [[1024, 1024], [1536, 1024], [1024, 1536]])
+	assert_false(capabilities.has("cost_estimate"))
+	assert_eq(capabilities["target_size_constraints"]["allowed_sizes"].size(), 12)
+	assert_has(capabilities["target_size_constraints"]["allowed_sizes"], [1920, 1080])
+	assert_eq(capabilities["provider_output_sizes"].size(), 12)
+	assert_has(capabilities["provider_output_sizes"], [1920, 1088])
+	assert_eq(descriptor["dynamic_params"], [])
 	var schema := _provider.get_config_schema()
 	assert_eq(schema.size(), 2)
 	assert_eq(schema[0]["key"], "base_url")
@@ -97,12 +101,12 @@ func test_capabilities_and_persistent_schema_match_contract() -> void:
 
 func test_request_body_is_sanitized_and_adapts_target_size() -> void:
 	assert_null(_provider.configure({"api_key": SECRET_SENTINEL}))
-	var request := _request("request-body", 4, [1024, 1024])
+	var request := _request("request-body", 4, [1920, 1088])
 	request["prompt"] = "wooden barrel"
 	var body := _provider.build_request_body(request)
 	assert_eq(body["model"], "gpt-image-2")
-	assert_eq(body["quality"], "low")
-	assert_eq(body["size"], "1024x1024")
+	assert_false(body.has("quality"))
+	assert_eq(body["size"], "1920x1088")
 	assert_eq(body["n"], 4)
 	assert_eq(body["background"], "opaque")
 	assert_eq(body["output_format"], "png")
@@ -175,11 +179,11 @@ func test_targeted_request_uses_only_the_requested_generate_branch() -> void:
 				{
 					"provider_id": "openai_image",
 					"model_id": "gpt-image-2",
-					"target_width": 32 if suffix == "a" else 48,
-					"target_height": 32,
+					"resolution_preset": "720p",
+					"orientation": "square" if suffix == "a" else "landscape",
 					"batch_size": 1,
-					"seed": 10,
-					"extra": {"quality": "low"},
+					"seed": -1,
+					"extra": {},
 				},
 				Vector2.ZERO
 			)
@@ -199,24 +203,12 @@ func test_targeted_request_uses_only_the_requested_generate_branch() -> void:
 	assert_true(second_plan["ok"])
 	var first: Dictionary = first_plan["requests"][0]
 	var second: Dictionary = second_plan["requests"][0]
-	assert_eq(
-		first["prompt"],
-		(
-			"subject_a, "
-			+ "pixel art designed for a 32x32 true-pixel target, flat colors, crisp edges"
-		),
-	)
-	assert_eq(
-		second["prompt"],
-		(
-			"subject_b, "
-			+ "pixel art designed for a 48x32 true-pixel target, flat colors, crisp edges"
-		),
-	)
-	assert_eq(first["target_width"], 32)
-	assert_eq(second["target_width"], 48)
-	assert_eq(first["provider_output_size"], [1024, 1024])
-	assert_eq(second["provider_output_size"], [1536, 1024])
+	assert_eq(first["prompt"], "subject_a")
+	assert_eq(second["prompt"], "subject_b")
+	assert_eq(first["target_width"], 720)
+	assert_eq(second["target_width"], 1280)
+	assert_eq(first["provider_output_size"], [720, 720])
+	assert_eq(second["provider_output_size"], [1280, 720])
 	assert_eq(first_plan["provenance_inputs"]["reference_asset_ids"], [first_id])
 	assert_eq(second_plan["provenance_inputs"]["reference_asset_ids"], [second_id])
 	assert_eq(first_plan["provenance_inputs"]["source_node_id"], "generate_a")
@@ -255,11 +247,11 @@ func test_structured_rows_split_at_model_limit_without_legacy_graph_fields() -> 
 			{
 				"provider_id": "openai_image",
 				"model_id": "gpt-image-2",
-				"target_width": 32,
-				"target_height": 32,
+				"resolution_preset": "1080p",
+				"orientation": "square",
 				"batch_size": 9,
-				"seed": 50,
-				"extra": {"quality": "low"},
+				"seed": -1,
+				"extra": {},
 			},
 			Vector2.ZERO
 		)
@@ -276,26 +268,13 @@ func test_structured_rows_split_at_model_limit_without_legacy_graph_fields() -> 
 	)
 	assert_eq(
 		all["requests"].map(func(request: Dictionary) -> String: return request["prompt"]),
-		[
-			(
-				"tower, "
-				+ "pixel art designed for a 32x32 true-pixel target, flat colors, crisp edges"
-			),
-			(
-				"tower, "
-				+ "pixel art designed for a 32x32 true-pixel target, flat colors, crisp edges"
-			),
-			(
-				"barrel, "
-				+ "pixel art designed for a 32x32 true-pixel target, flat colors, crisp edges"
-			),
-		]
+		["tower", "tower", "barrel"]
 	)
 	for request in all["requests"]:
 		assert_eq(request.keys().size(), 14)
-		assert_eq(request["target_width"], 32)
-		assert_eq(request["target_height"], 32)
-		assert_eq(request["provider_output_size"], [1024, 1024])
+		assert_eq(request["target_width"], 1080)
+		assert_eq(request["target_height"], 1080)
+		assert_eq(request["provider_output_size"], [1088, 1088])
 	var graph_data := graph.to_json()
 	assert_false(JSON.stringify(graph_data).contains('"items"'))
 	assert_false(JSON.stringify(graph_data).contains('"spec"'))
@@ -313,11 +292,11 @@ func test_production_planner_rejects_empty_model_and_prompt_without_defaulting()
 			{
 				"provider_id": "openai_image",
 				"model_id": "",
-				"target_width": 32,
-				"target_height": 32,
+				"resolution_preset": "1080p",
+				"orientation": "square",
 				"batch_size": 1,
 				"seed": -1,
-				"extra": {"quality": "low"},
+				"extra": {},
 			},
 			Vector2.ZERO,
 		)
@@ -355,11 +334,11 @@ func test_real_queue_validates_fields_before_credentials_or_state_changes() -> v
 			{
 				"provider_id": "openai_image",
 				"model_id": "",
-				"target_width": 32,
-				"target_height": 32,
+				"resolution_preset": "1080p",
+				"orientation": "square",
 				"batch_size": 1,
 				"seed": -1,
-				"extra": {"quality": "low"},
+				"extra": {},
 			},
 			Vector2.ZERO,
 		)
@@ -397,11 +376,11 @@ func test_real_task_failure_materializes_structured_slot_and_request_audit() -> 
 			{
 				"provider_id": "openai_image",
 				"model_id": "gpt-image-2",
-				"target_width": 32,
-				"target_height": 32,
+				"resolution_preset": "1080p",
+				"orientation": "square",
 				"batch_size": 1,
 				"seed": -1,
-				"extra": {"quality": "low"},
+				"extra": {},
 			},
 			Vector2(280, 0),
 		)
@@ -472,6 +451,7 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 	var decoded := _provider.decode_success_payload(
 		_load_fixture(), _request("materialize", 1, [1, 1])
 	)
+	decoded["items"][0]["image"].resize(1088, 1088, Image.INTERPOLATE_NEAREST)
 	var graph := GraphScript.new()
 	graph.id = "graph_openai_contract"
 	(
@@ -482,11 +462,11 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 			{
 				"provider_id": "openai_image",
 				"model_id": "gpt-image-2",
-				"target_width": 32,
-				"target_height": 32,
+				"resolution_preset": "1080p",
+				"orientation": "square",
 				"batch_size": 1,
 				"seed": -1,
-				"extra": {"quality": "low"},
+				"extra": {},
 			}
 		)
 	)
@@ -502,14 +482,14 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 				"prompt": "wooden barrel",
 				"prompt_preset_id": "",
 				"prompt_prefix": "",
-				"target_width": 32,
-				"target_height": 32,
-				"provider_output_size": [1, 1],
+				"target_width": 1080,
+				"target_height": 1080,
+				"provider_output_size": [1088, 1088],
 				"requested_seed": -1,
 				"reference_asset_ids": [],
 				"reference_content_sha256s": [],
 				"source_row_id": "",
-				"extra": {"quality": "low"},
+				"extra": {},
 			},
 		}
 	]
@@ -527,7 +507,7 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 	]
 	var plan := {
 		"ok": true,
-		"requests": [_request("materialize", 1, [1, 1])],
+		"requests": [_request("materialize", 1, [1088, 1088])],
 		"slots": planned_slots,
 		"total_slots": 1,
 	}
@@ -545,6 +525,7 @@ func test_provider_result_materializes_complete_provenance_without_secret() -> v
 	var meta: Dictionary = AssetLibrary.get_asset_meta(asset_ids[0])
 	var provenance: Dictionary = meta["provenance"]
 	var provenance_snapshot: Dictionary = provenance["generation_snapshot"]
+	assert_eq(AssetLibrary.get_image(asset_ids[0]).get_size(), Vector2i(1080, 1080))
 	assert_eq(provenance_snapshot["provider_id"], "openai_image")
 	assert_eq(provenance_snapshot["model_id"], "gpt-image-2")
 	assert_eq(provenance_snapshot["prompt"], "wooden barrel")
@@ -642,13 +623,13 @@ func _request(request_id: String, batch: int, provider_output_size: Array) -> Di
 		"mode": "txt2img",
 		"model_id": "gpt-image-2",
 		"prompt": "barrel",
-		"target_width": 32,
-		"target_height": 32,
+		"target_width": 1080,
+		"target_height": 1080,
 		"provider_output_size": provider_output_size,
 		"batch": batch,
 		"seed": -1,
 		"ref_images": [],
-		"extra": {"quality": "low"},
+		"extra": {},
 	}
 
 

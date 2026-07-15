@@ -49,7 +49,6 @@ const MOCK_MODEL_DESCRIPTOR := {
 		"safe_validation": false,
 		"seed": true,
 		"transparent_bg": false,
-		"cost_estimate": true,
 	},
 	"dynamic_params": [],
 }
@@ -671,7 +670,6 @@ func _model_descriptors_are_valid(provider_id: String, descriptors: Array[Dictio
 		"ui_scope",
 	]
 	var capability_keys := [
-		"cost_estimate",
 		"img2img",
 		"max_batch",
 		"max_reference_images",
@@ -735,7 +733,6 @@ func _capabilities_are_valid(capabilities: Dictionary) -> bool:
 		"safe_validation",
 		"seed",
 		"transparent_bg",
-		"cost_estimate",
 	]:
 		if not (capabilities[flag] is bool):
 			valid = false

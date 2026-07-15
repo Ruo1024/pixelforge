@@ -74,7 +74,11 @@ func test_template_storage_is_atomic_and_corrupt_files_do_not_block_listing() ->
 	template["name"] = "Saved workflow"
 	_saved_ids.append(template["id"])
 	assert_true(Service.save_template(template)["ok"])
-	assert_eq(Service.load_template(template["id"])["template"]["name"], "Saved workflow")
+	var loaded := Service.load_template(template["id"])
+	assert_true(loaded.get("ok", false), JSON.stringify(loaded))
+	if not loaded.get("ok", false):
+		return
+	assert_eq(loaded["template"]["name"], "Saved workflow")
 	assert_true(Service.rename_template(template["id"], "Renamed workflow")["ok"])
 
 	var corrupt_id := "test-template-corrupt"
@@ -163,11 +167,11 @@ func _graph_fixture() -> Dictionary:
 				{
 					"provider_id": "openai_image",
 					"model_id": "gpt-image-2",
-					"target_width": 64,
-					"target_height": 64,
+					"resolution_preset": "1080p",
+					"orientation": "square",
 					"batch_size": 1,
 					"seed": -1,
-					"extra": {"quality": "low"},
+					"extra": {},
 				}
 			},
 			{

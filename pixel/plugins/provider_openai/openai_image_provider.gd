@@ -75,40 +75,57 @@ func get_model_descriptors() -> Array[Dictionary]:
 				"max_batch": MAX_BATCH,
 				"target_size_constraints":
 				{
-					"min_width": 16,
-					"max_width": 512,
+					"min_width": 720,
+					"max_width": 3840,
 					"width_step": 1,
-					"min_height": 16,
-					"max_height": 512,
+					"min_height": 720,
+					"max_height": 3840,
 					"height_step": 1,
-					"allowed_sizes": [],
+					"allowed_sizes": _fixed_delivery_sizes(),
 				},
-				"provider_output_sizes": [[1024, 1024], [1536, 1024], [1024, 1536]],
+				"provider_output_sizes": _fixed_request_sizes(),
 				"native_pixel": false,
 				"native_idempotency": false,
 				"safe_validation": true,
 				"seed": false,
 				"transparent_bg": false,
-				"cost_estimate": false,
 			},
-			"dynamic_params":
-			[
-				{
-					"key": "quality",
-					"kind": "enum",
-					"default": "low",
-					"required": false,
-					"values": ["auto", "low", "medium", "high"],
-					"min": null,
-					"max": null,
-					"step": null,
-					"label_key": "GEN_PARAM_QUALITY",
-					"help_key": "GEN_PARAM_QUALITY_HELP",
-					"advanced": false,
-					"template_safe": true,
-				}
-			],
+			"dynamic_params": [],
 		}
+	]
+
+
+static func _fixed_delivery_sizes() -> Array:
+	return [
+		[1280, 720],
+		[720, 1280],
+		[720, 720],
+		[1920, 1080],
+		[1080, 1920],
+		[1080, 1080],
+		[2560, 1440],
+		[1440, 2560],
+		[1440, 1440],
+		[3840, 2160],
+		[2160, 3840],
+		[2160, 2160],
+	]
+
+
+static func _fixed_request_sizes() -> Array:
+	return [
+		[1280, 720],
+		[720, 1280],
+		[720, 720],
+		[1920, 1088],
+		[1088, 1920],
+		[1088, 1088],
+		[2560, 1440],
+		[1440, 2560],
+		[1440, 1440],
+		[3840, 2160],
+		[2160, 3840],
+		[2160, 2160],
 	]
 
 
@@ -285,12 +302,6 @@ func _start_generation(request: Dictionary, wrapper: PFProviderTaskV2) -> void:
 	)
 
 
-func estimate_cost(_request: Dictionary) -> Variant:
-	# GPT Image 2's official page currently points to a dynamic calculator rather than a stable
-	# per-image table. Unknown is safer than a stale hard-coded amount.
-	return null
-
-
 func cancel(request_id: String) -> PFCancelTaskV2:
 	var existing: Variant = _cancel_settlement.get_cancel_task(request_id)
 	if existing != null:
@@ -318,13 +329,11 @@ func cancel(request_id: String) -> PFCancelTaskV2:
 func build_request_body(request: Dictionary) -> Dictionary:
 	var prompt := String(request.get("prompt", "sprite")).strip_edges()
 	var output_size: Array = request.get("provider_output_size", [1024, 1024])
-	var extra: Dictionary = request.get("extra", {"quality": "low"})
 	return {
 		"model": MODEL_ID,
 		"prompt": prompt,
 		"n": clampi(int(request.get("batch", 1)), 1, MAX_BATCH),
 		"size": "%dx%d" % [output_size[0], output_size[1]],
-		"quality": String(extra.get("quality", "low")),
 		"background": "opaque",
 		"output_format": "png",
 	}
@@ -333,7 +342,7 @@ func build_request_body(request: Dictionary) -> Dictionary:
 func build_edit_request(request: Dictionary) -> PackedByteArray:
 	var body := PackedByteArray()
 	var fields := build_request_body(request)
-	for key in ["model", "prompt", "n", "size", "quality", "background", "output_format"]:
+	for key in ["model", "prompt", "n", "size", "background", "output_format"]:
 		_append_multipart_text(body, str(key), str(fields[key]))
 	var references: Array = request["ref_images"]
 	for index in range(references.size()):

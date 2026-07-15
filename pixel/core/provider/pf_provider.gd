@@ -16,10 +16,6 @@ func get_model_descriptors() -> Array[Dictionary]:
 	return []
 
 
-func estimate_cost(_request: Dictionary) -> Variant:
-	return null
-
-
 func generate(_request: Dictionary) -> PFProviderTaskV2:
 	return null
 

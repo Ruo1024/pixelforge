@@ -29,12 +29,12 @@ func test_mock_generate_chain_materializes_images_into_batch_node() -> void:
 
 	var first_asset_id := String(result["result_slots"][0]["asset_id"])
 	assert_true(asset_library.has_asset(first_asset_id))
-	assert_eq(asset_library.get_image(first_asset_id).get_size(), Vector2i(12, 10))
+	assert_eq(asset_library.get_image(first_asset_id).get_size(), Vector2i(720, 720))
 	var meta: Dictionary = asset_library.get_asset_meta(first_asset_id)
 	assert_eq(meta["origin"], "generated")
 	assert_eq(meta["provenance"]["graph_id"], "graph_main")
 	assert_eq(meta["provenance"]["generation_snapshot"]["provider_id"], "mock")
-	assert_eq(meta["provenance"]["generation_snapshot"]["actual_seed"], 700)
+	assert_eq(meta["provenance"]["generation_snapshot"]["actual_seed"], 0)
 
 
 func test_mock_path_uses_result_slots_projection_only() -> void:
@@ -80,10 +80,10 @@ func test_structured_object_rows_override_batch_size_and_persist_source_provenan
 			{
 				"provider_id": "mock",
 				"model_id": "pixel_mock_v1",
-				"target_width": 12,
-				"target_height": 10,
+				"resolution_preset": "720p",
+				"orientation": "square",
 				"batch_size": 7,
-				"seed": 900,
+				"seed": -1,
 				"extra": {},
 			}
 		)
@@ -103,7 +103,7 @@ func test_structured_object_rows_override_batch_size_and_persist_source_provenan
 	assert_eq(source_rows, ["row-tower", "row-tower", "row-barrel", "row-barrel", "row-barrel"])
 
 
-func test_mock_generate_chain_uses_local_target_params_without_size_spec() -> void:
+func test_mock_generate_chain_uses_fixed_delivery_params_without_size_spec() -> void:
 	var graph := _make_mock_graph()
 	var asset_library := get_tree().root.get_node("AssetLibrary")
 
@@ -112,7 +112,7 @@ func test_mock_generate_chain_uses_local_target_params_without_size_spec() -> vo
 	assert_true(bool(result["ok"]))
 	assert_null(graph.get_node("size"))
 	for slot in result["result_slots"]:
-		assert_eq(asset_library.get_image(String(slot["asset_id"])).get_size(), Vector2i(12, 10))
+		assert_eq(asset_library.get_image(String(slot["asset_id"])).get_size(), Vector2i(720, 720))
 
 
 func test_mock_generate_chain_rejects_loaded_invalid_edge_before_run() -> void:
@@ -276,10 +276,10 @@ func _make_mock_graph() -> PFGraph:
 			{
 				"provider_id": "mock",
 				"model_id": "pixel_mock_v1",
-				"target_width": 12,
-				"target_height": 10,
+				"resolution_preset": "720p",
+				"orientation": "square",
 				"batch_size": 2,
-				"seed": 700,
+				"seed": -1,
 				"extra": {},
 			},
 			Vector2(440, 0)

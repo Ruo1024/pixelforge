@@ -66,7 +66,6 @@ const RECENT_MENU_REMOVE_MISSING := 999
 var _canvas: Control = null
 var _cleanup_inspector: Control = null
 var _status_label: Label = null
-var _cost_label: Label = null
 var _m2_actions: Variant = null
 var _new_project_callback: Callable
 var _open_project_callback: Callable
@@ -105,7 +104,6 @@ func setup(
 	canvas: Control,
 	cleanup_inspector: Control,
 	status_label: Label,
-	cost_label: Label,
 	m2_actions: Variant,
 	new_project_callback: Callable,
 	open_project_callback: Callable,
@@ -114,7 +112,6 @@ func setup(
 	_canvas = canvas
 	_cleanup_inspector = cleanup_inspector
 	_status_label = status_label
-	_cost_label = cost_label
 	_m2_actions = m2_actions
 	_new_project_callback = new_project_callback
 	_open_project_callback = open_project_callback
@@ -134,7 +131,7 @@ func setup(
 	_generation_flow = GenerationRunControllerScript.new()
 	_generation_flow.name = "GenerationRunController"
 	add_child(_generation_flow)
-	_generation_flow.setup(_canvas, _status_label, _cost_label, _provider_settings_dialog)
+	_generation_flow.setup(_canvas, _status_label, _provider_settings_dialog)
 	_cleanup_flow = CleanupRunControllerScript.new()
 	_cleanup_flow.name = "CleanupRunController"
 	add_child(_cleanup_flow)
@@ -664,11 +661,6 @@ func _run_selected_frame(frame_id: String) -> void:
 	_status_label.text = (
 		Strings.text("STATUS_FRAME_RUN_PLAN_FORMAT")
 		% [plan["target_generate_ids"].size(), plan["request_count"], plan["result_count"]]
-	)
-	_cost_label.text = (
-		Strings.text("CONTENT_DETAIL_COST_ESTIMATE_FORMAT") % float(plan["known_cost"])
-		if float(plan["known_cost"]) >= 0.0
-		else Strings.text("CONTENT_COST_UNKNOWN")
 	)
 	for target_id in plan["target_generate_ids"]:
 		_run_graph_node(graph_id, String(target_id))

@@ -182,13 +182,49 @@ static func load_template(template_id: String) -> Dictionary:
 	var parsed: Variant = parser.data
 	if not (parsed is Dictionary):
 		return _failure("template_corrupt", template_id)
-	# JSON numbers arrive as floats; normalize only the exact integral version at the file boundary.
-	if parsed.get("version", null) is float and float(parsed["version"]) == VERSION:
-		parsed["version"] = VERSION
+	_normalize_loaded_integer_fields(parsed)
 	var validation := validate_template(parsed)
 	if not bool(validation.get("ok", false)):
 		return validation
 	return {"ok": true, "template": Dictionary(parsed).duplicate(true)}
+
+
+static func _normalize_loaded_integer_fields(template: Dictionary) -> void:
+	_normalize_integral_key(template, "version")
+	for raw_node in template.get("nodes", []):
+		if not (raw_node is Dictionary):
+			continue
+		var node: Dictionary = raw_node
+		var params: Variant = node.get("params", {})
+		if not (params is Dictionary):
+			continue
+		match String(node.get("type", "")):
+			"object_list":
+				for raw_row in params.get("rows", []):
+					if raw_row is Dictionary:
+						_normalize_integral_key(raw_row, "count")
+			"prompt_preset":
+				var preset: Variant = params.get("preset", {})
+				if preset is Dictionary:
+					_normalize_integral_key(preset, "prompt_preset_version")
+			"ai_generate":
+				_normalize_integral_key(params, "batch_size")
+				_normalize_integral_key(params, "seed")
+			"pixel_cleanup":
+				var settings: Variant = params.get("settings", {})
+				if settings is Dictionary:
+					var detect_grid: Variant = settings.get("detect_grid", {})
+					if detect_grid is Dictionary:
+						_normalize_integral_key(detect_grid, "base_size")
+					var quantize: Variant = settings.get("quantize", {})
+					if quantize is Dictionary:
+						_normalize_integral_key(quantize, "k")
+
+
+static func _normalize_integral_key(target: Dictionary, key: String) -> void:
+	var value: Variant = target.get(key)
+	if value is float and is_equal_approx(value, roundf(value)):
+		target[key] = int(value)
 
 
 static func list_templates(query: String = "") -> Dictionary:

@@ -105,7 +105,7 @@ func test_data_stores_code_args_only() -> void:
 		"provenance":
 		{
 			"operation_code": "generation",
-			"args": {"provider_id": "openai_image", "model_id": "gpt-image-1"},
+			"args": {"provider_id": "openai_image", "model_id": "gpt-image-2"},
 		},
 	}
 	var roundtrip: Dictionary = JSON.parse_string(JSON.stringify(persisted))
@@ -114,7 +114,7 @@ func test_data_stores_code_args_only() -> void:
 	assert_eq(roundtrip["run_state"]["code"], "Failed")
 	assert_eq(roundtrip["project"]["status_code"], "generation_failed")
 	assert_eq(roundtrip["provenance"]["operation_code"], "generation")
-	assert_eq(roundtrip["provenance"]["args"]["model_id"], "gpt-image-1")
+	assert_eq(roundtrip["provenance"]["args"]["model_id"], "gpt-image-2")
 	var stored_json := JSON.stringify(roundtrip)
 	for locale in ["en", "zh_CN"]:
 		for key in ["GEN_ERROR_AUTH_FAILED_REASON", "GEN_ERROR_AUTH_FAILED_NEXT"]:
@@ -131,23 +131,21 @@ func test_data_stores_code_args_only() -> void:
 
 func test_official_names_surrounded_by_localized_copy() -> void:
 	var generation := await _generation_view()
-	var provider_option: OptionButton = generation.find_child("ProviderOption", true, false)
-	var model_option: OptionButton = generation.find_child("ModelOption", true, false)
-	assert_eq(provider_option.get_item_text(0), "OpenAI Image · gpt-image-1")
-	assert_eq(model_option.get_item_text(0), "OpenAI Image · gpt-image-1")
+	var model_value: Label = generation.find_child("ModelValue", true, false)
+	var api_host: Label = generation.find_child("ApiHost", true, false)
+	assert_eq(model_value.text, "GPT Image 2")
+	assert_eq(api_host.text, "api.openai.com")
 	var english := _visible_text(generation)
-	assert_string_contains(english, "Provider")
-	assert_string_contains(english, "Model")
+	assert_string_contains(english, _catalog_text("en", "GEN_CARD_MODEL"))
 
 	LocalizationService.set_language("zh_CN")
 	await wait_process_frames(1)
-	provider_option = generation.find_child("ProviderOption", true, false)
-	model_option = generation.find_child("ModelOption", true, false)
-	assert_eq(provider_option.get_item_text(0), "OpenAI Image · gpt-image-1")
-	assert_eq(model_option.get_item_text(0), "OpenAI Image · gpt-image-1")
+	model_value = generation.find_child("ModelValue", true, false)
+	api_host = generation.find_child("ApiHost", true, false)
+	assert_eq(model_value.text, "GPT Image 2")
+	assert_eq(api_host.text, "api.openai.com")
 	var chinese := _visible_text(generation)
-	assert_string_contains(chinese, "提供方")
-	assert_string_contains(chinese, "模型")
+	assert_string_contains(chinese, _catalog_text("zh_CN", "GEN_CARD_MODEL"))
 	assert_ne(chinese, english, "only official names may remain unchanged")
 
 
@@ -173,8 +171,10 @@ func _surface_snapshot(
 		"provider_settings": provider_dialog.title,
 		"error_dialog": presenter.get_dialog().title,
 		"example": (main.get_node("Root/BottomBar").get_child(0) as Label).text,
-		"tooltip":
-		generation.get_node("BodyScroll/BodyGroups/InputSummaryGroup/InputSource0").tooltip_text,
+		"orientation":
+		generation.get_node("BodyGroups/OrientationGroup/Orientation").get_item_text(
+			generation.get_node("BodyGroups/OrientationGroup/Orientation").selected
+		),
 	}
 
 
@@ -190,14 +190,14 @@ func _assert_expected_surface_text(snapshot: Dictionary, locale: String) -> void
 	)
 	assert_eq(snapshot["error_dialog"], _catalog_text(locale, "GEN_ERROR_TITLE_FAILED"), locale)
 	assert_eq(snapshot["example"], _catalog_text(locale, "STATUS_EXAMPLE_OPENED"), locale)
-	assert_eq(snapshot["tooltip"], _catalog_text(locale, "GEN_CARD_INPUT_JUMP_HINT"), locale)
+	assert_eq(snapshot["orientation"], _catalog_text(locale, "GEN_CARD_ORIENTATION_SQUARE"), locale)
 
 
 func _generation_view() -> Control:
 	var descriptor := {
 		"provider_id": "openai_image",
-		"model_id": "gpt-image-1",
-		"display_name": "OpenAI Image · gpt-image-1",
+		"model_id": "gpt-image-2",
+		"display_name": "GPT Image 2",
 		"capabilities":
 		{
 			"txt2img": true,
@@ -224,15 +224,16 @@ func _generation_view() -> Control:
 		"params":
 		{
 			"provider_id": "openai_image",
-			"model_id": "gpt-image-1",
-			"target_width": 32,
-			"target_height": 32,
+			"model_id": "gpt-image-2",
+			"resolution_preset": "1080p",
+			"orientation": "square",
 			"batch_size": 4,
-			"seed": 7,
+			"seed": -1,
 			"extra": {},
 		},
 		"descriptor": descriptor,
 		"descriptors": [descriptor],
+		"api_host": "api.openai.com",
 		"prompt": "forest shrine",
 		"prefix": "",
 		"rows": [],
@@ -240,7 +241,7 @@ func _generation_view() -> Control:
 		"run": {"state": "Ready", "errors": []},
 	}
 	var view: Control = GenerationCardViewScript.new()
-	view.size = Vector2(400, 520)
+	view.size = Vector2(420, 520)
 	add_child_autofree(view)
 	view.configure(snapshot)
 	await wait_process_frames(1)
@@ -262,7 +263,7 @@ func _output_view() -> Control:
 			)
 		)
 	var view: Control = OutputCardControllerScript.new()
-	view.size = Vector2(600, 488)
+	view.size = Vector2(720, 520)
 	add_child_autofree(view)
 	(
 		view
@@ -281,7 +282,7 @@ func _output_view() -> Control:
 
 func _cleanup_view() -> Control:
 	var view: Control = CleanupCardViewScript.new()
-	view.size = Vector2(420, 680)
+	view.size = Vector2(420, 360)
 	add_child_autofree(view)
 	(
 		view

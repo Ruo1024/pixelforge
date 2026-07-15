@@ -34,7 +34,7 @@ func test_capture_keeps_relative_layout_internal_edges_and_safe_asset_references
 	assert_eq(_by_id(payload["items"], "item_reference")["position"], [0, 220])
 	assert_eq(payload["edges"], [{"from": ["prompt", "text"], "to": ["generate", "prompt"]}])
 	assert_eq(_by_id(payload["nodes"], "reference")["params"]["asset_id"], "asset-safe")
-	assert_eq(_by_id(payload["nodes"], "generate")["params"]["extra"], {"quality": "low"})
+	assert_eq(_by_id(payload["nodes"], "generate")["params"]["extra"], {})
 	assert_false(_by_id(payload["nodes"], "generate").has("execution_status"))
 	assert_false(_by_id(payload["nodes"], "generate")["params"].has("task_id"))
 	assert_false(_by_id(payload["items"], "item_generate").has("progress"))
@@ -149,11 +149,11 @@ func _graph_fixture() -> Dictionary:
 				{
 					"provider_id": "openai_image",
 					"model_id": "gpt-image-2",
-					"target_width": 64,
-					"target_height": 64,
+					"resolution_preset": "1080p",
+					"orientation": "square",
 					"batch_size": 1,
 					"seed": -1,
-					"extra": {"quality": "low"},
+					"extra": {},
 					"task_id": "live-task",
 				},
 				"execution_status": "running",

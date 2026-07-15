@@ -68,11 +68,11 @@ func test_config_only_node_payloads() -> void:
 		{
 			"provider_id": "openai_image",
 			"model_id": "gpt-image-2",
-			"target_width": 32,
-			"target_height": 32,
+			"resolution_preset": "1080p",
+			"orientation": "square",
 			"batch_size": 2,
 			"seed": -1,
-			"extra": {"quality": "low"},
+			"extra": {},
 		}
 	)
 	assert_eq(
@@ -94,7 +94,7 @@ func test_config_only_node_payloads() -> void:
 
 func test_forbids_task_request_progress_raw_headers_response() -> void:
 	var graph := _graph()
-	_node(graph, "generate")["params"]["extra"]["nested"] = {
+	_node(graph, "generate")["params"]["credential_shadow"] = {
 		"Authorization": "Bearer secret",
 		"response_body": {"raw": "private"},
 		"progress_detail": "uploading private prompt",
@@ -150,11 +150,11 @@ func _graph() -> Dictionary:
 				{
 					"provider_id": "openai_image",
 					"model_id": "gpt-image-2",
-					"target_width": 32,
-					"target_height": 32,
+					"resolution_preset": "1080p",
+					"orientation": "square",
 					"batch_size": 2,
 					"seed": -1,
-					"extra": {"quality": "low"},
+					"extra": {},
 					"source_run_id": "run-generate",
 					"request_records": [{"request_id": "request-private"}],
 					"result_slots": [{"slot_id": "slot-private"}],
