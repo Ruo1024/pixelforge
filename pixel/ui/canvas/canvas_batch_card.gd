@@ -29,7 +29,7 @@ var locked := false
 var collapsed := false
 var frame_id: Variant = null
 var display_title := ""
-var requested_size := Vector2i(600, 240)
+var requested_size := Vector2i(720, 520)
 
 var _raw_data := {}
 var _params := {}
@@ -113,7 +113,7 @@ func set_requested_size(value: Variant) -> void:
 
 
 func default_requested_size() -> Vector2i:
-	return Vector2i(600, LayoutScript.natural_height(600, asset_ids.size()))
+	return Vector2i(720, LayoutScript.natural_height(720, asset_ids.size()))
 
 
 func set_display_title(value: Variant) -> void:
@@ -370,7 +370,7 @@ func _display_state() -> String:
 func _card_height() -> int:
 	if collapsed:
 		return CardContract.COLLAPSED_HEIGHT
-	return maxi(requested_size.y, LayoutScript.natural_height(requested_size.x, asset_ids.size()))
+	return requested_size.y
 
 
 func _graph_port_position(index: int, count: int, is_input: bool) -> Vector2:

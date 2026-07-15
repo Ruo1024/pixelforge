@@ -10,6 +10,7 @@ signal action_requested(graph_id: String, node_id: String, action_id: String)
 signal collapsed_change_requested(item_id: String, collapsed: bool)
 signal display_title_change_requested(item_id: String, display_title: String)
 signal size_change_requested(item_id: String, requested_size: Vector2i)
+signal reference_reorder_requested(graph_id: String, node_id: String, asset_ids: Array)
 
 const NodeRegistryScript := preload("res://core/graph/node_registry.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
@@ -21,6 +22,7 @@ const ObjectListEditorScript := preload("res://ui/canvas/object_list_editor.gd")
 const PromptPresetCardViewScript := preload("res://ui/canvas/prompt_preset_card_view.gd")
 const GenerationCardViewScript := preload("res://ui/canvas/generation_card_view.gd")
 const CleanupCardViewScript := preload("res://ui/canvas/cleanup_card_view.gd")
+const MediaTileGridScript := preload("res://ui/canvas/media_tile_grid.gd")
 const CardContract := preload("res://ui/canvas/canvas_card_contract.gd")
 const AppTheme := preload("res://ui/shell/app_theme.gd")
 
@@ -98,6 +100,8 @@ func setup_from_data(data: Dictionary) -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	if not LocalizationService.language_changed.is_connected(_on_language_changed):
 		LocalizationService.language_changed.connect(_on_language_changed)
+	if not SettingsService.developer_mode_changed.is_connected(_on_developer_mode_changed):
+		SettingsService.developer_mode_changed.connect(_on_developer_mode_changed)
 	_prompt_draft_cache = ""
 	_prompt_draft_cached = false
 	_resolve_graph_node()
@@ -812,26 +816,35 @@ func _build_reference_set_controls() -> void:
 	summary.name = "ReferenceSetSummary"
 	summary.text = Strings.text("CONTENT_REFERENCE_SET_ORDER_SUMMARY") % asset_ids.size()
 	_content_root.add_child(summary)
-	var scroll := ScrollContainer.new()
-	scroll.name = "ReferenceSetScroll"
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	var rows := GridContainer.new()
-	rows.name = "ReferenceSetRows"
-	rows.columns = maxi(1, int(floor(float(requested_size.x - 32) / 108.0)))
-	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var grid: Control = MediaTileGridScript.new()
+	grid.name = "ReferenceMediaGrid"
+	grid.custom_minimum_size = Vector2(0, 224)
+	grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var media_items: Array[Dictionary] = []
 	for index in range(asset_ids.size()):
-		rows.add_child(_reference_set_row(asset_ids, index))
+		(
+			media_items
+			. append(
+				{
+					"id": String(asset_ids[index]),
+					"asset_id": String(asset_ids[index]),
+					"status": "reference",
+					"order_label": str(index + 1),
+				}
+			)
+		)
+	grid.configure_items(media_items, false, true, true)
+	grid.reorder_requested.connect(_reorder_reference_set_item.bind(asset_ids))
+	grid.replace_requested.connect(_replace_reference_set_asset.bind(asset_ids))
+	grid.remove_requested.connect(_remove_reference_set_asset.bind(asset_ids))
+	_content_root.add_child(grid)
 	var add_tile := Button.new()
 	add_tile.name = "ReferenceSetAddTile"
 	add_tile.text = Strings.text("ACTION_ADD_REFERENCE")
-	add_tile.custom_minimum_size = Vector2.ONE * AppTheme.REFERENCE_TILE_SIZE
 	add_tile.pressed.connect(
 		func() -> void: action_requested.emit(graph_id, node_id, "import_reference_set")
 	)
-	rows.add_child(add_tile)
-	scroll.add_child(rows)
-	_content_root.add_child(scroll)
+	_content_root.add_child(add_tile)
 	var limit := _reference_limit()
 	var limit_label := Label.new()
 	limit_label.name = "ReferenceSetLimit"
@@ -855,68 +868,32 @@ func _build_reference_set_controls() -> void:
 	_content_root.add_child(add_field)
 
 
-func _reference_set_row(asset_ids: Array, index: int) -> Control:
-	var asset_id := String(asset_ids[index])
-	var row := VBoxContainer.new()
-	row.name = "ReferenceSetRow%d" % index
-	row.custom_minimum_size = Vector2(
-		AppTheme.REFERENCE_TILE_SIZE, AppTheme.REFERENCE_TILE_ROW_HEIGHT
-	)
-	var preview := TextureRect.new()
-	preview.name = "ReferenceSetPreview%d" % index
-	preview.custom_minimum_size = Vector2.ONE * AppTheme.REFERENCE_TILE_SIZE
-	preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	var detail := Label.new()
-	detail.name = "ReferenceSetDetail%d" % index
-	detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	if asset_id.is_empty():
-		detail.text = Strings.text("CONTENT_REFERENCE_NONE")
-	elif not AssetLibrary.has_asset(asset_id):
-		detail.text = Strings.text("CONTENT_REFERENCE_MISSING_FORMAT") % asset_id.left(8)
-	else:
-		var image: Image = AssetLibrary.get_image(asset_id)
-		var meta: Dictionary = AssetLibrary.get_asset_meta(asset_id)
-		if image == null:
-			detail.text = Strings.text("CONTENT_REFERENCE_DECODE_FAILED_FORMAT") % asset_id.left(8)
-		else:
-			preview.texture = ImageTexture.create_from_image(image)
-			detail.text = "%d. %s" % [index + 1, String(meta.get("name", ""))]
-	row.add_child(preview)
-	row.add_child(detail)
-	var field := AssetRefFieldScript.new()
-	field.name = "ReferenceSetField%d" % index
-	field.visible = false
-	field.set_value(asset_id)
-	field.value_changed.connect(_replace_reference_set_item.bind(asset_ids, index))
-	row.add_child(field)
-	var action_row := HBoxContainer.new()
-	for action in ["up", "down", "remove"]:
-		var button := Button.new()
-		button.name = "ReferenceSet%s%d" % [String(action).capitalize(), index]
-		button.text = _reference_action_text(String(action))
-		button.disabled = (
-			(action == "up" and index == 0) or (action == "down" and index == asset_ids.size() - 1)
-		)
-		button.pressed.connect(_change_reference_set_item.bind(asset_ids, index, action))
-		button.visible = false
-		action_row.add_child(button)
-	row.add_child(action_row)
-	var menu := MenuButton.new()
-	menu.name = "ReferenceSetMenu%d" % index
-	menu.text = Strings.text("ACTION_MORE")
-	menu.get_popup().add_item(Strings.text("ACTION_REPLACE"), 0)
-	menu.get_popup().add_item(Strings.text("ACTION_REMOVE"), 1)
-	menu.get_popup().id_pressed.connect(
-		func(action_id: int) -> void:
-			if action_id == 0:
-				action_requested.emit(graph_id, node_id, "replace_reference:%d" % index)
-			else:
-				_change_reference_set_item(asset_ids, index, "remove")
-	)
-	row.add_child(menu)
-	return row
+func _reorder_reference_set_item(
+	dragged_asset_id: String, before_asset_id: String, asset_ids: Array
+) -> void:
+	var updated := asset_ids.duplicate()
+	var source_index := updated.find(dragged_asset_id)
+	if source_index < 0:
+		return
+	updated.remove_at(source_index)
+	var insert_index := updated.find(before_asset_id) if not before_asset_id.is_empty() else -1
+	updated.insert(updated.size() if insert_index < 0 else insert_index, dragged_asset_id)
+	if updated == asset_ids:
+		return
+	reference_reorder_requested.emit(graph_id, node_id, updated.duplicate())
+	params_commit_requested.emit(graph_id, node_id, {"asset_ids": updated})
+
+
+func _replace_reference_set_asset(asset_id: String, asset_ids: Array) -> void:
+	var index := asset_ids.find(asset_id)
+	if index >= 0:
+		action_requested.emit(graph_id, node_id, "replace_reference:%d" % index)
+
+
+func _remove_reference_set_asset(asset_id: String, asset_ids: Array) -> void:
+	var updated := asset_ids.duplicate()
+	updated.erase(asset_id)
+	params_commit_requested.emit(graph_id, node_id, {"asset_ids": updated})
 
 
 func _reference_limit() -> int:
@@ -925,28 +902,6 @@ func _reference_limit() -> int:
 		return 0
 	var capabilities: Dictionary = descriptors[0].get("capabilities", {})
 	return maxi(0, int(capabilities.get("max_reference_images", 0)))
-
-
-func _replace_reference_set_item(asset_id: String, asset_ids: Array, index: int) -> void:
-	var updated := asset_ids.duplicate()
-	updated[index] = asset_id
-	params_commit_requested.emit(graph_id, node_id, {"asset_ids": updated})
-
-
-func _change_reference_set_item(asset_ids: Array, index: int, action: String) -> void:
-	var updated := asset_ids.duplicate()
-	match action:
-		"up":
-			var previous: Variant = updated[index - 1]
-			updated[index - 1] = updated[index]
-			updated[index] = previous
-		"down":
-			var following: Variant = updated[index + 1]
-			updated[index + 1] = updated[index]
-			updated[index] = following
-		"remove":
-			updated.remove_at(index)
-	params_commit_requested.emit(graph_id, node_id, {"asset_ids": updated})
 
 
 func _commit_text_prompt(editor: TextEdit = null) -> void:
@@ -1164,6 +1119,8 @@ func _generation_card_snapshot() -> Dictionary:
 		"params": _params_snapshot.duplicate(true),
 		"descriptor": descriptor,
 		"descriptors": ProviderService.get_selectable_model_descriptors(),
+		"developer_mode": SettingsService.is_developer_mode_enabled(),
+		"api_host": _provider_api_host(String(_params_snapshot.get("provider_id", ""))),
 		"prefix": prefix,
 		"prompt": prompt,
 		"rows": rows,
@@ -1171,6 +1128,20 @@ func _generation_card_snapshot() -> Dictionary:
 		"input_sources": input_sources,
 		"run": {"state": _generation_state().capitalize(), "errors": []},
 	}
+
+
+func _provider_api_host(provider_id: String) -> String:
+	var provider: Variant = ProviderService.get_provider(provider_id)
+	if provider == null or not provider.has_method("get_base_url"):
+		return ""
+	var base_url := String(provider.get_base_url())
+	var without_scheme := base_url.get_slice("://", 1) if "://" in base_url else base_url
+	return without_scheme.get_slice("/", 0)
+
+
+func _on_developer_mode_changed(enabled: bool) -> void:
+	if _generation_view != null and _generation_view.has_method("set_developer_mode"):
+		_generation_view.set_developer_mode(enabled)
 
 
 func _on_generation_card_action(action_id: String, _route: String) -> void:

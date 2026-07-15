@@ -70,7 +70,7 @@ func test_reference_node_card_keeps_missing_id_and_shows_placeholder() -> void:
 	assert_eq(card.get_content_control("ReferenceField").get_value(), "missing-reference-id")
 
 
-func test_reference_set_card_previews_reorders_replaces_removes_and_adds_assets() -> void:
+func test_reference_set_card_uses_shared_large_media_grid_and_stable_asset_actions() -> void:
 	var blue := Image.create(4, 3, false, Image.FORMAT_RGBA8)
 	blue.fill(Color.CORNFLOWER_BLUE)
 	var red := Image.create(3, 4, false, Image.FORMAT_RGBA8)
@@ -100,16 +100,27 @@ func test_reference_set_card_previews_reorders_replaces_removes_and_adds_assets(
 	var card: Node = canvas._add_graph_node_card(
 		graph.id, "references", Vector2.ZERO, "reference_set_card", false
 	)
-	assert_not_null(card.get_content_control("ReferenceSetPreview0").texture)
-	assert_string_contains(card.get_content_control("ReferenceSetDetail1").text, "red")
-	(card.get_content_control("ReferenceSetDown0") as Button).pressed.emit()
+	await wait_process_frames(2)
+	var grid: Control = card.get_content_control("ReferenceMediaGrid")
+	assert_not_null(grid)
+	assert_eq(grid.item_ids(), [blue_id, red_id])
+	assert_eq(grid.loaded_texture_count(), 2)
+	assert_true(grid.request_reorder(red_id, blue_id))
 	assert_eq(commits[-1][2], {"asset_ids": [red_id, blue_id]})
-	(card.get_content_control("ReferenceSetRemove1") as Button).pressed.emit()
+	var red_tile := _tile_for_id(grid, red_id)
+	(red_tile.get_node("Actions/Replace") as Button).pressed.emit()
+	assert_eq(actions[-1], [graph.id, "references", "replace_reference:1"])
+	(red_tile.get_node("Actions/Remove") as Button).pressed.emit()
 	assert_eq(commits[-1][2], {"asset_ids": [blue_id]})
-	card.get_content_control("ReferenceSetField0").set_value_and_emit(red_id)
-	assert_eq(commits[-1][2], {"asset_ids": [red_id, red_id]})
 	card.get_content_control("ReferenceSetAddField").set_value_and_emit(red_id)
 	assert_eq(commits[-1][2], {"asset_ids": [blue_id, red_id, red_id]})
 	var add_field: Control = card.get_content_control("ReferenceSetAddField")
 	(add_field.find_child("ImportButton", true, false) as Button).pressed.emit()
-	assert_eq(actions, [[graph.id, "references", "import_reference_set"]])
+	assert_eq(actions[-1], [graph.id, "references", "import_reference_set"])
+
+
+func _tile_for_id(grid: Control, item_id: String) -> Button:
+	for child in grid.get_children():
+		if child is Button and String(child.get_meta("item_id", "")) == item_id:
+			return child
+	return null

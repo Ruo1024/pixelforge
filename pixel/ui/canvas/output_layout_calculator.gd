@@ -3,18 +3,19 @@ extends RefCounted
 
 ## Pure §10.2 Output geometry. Scrollbar metrics never participate in column width.
 
-const DEFAULT_WIDTH := 600
-const MIN_WIDTH := 360
-const MAX_WIDTH := 960
+const DEFAULT_WIDTH := 720
+const MIN_WIDTH := 520
+const MAX_WIDTH := 1200
 const TOP_RAIL_HEIGHT := 32
 const HORIZONTAL_PADDING := 16
 const VERTICAL_PADDING := 16
 const TILE_GAP := 8
-const MAX_COLUMNS := 4
+const MAX_COLUMNS := 5
 const MAX_VISIBLE_ROWS := 3
-const TILE_MIN := 96
-const TILE_MAX := 176
-const EMPTY_HEIGHT := 240
+const TILE_MIN := 176
+const TILE_TARGET := 224
+const TILE_MAX := 320
+const EMPTY_HEIGHT := 520
 const SCROLLBAR_VISUAL_WIDTH := 4
 const SCROLLBAR_HIT_WIDTH := 12
 
