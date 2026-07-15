@@ -7,11 +7,8 @@ const ContractErrorText := preload("res://services/contract_error_text.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const InfiniteCanvasScript := preload("res://ui/canvas/infinite_canvas.gd")
 const ContextInspectorScript := preload("res://ui/inspector/workspace_context_inspector.gd")
-const TaskScript := preload("res://services/pf_task.gd")
 const AppInfo := preload("res://core/util/app_info.gd")
-const IdUtil := preload("res://core/util/id_util.gd")
 const Log := preload("res://core/util/log_util.gd")
-const Pipeline := preload("res://core/pixel/pipeline.gd")
 const M2ActionController := preload("res://ui/shell/m2_action_controller.gd")
 const M21UiControllerScript := preload("res://ui/shell/m2_1_ui_controller.gd")
 const ZoomOverlayControllerScript := preload("res://ui/shell/canvas_zoom_overlay_controller.gd")
@@ -52,8 +49,6 @@ const DEVELOPER_MODE_BUTTON_WIDTH := 124
 const DEVELOPER_MODE_COMPACT_WIDTH := 68
 const ZOOM_CONTROL_MARGIN := 12
 const FLEXIBLE_WIDTH := 0
-const CLEANUP_RESULT_GAP := 8
-const PREVIEW_OPACITY := 0.56
 
 var _project_filters := PackedStringArray(["*.pxproj ; PixelForge Project"])
 var _interface_scale := 1.0
@@ -68,9 +63,6 @@ var _save_dialog: FileDialog = null
 var _open_dialog: FileDialog = null
 var _recovery_dialog: ConfirmationDialog = null
 var _pending_recovery_path := ""
-var _cleanup_task_id := ""
-var _preview_task_id := ""
-var _preview_token := 0
 var _m2_actions: Variant = null
 var _m2_1_ui: Variant = null
 var _zoom_overlay: RefCounted = null
@@ -604,6 +596,7 @@ func _connect_services() -> void:
 	_canvas.graph_status.connect(_on_canvas_graph_status)
 	_canvas.graph_node_params_commit_requested.connect(_m2_1_ui.apply_graph_node_params)
 	_canvas.graph_node_action_requested.connect(_on_graph_node_action_requested)
+	_cleanup_inspector.params_commit_requested.connect(_m2_1_ui.apply_graph_node_params)
 	_canvas.batch_run_action_requested.connect(_m2_1_ui._handle_batch_run_action)
 	_canvas.batch_face_action_requested.connect(_m2_1_ui.handle_batch_face_action)
 	_canvas.project_resource_dropped.connect(_m2_1_ui._handle_project_resource_drop)
@@ -758,10 +751,6 @@ func _on_canvas_changed() -> void:
 func _on_canvas_selection_changed(selected_ids: Array) -> void:
 	_cleanup_inspector.set_selection_count(selected_ids.size())
 	_context_inspector.show_canvas_selection(_canvas)
-	if selected_ids.size() != 1:
-		_canvas.clear_cleanup_preview()
-	_cancel_preview_task()
-	_sync_manual_grid_overlay()
 
 
 func _on_canvas_graph_connect_failed(reason: String) -> void:
@@ -769,6 +758,9 @@ func _on_canvas_graph_connect_failed(reason: String) -> void:
 
 
 func _on_graph_node_action_requested(graph_id: String, node_id: String, action_id: String) -> void:
+	if action_id == "open_settings":
+		_context_inspector.show_cleanup_node(graph_id, node_id)
+		return
 	_m2_1_ui.handle_graph_node_action(graph_id, node_id, action_id)
 
 
@@ -776,264 +768,6 @@ func _on_canvas_graph_status(event: Dictionary) -> void:
 	var status_text := CanvasGraphStatusPresenter.text(event)
 	if not status_text.is_empty():
 		_status_label.text = status_text
-
-
-func _apply_cleanup_to_selection(params: Dictionary) -> void:
-	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
-	if snapshots.is_empty():
-		_status_label.text = Strings.text("STATUS_CLEANUP_EMPTY")
-		return
-
-	var effective_params := _cleanup_params_with_project_style(params)
-	var task := TaskScript.new(
-		"pixel_cleanup", {"items": snapshots, "params": effective_params}, _cleanup_work
-	)
-	task.finished.connect(_on_cleanup_finished)
-	task.canceled.connect(_on_cleanup_canceled)
-	task.failed.connect(_on_cleanup_failed)
-	task.progress_reported.connect(_on_cleanup_progress)
-	_cleanup_task_id = TaskQueue.submit(task)
-	_cleanup_inspector.set_cleanup_running(true)
-	_status_label.text = Strings.text("STATUS_CLEANUP_QUEUED")
-
-
-func _cleanup_work(task_ref: Variant) -> Dictionary:
-	var items: Array = task_ref.payload["items"]
-	var params: Dictionary = task_ref.payload["params"]
-	var results := []
-	for index in range(items.size()):
-		if task_ref.cancel_requested:
-			return {"canceled": true, "items": results}
-
-		var item: Dictionary = items[index]
-		var pipeline_result := Pipeline.apply(item["image"], params)
-		(
-			results
-			. append(
-				{
-					"source_data": item["data"],
-					"image": pipeline_result["image"],
-					"report": pipeline_result["report"],
-					"params": params,
-				}
-			)
-		)
-		task_ref.report_progress(float(index + 1) / float(items.size()), "cleanup")
-	return {"canceled": false, "items": results}
-
-
-func _on_cleanup_finished(result: Variant) -> void:
-	_cleanup_task_id = ""
-	_cleanup_inspector.set_cleanup_running(false)
-	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
-	if not (result is Dictionary):
-		_status_label.text = Strings.text("STATUS_TASK_FAILED")
-		return
-	if bool(result.get("canceled", false)):
-		_status_label.text = Strings.text("STATUS_CLEANUP_CANCELED")
-		return
-
-	var reports := []
-	for item_result in result.get("items", []):
-		var source_data: Dictionary = item_result["source_data"]
-		var output: Image = item_result["image"]
-		var source_position_data: Array = source_data.get("position", [0, 0])
-		var source_position := Vector2(
-			float(source_position_data[0]), float(source_position_data[1])
-		)
-		var source_width := output.get_width()
-		if AssetLibrary.has_asset(String(source_data.get("asset_id", ""))):
-			var source_image := AssetLibrary.get_image(String(source_data["asset_id"]))
-			if source_image != null:
-				source_width = source_image.get_width()
-
-		var parent_asset_id := String(source_data.get("asset_id", ""))
-		var asset_id := (
-			AssetLibrary
-			. register_image(
-				output,
-				"%s_clean" % parent_asset_id.left(8),
-				{
-					"origin": "edited",
-					"tags": ["cleanup"],
-					"provenance":
-					{
-						"provider": null,
-						"model": null,
-						"prompt": "",
-						"seed": null,
-						"parent_asset": parent_asset_id,
-						"graph_id": null,
-						"created_at": IdUtil.utc_now_iso(),
-						"cleanup":
-						{
-							"source_asset": parent_asset_id,
-							"params": _json_safe(item_result.get("params", {})),
-							"report": _json_safe(item_result.get("report", {})),
-						},
-					},
-				}
-			)
-		)
-		_canvas.add_sprite_item(
-			output, asset_id, source_position + Vector2(source_width + CLEANUP_RESULT_GAP, 0)
-		)
-		reports.append(item_result["report"])
-
-	if not reports.is_empty():
-		_cleanup_inspector.show_report(reports[0])
-	_cleanup_inspector.cancel_pending_preview()
-	_preview_token += 1
-	_cancel_preview_task()
-	_canvas.clear_cleanup_preview()
-	_status_label.text = Strings.text("STATUS_CLEANUP_DONE")
-
-
-func _on_cleanup_progress(_task_id: String, ratio: float, _message: String) -> void:
-	_status_label.text = (
-		Strings.text("STATUS_TASK_RUNNING_FORMAT")
-		% [Strings.text("TASK_CLEANUP"), int(round(ratio * 100.0))]
-	)
-
-
-func _on_cleanup_failed(_error: Dictionary) -> void:
-	_cleanup_task_id = ""
-	_cleanup_inspector.set_cleanup_running(false)
-	_status_label.text = Strings.text("STATUS_TASK_FAILED")
-
-
-func _on_cleanup_canceled() -> void:
-	_cleanup_task_id = ""
-	_cleanup_inspector.set_cleanup_running(false)
-	_cleanup_inspector.set_selection_count(_canvas.get_selected_ids().size())
-	_status_label.text = Strings.text("STATUS_CLEANUP_CANCELED")
-
-
-func _cancel_cleanup_task() -> void:
-	if not _cleanup_task_id.is_empty():
-		TaskQueue.cancel(_cleanup_task_id)
-		return
-	if _m2_actions != null:
-		_m2_actions.cancel_current_task()
-
-
-func _request_cleanup_preview(params: Dictionary) -> void:
-	var snapshots: Array = _canvas.get_selected_sprite_snapshots()
-	if snapshots.size() != 1:
-		_canvas.clear_cleanup_preview()
-		return
-
-	var effective_params := _cleanup_params_with_project_style(params)
-	_cancel_preview_task()
-	_preview_token += 1
-	var preview_token := _preview_token
-	var task := (
-		TaskScript
-		. new(
-			"pixel_cleanup_preview",
-			{
-				"item": snapshots[0],
-				"params": effective_params,
-				"token": preview_token,
-			},
-			_cleanup_preview_work
-		)
-	)
-	task.finished.connect(_on_cleanup_preview_finished)
-	task.canceled.connect(func() -> void: _on_cleanup_preview_canceled(preview_token))
-	task.progress_reported.connect(_on_cleanup_preview_progress)
-	_preview_task_id = TaskQueue.submit(task)
-	_status_label.text = Strings.text("STATUS_PREVIEW_QUEUED")
-
-
-func _cancel_preview_task() -> void:
-	if _preview_task_id.is_empty():
-		return
-	TaskQueue.cancel(_preview_task_id)
-	_preview_task_id = ""
-
-
-func _cleanup_preview_work(task_ref: Variant) -> Dictionary:
-	var item: Dictionary = task_ref.payload["item"]
-	var params: Dictionary = task_ref.payload["params"]
-	task_ref.report_progress(0.05, "preview")
-	var pipeline_result := Pipeline.apply(item["image"], params)
-	if task_ref.cancel_requested:
-		return {"canceled": true, "token": int(task_ref.payload["token"])}
-
-	var source_image: Image = item["image"]
-	var preview_image: Image = pipeline_result["image"]
-	var fitted_preview := _fit_preview_to_source(preview_image, source_image.get_size())
-	task_ref.report_progress(1.0, "preview")
-	return {
-		"canceled": false,
-		"token": int(task_ref.payload["token"]),
-		"item_id": String(item["data"].get("id", "")),
-		"image": fitted_preview,
-		"report": pipeline_result["report"],
-	}
-
-
-func _on_cleanup_preview_finished(result: Variant) -> void:
-	if not (result is Dictionary):
-		_preview_task_id = ""
-		_status_label.text = Strings.text("STATUS_TASK_FAILED")
-		return
-	var token := int(result.get("token", -1))
-	if token == _preview_token:
-		_preview_task_id = ""
-	if bool(result.get("canceled", false)) or token != _preview_token:
-		return
-
-	_canvas.show_cleanup_preview(
-		String(result.get("item_id", "")), result["image"], PREVIEW_OPACITY
-	)
-	_cleanup_inspector.show_report(result.get("report", {}))
-	_status_label.text = Strings.text("STATUS_PREVIEW_DONE")
-
-
-func _on_cleanup_preview_progress(_task_id: String, ratio: float, _message: String) -> void:
-	_status_label.text = Strings.text("STATUS_PREVIEW_RUNNING_FORMAT") % int(round(ratio * 100.0))
-
-
-func _on_cleanup_preview_canceled(token: int) -> void:
-	if token != _preview_token:
-		return
-	_preview_task_id = ""
-	_status_label.text = Strings.text("STATUS_PREVIEW_CANCELED")
-
-
-func _on_manual_grid_changed(active: bool, scale: float, offset: Vector2) -> void:
-	if active:
-		_canvas.show_cleanup_grid_overlay(scale, offset)
-	else:
-		_canvas.hide_cleanup_grid_overlay()
-
-
-func _on_cleanup_grid_changed(scale: float, offset: Vector2) -> void:
-	_cleanup_inspector.set_manual_grid_from_overlay(scale, offset)
-
-
-func _sync_manual_grid_overlay() -> void:
-	var params: Dictionary = _cleanup_inspector.get_params()
-	var detect: Dictionary = params.get(Pipeline.STEP_DETECT_GRID, {})
-	var active := String(detect.get("mode", Pipeline.DETECT_AUTO)) == Pipeline.DETECT_MANUAL
-	_on_manual_grid_changed(
-		active, float(detect.get("scale", 4.0)), detect.get("offset", Vector2.ZERO)
-	)
-
-
-static func _fit_preview_to_source(preview: Image, source_size: Vector2i) -> Image:
-	var fitted := preview.duplicate()
-	if fitted.get_format() != Image.FORMAT_RGBA8:
-		fitted.convert(Image.FORMAT_RGBA8)
-	if fitted.get_size() != source_size:
-		fitted.resize(source_size.x, source_size.y, Image.INTERPOLATE_NEAREST)
-	return fitted
-
-
-func _cleanup_params_with_project_style(params: Dictionary) -> Dictionary:
-	return Pipeline.normalize_params(params)
 
 
 func _export_selected_png() -> void:
@@ -1117,25 +851,3 @@ func _update_window_title() -> void:
 	var window := get_window()
 	if window != null:
 		window.title = title
-
-
-static func _json_safe(value: Variant) -> Variant:
-	match typeof(value):
-		TYPE_DICTIONARY:
-			var output := {}
-			for key in Dictionary(value).keys():
-				output[String(key)] = _json_safe(Dictionary(value)[key])
-			return output
-		TYPE_ARRAY:
-			var output := []
-			for item in Array(value):
-				output.append(_json_safe(item))
-			return output
-		TYPE_VECTOR2:
-			return [value.x, value.y]
-		TYPE_VECTOR2I:
-			return [value.x, value.y]
-		TYPE_COLOR:
-			return Color(value).to_html(true)
-		_:
-			return value

@@ -713,9 +713,6 @@ func _build_cleanup_shell_controls() -> void:
 	_cleanup_view.action_requested.connect(
 		func(action_id: String) -> void: action_requested.emit(graph_id, node_id, action_id)
 	)
-	_cleanup_view.params_commit_requested.connect(
-		func(params: Dictionary) -> void: params_commit_requested.emit(graph_id, node_id, params)
-	)
 	_content_root.add_child(_cleanup_view)
 	_cleanup_view.configure(
 		{

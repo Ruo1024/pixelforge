@@ -27,7 +27,7 @@ func test_generation_card_is_fixed_and_uses_only_presets_orientation_and_count()
 func test_api_settings_and_developer_mode_are_top_bar_actions() -> void:
 	var source := _source("res://ui/shell/main.gd")
 	assert_true(source.contains("ApiSettingsButton"))
-	assert_true(source.contains("DeveloperModeButton"))
+	assert_true(source.contains("DeveloperModeToggle"))
 
 
 func test_prompt_editor_wraps_without_horizontal_scroll() -> void:
@@ -37,14 +37,8 @@ func test_prompt_editor_wraps_without_horizontal_scroll() -> void:
 
 
 func test_style_prompt_has_copy_edit_save_delete_flow() -> void:
-	var source := _source("res://ui/canvas/canvas_node_card.gd")
-	for control_name in [
-		"StylePresetSelector",
-		"StylePresetCopy",
-		"StylePresetEdit",
-		"StylePresetSave",
-		"StylePresetDelete"
-	]:
+	var source := _source("res://ui/canvas/prompt_preset_card_view.gd")
+	for control_name in ["PresetOption", "PresetCopy", "PresetEdit", "PresetSave", "PresetDelete"]:
 		assert_true(source.contains(control_name), control_name)
 
 
@@ -75,7 +69,7 @@ func test_clicked_card_uses_ephemeral_selected_item_layer() -> void:
 	canvas.size = Vector2(640, 480)
 	add_child_autofree(canvas)
 	await wait_process_frames(1)
-	assert_not_null(canvas.get_node_or_null("SelectedItemLayer"))
+	assert_not_null(canvas.get_node_or_null("ItemLayer/SelectedItemLayer"))
 
 
 func test_cost_product_path_is_absent_from_generation_surface_and_coordinator() -> void:

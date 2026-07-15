@@ -1,20 +1,18 @@
-# gdlint: disable=max-returns
 class_name PFCleanupCardView
 extends Control
 
-signal action_requested(action_id: String)
-signal upstream_requested(source_id: String)
-signal params_commit_requested(params: Dictionary)
+## Compact canvas surface for pixel cleanup. Parameters are edited in the
+## workspace inspector; this card remains the only run/cancel entry point.
 
-const DEFAULT_SIZE := Vector2i(420, 680)
-const MIN_SIZE := Vector2i(360, 480)
-const MAX_SIZE := Vector2i(800, 1000)
+signal action_requested(action_id: String)
+
+const DEFAULT_SIZE := Vector2i(420, 360)
+const MIN_SIZE := Vector2i(360, 300)
+const MAX_SIZE := Vector2i(800, 720)
 const HEADER_HEIGHT := 40
 const STATUS_HEIGHT := 32
 const FOOTER_HEIGHT := 56
-const GROUP_IDS := [
-	"run_status", "input_summary", "preset", "grid", "resample", "quantize", "last_report", "footer"
-]
+const GROUP_IDS := ["run_status", "summary", "settings", "footer"]
 
 var _snapshot := {}
 
@@ -50,38 +48,42 @@ func _rebuild() -> void:
 	state.text = _state_text(String(_snapshot.get("run", {}).get("state", "Ready")))
 	status.add_child(state)
 	add_child(status)
-	var scroll := ScrollContainer.new()
-	scroll.name = "BodyScroll"
-	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	scroll.offset_top = STATUS_HEIGHT
-	scroll.offset_bottom = -FOOTER_HEIGHT
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	add_child(scroll)
+
 	var body := VBoxContainer.new()
-	body.name = "BodyGroups"
-	body.custom_minimum_size.x = 0
-	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(body)
-	_build_input(body)
-	_build_group(
-		body, "PresetGroup", "CLEANUP_CARD_GROUP_PRESET", [_text("CLEANUP_CARD_PRESET_HINT")]
+	body.name = "SummaryGroup"
+	body.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	body.offset_top = STATUS_HEIGHT
+	body.offset_bottom = -FOOTER_HEIGHT
+	body.add_theme_constant_override("separation", 8)
+	add_child(body)
+	var params: Dictionary = _snapshot.get("params", {})
+	var settings: Dictionary = params.get("settings", {})
+	var preset := Label.new()
+	preset.name = "PresetSummary"
+	preset.text = (
+		LocalizationService.text("CLEANUP_CARD_PRESET_FORMAT")
+		% String(params.get("preset_id", "—"))
 	)
-	_build_group(body, "GridGroup", "CLEANUP_CARD_GROUP_GRID", [_text("CLEANUP_CARD_GRID_SUMMARY")])
-	_build_group(
-		body,
-		"ResampleGroup",
-		"CLEANUP_CARD_GROUP_RESAMPLE",
-		[_text("CLEANUP_CARD_RESAMPLE_SUMMARY")]
+	preset.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(preset)
+	var input := Label.new()
+	input.name = "InputSummary"
+	var input_snapshot: Dictionary = _snapshot.get("input", {})
+	input.text = (
+		LocalizationService.text("CLEANUP_CARD_INPUT_COUNT") % int(input_snapshot.get("count", 0))
 	)
-	_build_group(
-		body,
-		"QuantizeGroup",
-		"CLEANUP_CARD_GROUP_QUANTIZE",
-		[_text("CLEANUP_CARD_QUANTIZE_SUMMARY")]
-	)
-	_build_group(
-		body, "LastReportGroup", "CLEANUP_CARD_GROUP_REPORT", [_text("CLEANUP_CARD_REPORT_EMPTY")]
-	)
+	body.add_child(input)
+	var details := Label.new()
+	details.name = "SettingsSummary"
+	details.text = _settings_summary(settings)
+	details.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(details)
+	var settings_button := Button.new()
+	settings_button.name = "SettingsButton"
+	settings_button.text = LocalizationService.text("CLEANUP_CARD_ACTION_SETTINGS")
+	settings_button.pressed.connect(func() -> void: action_requested.emit("open_settings"))
+	body.add_child(settings_button)
+
 	var footer := HBoxContainer.new()
 	footer.name = "Footer"
 	footer.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
@@ -95,34 +97,20 @@ func _rebuild() -> void:
 	add_child(footer)
 
 
-func _build_input(parent: VBoxContainer) -> void:
-	var input: Dictionary = _snapshot.get("input", {})
-	var text := (
-		"%s · %s · %s"
+func _settings_summary(settings: Dictionary) -> String:
+	var detect: Dictionary = settings.get("detect_grid", {})
+	var resample: Dictionary = settings.get("resample", {})
+	var quantize: Dictionary = settings.get("quantize", {})
+	return (
+		LocalizationService.text("CLEANUP_CARD_SETTINGS_FORMAT")
 		% [
-			String(input.get("kind", "—")),
-			_text("CLEANUP_CARD_INPUT_COUNT") % int(input.get("count", 0)),
-			String(input.get("target", "—"))
+			String(detect.get("mode", "—")),
+			float(detect.get("scale", 0.0)),
+			String(resample.get("mode", "—")),
+			String(quantize.get("mode", "—")),
+			String(quantize.get("palette_id", "—")),
 		]
 	)
-	_build_group(parent, "InputSummaryGroup", "CLEANUP_CARD_GROUP_INPUT", [text])
-
-
-func _build_group(parent: VBoxContainer, name: String, title_key: String, lines: Array) -> void:
-	var group := VBoxContainer.new()
-	group.name = name
-	var title := Label.new()
-	title.text = _text(title_key)
-	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	group.add_child(title)
-	for line in lines:
-		var label := Label.new()
-		label.text = String(line)
-		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		group.add_child(label)
-	parent.add_child(group)
 
 
 func _footer_action() -> String:
@@ -141,42 +129,8 @@ func _footer_action() -> String:
 func _footer_text() -> String:
 	match _footer_action():
 		"cancel_cleanup":
-			return _text("CLEANUP_CARD_ACTION_CANCEL")
-		"retry_cleanup_interrupted":
-			return _text("CLEANUP_CARD_ACTION_RETRY_INTERRUPTED")
-		_:
-			return _text("CLEANUP_CARD_ACTION_START")
-
-
-func _text(key: String) -> String:
-	match key:
-		"CLEANUP_CARD_GROUP_PRESET":
-			return LocalizationService.text("CLEANUP_CARD_GROUP_PRESET")
-		"CLEANUP_CARD_PRESET_HINT":
-			return LocalizationService.text("CLEANUP_CARD_PRESET_HINT")
-		"CLEANUP_CARD_GROUP_GRID":
-			return LocalizationService.text("CLEANUP_CARD_GROUP_GRID")
-		"CLEANUP_CARD_GRID_SUMMARY":
-			return LocalizationService.text("CLEANUP_CARD_GRID_SUMMARY")
-		"CLEANUP_CARD_GROUP_RESAMPLE":
-			return LocalizationService.text("CLEANUP_CARD_GROUP_RESAMPLE")
-		"CLEANUP_CARD_RESAMPLE_SUMMARY":
-			return LocalizationService.text("CLEANUP_CARD_RESAMPLE_SUMMARY")
-		"CLEANUP_CARD_GROUP_QUANTIZE":
-			return LocalizationService.text("CLEANUP_CARD_GROUP_QUANTIZE")
-		"CLEANUP_CARD_QUANTIZE_SUMMARY":
-			return LocalizationService.text("CLEANUP_CARD_QUANTIZE_SUMMARY")
-		"CLEANUP_CARD_GROUP_REPORT":
-			return LocalizationService.text("CLEANUP_CARD_GROUP_REPORT")
-		"CLEANUP_CARD_REPORT_EMPTY":
-			return LocalizationService.text("CLEANUP_CARD_REPORT_EMPTY")
-		"CLEANUP_CARD_INPUT_COUNT":
-			return LocalizationService.text("CLEANUP_CARD_INPUT_COUNT")
-		"CLEANUP_CARD_GROUP_INPUT":
-			return LocalizationService.text("CLEANUP_CARD_GROUP_INPUT")
-		"CLEANUP_CARD_ACTION_CANCEL":
 			return LocalizationService.text("CLEANUP_CARD_ACTION_CANCEL")
-		"CLEANUP_CARD_ACTION_RETRY_INTERRUPTED":
+		"retry_cleanup_interrupted":
 			return LocalizationService.text("CLEANUP_CARD_ACTION_RETRY_INTERRUPTED")
 		_:
 			return LocalizationService.text("CLEANUP_CARD_ACTION_START")

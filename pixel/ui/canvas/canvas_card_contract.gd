@@ -18,7 +18,7 @@ const DEFAULT_SIZES := {
 	"text_prompt": Vector2i(360, 300),
 	"object_list": Vector2i(400, 520),
 	"prompt_preset": Vector2i(320, 280),
-	"pixel_cleanup": Vector2i(420, 680),
+	"pixel_cleanup": Vector2i(420, 360),
 	"image_input": Vector2i(320, 380),
 	"reference_set": Vector2i(720, 520),
 	"ai_generate": Vector2i(420, 520),
@@ -31,7 +31,7 @@ const MIN_SIZES := {
 	"text_prompt": Vector2i(320, 240),
 	"object_list": Vector2i(360, 360),
 	"prompt_preset": Vector2i(280, 220),
-	"pixel_cleanup": Vector2i(360, 480),
+	"pixel_cleanup": Vector2i(360, 300),
 	"image_input": Vector2i(280, 300),
 	"reference_set": Vector2i(520, 360),
 	"ai_generate": Vector2i(380, 460),
@@ -82,7 +82,7 @@ static func normalize_requested_size(
 	if not _is_number(values[0]) or not _is_number(values[1]):
 		return fallback
 	var minimum := minimum_size_for_type(card_type)
-	var request_max := Vector2i(800, 1000) if card_type == "pixel_cleanup" else REQUEST_MAX
+	var request_max := Vector2i(800, 720) if card_type == "pixel_cleanup" else REQUEST_MAX
 	return Vector2i(
 		clampi(int(round(float(values[0]))), minimum.x, request_max.x),
 		clampi(int(round(float(values[1]))), minimum.y, request_max.y)

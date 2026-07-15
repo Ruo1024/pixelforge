@@ -216,7 +216,7 @@ func test_file_dialog_policy_uses_godot_drawn_dialogs() -> void:
 	dialog.free()
 
 
-func test_cleanup_inspector_keeps_apply_actions_reachable_below_scroll() -> void:
+func test_cleanup_inspector_is_parameter_only_and_scrollable() -> void:
 	var main: Control = MainScript.new()
 	add_child_autofree(main)
 	await wait_process_frames(2)
@@ -228,10 +228,9 @@ func test_cleanup_inspector_keeps_apply_actions_reachable_below_scroll() -> void
 
 	assert_gte(inspector.custom_minimum_size.x, 360.0)
 	assert_not_null(root.get_node("CleanupScroll"))
-	assert_not_null(root.get_node("CleanupActions/ApplyCleanupButton"))
-	assert_eq(
-		root.get_node("CleanupActions/ApplyCleanupButton").get_parent().name, "CleanupActions"
-	)
+	assert_null(root.get_node_or_null("CleanupActions"))
+	assert_null(root.find_child("ApplyCleanupButton", true, false))
+	assert_null(root.find_child("CancelCleanupButton", true, false))
 
 
 func test_selection_tool_buttons_are_hidden_until_selection_actions_are_wired() -> void:
@@ -303,20 +302,11 @@ func test_selected_graph_node_params_are_undoable() -> void:
 	assert_true(
 		controller.apply_graph_node_params(graph_id, "text_prompt", {"text": "four tiny towers"})
 	)
-	assert_eq(
-		_node_data_for_id(ProjectService.get_graph_data(graph_id)["nodes"], "text_prompt")["params"]["text"],
-		"four tiny towers"
-	)
+	assert_eq(_graph_text_param(graph_id), "four tiny towers")
 	assert_true(UndoService.undo())
-	assert_ne(
-		_node_data_for_id(ProjectService.get_graph_data(graph_id)["nodes"], "text_prompt")["params"]["text"],
-		"four tiny towers"
-	)
+	assert_ne(_graph_text_param(graph_id), "four tiny towers")
 	assert_true(UndoService.redo())
-	assert_eq(
-		_node_data_for_id(ProjectService.get_graph_data(graph_id)["nodes"], "text_prompt")["params"]["text"],
-		"four tiny towers"
-	)
+	assert_eq(_graph_text_param(graph_id), "four tiny towers")
 
 
 func test_registry_graph_node_add_is_undoable_with_canvas_card() -> void:
@@ -778,6 +768,11 @@ func _node_data_for_id(nodes: Array, node_id: String) -> Dictionary:
 		if String(data.get("id", "")) == node_id:
 			return data
 	return {}
+
+
+func _graph_text_param(graph_id: String) -> String:
+	var nodes: Array = ProjectService.get_graph_data(graph_id).get("nodes", [])
+	return String(_node_data_for_id(nodes, "text_prompt").get("params", {}).get("text", ""))
 
 
 func _newest_batch_node_except(nodes: Array, excluded_ids: Array) -> Dictionary:

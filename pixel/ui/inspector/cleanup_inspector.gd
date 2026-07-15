@@ -2,13 +2,10 @@
 class_name PFCleanupInspector
 extends PanelContainer
 
-## 像素清洗检查器。
-## UI 只收集参数并展示报告；实际算法由 core/pixel/pipeline.gd 执行。
+## Pixel cleanup graph-node editor. It persists settings through one Undo action;
+## execution remains exclusively on the canvas card footer.
 
-signal apply_requested(params: Dictionary)
-signal preview_requested(params: Dictionary)
-signal cancel_requested
-signal manual_grid_changed(active: bool, scale: float, offset: Vector2)
+signal params_commit_requested(graph_id: String, node_id: String, params: Dictionary)
 signal custom_palettes_changed
 
 const Pipeline := preload("res://core/pixel/pipeline.gd")
@@ -16,12 +13,12 @@ const Resampler := preload("res://core/pixel/resampler.gd")
 const Quantizer := preload("res://core/pixel/quantizer.gd")
 const Ditherer := preload("res://core/pixel/ditherer.gd")
 const PaletteRegistry := preload("res://core/pixel/palette_registry.gd")
+const CleanupPresetRegistry := preload("res://services/cleanup_preset_registry.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const DialogScalePolicy := preload("res://ui/shell/dialog_scale_policy.gd")
 
 const PANEL_WIDTH := 360
 const CONTROL_HEIGHT := 30
-const PREVIEW_DEBOUNCE_SECONDS := 0.3
 const RESAMPLE_LABEL_KEYS := [
 	"CLEANUP_RESAMPLE_MODE",
 	"CLEANUP_RESAMPLE_CENTER",
@@ -69,6 +66,8 @@ const ROW_SEPARATION := 2
 const FLEXIBLE_WIDTH := 0
 
 var _selection_label: Label = null
+var _preset_options: OptionButton = null
+var _base_size_label: Label = null
 var _auto_detect_check: CheckBox = null
 var _resample_check: CheckBox = null
 var _quantize_check: CheckBox = null
@@ -88,9 +87,6 @@ var _strength_slider: HSlider = null
 var _chroma_slider: HSlider = null
 var _density_slider: HSlider = null
 var _report_label: Label = null
-var _apply_button: Button = null
-var _cancel_button: Button = null
-var _preview_timer: Timer = null
 var _palette_import_dialog: FileDialog = null
 var _palette_error_dialog: AcceptDialog = null
 var _palette_ids := []
@@ -99,17 +95,24 @@ var _suppress_param_signal := false
 var _selection_count := 0
 var _last_report := {}
 var _localized_options: Array[OptionButton] = []
+var _preset_ids := []
+var _preset_id := ""
+var _base_size := 32
+var _graph_id := ""
+var _node_id := ""
+var _running := false
+var _controls_root: Control = null
 
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(PANEL_WIDTH, 0)
 	_build_ui()
-	set_selection_count(0)
+	_selection_label.text = Strings.text("CLEANUP_INSPECTOR_NODE_HINT")
 	LocalizationService.language_changed.connect(_on_language_changed)
 
 
 func get_params() -> Dictionary:
-	var offset := Vector2(_offset_x_spin.value, _offset_y_spin.value)
+	var offset := [_offset_x_spin.value, _offset_y_spin.value]
 	return {
 		Pipeline.STEP_DETECT_GRID:
 		{
@@ -118,6 +121,7 @@ func get_params() -> Dictionary:
 			Pipeline.DETECT_AUTO if _auto_detect_check.button_pressed else Pipeline.DETECT_MANUAL,
 			"scale": _scale_spin.value,
 			"offset": offset,
+			"base_size": _base_size,
 		},
 		Pipeline.STEP_RESAMPLE:
 		{
@@ -142,35 +146,41 @@ func get_params() -> Dictionary:
 	}
 
 
+func get_node_params() -> Dictionary:
+	return {"preset_id": _preset_id, "settings": get_params()}
+
+
+func configure_node(
+	graph_id: String, node_id: String, params: Dictionary, running: bool = false
+) -> void:
+	_graph_id = graph_id
+	_node_id = node_id
+	_suppress_param_signal = true
+	var settings_value: Variant = params.get("settings", {})
+	var settings: Dictionary = Dictionary(settings_value) if settings_value is Dictionary else {}
+	_preset_id = String(params.get("preset_id", ""))
+	_apply_settings(settings)
+	_refresh_preset_options(_preset_id)
+	_suppress_param_signal = false
+	_selection_label.text = Strings.text("CLEANUP_INSPECTOR_NODE_HINT")
+	set_cleanup_running(running)
+
+
 func set_selection_count(count: int) -> void:
 	_selection_count = count
 	if _selection_label == null:
 		return
-	_selection_label.text = Strings.text("CLEANUP_SELECTED_FORMAT") % count
-	_apply_button.disabled = count <= 0
-	_schedule_preview()
-	_emit_manual_grid_changed()
+	if _graph_id.is_empty():
+		_selection_label.text = Strings.text("CLEANUP_SELECTED_FORMAT") % count
 
 
 func set_cleanup_running(running: bool) -> void:
-	if _apply_button != null:
-		_apply_button.disabled = running
-	if _cancel_button != null:
-		_cancel_button.disabled = not running
-
-
-func cancel_pending_preview() -> void:
-	if _preview_timer != null:
-		_preview_timer.stop()
-
-
-func set_manual_grid_from_overlay(scale: float, offset: Vector2) -> void:
-	_suppress_param_signal = true
-	_scale_spin.value = scale
-	_offset_x_spin.value = offset.x
-	_offset_y_spin.value = offset.y
-	_suppress_param_signal = false
-	_schedule_preview()
+	_running = running
+	if _controls_root != null:
+		_controls_root.process_mode = (
+			Node.PROCESS_MODE_DISABLED if running else Node.PROCESS_MODE_INHERIT
+		)
+		_controls_root.modulate = Color(1.0, 1.0, 1.0, 0.55 if running else 1.0)
 
 
 func refresh_palette_options(preferred_id: String = "") -> void:
@@ -256,6 +266,12 @@ func _build_ui() -> void:
 	controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	controls.add_theme_constant_override("separation", ROOT_SEPARATION)
 	scroll.add_child(controls)
+	_controls_root = controls
+
+	_preset_options = _make_options([])
+	_preset_options.name = "CleanupPresetOptions"
+	_add_labeled_control(controls, "CLEANUP_CARD_GROUP_PRESET", _preset_options)
+	_refresh_preset_options("")
 
 	_auto_detect_check = _make_check("CLEANUP_AUTO_DETECT", true)
 	_auto_detect_check.name = "AutoDetectCheck"
@@ -268,7 +284,12 @@ func _build_ui() -> void:
 	controls.add_child(_quantize_check)
 
 	_scale_spin = _make_spin(1.0, 64.0, 0.1, 4.0)
+	_scale_spin.name = "ScaleSpin"
 	_add_labeled_control(controls, "CLEANUP_LABEL_SCALE", _scale_spin)
+
+	_base_size_label = Label.new()
+	_base_size_label.name = "BaseSizeReadOnly"
+	_add_labeled_control(controls, "CLEANUP_LABEL_BASE_SIZE", _base_size_label)
 
 	_offset_x_spin = _make_spin(0.0, 64.0, 0.25, 0.0)
 	_add_labeled_control(controls, "CLEANUP_LABEL_OFFSET_X", _offset_x_spin)
@@ -327,33 +348,6 @@ func _build_ui() -> void:
 	_report_label.text = Strings.text("CLEANUP_NO_REPORT")
 	controls.add_child(_report_label)
 
-	var action_row := HBoxContainer.new()
-	action_row.name = "CleanupActions"
-	action_row.add_theme_constant_override("separation", ROOT_SEPARATION)
-	root.add_child(action_row)
-
-	_apply_button = Button.new()
-	_apply_button.name = "ApplyCleanupButton"
-	LocalizationService.bind_control_text(_apply_button, "CLEANUP_APPLY")
-	_apply_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
-	_apply_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_apply_button.pressed.connect(func() -> void: apply_requested.emit(get_params()))
-	action_row.add_child(_apply_button)
-
-	_cancel_button = Button.new()
-	_cancel_button.name = "CancelCleanupButton"
-	LocalizationService.bind_control_text(_cancel_button, "CLEANUP_CANCEL")
-	_cancel_button.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, CONTROL_HEIGHT)
-	_cancel_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_cancel_button.disabled = true
-	_cancel_button.pressed.connect(func() -> void: cancel_requested.emit())
-	action_row.add_child(_cancel_button)
-
-	_preview_timer = Timer.new()
-	_preview_timer.one_shot = true
-	_preview_timer.wait_time = PREVIEW_DEBOUNCE_SECONDS
-	_preview_timer.timeout.connect(func() -> void: preview_requested.emit(get_params()))
-	add_child(_preview_timer)
 	_create_palette_dialogs()
 	_connect_param_controls()
 	_update_quantize_visibility()
@@ -453,7 +447,7 @@ func _on_palette_file_selected(path: String) -> void:
 	var palette: PFPalette = result["palette"]
 	refresh_palette_options(palette.id)
 	custom_palettes_changed.emit()
-	_schedule_preview()
+	_on_params_changed()
 
 
 func _delete_selected_custom_palette() -> void:
@@ -462,7 +456,7 @@ func _delete_selected_custom_palette() -> void:
 		return
 	refresh_palette_options("db32")
 	custom_palettes_changed.emit()
-	_schedule_preview()
+	_on_params_changed()
 
 
 func _show_palette_error(message: String) -> void:
@@ -511,6 +505,7 @@ func _update_quantize_visibility() -> void:
 
 
 func _connect_param_controls() -> void:
+	_preset_options.item_selected.connect(_on_preset_selected)
 	_auto_detect_check.toggled.connect(func(_pressed: bool) -> void: _on_params_changed())
 	_resample_check.toggled.connect(func(_pressed: bool) -> void: _on_params_changed())
 	_quantize_check.toggled.connect(func(_pressed: bool) -> void: _on_params_changed())
@@ -529,11 +524,12 @@ func _connect_param_controls() -> void:
 
 
 func _on_params_changed() -> void:
-	if _suppress_param_signal:
+	if _suppress_param_signal or _running:
 		return
 	_update_quantize_visibility()
-	_schedule_preview()
-	_emit_manual_grid_changed()
+	_preset_id = ""
+	_refresh_preset_options("")
+	_commit_params()
 
 
 func _on_palette_option_selected(index: int) -> void:
@@ -548,20 +544,106 @@ func _on_palette_option_selected(index: int) -> void:
 	_on_params_changed()
 
 
-func _schedule_preview() -> void:
-	if _preview_timer == null:
+func _commit_params() -> void:
+	if _suppress_param_signal or _running or _graph_id.is_empty() or _node_id.is_empty():
 		return
-	_preview_timer.start()
+	params_commit_requested.emit(_graph_id, _node_id, get_node_params())
 
 
-func _emit_manual_grid_changed() -> void:
-	if _auto_detect_check == null:
+func _refresh_preset_options(preferred_id: String) -> void:
+	if _preset_options == null:
 		return
-	manual_grid_changed.emit(
-		not _auto_detect_check.button_pressed,
-		float(_scale_spin.value),
-		Vector2(_offset_x_spin.value, _offset_y_spin.value)
+	_preset_options.clear()
+	_preset_ids.clear()
+	_preset_options.add_item(Strings.text("CLEANUP_PRESET_CUSTOM"))
+	_preset_ids.append("")
+	var registry := CleanupPresetRegistry.new()
+	for preset_id_value in registry.get_preset_ids():
+		var preset_id := String(preset_id_value)
+		var preset := registry.get_preset(preset_id)
+		_preset_options.add_item(_preset_name(preset_id, preset))
+		_preset_ids.append(preset_id)
+	var selected_index := _preset_ids.find(preferred_id)
+	_preset_options.select(maxi(0, selected_index))
+
+
+func _on_preset_selected(index: int) -> void:
+	if _suppress_param_signal or _running:
+		return
+	var safe_index := clampi(index, 0, _preset_ids.size() - 1)
+	var selected_id := String(_preset_ids[safe_index])
+	if selected_id.is_empty():
+		_preset_id = ""
+		_commit_params()
+		return
+	var preset := CleanupPresetRegistry.new().get_preset(selected_id)
+	if preset.is_empty():
+		return
+	_suppress_param_signal = true
+	_preset_id = selected_id
+	_apply_settings(preset.get("settings", {}))
+	_suppress_param_signal = false
+	_commit_params()
+
+
+func _apply_settings(settings: Dictionary) -> void:
+	var detect: Dictionary = settings.get("detect_grid", {})
+	var resample: Dictionary = settings.get("resample", {})
+	var quantize: Dictionary = settings.get("quantize", {})
+	_auto_detect_check.button_pressed = (
+		String(detect.get("mode", Pipeline.DETECT_AUTO)) == Pipeline.DETECT_AUTO
 	)
+	_base_size = int(detect.get("base_size", 32))
+	_base_size_label.text = Strings.text("CLEANUP_PRESET_PRIOR_FORMAT") % _base_size
+	_scale_spin.value = float(detect.get("scale", 4.0))
+	var offset_value: Variant = detect.get("offset", [0.0, 0.0])
+	var offset: Array = (
+		offset_value if offset_value is Array and offset_value.size() == 2 else [0.0, 0.0]
+	)
+	_offset_x_spin.value = float(offset[0])
+	_offset_y_spin.value = float(offset[1])
+	_resample_check.button_pressed = bool(resample.get("enabled", true))
+	_select_option_value(
+		_resample_options, RESAMPLE_VALUES, String(resample.get("mode", Resampler.MODE_MODE))
+	)
+	_quantize_check.button_pressed = bool(quantize.get("enabled", true))
+	_select_option_value(
+		_quantize_options,
+		QUANTIZE_VALUES,
+		String(quantize.get("mode", Quantizer.MODE_FIXED_PALETTE))
+	)
+	_select_option_value(
+		_auto_k_strategy_options,
+		AUTO_K_STRATEGY_VALUES,
+		String(quantize.get("auto_k_strategy", Quantizer.AUTO_K_STRATEGY_MEDIAN_CUT))
+	)
+	refresh_palette_options(String(quantize.get("palette_id", "db32")))
+	_k_spin.value = int(quantize.get("k", 16))
+	_select_option_value(
+		_dither_options, DITHER_VALUES, String(quantize.get("dither", Ditherer.MODE_NONE))
+	)
+	_strength_slider.value = float(quantize.get("dither_strength", 0.0))
+	_chroma_slider.value = float(quantize.get("dither_chroma", 0.0))
+	_density_slider.value = float(quantize.get("dither_density", 1.0))
+	_update_quantize_visibility()
+
+
+func _preset_name(preset_id: String, preset: Dictionary) -> String:
+	match preset_id:
+		"cleanup-hibit":
+			return Strings.text("CLEANUP_PRESET_HIBIT")
+		"cleanup-gb":
+			return Strings.text("CLEANUP_PRESET_GB")
+		"cleanup-hd2d-prop":
+			return Strings.text("CLEANUP_PRESET_HD2D_PROP")
+		"cleanup-1bit":
+			return Strings.text("CLEANUP_PRESET_1BIT")
+		"cleanup-nes":
+			return Strings.text("CLEANUP_PRESET_NES")
+		"cleanup-16bit-db32":
+			return Strings.text("CLEANUP_PRESET_16BIT_DB32")
+		_:
+			return String(preset.get("name", preset_id))
 
 
 func _on_language_changed(_preference: String, _locale: String) -> void:
@@ -570,7 +652,13 @@ func _on_language_changed(_preference: String, _locale: String) -> void:
 		for index in range(mini(options.item_count, label_keys.size())):
 			options.set_item_text(index, _option_text(String(label_keys[index])))
 	_auto_k_strategy_options.tooltip_text = Strings.text("CLEANUP_AUTO_K_TOOLTIP")
-	_selection_label.text = Strings.text("CLEANUP_SELECTED_FORMAT") % _selection_count
+	_selection_label.text = (
+		Strings.text("CLEANUP_INSPECTOR_NODE_HINT")
+		if not _graph_id.is_empty()
+		else Strings.text("CLEANUP_SELECTED_FORMAT") % _selection_count
+	)
+	_refresh_preset_options(_preset_id)
+	_base_size_label.text = Strings.text("CLEANUP_PRESET_PRIOR_FORMAT") % _base_size
 	refresh_palette_options(_selected_palette_id())
 	if _last_report.is_empty():
 		_report_label.text = Strings.text("CLEANUP_NO_REPORT")

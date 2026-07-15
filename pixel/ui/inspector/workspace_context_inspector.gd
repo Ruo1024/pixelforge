@@ -14,6 +14,7 @@ const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
 const CanvasBatchCardScript := preload("res://ui/canvas/canvas_batch_card.gd")
 const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
 const ProjectResourceBrowserScript := preload("res://ui/inspector/project_resource_browser.gd")
+const GraphScript := preload("res://core/graph/pf_graph.gd")
 
 const PANEL_WIDTH := 360
 const CONTENT_GAP := 8
@@ -115,7 +116,7 @@ func show_context(context: Dictionary) -> void:
 	var kind := String(context.get("kind", "none"))
 	var is_graph_node := kind == "node"
 	_graph_summary.visible = is_graph_node or kind == "none"
-	cleanup_inspector.visible = false
+	cleanup_inspector.visible = kind == "cleanup"
 	_candidate_panel.visible = kind == "candidate"
 
 	_title_label.text = String(context.get("title", Strings.text("INSPECTOR_TITLE")))
@@ -141,6 +142,8 @@ func show_canvas_selection(canvas: Control) -> void:
 	var item: Node = canvas._items_by_id.get(String(selected_ids[0]), null)
 	if item == null:
 		show_context({})
+	elif item.get_script() == CanvasNodeCardScript and item._node_type == "pixel_cleanup":
+		show_cleanup_node(String(item.graph_id), String(item.node_id), item)
 	elif item.get_script() == CanvasNodeCardScript:
 		show_context(
 			{
@@ -178,6 +181,37 @@ func _sprite_context(item: Node) -> Dictionary:
 
 func get_cleanup_inspector() -> Control:
 	return cleanup_inspector
+
+
+func show_cleanup_node(graph_id: String, node_id: String, card: Node = null) -> bool:
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	if graph_data.is_empty():
+		return false
+	var graph := GraphScript.from_json(graph_data)
+	var node: PFNode = graph.get_node(node_id)
+	if node == null or node.get_type() != "pixel_cleanup":
+		return false
+	show_context(
+		{
+			"kind": "cleanup",
+			"title": Strings.text("CLEANUP_TITLE"),
+			"type": "pixel_cleanup",
+		}
+	)
+	var running := false
+	if card == null and _canvas != null:
+		for candidate in _canvas._items_by_id.values():
+			if (
+				candidate.get_script() == CanvasNodeCardScript
+				and String(candidate.graph_id) == graph_id
+				and String(candidate.node_id) == node_id
+			):
+				card = candidate
+				break
+	if card != null:
+		running = String(card._generation_state()).to_lower() in ["queued", "running", "canceling"]
+	cleanup_inspector.configure_node(graph_id, node_id, graph.get_node_params(node_id), running)
+	return true
 
 
 func _build_candidate_panel(root: VBoxContainer) -> void:
