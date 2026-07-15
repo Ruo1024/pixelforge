@@ -702,6 +702,28 @@ func _run_bound_graph(graph: PFGraph, selected_node_id: String, action_id: Strin
 	if not edge_errors.is_empty():
 		_status_label.text = _graph_run_failure_status(edge_errors[0])
 		return
+	var passthrough := _reference_passthrough_source(graph, selected_node_id)
+	if not passthrough.is_empty() and action_id == "run":
+		var local_result: Dictionary = (
+			_generation_flow
+			. get_run_coordinator()
+			. run_reference_passthrough(
+				graph, String(passthrough["source_node_id"]), selected_node_id, AssetLibrary
+			)
+		)
+		if not bool(local_result.get("ok", false)):
+			_status_label.text = (
+				Strings.text("STATUS_GRAPH_RUN_FAILED_DETAIL")
+				% String(local_result.get("error", {}).get("code", "invalid_local_passthrough"))
+			)
+			return
+		ProjectService.set_graph_data(graph.id, graph.to_json(), true)
+		_canvas._refresh_graph_batch_card(graph.id, selected_node_id)
+		_status_label.text = (
+			Strings.text("STATUS_REFERENCE_PASSTHROUGH_COMPLETE_FORMAT")
+			% Array(local_result.get("asset_ids", [])).size()
+		)
+		return
 	var cleanup_node_id := _target_cleanup_node_id(graph, selected_node_id)
 	if not cleanup_node_id.is_empty():
 		if action_id in ["retry", "retry_failed"]:
@@ -719,6 +741,21 @@ func _run_bound_graph(graph: PFGraph, selected_node_id: String, action_id: Strin
 		_generation_flow.retry_graph(graph, selected_node_id)
 		return
 	_generation_flow.run_graph(graph, "", "", generate_node_id)
+
+
+func _reference_passthrough_source(graph: PFGraph, selected_node_id: String) -> Dictionary:
+	var selected: PFNode = graph.get_node(selected_node_id)
+	if selected == null or selected.get_type() != "batch":
+		return {}
+	for edge in graph.edges:
+		var from_data: Array = edge.get("from", [])
+		var to_data: Array = edge.get("to", [])
+		if to_data != [selected_node_id, "in"]:
+			continue
+		var source: PFNode = graph.get_node(String(from_data[0]))
+		if source != null and source.get_type() == "reference_set" and from_data[1] == "assets":
+			return {"source_node_id": String(from_data[0])}
+	return {}
 
 
 func edit_selected_graph_node() -> void:

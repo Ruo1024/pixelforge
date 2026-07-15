@@ -6,6 +6,7 @@ const LEGACY_CONTROLLER_PATH := "res://ui/shell/openai_generation_controller.gd"
 const GraphScript := preload("res://core/graph/pf_graph.gd")
 const GenerateNodeScript := preload("res://core/graph/nodes/ai_generate_node.gd")
 const BatchNodeScript := preload("res://core/graph/nodes/batch_node.gd")
+const ReferenceSetNodeScript := preload("res://core/graph/nodes/reference_set_node.gd")
 
 
 class RecordingAssetLibrary:
@@ -23,6 +24,18 @@ class RecordingAssetLibrary:
 		observed_statuses.append(statuses)
 		registered.append({"image": image, "name": name, "metadata": metadata.duplicate(true)})
 		return "asset-%d" % registered.size()
+
+
+class LocalAssetSource:
+	extends RefCounted
+
+	var images := {}
+
+	func has_asset(asset_id: String) -> bool:
+		return images.has(asset_id)
+
+	func get_image(asset_id: String) -> Image:
+		return images.get(asset_id)
 
 
 func test_legacy_adapter_and_old_entries_are_absent() -> void:
@@ -194,6 +207,62 @@ func test_generation_state_transition_matrix_and_cancel_cutoff() -> void:
 	assert_false(coordinator.accepts_business_callback("run-cutoff", 101))
 
 
+func test_reference_passthrough_is_ordered_atomic_and_zero_provider_work() -> void:
+	var coordinator: Variant = _coordinator()
+	var graph := _local_passthrough_graph(["asset-b", "asset-a"])
+	var source := LocalAssetSource.new()
+	source.images = {
+		"asset-a": Image.create(3, 2, false, Image.FORMAT_RGBA8),
+		"asset-b": Image.create(5, 4, false, Image.FORMAT_RGBA8),
+	}
+	var result: Dictionary = coordinator.run_reference_passthrough(
+		graph, "references", "output", source
+	)
+	assert_true(result["ok"])
+	assert_eq(result["kind"], "local_passthrough")
+	assert_eq(result["asset_ids"], ["asset-b", "asset-a"])
+	assert_eq(result["provider_request_count"], 0)
+	assert_eq(result["task_count"], 0)
+	assert_eq(result["network_count"], 0)
+	var params: Dictionary = graph.get_node_params("output")
+	assert_eq(BatchNodeScript.get_visible_asset_ids(params), ["asset-b", "asset-a"])
+	assert_eq(params["request_records"], [])
+	assert_eq(params["input_snapshots"], {})
+	assert_eq(params["result_slots"][0]["source_asset_id"], "asset-b")
+	assert_eq(params["result_slots"][0]["planned_size"], [5, 4])
+	assert_eq(params["result_slots"][0]["asset_id"], "asset-b")
+	assert_true(BatchNodeScript.validate_v2_domain(params)["ok"])
+
+
+func test_reference_passthrough_rejects_missing_duplicate_and_audited_output_atomically() -> void:
+	var coordinator: Variant = _coordinator()
+	var source := LocalAssetSource.new()
+	source.images = {"asset-a": Image.create(2, 2, false, Image.FORMAT_RGBA8)}
+	for asset_ids in [["asset-a", "asset-a"], ["asset-a", "missing"]]:
+		var graph := _local_passthrough_graph(asset_ids)
+		var before: Dictionary = graph.to_json()
+		var rejected: Dictionary = coordinator.run_reference_passthrough(
+			graph, "references", "output", source
+		)
+		assert_false(rejected["ok"])
+		assert_eq(graph.to_json(), before)
+
+	var audited := _local_passthrough_graph(["asset-a"])
+	var prepared: Dictionary = coordinator.prepare_full_run(
+		audited, "generate", "audited-output", _plan("audited", 1)
+	)
+	assert_true(prepared["ok"])
+	audited.edges.erase({"from": ["generate", "assets"], "to": ["audited-output", "in"]})
+	assert_true(audited.add_edge("references", "assets", "audited-output", "in")["ok"])
+	var before_audit := audited.to_json()
+	var rejected_audit: Dictionary = coordinator.run_reference_passthrough(
+		audited, "references", "audited-output", source
+	)
+	assert_false(rejected_audit["ok"])
+	assert_eq(rejected_audit["error"]["code"], "audited_output_requires_blank_target")
+	assert_eq(audited.to_json(), before_audit)
+
+
 func _coordinator() -> Variant:
 	assert_true(ResourceLoader.exists(COORDINATOR_PATH), "B7-4 coordinator must exist")
 	if not ResourceLoader.exists(COORDINATOR_PATH):
@@ -210,6 +279,16 @@ func _graph_with_current_output(with_consumer: bool = false) -> PFGraph:
 	if with_consumer:
 		graph.add_node(BatchNodeScript.new(), "consumer", _standalone_output())
 		assert_true(graph.add_edge("output-old", "assets", "consumer", "in")["ok"])
+	return graph
+
+
+func _local_passthrough_graph(asset_ids: Array) -> PFGraph:
+	var graph := GraphScript.new()
+	graph.id = "graph-local-passthrough"
+	graph.add_node(GenerateNodeScript.new(), "generate", {})
+	graph.add_node(ReferenceSetNodeScript.new(), "references", {"asset_ids": asset_ids})
+	graph.add_node(BatchNodeScript.new(), "output", _standalone_output())
+	assert_true(graph.add_edge("references", "assets", "output", "in")["ok"])
 	return graph
 
 

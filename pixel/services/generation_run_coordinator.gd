@@ -57,6 +57,64 @@ func prepare_retry_preflight(
 	)
 
 
+func run_reference_passthrough(
+	graph: PFGraph, reference_node_id: String, output_node_id: String, asset_source: Variant
+) -> Dictionary:
+	if (
+		graph == null
+		or graph.get_node(reference_node_id) == null
+		or graph.get_node(reference_node_id).get_type() != "reference_set"
+		or graph.get_node(output_node_id) == null
+		or graph.get_node(output_node_id).get_type() != "batch"
+		or not _has_execution_edge(graph, reference_node_id, output_node_id)
+	):
+		return _command_error("invalid_local_passthrough")
+	var output_params := graph.get_node_params(output_node_id)
+	if not output_params.get("request_records", []).is_empty():
+		return _command_error("audited_output_requires_blank_target")
+	var asset_ids: Array = graph.get_node_params(reference_node_id).get("asset_ids", [])
+	var resolved := _validate_local_assets(asset_ids, asset_source)
+	if not bool(resolved.get("ok", false)):
+		return resolved
+	var next_params: Dictionary = output_params.duplicate(true)
+	next_params["input_snapshots"] = {}
+	next_params["request_records"] = []
+	next_params["result_slots"] = []
+	for index in range(asset_ids.size()):
+		var asset_id := String(asset_ids[index])
+		var size: Vector2i = resolved["sizes"][index]
+		(
+			next_params["result_slots"]
+			. append(
+				{
+					"slot_id": "local-%s" % IdUtil.uuid_v4(),
+					"run_id": "",
+					"request_id": "",
+					"source_row_id": "",
+					"source_asset_id": asset_id,
+					"input_snapshot_id": "",
+					"planned_size": [size.x, size.y],
+					"status": "succeeded",
+					"asset_id": asset_id,
+					"detached": false,
+					"unexpected": false,
+					"error": null,
+				}
+			)
+		)
+	if not bool(BatchNodeScript.validate_v2_domain(next_params).get("ok", false)):
+		return _command_error("invalid_local_passthrough")
+	graph.set_node_params(output_node_id, next_params)
+	return {
+		"ok": true,
+		"kind": "local_passthrough",
+		"asset_ids": asset_ids.duplicate(),
+		"provider_request_count": 0,
+		"task_count": 0,
+		"network_count": 0,
+	}
+
+
 func prepare_full_run(
 	graph: PFGraph, source_node_id: String, output_node_id: String, plan: Dictionary
 ) -> Dictionary:
@@ -935,6 +993,36 @@ func _validate_prepare(
 		if String(request.get("run_id", "")) != run_id:
 			return _command_error("mixed_run_plan")
 	return {}
+
+
+func _has_execution_edge(graph: PFGraph, source_node_id: String, output_node_id: String) -> bool:
+	for edge in graph.edges:
+		var from_data: Array = edge.get("from", [])
+		var to_data: Array = edge.get("to", [])
+		if from_data == [source_node_id, "assets"] and to_data == [output_node_id, "in"]:
+			return true
+	return false
+
+
+func _validate_local_assets(asset_ids: Variant, asset_source: Variant) -> Dictionary:
+	if not (asset_ids is Array) or asset_ids.is_empty() or asset_source == null:
+		return _command_error("invalid_local_assets")
+	if not asset_source.has_method("has_asset") or not asset_source.has_method("get_image"):
+		return _command_error("invalid_local_assets")
+	var seen := {}
+	var sizes: Array[Vector2i] = []
+	for value in asset_ids:
+		if not (value is String):
+			return _command_error("invalid_local_assets")
+		var asset_id := String(value)
+		if asset_id.is_empty() or seen.has(asset_id) or not asset_source.has_asset(asset_id):
+			return _command_error("invalid_local_assets")
+		var image: Image = asset_source.get_image(asset_id)
+		if image == null or image.is_empty():
+			return _command_error("invalid_local_assets")
+		seen[asset_id] = true
+		sizes.append(image.get_size())
+	return {"ok": true, "sizes": sizes}
 
 
 func _pending_params(source_node_id: String, plan: Dictionary) -> Dictionary:
