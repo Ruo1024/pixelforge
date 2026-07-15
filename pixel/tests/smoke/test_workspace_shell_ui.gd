@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
 const MainScript := preload("res://ui/shell/main.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const GraphScript := preload("res://core/graph/pf_graph.gd")
+const CanvasNodeCardScript := preload("res://ui/canvas/canvas_node_card.gd")
 
 
 func before_each() -> void:
@@ -256,6 +257,106 @@ func test_context_inspector_shows_cleanup_parameters_for_cleanup_selection() -> 
 	await wait_process_frames(2)
 	assert_true(cleanup.visible)
 	assert_false(context.get_node("ContextRoot/GraphSummary").visible)
+	var graph: Dictionary = ProjectService.current_project.graphs.values()[0]
+	var graph_id := String(graph["id"])
+	context.visible = false
+	main._on_graph_node_action_requested(graph_id, "cleanup", "open_settings")
+	assert_true(context.visible, "cleanup Settings must open the inspector dock")
+	assert_true(cleanup.visible)
+
+	context.visible = false
+	main._on_graph_node_action_requested(graph_id, "prompt_preset", "open_prompt_settings:")
+	assert_true(context.visible, "prompt preset settings must open the inspector dock")
+	assert_true(context.get_node("ContextRoot/PromptPresetInspector").visible)
+	var prompt_card: Node = null
+	for item in canvas._items_by_id.values():
+		if item.get_script() == CanvasNodeCardScript:
+			if item._node_type == "prompt_preset":
+				prompt_card = item
+				break
+	assert_not_null(prompt_card)
+	assert_false(prompt_card.find_child("PresetPrefixEdit", true, false).visible)
+	assert_true(
+		(
+			context
+			. get_node("ContextRoot/PromptPresetInspector")
+			. find_child("PresetPrefixEdit", true, false)
+			. visible
+		)
+	)
+
+
+func test_reference_tile_replace_and_remove_reach_graph_with_undo() -> void:
+	var main := await _make_main()
+	var controller: Node = main.get_node("M21UiController")
+	var flow: Node = main.get_node("M21UiController/ImportFlowController")
+	var canvas: Control = main.get_node("Root/Content/Workspace/InfiniteCanvas")
+	controller.generate_mock_batch()
+	await wait_process_frames(2)
+	var graph: Dictionary = ProjectService.current_project.graphs.values()[0]
+	var graph_id := String(graph["id"])
+	var image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	image.fill(Color.CORNFLOWER_BLUE)
+	var first_id := AssetLibrary.register_image(image, "first", {"origin": "imported"})
+	image.fill(Color.INDIAN_RED)
+	var second_id := AssetLibrary.register_image(image, "second", {"origin": "imported"})
+	image.fill(Color.DARK_SEA_GREEN)
+	var replacement_id := AssetLibrary.register_image(image, "replacement", {"origin": "imported"})
+	assert_true(
+		controller.apply_graph_node_params(
+			graph_id, "reference_set", {"asset_ids": [first_id, second_id]}
+		)
+	)
+	await wait_process_frames(2)
+
+	main._on_graph_node_action_requested(graph_id, "reference_set", "replace_reference:1")
+	assert_eq(
+		flow._reference_target,
+		{
+			"mode": "reference_set",
+			"graph_id": graph_id,
+			"node_id": "reference_set",
+			"replace_index": 1,
+		}
+	)
+	flow._reference_dialog.hide()
+	controller._on_reference_asset_imported(flow._reference_target, replacement_id)
+	assert_eq(
+		_node_data(ProjectService.get_graph_data(graph_id), "reference_set")["params"]["asset_ids"],
+		[first_id, replacement_id]
+	)
+	assert_true(UndoService.undo())
+	await wait_process_frames(2)
+	assert_eq(
+		_node_data(ProjectService.get_graph_data(graph_id), "reference_set")["params"]["asset_ids"],
+		[first_id, second_id]
+	)
+
+	var reference_card: Node = null
+	for item in canvas._items_by_id.values():
+		if item.get_script() == CanvasNodeCardScript:
+			if item._node_type == "reference_set":
+				reference_card = item
+				break
+	assert_not_null(reference_card)
+	var grid: Control = reference_card.get_content_control("ReferenceMediaGrid")
+	var second_tile: Button = null
+	for tile_value in grid._all_tiles:
+		var tile: Button = tile_value
+		if String(tile.get_meta("item_id", "")) == second_id:
+			second_tile = tile
+			break
+	assert_not_null(second_tile)
+	(second_tile.get_node("Actions/Remove") as Button).pressed.emit()
+	assert_eq(
+		_node_data(ProjectService.get_graph_data(graph_id), "reference_set")["params"]["asset_ids"],
+		[first_id]
+	)
+	assert_true(UndoService.undo())
+	assert_eq(
+		_node_data(ProjectService.get_graph_data(graph_id), "reference_set")["params"]["asset_ids"],
+		[first_id, second_id]
+	)
 
 
 func test_navigation_buttons_focus_selected_and_all_canvas_content() -> void:

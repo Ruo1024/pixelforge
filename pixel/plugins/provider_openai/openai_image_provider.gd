@@ -1,3 +1,4 @@
+# gdlint: disable=max-public-methods
 class_name PFOpenAIImageProvider
 extends PFProvider
 
@@ -12,6 +13,9 @@ const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 const PROVIDER_ID := "openai_image"
 const API_VERSION := 2
 const MODEL_ID := "gpt-image-2"
+const DEFAULT_REMOTE_MODEL := "gpt-image-2"
+const API_MODE_IMAGES := "images"
+const API_MODE_CHAT_COMPLETIONS := "chat_completions"
 const DEFAULT_BASE_URL := "https://api.openai.com/v1"
 const GENERATION_URL := DEFAULT_BASE_URL + "/images/generations"
 const EDIT_URL := DEFAULT_BASE_URL + "/images/edits"
@@ -27,6 +31,8 @@ var _request_host: Node = null
 var _http: Node = null
 var _api_key := ""
 var _base_url := DEFAULT_BASE_URL
+var _remote_model := DEFAULT_REMOTE_MODEL
+var _api_mode := API_MODE_IMAGES
 var _generation_url := GENERATION_URL
 var _edit_url := EDIT_URL
 var _validation_url := VALIDATION_URL
@@ -146,6 +152,23 @@ func get_config_schema() -> Array[Dictionary]:
 			"help_key": "OPENAI_FIELD_API_KEY_HELP",
 			"required": true,
 			"default": "",
+		},
+		{
+			"key": "remote_model",
+			"kind": "string",
+			"label_key": "OPENAI_FIELD_REMOTE_MODEL",
+			"help_key": "OPENAI_FIELD_REMOTE_MODEL_HELP",
+			"required": true,
+			"default": DEFAULT_REMOTE_MODEL,
+		},
+		{
+			"key": "api_mode",
+			"kind": "enum",
+			"label_key": "OPENAI_FIELD_API_MODE",
+			"help_key": "OPENAI_FIELD_API_MODE_HELP",
+			"required": true,
+			"default": API_MODE_IMAGES,
+			"values": [API_MODE_IMAGES, API_MODE_CHAT_COMPLETIONS],
 		}
 	]
 
@@ -161,25 +184,39 @@ func attach_request_host(host: Node) -> void:
 func configure(config: Dictionary) -> Variant:
 	for key_value in config.keys():
 		var key := String(key_value)
-		if key not in ["api_key", "base_url"]:
+		if key not in ["api_key", "base_url", "remote_model", "api_mode"]:
 			return {"code": "invalid_request", "field": key, "args": {}}
 	var candidate := String(config.get("api_key", "")).strip_edges()
 	if candidate.is_empty():
 		return {"code": "auth_failed", "field": "api_key", "args": {}}
+	var next_base_url := _base_url
 	if config.has("base_url"):
-		var normalized_base_url := _normalize_base_url(String(config["base_url"]))
-		if normalized_base_url.is_empty():
+		next_base_url = _normalize_base_url(String(config["base_url"]))
+		if next_base_url.is_empty():
 			return {"code": "invalid_request", "field": "base_url", "args": {}}
-		_base_url = normalized_base_url
-		_generation_url = _base_url + "/images/generations"
-		_edit_url = _base_url + "/images/edits"
-		_validation_url = _base_url + "/models/" + MODEL_ID
+	var next_remote_model := String(config.get("remote_model", _remote_model)).strip_edges()
+	if next_remote_model.is_empty() or next_remote_model.length() > 128:
+		return {"code": "invalid_request", "field": "remote_model", "args": {}}
+	var next_api_mode := String(config.get("api_mode", _api_mode)).strip_edges()
+	if next_api_mode not in [API_MODE_IMAGES, API_MODE_CHAT_COMPLETIONS]:
+		return {"code": "invalid_request", "field": "api_mode", "args": {}}
+	_remote_model = next_remote_model
+	if config.has("base_url") or config.has("remote_model") or config.has("api_mode"):
+		_configure_endpoints(next_base_url, next_api_mode)
 	_api_key = candidate
 	return null
 
 
 func get_base_url() -> String:
 	return _base_url
+
+
+func get_remote_model() -> String:
+	return _remote_model
+
+
+func get_api_mode() -> String:
+	return _api_mode
 
 
 func clear_session_config() -> void:
@@ -195,6 +232,23 @@ func has_session_credentials() -> bool:
 func validate_credentials() -> Variant:
 	if not _is_ready_for_request():
 		return null
+	if _api_mode == API_MODE_CHAT_COMPLETIONS:
+		return (
+			_http
+			. request_json(
+				HTTPClient.METHOD_POST,
+				_validation_url,
+				_headers(),
+				build_chat_validation_body(),
+				{
+					"timeout": _request_timeout_seconds,
+					"retries": PING_NETWORK_RETRIES,
+					"max_redirects": 0,
+					"transform": _decode_chat_validation_response,
+					"error_mapper": map_validation_error,
+				}
+			)
+		)
 	return (
 		_http
 		. request_json(
@@ -246,7 +300,25 @@ func _start_generation(request: Dictionary, wrapper: PFProviderTaskV2) -> void:
 	)
 	var references: Array = request["ref_images"]
 	var transport: PFTask
-	if not references.is_empty():
+	if _api_mode == API_MODE_CHAT_COMPLETIONS:
+		transport = (
+			_http
+			. request_json(
+				HTTPClient.METHOD_POST,
+				_generation_url,
+				_headers(),
+				build_chat_request_body(request),
+				{
+					"timeout": _request_timeout_seconds,
+					"retries": MAX_NETWORK_RETRIES,
+					"backoff": RETRY_DELAY_SECONDS,
+					"transform": _decode_chat_generation_response.bind(request),
+					"worker_transform": true,
+					"error_mapper": map_error.bind(request),
+				}
+			)
+		)
+	elif not references.is_empty():
 		var multipart := build_edit_request(request)
 		transport = (
 			_http
@@ -330,12 +402,55 @@ func build_request_body(request: Dictionary) -> Dictionary:
 	var prompt := String(request.get("prompt", "sprite")).strip_edges()
 	var output_size: Array = request.get("provider_output_size", [1024, 1024])
 	return {
-		"model": MODEL_ID,
+		"model": _remote_model,
 		"prompt": prompt,
 		"n": clampi(int(request.get("batch", 1)), 1, MAX_BATCH),
 		"size": "%dx%d" % [output_size[0], output_size[1]],
 		"background": "opaque",
 		"output_format": "png",
+	}
+
+
+func build_chat_validation_body() -> Dictionary:
+	return {
+		"model": _remote_model,
+		"messages": [{"role": "user", "content": "Reply with OK."}],
+		"temperature": 0.0,
+	}
+
+
+func build_chat_request_body(request: Dictionary) -> Dictionary:
+	var output_size: Array = request.get("provider_output_size", [1024, 1024])
+	var prompt := String(request.get("prompt", "sprite")).strip_edges()
+	var content: Variant = prompt
+	var references: Array = request.get("ref_images", [])
+	if not references.is_empty():
+		var parts: Array = [{"type": "text", "text": prompt}]
+		for image_value in references:
+			if image_value is Image:
+				(
+					parts
+					. append(
+						{
+							"type": "image_url",
+							"image_url":
+							{
+								"url":
+								(
+									"data:image/png;base64,%s"
+									% Marshalls.raw_to_base64(image_value.save_png_to_buffer())
+								)
+							},
+						}
+					)
+				)
+		content = parts
+	return {
+		"model": _remote_model,
+		"messages": [{"role": "user", "content": content}],
+		"temperature": 0.7,
+		"n": clampi(int(request.get("batch", 1)), 1, MAX_BATCH),
+		"size": "%dx%d" % [output_size[0], output_size[1]],
 	}
 
 
@@ -406,6 +521,76 @@ func decode_success_payload(payload: Dictionary, request: Dictionary) -> Diction
 	}
 
 
+func _decode_chat_generation_response(response: Dictionary, request: Dictionary) -> Dictionary:
+	var payload: Variant = response.get("body", {})
+	if not (payload is Dictionary):
+		return _failure("ambiguous_result", request)
+	if payload.get("data") is Array:
+		return decode_success_payload(payload, request)
+	var encoded_images: Array[String] = []
+	_collect_chat_image_payloads(payload.get("choices", []), encoded_images)
+	var items := []
+	for index in range(encoded_images.size()):
+		var image := _decode_base64_image(encoded_images[index])
+		if image == null or not _image_matches_request(image, request):
+			items.append(_failed_item(index, request, "ambiguous_result"))
+		else:
+			items.append({"index": index, "image": image, "actual_seed": null, "error": null})
+	return {
+		"request_id": String(request.get("request_id", "")),
+		"items": items,
+		"actual_cost_usd": null,
+		"charge_id": "",
+		"provider_meta": _provider_meta(payload),
+	}
+
+
+func _collect_chat_image_payloads(value: Variant, output: Array[String], depth: int = 0) -> void:
+	if depth > 8:
+		return
+	if value is Array:
+		for item in value:
+			_collect_chat_image_payloads(item, output, depth + 1)
+		return
+	if value is String:
+		var expression := RegEx.new()
+		if expression.compile("data:image/[A-Za-z0-9.+-]+;base64,([A-Za-z0-9+/=]+)") != OK:
+			return
+		for matched in expression.search_all(value):
+			output.append(matched.get_string(1))
+		return
+	if not (value is Dictionary):
+		return
+	var dictionary: Dictionary = value
+	var encoded := String(dictionary.get("b64_json", ""))
+	if not encoded.is_empty():
+		output.append(encoded)
+	for key in ["message", "content", "images", "image_url", "url", "data"]:
+		if dictionary.has(key):
+			_collect_chat_image_payloads(dictionary[key], output, depth + 1)
+
+
+func _decode_base64_image(encoded: String) -> Image:
+	if encoded.is_empty():
+		return null
+	var bytes := Marshalls.base64_to_raw(encoded)
+	var image := Image.new()
+	if image.load_png_from_buffer(bytes) != OK:
+		return null
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	return image
+
+
+func _image_matches_request(image: Image, request: Dictionary) -> bool:
+	var expected_size: Array = request.get("provider_output_size", [])
+	return (
+		expected_size.size() == 2
+		and image.get_width() == int(expected_size[0])
+		and image.get_height() == int(expected_size[1])
+	)
+
+
 func map_error(
 	result: int, status_code: int, detail: Dictionary = {}, request: Dictionary = {}
 ) -> Dictionary:
@@ -474,7 +659,17 @@ func _decode_raw_generation_response(response: Dictionary, request: Dictionary) 
 
 func _decode_validation_response(response: Dictionary) -> Dictionary:
 	var payload: Variant = response.get("body", {})
-	if payload is Dictionary and String(payload.get("id", "")) == MODEL_ID:
+	if payload is Dictionary and String(payload.get("id", "")) == _remote_model:
+		return {"ok": true, "status": "success", "provider_id": PROVIDER_ID}
+	return {"ok": true, "status": "model_unconfirmed", "provider_id": PROVIDER_ID}
+
+
+func _decode_chat_validation_response(response: Dictionary) -> Dictionary:
+	var payload: Variant = response.get("body", {})
+	if not (payload is Dictionary):
+		return {"ok": true, "status": "model_unconfirmed", "provider_id": PROVIDER_ID}
+	var choices: Variant = payload.get("choices", [])
+	if choices is Array and not choices.is_empty():
 		return {"ok": true, "status": "success", "provider_id": PROVIDER_ID}
 	return {"ok": true, "status": "model_unconfirmed", "provider_id": PROVIDER_ID}
 
@@ -520,6 +715,34 @@ func _normalize_base_url(value: String) -> String:
 	if not port.is_empty() and int(port) > 65535:
 		return ""
 	return candidate
+
+
+func _configure_endpoints(base_url: String, requested_mode: String) -> void:
+	_base_url = base_url
+	var root := base_url
+	if base_url.ends_with("/chat/completions"):
+		_api_mode = API_MODE_CHAT_COMPLETIONS
+		_generation_url = base_url
+		_edit_url = base_url
+		_validation_url = base_url
+		return
+	if base_url.ends_with("/images/generations"):
+		_api_mode = API_MODE_IMAGES
+		root = base_url.left(base_url.length() - "/images/generations".length())
+		_generation_url = base_url
+	else:
+		_api_mode = requested_mode
+		_generation_url = (
+			base_url + "/chat/completions"
+			if _api_mode == API_MODE_CHAT_COMPLETIONS
+			else base_url + "/images/generations"
+		)
+	if _api_mode == API_MODE_CHAT_COMPLETIONS:
+		_edit_url = _generation_url
+		_validation_url = _generation_url
+	else:
+		_edit_url = root + "/images/edits"
+		_validation_url = root + "/models/" + _remote_model.uri_encode()
 
 
 func _headers(content_type: String = "application/json") -> PackedStringArray:

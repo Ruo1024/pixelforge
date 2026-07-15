@@ -8,6 +8,7 @@ signal candidate_action_requested(action_id: String, context: Dictionary)
 signal project_resource_activated(resource: Dictionary)
 
 const CleanupInspectorScript := preload("res://ui/inspector/cleanup_inspector.gd")
+const PromptPresetInspectorScript := preload("res://ui/inspector/prompt_preset_inspector.gd")
 const Strings := preload("res://ui/shell/strings.gd")
 const AppTheme := preload("res://ui/shell/app_theme.gd")
 const CanvasItemSpriteScript := preload("res://ui/canvas/canvas_item_sprite.gd")
@@ -48,6 +49,7 @@ const SNAPSHOT_FORBIDDEN_KEY_PARTS: Array[String] = [
 ]
 
 var cleanup_inspector: Control = null
+var prompt_preset_inspector: Control = null
 var project_resource_browser: Control = null
 
 var _title_label: Label = null
@@ -105,6 +107,10 @@ func _ready() -> void:
 	cleanup_inspector.name = "CleanupInspector"
 	cleanup_inspector.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(cleanup_inspector)
+	prompt_preset_inspector = PromptPresetInspectorScript.new()
+	prompt_preset_inspector.name = "PromptPresetInspector"
+	prompt_preset_inspector.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(prompt_preset_inspector)
 
 	show_context({})
 	LocalizationService.language_changed.connect(_on_language_changed)
@@ -117,6 +123,7 @@ func show_context(context: Dictionary) -> void:
 	var is_graph_node := kind == "node"
 	_graph_summary.visible = is_graph_node or kind == "none"
 	cleanup_inspector.visible = kind == "cleanup"
+	prompt_preset_inspector.visible = kind == "prompt_preset"
 	_candidate_panel.visible = kind == "candidate"
 
 	_title_label.text = String(context.get("title", Strings.text("INSPECTOR_TITLE")))
@@ -144,6 +151,8 @@ func show_canvas_selection(canvas: Control) -> void:
 		show_context({})
 	elif item.get_script() == CanvasNodeCardScript and item._node_type == "pixel_cleanup":
 		show_cleanup_node(String(item.graph_id), String(item.node_id), item)
+	elif item.get_script() == CanvasNodeCardScript and item._node_type == "prompt_preset":
+		show_prompt_preset_node(String(item.graph_id), String(item.node_id))
 	elif item.get_script() == CanvasNodeCardScript:
 		show_context(
 			{
@@ -183,6 +192,10 @@ func get_cleanup_inspector() -> Control:
 	return cleanup_inspector
 
 
+func get_prompt_preset_inspector() -> Control:
+	return prompt_preset_inspector
+
+
 func show_cleanup_node(graph_id: String, node_id: String, card: Node = null) -> bool:
 	var graph_data := ProjectService.get_graph_data(graph_id)
 	if graph_data.is_empty():
@@ -211,6 +224,27 @@ func show_cleanup_node(graph_id: String, node_id: String, card: Node = null) -> 
 	if card != null:
 		running = String(card._generation_state()).to_lower() in ["queued", "running", "canceling"]
 	cleanup_inspector.configure_node(graph_id, node_id, graph.get_node_params(node_id), running)
+	return true
+
+
+func show_prompt_preset_node(graph_id: String, node_id: String, intent: String = "") -> bool:
+	var graph_data := ProjectService.get_graph_data(graph_id)
+	if graph_data.is_empty():
+		return false
+	var graph := GraphScript.from_json(graph_data)
+	var node: PFNode = graph.get_node(node_id)
+	if node == null or node.get_type() != "prompt_preset":
+		return false
+	show_context(
+		{
+			"kind": "prompt_preset",
+			"title": Strings.text("NODE_PROMPT_PRESET"),
+			"type": "prompt_preset",
+		}
+	)
+	prompt_preset_inspector.configure_node(
+		graph_id, node_id, graph.get_node_params(node_id), intent
+	)
 	return true
 
 

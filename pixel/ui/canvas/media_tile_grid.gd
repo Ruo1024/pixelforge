@@ -10,6 +10,7 @@ signal replace_requested(item_id: String)
 signal remove_requested(item_id: String)
 
 const Layout := preload("res://ui/canvas/output_layout_calculator.gd")
+const Strings := preload("res://ui/shell/strings.gd")
 const ACTION_MIN_SIZE := Vector2(32, 28)
 const STATE_COLORS := {
 	"queued": Color(0.24, 0.27, 0.32),
@@ -204,12 +205,13 @@ func _acquire_tile() -> Button:
 		return _tile_pool.pop_back()
 	var tile := Button.new()
 	tile.flat = true
+	tile.set_meta("actions_hover_epoch", 0)
 	tile.focus_mode = Control.FOCUS_NONE
 	tile.mouse_filter = Control.MOUSE_FILTER_STOP
 	tile.pressed.connect(_on_tile_pressed.bind(tile))
 	tile.gui_input.connect(_on_tile_input.bind(tile))
 	tile.mouse_entered.connect(_set_tile_actions_visible.bind(tile, true))
-	tile.mouse_exited.connect(_set_tile_actions_visible.bind(tile, false))
+	tile.mouse_exited.connect(_defer_tile_actions_hide.bind(tile))
 	var preview := TextureRect.new()
 	preview.name = "Preview"
 	preview.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -232,9 +234,20 @@ func _acquire_tile() -> Button:
 		var action := Button.new()
 		action.name = String(spec[0])
 		action.text = String(spec[1])
+		action.tooltip_text = (
+			Strings.text("ACTION_REPLACE")
+			if String(spec[0]) == "Replace"
+			else Strings.text("ACTION_REMOVE")
+		)
+		action.focus_mode = Control.FOCUS_NONE
+		action.mouse_filter = Control.MOUSE_FILTER_STOP
 		action.custom_minimum_size = ACTION_MIN_SIZE
 		action.pressed.connect(_on_action_pressed.bind(String(spec[0]), tile))
+		action.mouse_entered.connect(_set_tile_actions_visible.bind(tile, true))
+		action.mouse_exited.connect(_defer_tile_actions_hide.bind(tile))
 		actions.add_child(action)
+	actions.mouse_entered.connect(_set_tile_actions_visible.bind(tile, true))
+	actions.mouse_exited.connect(_defer_tile_actions_hide.bind(tile))
 	tile.add_child(actions)
 	add_child(tile)
 	_all_tiles.append(tile)
@@ -243,6 +256,7 @@ func _acquire_tile() -> Button:
 
 func _configure_tile(tile: Button, index: int) -> void:
 	var item: Dictionary = _items[index]
+	tile.set_meta("actions_hover_epoch", int(tile.get_meta("actions_hover_epoch", 0)) + 1)
 	tile.set_meta("index", index)
 	tile.set_meta("item_id", String(item["id"]))
 	tile.position = item_rect(index).position
@@ -345,7 +359,24 @@ func _on_action_pressed(action_name: String, tile: Button) -> void:
 
 func _set_tile_actions_visible(tile: Button, visible_value: bool) -> void:
 	if tile != null and tile.visible:
+		if visible_value:
+			tile.set_meta("actions_hover_epoch", int(tile.get_meta("actions_hover_epoch", 0)) + 1)
 		tile.get_node("Actions").visible = _actions_enabled and visible_value
+
+
+func _defer_tile_actions_hide(tile: Button) -> void:
+	var hover_epoch := int(tile.get_meta("actions_hover_epoch", 0))
+	call_deferred("_hide_tile_actions_if_pointer_left", tile, hover_epoch)
+
+
+func _hide_tile_actions_if_pointer_left(tile: Button, hover_epoch: int) -> void:
+	if tile == null or not is_instance_valid(tile) or not tile.visible:
+		return
+	if int(tile.get_meta("actions_hover_epoch", 0)) != hover_epoch:
+		return
+	var pointer_inside := Rect2(Vector2.ZERO, tile.size).has_point(tile.get_local_mouse_position())
+	if not pointer_inside:
+		tile.get_node("Actions").visible = false
 
 
 func _target_before_id(local_position: Vector2) -> String:

@@ -106,12 +106,16 @@ func _build_model(parent: VBoxContainer) -> void:
 	var descriptor: Dictionary = _snapshot.get("descriptor", {})
 	var model := Label.new()
 	model.name = "ModelValue"
-	model.text = String(descriptor.get("display_name", "GPT Image 2"))
+	model.text = String(
+		_snapshot.get(
+			"remote_model", descriptor.get("display_name", descriptor.get("model_id", ""))
+		)
+	)
 	model.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	group.add_child(model)
 	var host := Label.new()
 	host.name = "ApiHost"
-	host.text = String(_snapshot.get("api_host", "api.openai.com"))
+	host.text = String(_snapshot.get("api_host", ""))
 	host.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	group.add_child(host)
 

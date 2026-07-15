@@ -1,4 +1,4 @@
-# gdlint: disable=max-public-methods
+# gdlint: disable=max-public-methods,max-file-lines
 class_name PFProviderService
 extends Node
 
@@ -60,6 +60,7 @@ var _validation_states := {}
 var _credential_store: RefCounted = null
 var _automation_mock_enabled := false
 var _verified_config_fingerprints := {}
+var _unconfirmed_config_fingerprints := {}
 
 
 func _ready() -> void:
@@ -127,6 +128,7 @@ func unregister_provider(provider_id: String) -> bool:
 	_providers.erase(provider_id)
 	_validation_states.erase(provider_id)
 	_verified_config_fingerprints.erase(provider_id)
+	_unconfirmed_config_fingerprints.erase(provider_id)
 	return true
 
 
@@ -259,7 +261,23 @@ func save_provider_config(provider_id: String, config: Dictionary) -> Dictionary
 	var configure_error: Variant = provider.configure(effective_config)
 	if configure_error != null:
 		return configure_error
+	var stored_fingerprint := _provider_config_fingerprint(_effective_provider_config(provider_id))
+	var stored_verified := bool(
+		SettingsService.get_setting(_provider_settings_section(provider_id), "validated", false)
+	)
+	var stored_unconfirmed := bool(
+		SettingsService.get_setting(
+			_provider_settings_section(provider_id), "allow_unconfirmed_model", false
+		)
+	)
 	var tested_fingerprint := String(_verified_config_fingerprints.get(provider_id, ""))
+	var tested_unconfirmed_fingerprint := String(
+		_unconfirmed_config_fingerprints.get(provider_id, "")
+	)
+	if tested_fingerprint.is_empty() and stored_verified:
+		tested_fingerprint = stored_fingerprint
+	if tested_unconfirmed_fingerprint.is_empty() and stored_unconfirmed:
+		tested_unconfirmed_fingerprint = stored_fingerprint
 	for field in provider.get_config_schema():
 		var key := String(field.get("key", ""))
 		if key.is_empty() or not config.has(key):
@@ -278,10 +296,18 @@ func save_provider_config(provider_id: String, config: Dictionary) -> Dictionary
 		return configure_error
 	var fingerprint := _provider_config_fingerprint(_effective_provider_config(provider_id))
 	var remains_verified := not fingerprint.is_empty() and tested_fingerprint == fingerprint
+	var allows_unconfirmed := (
+		not fingerprint.is_empty() and tested_unconfirmed_fingerprint == fingerprint
+	)
 	if not remains_verified:
 		_verified_config_fingerprints.erase(provider_id)
+	if not allows_unconfirmed:
+		_unconfirmed_config_fingerprints.erase(provider_id)
 	SettingsService.set_setting(
 		_provider_settings_section(provider_id), "validated", remains_verified
+	)
+	SettingsService.set_setting(
+		_provider_settings_section(provider_id), "allow_unconfirmed_model", allows_unconfirmed
 	)
 	_set_validation_state(
 		provider_id,
@@ -289,7 +315,11 @@ func save_provider_config(provider_id: String, config: Dictionary) -> Dictionary
 		(
 			LocalizationService.text("PROVIDER_PING_SUCCESS", "Connection successful")
 			if remains_verified
-			else _configured_message(provider)
+			else (
+				_unconfirmed_model_message()
+				if allows_unconfirmed
+				else _configured_message(provider)
+			)
 		)
 	)
 	provider_config_changed.emit(provider_id)
@@ -298,6 +328,7 @@ func save_provider_config(provider_id: String, config: Dictionary) -> Dictionary
 
 func restore_provider_config(provider_id: String) -> void:
 	_verified_config_fingerprints.erase(provider_id)
+	_unconfirmed_config_fingerprints.erase(provider_id)
 	_configure_from_storage(provider_id)
 
 
@@ -307,7 +338,11 @@ func delete_provider_credentials(provider_id: String) -> Error:
 	if provider != null and provider.has_method("clear_session_config"):
 		provider.clear_session_config()
 	SettingsService.set_setting(_provider_settings_section(provider_id), "validated", false)
+	SettingsService.set_setting(
+		_provider_settings_section(provider_id), "allow_unconfirmed_model", false
+	)
 	_verified_config_fingerprints.erase(provider_id)
+	_unconfirmed_config_fingerprints.erase(provider_id)
 	_set_validation_state(
 		provider_id,
 		"unconfigured",
@@ -348,22 +383,43 @@ func validate_provider(provider_id: String, draft_config: Dictionary = {}) -> Va
 				outcome = String(result.get("status", "success"))
 			if outcome == "success":
 				_verified_config_fingerprints[provider_id] = fingerprint
-				if not is_draft:
-					SettingsService.set_setting(
-						_provider_settings_section(provider_id), "validated", true
-					)
+				_unconfirmed_config_fingerprints.erase(provider_id)
+			elif outcome == "model_unconfirmed":
+				_verified_config_fingerprints.erase(provider_id)
+				_unconfirmed_config_fingerprints[provider_id] = fingerprint
 			else:
 				_verified_config_fingerprints.erase(provider_id)
+				_unconfirmed_config_fingerprints.erase(provider_id)
+			if not is_draft:
+				SettingsService.set_setting(
+					_provider_settings_section(provider_id), "validated", outcome == "success"
+				)
+				SettingsService.set_setting(
+					_provider_settings_section(provider_id),
+					"allow_unconfirmed_model",
+					outcome == "model_unconfirmed"
+				)
 			_set_validation_outcome(provider_id, outcome)
 	)
 	task.failed.connect(
 		func(error: Dictionary) -> void:
+			var outcome := String(error.get("code", "protocol_error"))
+			var model_unconfirmed := outcome == "model_unconfirmed"
 			if not is_draft:
 				SettingsService.set_setting(
 					_provider_settings_section(provider_id), "validated", false
 				)
+				SettingsService.set_setting(
+					_provider_settings_section(provider_id),
+					"allow_unconfirmed_model",
+					model_unconfirmed
+				)
 			_verified_config_fingerprints.erase(provider_id)
-			_set_validation_outcome(provider_id, String(error.get("code", "protocol_error")))
+			if model_unconfirmed:
+				_unconfirmed_config_fingerprints[provider_id] = fingerprint
+			else:
+				_unconfirmed_config_fingerprints.erase(provider_id)
+			_set_validation_outcome(provider_id, outcome)
 	)
 	task.canceled.connect(
 		func() -> void:
@@ -455,7 +511,21 @@ func _configure_from_storage(provider_id: String) -> Variant:
 				LocalizationService.text("PROVIDER_STATUS_VERIFIED", "Credentials verified")
 			)
 		else:
-			_set_validation_state(provider_id, "configured", _configured_message(provider))
+			_set_validation_state(
+				provider_id,
+				"configured",
+				(
+					_unconfirmed_model_message()
+					if bool(
+						SettingsService.get_setting(
+							_provider_settings_section(provider_id),
+							"allow_unconfirmed_model",
+							false
+						)
+					)
+					else _configured_message(provider)
+				)
+			)
 	return error
 
 
@@ -512,14 +582,7 @@ func _set_validation_outcome(provider_id: String, outcome: String) -> void:
 				LocalizationService.text("PROVIDER_PING_AUTH_FAILED", "Authentication failed")
 			)
 		"model_unconfirmed":
-			_set_validation_state(
-				provider_id,
-				"configured",
-				LocalizationService.text(
-					"PROVIDER_PING_MODEL_UNCONFIRMED",
-					"Service reached, but the model could not be confirmed"
-				)
-			)
+			_set_validation_state(provider_id, "configured", _unconfirmed_model_message(false))
 		"rate_limited":
 			_set_validation_state(
 				provider_id,
@@ -563,7 +626,34 @@ func _provider_can_generate(provider_id: String) -> bool:
 	if provider == null:
 		return false
 	var state := get_validation_state(provider_id)
-	return state == "verified" or (state == "configured" and not _safe_validation(provider))
+	return (
+		state == "verified"
+		or (
+			state == "configured"
+			and (
+				not _safe_validation(provider)
+				or bool(
+					SettingsService.get_setting(
+						_provider_settings_section(provider_id), "allow_unconfirmed_model", false
+					)
+				)
+			)
+		)
+	)
+
+
+func _unconfirmed_model_message(usable: bool = true) -> String:
+	return (
+		LocalizationService.text(
+			"PROVIDER_PING_MODEL_UNCONFIRMED_USABLE",
+			"Service reached; the configured model was not listed, but generation is enabled"
+		)
+		if usable
+		else LocalizationService.text(
+			"PROVIDER_PING_MODEL_UNCONFIRMED",
+			"Service reached, but the configured model could not be confirmed"
+		)
+	)
 
 
 func _configured_message(provider: PFProvider) -> String:

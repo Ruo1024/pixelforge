@@ -698,7 +698,12 @@ func _build_prompt_preset_controls() -> void:
 	_prompt_preset_view = PromptPresetCardViewScript.new()
 	_prompt_preset_view.name = "PromptPresetCardView"
 	_prompt_preset_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_prompt_preset_view.set_compact_mode(true)
 	_prompt_preset_view.preset_commit_requested.connect(_commit_prompt_preset)
+	_prompt_preset_view.inspector_requested.connect(
+		func(intent: String) -> void:
+			action_requested.emit(graph_id, node_id, "open_prompt_settings:%s" % intent)
+	)
 	_prompt_preset_view.configure(preset)
 	_content_root.add_child(_prompt_preset_view)
 
@@ -1119,6 +1124,7 @@ func _generation_card_snapshot() -> Dictionary:
 		"descriptors": ProviderService.get_selectable_model_descriptors(),
 		"developer_mode": SettingsService.is_developer_mode_enabled(),
 		"api_host": _provider_api_host(String(_params_snapshot.get("provider_id", ""))),
+		"remote_model": _provider_remote_model(String(_params_snapshot.get("provider_id", ""))),
 		"prefix": prefix,
 		"prompt": prompt,
 		"rows": rows,
@@ -1135,6 +1141,14 @@ func _provider_api_host(provider_id: String) -> String:
 	var base_url := String(provider.get_base_url())
 	var without_scheme := base_url.get_slice("://", 1) if "://" in base_url else base_url
 	return without_scheme.get_slice("/", 0)
+
+
+func _provider_remote_model(provider_id: String) -> String:
+	var provider: Variant = ProviderService.get_provider(provider_id)
+	if provider != null and provider.has_method("get_remote_model"):
+		return String(provider.get_remote_model())
+	var descriptor := ProviderService.get_model_descriptor(provider_id)
+	return String(descriptor.get("display_name", descriptor.get("model_id", "")))
 
 
 func _on_developer_mode_changed(enabled: bool) -> void:

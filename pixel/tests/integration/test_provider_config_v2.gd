@@ -106,6 +106,23 @@ func test_exact_config_schema() -> void:
 				"help_key": "OPENAI_FIELD_API_KEY_HELP",
 				"required": true,
 				"default": "",
+			},
+			{
+				"key": "remote_model",
+				"kind": "string",
+				"label_key": "OPENAI_FIELD_REMOTE_MODEL",
+				"help_key": "OPENAI_FIELD_REMOTE_MODEL_HELP",
+				"required": true,
+				"default": "gpt-image-2",
+			},
+			{
+				"key": "api_mode",
+				"kind": "enum",
+				"label_key": "OPENAI_FIELD_API_MODE",
+				"help_key": "OPENAI_FIELD_API_MODE_HELP",
+				"required": true,
+				"default": "images",
+				"values": ["images", "chat_completions"],
 			}
 		]
 	)

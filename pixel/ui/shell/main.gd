@@ -581,6 +581,9 @@ func _connect_services() -> void:
 	_canvas.graph_node_params_commit_requested.connect(_m2_1_ui.apply_graph_node_params)
 	_canvas.graph_node_action_requested.connect(_on_graph_node_action_requested)
 	_cleanup_inspector.params_commit_requested.connect(_m2_1_ui.apply_graph_node_params)
+	_context_inspector.prompt_preset_inspector.params_commit_requested.connect(
+		_m2_1_ui.apply_graph_node_params
+	)
 	_canvas.batch_run_action_requested.connect(_m2_1_ui._handle_batch_run_action)
 	_canvas.batch_face_action_requested.connect(_m2_1_ui.handle_batch_face_action)
 	_canvas.project_resource_dropped.connect(_m2_1_ui._handle_project_resource_drop)
@@ -743,9 +746,20 @@ func _on_canvas_graph_connect_failed(reason: String) -> void:
 
 func _on_graph_node_action_requested(graph_id: String, node_id: String, action_id: String) -> void:
 	if action_id == "open_settings":
-		_context_inspector.show_cleanup_node(graph_id, node_id)
+		if _context_inspector.show_cleanup_node(graph_id, node_id):
+			_show_context_inspector()
+		return
+	if action_id.begins_with("open_prompt_settings:"):
+		var intent := action_id.trim_prefix("open_prompt_settings:")
+		if _context_inspector.show_prompt_preset_node(graph_id, node_id, intent):
+			_show_context_inspector()
 		return
 	_m2_1_ui.handle_graph_node_action(graph_id, node_id, action_id)
+
+
+func _show_context_inspector() -> void:
+	_context_inspector.visible = true
+	_context_inspector.get_parent().queue_sort()
 
 
 func _on_canvas_graph_status(event: Dictionary) -> void:

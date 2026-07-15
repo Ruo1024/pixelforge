@@ -40,6 +40,7 @@ class Handler(BaseHTTPRequestHandler):
     comfy_prompt = {}
     comfy_interrupts = 0
     openai_edit = {}
+    openai_chat = {}
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
         parsed_path = urlparse(self.path)
@@ -107,6 +108,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, Handler.comfy_prompt)
         elif self.path == "/last-openai-edit":
             self._json(200, Handler.openai_edit)
+        elif self.path == "/last-openai-chat":
+            self._json(200, Handler.openai_chat)
         elif self.path.startswith("/history/"):
             prompt_id = self.path.rsplit("/", 1)[-1]
             if prompt_id == "comfy-slow":
@@ -225,6 +228,36 @@ class Handler(BaseHTTPRequestHandler):
                     "fixture_reference_sha256s": reference_hashes,
                 },
             })
+        elif request_path.endswith("/chat/completions"):
+            Handler.openai_chat = request_body
+            messages = request_body.get("messages", [])
+            requested_size = request_body.get("size", "")
+            size_match = re.fullmatch(r"(\d+)x(\d+)", requested_size)
+            if not size_match:
+                self._json(200, {
+                    "model": request_body.get("model", ""),
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}}],
+                })
+            else:
+                width, height = int(size_match.group(1)), int(size_match.group(2))
+                pixel = _solid_png_base64(width, height)
+                image_count = max(1, min(4, int(request_body.get("n", 1))))
+                self._json(200, {
+                    "model": request_body.get("model", ""),
+                    "choices": [
+                        {
+                            "index": index,
+                            "message": {
+                                "role": "assistant",
+                                "content": [{
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/png;base64,{pixel}"},
+                                }],
+                            },
+                        }
+                        for index in range(image_count)
+                    ],
+                })
         elif self.path == "/auth":
             self._json(401, {"error": "bad credentials"})
         elif self.path in {"/rate-limit", "/post-rate-limit"}:

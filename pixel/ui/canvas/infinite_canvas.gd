@@ -1429,8 +1429,14 @@ func _finish_left_interaction(screen_position: Vector2) -> void:
 		elif not reason.is_empty():
 			graph_connect_failed.emit(reason)
 	elif _selection.is_dragging_items:
-		_commit_drag_if_needed()
+		var reference_target := _drop_dragged_sprites_into_reference_set(
+			screen_to_world(screen_position)
+		)
+		if reference_target.is_empty():
+			_commit_drag_if_needed()
 		_selection.stop_drag()
+		if not reference_target.is_empty():
+			_select_only([reference_target])
 	elif not _resize_drag.is_empty():
 		_commit_resize_drag()
 	elif _selection.is_box_selecting:
@@ -1511,6 +1517,72 @@ func _drag_selected_to(world_position: Vector2) -> void:
 				item.position = (_selection.drag_start_positions[item_id] + delta).round()
 	_sync_cleanup_grid_overlay()
 	queue_redraw()
+
+
+func _drop_dragged_sprites_into_reference_set(world_position: Vector2) -> String:
+	var target := _reference_set_card_at(world_position)
+	if target == null:
+		return ""
+	var dropped_asset_ids: Array[String] = []
+	for item_id in _selection.get_selected_ids():
+		var item: Node = _items_by_id.get(String(item_id), null)
+		if item == null or item.get_script() != CanvasItemSpriteScript:
+			continue
+		var asset_id := String(item.asset_id)
+		if (
+			not asset_id.is_empty()
+			and AssetLibrary.has_asset(asset_id)
+			and not dropped_asset_ids.has(asset_id)
+		):
+			dropped_asset_ids.append(asset_id)
+	if dropped_asset_ids.is_empty():
+		return ""
+	var existing := _graph_node_asset_ids(String(target.graph_id), String(target.node_id))
+	var updated := existing.duplicate()
+	for asset_id in dropped_asset_ids:
+		if not updated.has(asset_id):
+			updated.append(asset_id)
+	if updated == existing:
+		return ""
+	_apply_positions(_selection.drag_start_positions)
+	graph_node_params_commit_requested.emit(
+		String(target.graph_id), String(target.node_id), {"asset_ids": updated}
+	)
+	(
+		graph_status
+		. emit(
+			{
+				"type": "references_added",
+				"graph_id": String(target.graph_id),
+				"node_id": String(target.node_id),
+				"count": updated.size() - existing.size(),
+			}
+		)
+	)
+	return String(target.item_id)
+
+
+func _reference_set_card_at(world_position: Vector2) -> Node:
+	var result: Node = null
+	for item in _items_by_id.values():
+		if (
+			item.get_script() != CanvasNodeCardScript
+			or String(item._node_type) != "reference_set"
+			or not item.visible
+			or not item.get_canvas_bounds().has_point(world_position)
+		):
+			continue
+		if result == null or item.z_index > result.z_index:
+			result = item
+	return result
+
+
+func _graph_node_asset_ids(graph_id: String, node_id: String) -> Array:
+	var graph_data: Dictionary = ProjectService.get_graph_data(graph_id)
+	for node_value in graph_data.get("nodes", []):
+		if node_value is Dictionary and String(node_value.get("id", "")) == node_id:
+			return Array(node_value.get("params", {}).get("asset_ids", [])).duplicate()
+	return []
 
 
 func _commit_drag_if_needed() -> void:

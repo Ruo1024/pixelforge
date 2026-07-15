@@ -21,7 +21,10 @@ func before_each() -> void:
 	_base_url = OS.get_environment("PF_HTTP_MOCK_URL")
 	assert_false(_base_url.is_empty(), "network tests must use the local fixture server")
 	SettingsService.set_setting("provider_openai_image", "base_url", "https://api.openai.com/v1")
+	SettingsService.set_setting("provider_openai_image", "remote_model", "gpt-image-2")
+	SettingsService.set_setting("provider_openai_image", "api_mode", "images")
 	SettingsService.set_setting("provider_openai_image", "validated", false)
+	SettingsService.set_setting("provider_openai_image", "allow_unconfirmed_model", false)
 	SettingsService.set_developer_mode_enabled(false)
 	_queue = get_tree().root.get_node("TaskQueue")
 	_queue.clear()
@@ -37,7 +40,10 @@ func before_each() -> void:
 func after_each() -> void:
 	SettingsService.set_developer_mode_enabled(false)
 	SettingsService.set_setting("provider_openai_image", "base_url", "https://api.openai.com/v1")
+	SettingsService.set_setting("provider_openai_image", "remote_model", "gpt-image-2")
+	SettingsService.set_setting("provider_openai_image", "api_mode", "images")
 	SettingsService.set_setting("provider_openai_image", "validated", false)
+	SettingsService.set_setting("provider_openai_image", "allow_unconfirmed_model", false)
 	_remove_test_credentials()
 
 
@@ -52,8 +58,12 @@ func test_dialog_tests_draft_then_saves_base_url_and_encrypted_key() -> void:
 
 	var base_url_edit := dialog.get_field_control("base_url") as LineEdit
 	var key_edit := dialog.get_field_control("api_key") as LineEdit
+	var model_edit := dialog.get_field_control("remote_model") as LineEdit
+	var api_mode := dialog.get_field_control("api_mode") as OptionButton
 	assert_not_null(base_url_edit)
 	assert_not_null(key_edit)
+	assert_not_null(model_edit)
+	assert_not_null(api_mode)
 	assert_eq(dialog.cancel_button_text, LocalizationService.text("ACTION_CANCEL"))
 	assert_eq(base_url_edit.text, "https://api.openai.com/v1")
 	base_url_edit.text = _base_url + "/ping-sentinel"
@@ -71,12 +81,14 @@ func test_dialog_tests_draft_then_saves_base_url_and_encrypted_key() -> void:
 	)
 	assert_false(FileAccess.file_exists(TEST_PATH), "testing a draft must not persist its key")
 
-	var result: Dictionary = dialog.save_current_config()
-	assert_true(result["ok"])
+	dialog.confirmed.emit()
+	assert_eq(dialog._status_label.text, LocalizationService.text("PROVIDER_SETTINGS_SAVED"))
 	assert_eq(
 		_service.get_provider_config("openai_image")["base_url"], _base_url + "/ping-sentinel"
 	)
 	assert_true(_service.get_provider_config("openai_image")["api_key_saved"])
+	assert_eq(_service.get_provider_config("openai_image")["remote_model"], "gpt-image-2")
+	assert_eq(_service.get_provider_config("openai_image")["api_mode"], "images")
 	assert_false(SentinelScanner.file_contains(TEST_PATH, SECRET_SENTINEL))
 	assert_ne(SettingsService.get_setting("provider_openai_image", "api_key", ""), SECRET_SENTINEL)
 	assert_false(SentinelScanner.file_contains(log_path, SECRET_SENTINEL, log_offset))
@@ -93,6 +105,102 @@ func test_dialog_tests_draft_then_saves_base_url_and_encrypted_key() -> void:
 			)
 		)
 	)
+
+
+func test_chat_completions_relay_uses_saved_address_model_and_local_mock() -> void:
+	var dialog: PFProviderSettingsDialog = ProviderSettingsDialogScript.new()
+	dialog.set_services(_service, _queue)
+	add_child_autofree(dialog)
+	await wait_process_frames(1)
+	var base_url_edit := dialog.get_field_control("base_url") as LineEdit
+	var mode_control := dialog.get_field_control("api_mode") as OptionButton
+	base_url_edit.text = _base_url + "/v1/chat/completions"
+	base_url_edit.text_changed.emit(base_url_edit.text)
+	assert_eq(mode_control.get_item_metadata(mode_control.selected), "chat_completions")
+
+	var config := {
+		"base_url": _base_url + "/v1/chat/completions",
+		"remote_model": "relay-image-model-v2",
+		"api_mode": "chat_completions",
+		"api_key": SECRET_SENTINEL,
+	}
+	var validation: Variant = _service.validate_provider("openai_image", config)
+	assert_not_null(validation)
+	_queue.submit(validation)
+	assert_true(await _wait_for_validation_terminal())
+	assert_eq(_service.get_validation_state("openai_image"), "verified")
+	assert_true(_service.save_provider_config("openai_image", config)["ok"])
+	assert_eq(_provider.get_base_url(), _base_url + "/v1/chat/completions")
+	assert_eq(_provider.get_remote_model(), "relay-image-model-v2")
+	assert_eq(_provider.get_api_mode(), "chat_completions")
+	assert_true(_service.get_selectable_provider_ids().has("openai_image"))
+
+	var request := _chat_request()
+	var body := _provider.build_chat_request_body(request)
+	assert_eq(body["model"], "relay-image-model-v2")
+	assert_eq(body["messages"][0]["role"], "user")
+	assert_eq(body["messages"][0]["content"], request["prompt"])
+	assert_eq(body["n"], 2)
+	assert_eq(body["size"], "16x16")
+	var generation: PFProviderTaskV2 = _provider.generate(request)
+	var outcome := {"status": "pending", "value": null}
+	generation.completed.connect(
+		func(result: Dictionary) -> void:
+			outcome["status"] = "completed"
+			outcome["value"] = result
+	)
+	generation.failed.connect(
+		func(error: Dictionary) -> void:
+			outcome["status"] = "failed"
+			outcome["value"] = error
+	)
+	assert_true(await _wait_until(func() -> bool: return outcome["status"] != "pending"))
+	assert_eq(outcome["status"], "completed")
+	assert_eq(outcome["value"]["items"].size(), 2)
+	assert_true(
+		outcome["value"]["items"].all(
+			func(item: Dictionary) -> bool: return item["image"].get_size() == Vector2i(16, 16)
+		)
+	)
+
+
+func test_reachable_unlisted_model_can_be_saved_and_selected() -> void:
+	var config := {
+		"base_url": _base_url + "/ping-model-unconfirmed",
+		"remote_model": "relay-private-image-model",
+		"api_mode": "images",
+		"api_key": SECRET_SENTINEL,
+	}
+	var validation: Variant = _service.validate_provider("openai_image", config)
+	assert_not_null(validation)
+	_queue.submit(validation)
+	assert_true(await _wait_for_validation_terminal())
+	assert_eq(_service.get_validation_state("openai_image"), "configured")
+	assert_true(_service.save_provider_config("openai_image", config)["ok"])
+	assert_true(
+		bool(SettingsService.get_setting("provider_openai_image", "allow_unconfirmed_model", false))
+	)
+	assert_true(_service.get_selectable_provider_ids().has("openai_image"))
+	assert_eq(
+		_service.get_validation_message("openai_image"),
+		LocalizationService.text("PROVIDER_PING_MODEL_UNCONFIRMED_USABLE")
+	)
+	_service._unconfirmed_config_fingerprints.clear()
+	assert_true(
+		(
+			_service
+			. save_provider_config(
+				"openai_image",
+				{
+					"base_url": config["base_url"],
+					"remote_model": config["remote_model"],
+					"api_mode": config["api_mode"],
+					"api_key": "",
+				}
+			)["ok"]
+		)
+	)
+	assert_true(_service.get_selectable_provider_ids().has("openai_image"))
 
 
 func test_ping_statuses_are_distinct_single_attempt_and_local_only() -> void:
@@ -241,6 +349,35 @@ func _wait_for_validation_terminal(timeout_seconds: float = 2.0) -> bool:
 		await wait_seconds(0.02)
 		elapsed += 0.02
 	return false
+
+
+func _wait_until(predicate: Callable, timeout_seconds: float = 2.0) -> bool:
+	var elapsed := 0.0
+	while elapsed < timeout_seconds:
+		if predicate.call():
+			return true
+		await wait_seconds(0.02)
+		elapsed += 0.02
+	return false
+
+
+func _chat_request() -> Dictionary:
+	return {
+		"run_id": "chat-run",
+		"request_id": "chat-request",
+		"idempotency_key": "chat-idempotency",
+		"provider_id": "openai_image",
+		"mode": "txt2img",
+		"model_id": "gpt-image-2",
+		"prompt": "a tiny pixel shrine",
+		"target_width": 16,
+		"target_height": 16,
+		"provider_output_size": [16, 16],
+		"batch": 2,
+		"seed": -1,
+		"ref_images": [],
+		"extra": {},
+	}
 
 
 func _remove_test_credentials() -> void:

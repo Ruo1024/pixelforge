@@ -107,12 +107,19 @@ PROMPT-PRESETS.md。新节点默认嵌入 prompt-16bit-db32。
 
 旧 style_preset、style 端口、prompt_template、provider_hints 与 negative prompt
 均不存在。卡片继续使用 Beta 0.6 的默认 320x280、最小 280x220、最大
-1600x1200，并保留标题、尺寸、复制与 Undo。
+1600x1200，并保留标题、尺寸、复制与 Undo。画布卡片只保留预设选择、来源与动作；
+新建、编辑、重命名及 prefix 输入全部在右侧检查器完成。点击画布卡片上的这些动作必须
+自动打开检查器，不得在卡片下方保留第二套隐藏编辑器。
 
 ### 4.4 image_input / reference_set
 
 image_input.params.asset_id 必须是单一 String；reference_set.params.asset_ids
 必须是有序 String 数组。执行只解析项目素材，不接受绝对路径。
+
+Reference Set 卡片接受把画布中已选图片组拖入卡片：只取有效 sprite 的 asset id，按
+当前选择顺序追加，跳过组内重复和目标中已有 id；源图片位置保持不变，整组写入是一次
+Graph 参数 Undo，完成后选中目标卡片。卡片缩略图的替换与删除必须走同一参数提交/Undo
+链；悬浮动作区从缩略图移入按钮时不得反复显隐。
 
 协调器在网络前把每个 id 解析为 RGBA8 Image 和内容 SHA-256，顺序必须一致。
 缺失、损坏或超出模型上限返回字段级 validation issue，网络请求数为 0。
@@ -139,6 +146,8 @@ params 固定为：
   orientation=square、batch_size=4、seed=-1、extra={}；
 - resolution_preset 只允许 720p/1080p/2K/4K，orientation 只允许
   landscape/portrait/square；
+- 生成卡把 orientation 用户可见地显示为 `16:9 横向 / 9:16 纵向 / 1:1 正方形`
+  （英文等价文案），但 Graph 仍只保存上述三个稳定枚举；
 - 无 subjects 时 batch_size=1..16；有 subjects 时数量由有效行 count 总和决定；
 - MAX_RESULTS_PER_RUN=16，在 Output、slot、队列和网络前拒绝超限；5..16 张还必须先
   完成用户确认，取消时项目和队列不变；

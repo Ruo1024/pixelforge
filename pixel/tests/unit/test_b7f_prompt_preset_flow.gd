@@ -103,6 +103,19 @@ func test_read_only_edit_copies_first_then_save_updates_user_library_and_node_sn
 	assert_false(view.has_unsaved_changes())
 
 
+func test_compact_canvas_card_routes_editing_to_the_right_inspector() -> void:
+	var view := await _view(_builtin_preset())
+	view.set_compact_mode(true)
+	var intents := []
+	view.inspector_requested.connect(func(intent: String) -> void: intents.append(intent))
+	assert_false(view.find_child("PresetNameEdit", true, false).visible)
+	assert_false(view.find_child("PresetPrefixEdit", true, false).visible)
+	(view.find_child("PresetNew", true, false) as Button).pressed.emit()
+	(view.find_child("PresetEdit", true, false) as Button).pressed.emit()
+	assert_eq(intents, ["new", "edit"])
+	assert_eq(view.get_current_preset(), _builtin_preset())
+
+
 func test_user_new_copy_rename_copy_text_and_delete_keep_node_snapshot() -> void:
 	var view := await _view(_builtin_preset())
 	var commits := []
@@ -246,7 +259,7 @@ func test_plugin_selection_is_read_only_and_edit_derives_user_copy() -> void:
 	assert_false(commits[-1].has("name_key"))
 
 
-func test_canvas_card_refresh_keeps_user_preset_draft_focus_and_same_lod_identity() -> void:
+func test_canvas_card_routes_user_preset_edit_to_inspector_and_keeps_same_lod_identity() -> void:
 	var user: Dictionary = Library.create_user_preset("Card user", "stored prefix")["preset"]
 	(
 		ProjectService
@@ -278,18 +291,23 @@ func test_canvas_card_refresh_keeps_user_preset_draft_focus_and_same_lod_identit
 	add_child_autofree(card)
 	await wait_process_frames(2)
 	var commits := []
+	var actions := []
 	card.params_commit_requested.connect(
 		func(_graph_id: String, _node_id: String, params: Dictionary) -> void:
 			commits.append(params.duplicate(true))
+	)
+	card.action_requested.connect(
+		func(graph_id: String, node_id: String, action_id: String) -> void:
+			actions.append([graph_id, node_id, action_id])
 	)
 	var content: Control = card.get_node("Content")
 	var view: Control = card.get_content_control("PromptPresetCardView")
 	(card.get_content_control("PresetEdit") as Button).pressed.emit()
 	var prefix_edit: TextEdit = card.get_content_control("PresetPrefixEdit")
-	prefix_edit.text = "uncommitted card draft"
-	prefix_edit.text_changed.emit()
-	prefix_edit.grab_focus()
 	await wait_process_frames(1)
+	assert_eq(actions, [["style_graph", "style", "open_prompt_settings:edit"]])
+	assert_false(prefix_edit.visible)
+	assert_false(prefix_edit.editable)
 	card.set_lod_camera_zoom(1.5)
 	assert_same(card.get_node("Content"), content)
 	assert_same(card.get_content_control("PromptPresetCardView"), view)
@@ -300,14 +318,13 @@ func test_canvas_card_refresh_keeps_user_preset_draft_focus_and_same_lod_identit
 	var replacement_view: Control = card.get_content_control("PromptPresetCardView")
 	var replacement_prefix: TextEdit = card.get_content_control("PresetPrefixEdit")
 	assert_ne(replacement_view, view)
-	assert_true(replacement_view.has_unsaved_changes())
-	assert_eq(replacement_prefix.text, "uncommitted card draft")
-	assert_true(replacement_prefix.has_focus())
+	assert_false(replacement_view.has_unsaved_changes())
+	assert_false(replacement_prefix.visible)
 	assert_true(card.get_content_control("PromptPresetScroll").has_meta("_pf_scroll_owner_wired"))
 	assert_true(commits.is_empty())
 
 
-func test_read_only_edit_survives_synchronous_canvas_card_commit_refresh() -> void:
+func test_read_only_canvas_card_opens_inspector_without_creating_hidden_copy() -> void:
 	(
 		ProjectService
 		. set_graph_data(
@@ -345,6 +362,7 @@ func test_read_only_edit_survives_synchronous_canvas_card_commit_refresh() -> vo
 	add_child_autofree(card)
 	await wait_process_frames(2)
 	var commits := []
+	var actions := []
 	card.params_commit_requested.connect(
 		func(graph_id: String, node_id: String, params: Dictionary) -> void:
 			commits.append(params.duplicate(true))
@@ -356,17 +374,19 @@ func test_read_only_edit_survives_synchronous_canvas_card_commit_refresh() -> vo
 			ProjectService.set_graph_data(graph_id, graph, true)
 			card.refresh_from_graph()
 	)
+	card.action_requested.connect(
+		func(graph_id: String, node_id: String, action_id: String) -> void:
+			actions.append([graph_id, node_id, action_id])
+	)
 
 	(card.get_content_control("PresetEdit") as Button).pressed.emit()
 	await wait_process_frames(2)
 
-	assert_eq(commits.size(), 1)
-	assert_true(commits[0]["preset"].has("name"))
-	assert_false(commits[0]["preset"].has("name_key"))
-	assert_true(card.get_content_control("PresetNameEdit").visible)
-	assert_true((card.get_content_control("PresetPrefixEdit") as TextEdit).editable)
-	assert_true((card.get_content_control("PresetPrefixEdit") as TextEdit).has_focus())
-	assert_false(card.get_content_control("PresetEdit").visible)
+	assert_true(commits.is_empty())
+	assert_eq(actions, [["style_refresh_graph", "style", "open_prompt_settings:edit"]])
+	assert_false(card.get_content_control("PresetNameEdit").visible)
+	assert_false(card.get_content_control("PresetPrefixEdit").visible)
+	assert_true(card.get_content_control("PresetEdit").visible)
 
 
 func test_runtime_injects_nonempty_snapshot_prefix_once_and_omits_empty_prefix() -> void:

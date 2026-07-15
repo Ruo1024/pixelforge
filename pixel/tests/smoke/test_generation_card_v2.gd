@@ -29,6 +29,12 @@ func test_compact_fixed_surface_has_no_retired_controls_or_internal_scroll() -> 
 	assert_eq(count.value, 4.0)
 	assert_eq(GenerationCardViewScript.DEFAULT_SIZE, Vector2i(420, 520))
 	assert_eq(GenerationCardViewScript.MIN_SIZE, Vector2i(380, 460))
+	var orientation_group: HBoxContainer = view.find_child("OrientationGroup", true, false)
+	assert_eq(orientation_group.get_child(0).text, "Aspect ratio")
+	var ratio_options: OptionButton = view.find_child("Orientation", true, false)
+	assert_eq(ratio_options.get_item_text(0), "16:9 · Landscape")
+	assert_eq(ratio_options.get_item_text(1), "9:16 · Portrait")
+	assert_eq(ratio_options.get_item_text(2), "1:1 · Square")
 
 
 func test_developer_prompt_preview_defaults_hidden_and_reuses_prompt_builder() -> void:

@@ -3,6 +3,7 @@ extends Control
 
 signal preset_commit_requested(preset: Dictionary)
 signal text_copy_requested(text: String)
+signal inspector_requested(intent: String)
 
 const Library := preload("res://services/prompt_preset_library.gd")
 const Strings := preload("res://ui/shell/strings.gd")
@@ -19,9 +20,11 @@ var _pending_preset := {}
 var _status_key := ""
 var _suppress_changes := false
 var _last_editor_focus := &""
+var _compact_mode := false
 
 var _option: OptionButton = null
 var _source_label: Label = null
+var _prefix_label: Label = null
 var _name_edit: LineEdit = null
 var _prefix_edit: TextEdit = null
 var _status_label: Label = null
@@ -53,6 +56,25 @@ func configure(preset: Dictionary) -> void:
 	if is_inside_tree():
 		_rebuild_entries()
 		_sync_controls()
+
+
+func set_compact_mode(enabled: bool) -> void:
+	_compact_mode = enabled
+	if is_inside_tree():
+		_sync_controls()
+
+
+func begin_action(intent: String) -> bool:
+	match intent:
+		"new":
+			_create_new()
+		"edit":
+			_edit_current()
+		"rename":
+			_rename_current()
+		_:
+			return false
+	return true
 
 
 func get_current_preset() -> Dictionary:
@@ -156,9 +178,9 @@ func _build() -> void:
 	_name_edit.gui_input.connect(_on_editor_input)
 	_name_edit.focus_entered.connect(func() -> void: _last_editor_focus = &"name")
 	body.add_child(_name_edit)
-	var prefix_label := Label.new()
-	prefix_label.text = Strings.text("STYLE_PROMPT_PREFIX")
-	body.add_child(prefix_label)
+	_prefix_label = Label.new()
+	_prefix_label.text = Strings.text("STYLE_PROMPT_PREFIX")
+	body.add_child(_prefix_label)
 	_prefix_edit = TextEdit.new()
 	_prefix_edit.name = "PresetPrefixEdit"
 	_prefix_edit.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, PREFIX_MIN_HEIGHT)
@@ -173,16 +195,16 @@ func _build() -> void:
 	var actions := HFlowContainer.new()
 	actions.name = "PresetActions"
 	_new_button = _action_button(
-		actions, "PresetNew", Strings.text("STYLE_PROMPT_ACTION_NEW"), _create_new
+		actions, "PresetNew", Strings.text("STYLE_PROMPT_ACTION_NEW"), _request_new
 	)
 	_copy_button = _action_button(
 		actions, "PresetCopy", Strings.text("STYLE_PROMPT_ACTION_COPY"), _copy_current
 	)
 	_edit_button = _action_button(
-		actions, "PresetEdit", Strings.text("STYLE_PROMPT_ACTION_EDIT"), _edit_current
+		actions, "PresetEdit", Strings.text("STYLE_PROMPT_ACTION_EDIT"), _request_edit
 	)
 	_rename_button = _action_button(
-		actions, "PresetRename", Strings.text("ACTION_RENAME"), _rename_current
+		actions, "PresetRename", Strings.text("ACTION_RENAME"), _request_rename
 	)
 	_save_button = _action_button(
 		actions, "PresetSave", Strings.text("ACTION_SAVE"), _save_button_pressed
@@ -263,20 +285,43 @@ func _sync_controls() -> void:
 	var entry := _current_entry()
 	var source := String(entry.get("source", "snapshot"))
 	_source_label.text = (Strings.text("STYLE_PROMPT_SOURCE_FORMAT") % _source_text(source))
-	_name_edit.visible = _editing
+	_name_edit.visible = _editing and not _compact_mode
 	_name_edit.text = _draft_name
+	_prefix_label.visible = not _compact_mode
+	_prefix_edit.visible = not _compact_mode
 	_prefix_edit.editable = _editing
 	_prefix_edit.text = _draft_prefix if _editing else String(_current_preset.get("prefix", ""))
 	_new_button.visible = not _editing
 	_copy_button.visible = not _editing
 	_edit_button.visible = not _editing
 	_rename_button.visible = not _editing and source == "user"
-	_save_button.visible = _editing
+	_save_button.visible = _editing and not _compact_mode
 	_save_button.disabled = _draft_name.strip_edges().is_empty()
 	_delete_button.visible = not _editing and source == "user"
 	_copy_text_button.visible = not _editing
 	_status_label.text = _status_text()
 	_suppress_changes = false
+
+
+func _request_new() -> void:
+	if _compact_mode:
+		inspector_requested.emit("new")
+	else:
+		_create_new()
+
+
+func _request_edit() -> void:
+	if _compact_mode:
+		inspector_requested.emit("edit")
+	else:
+		_edit_current()
+
+
+func _request_rename() -> void:
+	if _compact_mode:
+		inspector_requested.emit("rename")
+	else:
+		_rename_current()
 
 
 func _sync_option_selection() -> void:

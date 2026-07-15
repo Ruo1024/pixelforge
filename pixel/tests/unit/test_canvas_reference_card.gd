@@ -108,6 +108,18 @@ func test_reference_set_card_uses_shared_large_media_grid_and_stable_asset_actio
 	assert_true(grid.request_reorder(red_id, blue_id))
 	assert_eq(commits[-1][2], {"asset_ids": [red_id, blue_id]})
 	var red_tile := _tile_for_id(grid, red_id)
+	var action_bar: Control = red_tile.get_node("Actions")
+	red_tile.mouse_entered.emit()
+	assert_true(action_bar.visible)
+	red_tile.mouse_exited.emit()
+	action_bar.mouse_entered.emit()
+	await wait_process_frames(1)
+	assert_true(
+		action_bar.visible, "moving from a tile into its actions must not flicker them away"
+	)
+	assert_eq(
+		(red_tile.get_node("Actions/Replace") as Button).mouse_filter, Control.MOUSE_FILTER_STOP
+	)
 	(red_tile.get_node("Actions/Replace") as Button).pressed.emit()
 	assert_eq(actions[-1], [graph.id, "references", "replace_reference:1"])
 	(red_tile.get_node("Actions/Remove") as Button).pressed.emit()
@@ -117,6 +129,47 @@ func test_reference_set_card_uses_shared_large_media_grid_and_stable_asset_actio
 	var add_field: Control = card.get_content_control("ReferenceSetAddField")
 	(add_field.find_child("ImportButton", true, false) as Button).pressed.emit()
 	assert_eq(actions[-1], [graph.id, "references", "import_reference_set"])
+
+
+func test_dragging_canvas_image_group_into_reference_set_appends_in_selection_order() -> void:
+	var first_image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	first_image.fill(Color.DARK_ORANGE)
+	var second_image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	second_image.fill(Color.DARK_SEA_GREEN)
+	var first_asset := AssetLibrary.register_image(first_image, "first", {"origin": "imported"})
+	var second_asset := AssetLibrary.register_image(second_image, "second", {"origin": "imported"})
+	var graph := GraphScript.new()
+	graph.id = "graph_reference_drop"
+	graph.add_node(ReferenceSetNodeScript.new(), "references", {"asset_ids": []}, Vector2.ZERO)
+	ProjectService.set_graph_data(graph.id, graph.to_json(), false)
+	var canvas: Control = CanvasScript.new()
+	canvas.size = Vector2(1200, 800)
+	add_child_autofree(canvas)
+	await wait_process_frames(2)
+	var card: Node = canvas._add_graph_node_card(
+		graph.id, "references", Vector2.ZERO, "reference_drop_card", false
+	)
+	var first: Node = canvas.add_sprite_item(
+		first_image, first_asset, Vector2(-320, 0), "first_sprite", false
+	)
+	var second: Node = canvas.add_sprite_item(
+		second_image, second_asset, Vector2(-240, 0), "second_sprite", false
+	)
+	canvas.select_ids([first.item_id, second.item_id])
+	var before := {first.item_id: first.position, second.item_id: second.position}
+	canvas._selection.start_drag(first.position, before)
+	var commits := []
+	canvas.graph_node_params_commit_requested.connect(
+		func(graph_id: String, node_id: String, params: Dictionary) -> void:
+			commits.append([graph_id, node_id, params])
+	)
+	var drop_world: Vector2 = card.position + Vector2(120, 120)
+	canvas._drag_selected_to(drop_world)
+	canvas._finish_left_interaction(canvas.world_to_screen(drop_world))
+	assert_eq(commits, [[graph.id, "references", {"asset_ids": [first_asset, second_asset]}]])
+	assert_eq(first.position, before[first.item_id])
+	assert_eq(second.position, before[second.item_id])
+	assert_eq(canvas.get_selected_ids(), [card.item_id])
 
 
 func _tile_for_id(grid: Control, item_id: String) -> Button:

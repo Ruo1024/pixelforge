@@ -59,13 +59,11 @@ func is_validation_available() -> bool:
 
 func save_current_config() -> Dictionary:
 	var result: Dictionary = _provider_api().save_provider_config(_provider_id, _draft_config())
-	_status_label.text = (
-		Strings.text("PROVIDER_SETTINGS_SAVED")
-		if bool(result.get("ok", false))
-		else Strings.text("PROVIDER_SETTINGS_SAVE_FAILED")
-	)
 	if bool(result.get("ok", false)):
 		_render_provider(_provider_id)
+		_status_label.text = Strings.text("PROVIDER_SETTINGS_SAVED")
+	else:
+		_status_label.text = Strings.text("PROVIDER_SETTINGS_SAVE_FAILED")
 	return result
 
 
@@ -187,7 +185,7 @@ func _add_field(schema: Dictionary, values: Dictionary) -> void:
 	var control := _make_control(schema, values.get(key, schema.get("default")))
 	_form.add_child(control)
 	_fields[key] = control
-	_connect_draft_signal(control)
+	_connect_draft_signal(control, key)
 	if String(schema.get("kind", "")) == "password" and bool(values.get("%s_saved" % key, false)):
 		(control as LineEdit).placeholder_text = Strings.text("PROVIDER_SETTINGS_SECRET_SAVED")
 
@@ -206,7 +204,8 @@ func _make_control(schema: Dictionary, value: Variant) -> Control:
 	if kind == "enum":
 		var options := OptionButton.new()
 		for option in schema.get("values", []):
-			options.add_item(String(option))
+			options.add_item(_enum_option_text(String(schema.get("key", "")), String(option)))
+			options.set_item_metadata(options.item_count - 1, option)
 			if option == value:
 				options.select(options.item_count - 1)
 		return options
@@ -220,7 +219,8 @@ func _control_value(control: Control) -> Variant:
 	if control is CheckBox:
 		return control.button_pressed
 	if control is OptionButton:
-		return control.get_item_text(control.selected)
+		var metadata: Variant = control.get_item_metadata(control.selected)
+		return metadata if metadata != null else control.get_item_text(control.selected)
 	if control is LineEdit:
 		return control.text
 	return null
@@ -243,6 +243,16 @@ func _yes_no(value: bool) -> String:
 	return Strings.text("VALUE_YES") if value else Strings.text("VALUE_NO")
 
 
+func _enum_option_text(key: String, value: String) -> String:
+	if key == "api_mode":
+		return (
+			Strings.text("OPENAI_API_MODE_CHAT_COMPLETIONS")
+			if value == "chat_completions"
+			else Strings.text("OPENAI_API_MODE_IMAGES")
+		)
+	return value
+
+
 func _draft_config() -> Dictionary:
 	var config := {}
 	for key in _fields.keys():
@@ -250,13 +260,33 @@ func _draft_config() -> Dictionary:
 	return config
 
 
-func _connect_draft_signal(control: Control) -> void:
+func _connect_draft_signal(control: Control, key: String) -> void:
 	if control is LineEdit:
-		control.text_changed.connect(func(_value: String) -> void: _mark_untested())
+		control.text_changed.connect(_on_text_field_changed.bind(key))
 	elif control is CheckBox:
 		control.toggled.connect(func(_value: bool) -> void: _mark_untested())
 	elif control is OptionButton:
 		control.item_selected.connect(func(_index: int) -> void: _mark_untested())
+
+
+func _on_text_field_changed(value: String, key: String) -> void:
+	if key == "base_url":
+		var normalized := value.strip_edges().trim_suffix("/")
+		if normalized.ends_with("/chat/completions"):
+			_select_enum_value("api_mode", "chat_completions")
+		elif normalized.ends_with("/images/generations"):
+			_select_enum_value("api_mode", "images")
+	_mark_untested()
+
+
+func _select_enum_value(key: String, value: String) -> void:
+	var control: Control = _fields.get(key)
+	if not (control is OptionButton):
+		return
+	for index in range(control.item_count):
+		if String(control.get_item_metadata(index)) == value:
+			control.select(index)
+			return
 
 
 func _mark_untested() -> void:

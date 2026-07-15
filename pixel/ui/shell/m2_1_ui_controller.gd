@@ -315,6 +315,21 @@ func _import_reference_for_node(graph_id: String, node_id: String) -> void:
 
 
 func handle_graph_node_action(graph_id: String, node_id: String, action_id: String) -> void:
+	if action_id.begins_with("replace_reference:"):
+		var index_text := action_id.trim_prefix("replace_reference:")
+		if index_text.is_valid_int() and int(index_text) >= 0:
+			(
+				_import_flow
+				. show_reference_import_dialog(
+					{
+						"mode": "reference_set",
+						"graph_id": graph_id,
+						"node_id": node_id,
+						"replace_index": int(index_text),
+					}
+				)
+			)
+		return
 	match action_id:
 		"run":
 			_run_graph_node(graph_id, node_id, "run")
@@ -985,7 +1000,13 @@ func _on_reference_asset_imported(target: Dictionary, asset_id: String) -> void:
 			. get("asset_ids", [])
 			. duplicate()
 		)
-		asset_ids.append(asset_id)
+		if target.has("replace_index"):
+			var replace_index := int(target.get("replace_index", -1))
+			if replace_index < 0 or replace_index >= asset_ids.size():
+				return
+			asset_ids[replace_index] = asset_id
+		else:
+			asset_ids.append(asset_id)
 		params = {"asset_ids": asset_ids}
 	apply_graph_node_params(
 		String(target.get("graph_id", "")), String(target.get("node_id", "")), params

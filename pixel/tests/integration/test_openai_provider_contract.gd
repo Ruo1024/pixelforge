@@ -92,11 +92,13 @@ func test_capabilities_and_persistent_schema_match_contract() -> void:
 	assert_has(capabilities["provider_output_sizes"], [1920, 1088])
 	assert_eq(descriptor["dynamic_params"], [])
 	var schema := _provider.get_config_schema()
-	assert_eq(schema.size(), 2)
+	assert_eq(schema.size(), 4)
 	assert_eq(schema[0]["key"], "base_url")
 	assert_eq(schema[0]["default"], "https://api.openai.com/v1")
 	assert_eq(schema[1]["kind"], "password")
 	assert_false(schema[1].has("session_only"))
+	assert_eq(schema[2]["key"], "remote_model")
+	assert_eq(schema[3]["key"], "api_mode")
 
 
 func test_request_body_is_sanitized_and_adapts_target_size() -> void:
