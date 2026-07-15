@@ -60,6 +60,7 @@ var _plugins := []
 var _validation_states := {}
 var _credential_store: RefCounted = null
 var _automation_mock_enabled := false
+var _verified_config_fingerprints := {}
 
 
 func _ready() -> void:
@@ -126,6 +127,7 @@ func unregister_provider(provider_id: String) -> bool:
 		provider.clear_session_config()
 	_providers.erase(provider_id)
 	_validation_states.erase(provider_id)
+	_verified_config_fingerprints.erase(provider_id)
 	return true
 
 
@@ -254,6 +256,11 @@ func save_provider_config(provider_id: String, config: Dictionary) -> Dictionary
 	var provider := get_provider(provider_id)
 	if provider == null:
 		return _error("invalid_request", "Provider is not registered")
+	var effective_config := _effective_provider_config(provider_id, config)
+	var configure_error: Variant = provider.configure(effective_config)
+	if configure_error != null:
+		return configure_error
+	var tested_fingerprint := String(_verified_config_fingerprints.get(provider_id, ""))
 	for field in provider.get_config_schema():
 		var key := String(field.get("key", ""))
 		if key.is_empty() or not config.has(key):
@@ -266,13 +273,33 @@ func save_provider_config(provider_id: String, config: Dictionary) -> Dictionary
 					return _error("provider_internal", "Credential could not be saved")
 		else:
 			SettingsService.set_setting(_provider_settings_section(provider_id), key, config[key])
-	var configure_error: Variant = _configure_from_storage(provider_id)
+	SettingsService.set_setting(_provider_settings_section(provider_id), "validated", false)
+	configure_error = _configure_from_storage(provider_id)
 	if configure_error != null:
 		return configure_error
-	SettingsService.set_setting(_provider_settings_section(provider_id), "validated", false)
-	_set_validation_state(provider_id, "configured", _configured_message(provider))
+	var fingerprint := _provider_config_fingerprint(_effective_provider_config(provider_id))
+	var remains_verified := not fingerprint.is_empty() and tested_fingerprint == fingerprint
+	if not remains_verified:
+		_verified_config_fingerprints.erase(provider_id)
+	SettingsService.set_setting(
+		_provider_settings_section(provider_id), "validated", remains_verified
+	)
+	_set_validation_state(
+		provider_id,
+		"verified" if remains_verified else "configured",
+		(
+			LocalizationService.text("PROVIDER_PING_SUCCESS", "Connection successful")
+			if remains_verified
+			else _configured_message(provider)
+		)
+	)
 	provider_config_changed.emit(provider_id)
 	return {"ok": true}
+
+
+func restore_provider_config(provider_id: String) -> void:
+	_verified_config_fingerprints.erase(provider_id)
+	_configure_from_storage(provider_id)
 
 
 func delete_provider_credentials(provider_id: String) -> Error:
@@ -281,6 +308,7 @@ func delete_provider_credentials(provider_id: String) -> Error:
 	if provider != null and provider.has_method("clear_session_config"):
 		provider.clear_session_config()
 	SettingsService.set_setting(_provider_settings_section(provider_id), "validated", false)
+	_verified_config_fingerprints.erase(provider_id)
 	_set_validation_state(
 		provider_id,
 		"unconfigured",
@@ -290,35 +318,53 @@ func delete_provider_credentials(provider_id: String) -> Error:
 	return error
 
 
-func validate_provider(provider_id: String) -> Variant:
+func validate_provider(provider_id: String, draft_config: Dictionary = {}) -> Variant:
 	var provider := get_provider(provider_id)
 	if provider == null or not _safe_validation(provider):
+		return null
+	var is_draft := not draft_config.is_empty()
+	var effective_config := _effective_provider_config(provider_id, draft_config)
+	var configure_error: Variant = provider.configure(effective_config)
+	if configure_error != null:
+		var configure_code := (
+			String(configure_error.get("code", "protocol_error"))
+			if configure_error is Dictionary
+			else "protocol_error"
+		)
+		_set_validation_outcome(provider_id, configure_code)
 		return null
 	var task: Variant = provider.validate_credentials()
 	if task == null:
 		return null
+	var fingerprint := _provider_config_fingerprint(effective_config)
 	_set_validation_state(
 		provider_id,
 		"validating",
-		LocalizationService.text("PROVIDER_STATUS_VALIDATING", "Validating credentials…")
+		LocalizationService.text("PROVIDER_PING_TESTING", "Testing connection…")
 	)
 	task.finished.connect(
-		func(_result: Variant) -> void:
-			SettingsService.set_setting(_provider_settings_section(provider_id), "validated", true)
-			_set_validation_state(
-				provider_id,
-				"verified",
-				LocalizationService.text("PROVIDER_STATUS_VERIFIED", "Credentials verified")
-			)
+		func(result: Variant) -> void:
+			var outcome := "success"
+			if result is Dictionary:
+				outcome = String(result.get("status", "success"))
+			if outcome == "success":
+				_verified_config_fingerprints[provider_id] = fingerprint
+				if not is_draft:
+					SettingsService.set_setting(
+						_provider_settings_section(provider_id), "validated", true
+					)
+			else:
+				_verified_config_fingerprints.erase(provider_id)
+			_set_validation_outcome(provider_id, outcome)
 	)
 	task.failed.connect(
 		func(error: Dictionary) -> void:
-			SettingsService.set_setting(_provider_settings_section(provider_id), "validated", false)
-			_set_validation_state(
-				provider_id,
-				"invalid",
-				LocalizationService.text("PROVIDER_STATUS_INVALID", "Credentials are invalid")
-			)
+			if not is_draft:
+				SettingsService.set_setting(
+					_provider_settings_section(provider_id), "validated", false
+				)
+			_verified_config_fingerprints.erase(provider_id)
+			_set_validation_outcome(provider_id, String(error.get("code", "protocol_error")))
 	)
 	task.canceled.connect(
 		func() -> void:
@@ -384,29 +430,26 @@ func _configure_from_storage(provider_id: String) -> Variant:
 	var provider := get_provider(provider_id)
 	if provider == null:
 		return _error("invalid_request", "Provider is not registered")
-	var config := {}
+	var config := _effective_provider_config(provider_id)
 	var has_required_secret := true
 	for field in provider.get_config_schema():
 		var key := String(field.get("key", ""))
 		if key.is_empty():
 			continue
 		if String(field.get("kind", "")) == "password":
-			var secret: String = _credential_store.get_secret(provider_id, key)
-			if secret.is_empty():
+			if bool(field.get("required", false)) and String(config.get(key, "")).is_empty():
 				has_required_secret = false
-			else:
-				config[key] = secret
-		else:
-			config[key] = SettingsService.get_setting(
-				_provider_settings_section(provider_id), key, field.get("default")
-			)
 	if not has_required_secret:
+		if provider.has_method("clear_session_config"):
+			provider.clear_session_config()
+		_set_validation_state(provider_id, "unconfigured", "")
 		return null
 	var error: Variant = provider.configure(config)
 	if error == null:
 		if bool(
 			SettingsService.get_setting(_provider_settings_section(provider_id), "validated", false)
 		):
+			_verified_config_fingerprints[provider_id] = _provider_config_fingerprint(config)
 			_set_validation_state(
 				provider_id,
 				"verified",
@@ -415,6 +458,93 @@ func _configure_from_storage(provider_id: String) -> Variant:
 		else:
 			_set_validation_state(provider_id, "configured", _configured_message(provider))
 	return error
+
+
+func _effective_provider_config(provider_id: String, draft_config: Dictionary = {}) -> Dictionary:
+	var provider := get_provider(provider_id)
+	if provider == null:
+		return {}
+	var config := {}
+	for field in provider.get_config_schema():
+		var key := String(field.get("key", ""))
+		if key.is_empty():
+			continue
+		var kind := String(field.get("kind", ""))
+		if kind == "password":
+			var draft_secret := String(draft_config.get(key, "")).strip_edges()
+			config[key] = (
+				draft_secret
+				if not draft_secret.is_empty()
+				else _credential_store.get_secret(provider_id, key)
+			)
+		else:
+			config[key] = (
+				draft_config[key]
+				if draft_config.has(key)
+				else SettingsService.get_setting(
+					_provider_settings_section(provider_id), key, field.get("default")
+				)
+			)
+	return config
+
+
+func _provider_config_fingerprint(config: Dictionary) -> String:
+	if config.is_empty():
+		return ""
+	var context := HashingContext.new()
+	if context.start(HashingContext.HASH_SHA256) != OK:
+		return ""
+	context.update(JSON.stringify(config).to_utf8_buffer())
+	return context.finish().hex_encode()
+
+
+func _set_validation_outcome(provider_id: String, outcome: String) -> void:
+	match outcome:
+		"success":
+			_set_validation_state(
+				provider_id,
+				"verified",
+				LocalizationService.text("PROVIDER_PING_SUCCESS", "Connection successful")
+			)
+		"auth_failed":
+			_set_validation_state(
+				provider_id,
+				"invalid",
+				LocalizationService.text("PROVIDER_PING_AUTH_FAILED", "Authentication failed")
+			)
+		"model_unconfirmed":
+			_set_validation_state(
+				provider_id,
+				"configured",
+				LocalizationService.text(
+					"PROVIDER_PING_MODEL_UNCONFIRMED",
+					"Service reached, but the model could not be confirmed"
+				)
+			)
+		"rate_limited":
+			_set_validation_state(
+				provider_id,
+				"configured",
+				LocalizationService.text("PROVIDER_PING_RATE_LIMITED", "Service is rate limited")
+			)
+		"timeout":
+			_set_validation_state(
+				provider_id,
+				"configured",
+				LocalizationService.text("PROVIDER_PING_TIMEOUT", "Connection timed out")
+			)
+		"network":
+			_set_validation_state(
+				provider_id,
+				"configured",
+				LocalizationService.text("PROVIDER_PING_NETWORK_ERROR", "Network or TLS error")
+			)
+		_:
+			_set_validation_state(
+				provider_id,
+				"configured",
+				LocalizationService.text("PROVIDER_PING_PROTOCOL_ERROR", "Protocol error")
+			)
 
 
 func _set_validation_state(provider_id: String, state: String, message: String) -> void:

@@ -125,6 +125,7 @@ func _normalize_opts(method: int, opts: Dictionary) -> Dictionary:
 	return {
 		"timeout": maxf(0.01, float(opts.get("timeout", DEFAULT_TIMEOUT_SECONDS))),
 		"retries": safe_get_retries,
+		"max_redirects": maxi(0, int(opts.get("max_redirects", 8))),
 		"backoff": maxf(0.0, float(opts.get("backoff", DEFAULT_BACKOFF_SECONDS))),
 		"log_requests": bool(opts.get("log_requests", false)),
 		"transform": opts.get("transform", Callable()),
@@ -171,6 +172,7 @@ func _attempt_request(task_id: String) -> void:
 		return
 	var request := HTTPRequest.new()
 	request.timeout = float(state["opts"]["timeout"])
+	request.max_redirects = int(state["opts"]["max_redirects"])
 	add_child(request)
 	state["request"] = request
 	state["request_dispatched"] = false

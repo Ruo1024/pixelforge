@@ -12,18 +12,21 @@ const ContractV2 := preload("res://core/provider/pf_provider_contract_v2.gd")
 const PROVIDER_ID := "openai_image"
 const API_VERSION := 2
 const MODEL_ID := "gpt-image-2"
-const GENERATION_URL := "https://api.openai.com/v1/images/generations"
-const EDIT_URL := "https://api.openai.com/v1/images/edits"
-const VALIDATION_URL := "https://api.openai.com/v1/models/gpt-image-2"
+const DEFAULT_BASE_URL := "https://api.openai.com/v1"
+const GENERATION_URL := DEFAULT_BASE_URL + "/images/generations"
+const EDIT_URL := DEFAULT_BASE_URL + "/images/edits"
+const VALIDATION_URL := DEFAULT_BASE_URL + "/models/" + MODEL_ID
 const MULTIPART_BOUNDARY := "----PixelForgeImageBoundary7MA4YWxkTrZu0gW"
 const REQUEST_TIMEOUT_SECONDS := 180.0
 const MAX_NETWORK_RETRIES := 0
+const PING_NETWORK_RETRIES := 0
 const RETRY_DELAY_SECONDS := 0.25
 const MAX_BATCH := 4
 
 var _request_host: Node = null
 var _http: Node = null
 var _api_key := ""
+var _base_url := DEFAULT_BASE_URL
 var _generation_url := GENERATION_URL
 var _edit_url := EDIT_URL
 var _validation_url := VALIDATION_URL
@@ -112,6 +115,14 @@ func get_model_descriptors() -> Array[Dictionary]:
 func get_config_schema() -> Array[Dictionary]:
 	return [
 		{
+			"key": "base_url",
+			"kind": "string",
+			"label_key": "OPENAI_FIELD_BASE_URL",
+			"help_key": "OPENAI_FIELD_BASE_URL_HELP",
+			"required": true,
+			"default": DEFAULT_BASE_URL,
+		},
+		{
 			"key": "api_key",
 			"kind": "password",
 			"label_key": "OPENAI_FIELD_API_KEY",
@@ -133,13 +144,25 @@ func attach_request_host(host: Node) -> void:
 func configure(config: Dictionary) -> Variant:
 	for key_value in config.keys():
 		var key := String(key_value)
-		if key != "api_key":
+		if key not in ["api_key", "base_url"]:
 			return {"code": "invalid_request", "field": key, "args": {}}
 	var candidate := String(config.get("api_key", "")).strip_edges()
 	if candidate.is_empty():
 		return {"code": "auth_failed", "field": "api_key", "args": {}}
+	if config.has("base_url"):
+		var normalized_base_url := _normalize_base_url(String(config["base_url"]))
+		if normalized_base_url.is_empty():
+			return {"code": "invalid_request", "field": "base_url", "args": {}}
+		_base_url = normalized_base_url
+		_generation_url = _base_url + "/images/generations"
+		_edit_url = _base_url + "/images/edits"
+		_validation_url = _base_url + "/models/" + MODEL_ID
 	_api_key = candidate
 	return null
+
+
+func get_base_url() -> String:
+	return _base_url
 
 
 func clear_session_config() -> void:
@@ -164,9 +187,10 @@ func validate_credentials() -> Variant:
 			null,
 			{
 				"timeout": _request_timeout_seconds,
-				"retries": 2,
+				"retries": PING_NETWORK_RETRIES,
+				"max_redirects": 0,
 				"transform": _decode_validation_response,
-				"error_mapper": map_error.bind(_validation_request()),
+				"error_mapper": map_validation_error,
 			}
 		)
 	)
@@ -439,8 +463,54 @@ func _decode_raw_generation_response(response: Dictionary, request: Dictionary) 
 	return decode_success_payload(payload, request)
 
 
-func _decode_validation_response(_response: Dictionary) -> Dictionary:
-	return {"ok": true, "provider_id": PROVIDER_ID}
+func _decode_validation_response(response: Dictionary) -> Dictionary:
+	var payload: Variant = response.get("body", {})
+	if payload is Dictionary and String(payload.get("id", "")) == MODEL_ID:
+		return {"ok": true, "status": "success", "provider_id": PROVIDER_ID}
+	return {"ok": true, "status": "model_unconfirmed", "provider_id": PROVIDER_ID}
+
+
+func map_validation_error(result: int, status_code: int, detail: Dictionary = {}) -> Dictionary:
+	var code := "protocol_error"
+	if result == HTTPRequest.RESULT_TIMEOUT:
+		code = "timeout"
+	elif result != HTTPRequest.RESULT_SUCCESS:
+		code = "network"
+	else:
+		match status_code:
+			401, 403:
+				code = "auth_failed"
+			404:
+				code = "model_unconfirmed"
+			429:
+				code = "rate_limited"
+			_:
+				code = "protocol_error"
+	if bool(detail.get("malformed_json", false)):
+		code = "protocol_error"
+	return {"code": code}
+
+
+func _normalize_base_url(value: String) -> String:
+	var candidate := value.strip_edges()
+	while candidate.ends_with("/"):
+		candidate = candidate.left(-1)
+	if candidate.is_empty() or candidate.contains("?") or candidate.contains("#"):
+		return ""
+	var pattern := RegEx.new()
+	var expression := (
+		"^https?://(?:[A-Za-z0-9._-]+|\\[[0-9A-Fa-f:]+\\])"
+		+ "(?::([0-9]{1,5}))?(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?$"
+	)
+	if pattern.compile(expression) != OK:
+		return ""
+	var result := pattern.search(candidate)
+	if result == null:
+		return ""
+	var port := result.get_string(1)
+	if not port.is_empty() and int(port) > 65535:
+		return ""
+	return candidate
 
 
 func _headers(content_type: String = "application/json") -> PackedStringArray:

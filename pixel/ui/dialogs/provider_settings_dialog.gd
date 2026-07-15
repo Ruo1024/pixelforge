@@ -23,13 +23,21 @@ var _save_button: Button = null
 var _budget_edit: LineEdit = null
 var _fields := {}
 var _provider_id := ""
+var _provider_service: Node = null
+var _task_queue: Node = null
+var _rendering := false
 
 
 func _ready() -> void:
 	_build()
-	ProviderService.provider_validation_changed.connect(_on_provider_validation_changed)
+	_provider_api().provider_validation_changed.connect(_on_provider_validation_changed)
 	LocalizationService.language_changed.connect(_on_language_changed)
 	_refresh_provider_list()
+
+
+func set_services(provider_service: Node, task_queue: Node) -> void:
+	_provider_service = provider_service
+	_task_queue = task_queue
 
 
 func show_settings(provider_id: String = "") -> void:
@@ -60,10 +68,7 @@ func save_current_config() -> Dictionary:
 			"ok": false,
 			"error": {"code": "invalid_budget", "field": "monthly_budget", "args": {}},
 		}
-	var config := {}
-	for key in _fields.keys():
-		config[String(key)] = _control_value(_fields[key])
-	var result := ProviderService.save_provider_config(_provider_id, config)
+	var result: Dictionary = _provider_api().save_provider_config(_provider_id, _draft_config())
 	_status_label.text = (
 		Strings.text("PROVIDER_SETTINGS_SAVED")
 		if bool(result.get("ok", false))
@@ -75,17 +80,26 @@ func save_current_config() -> Dictionary:
 
 
 func validate_current_provider() -> bool:
-	var task: Variant = ProviderService.validate_provider(_provider_id)
+	var task: Variant = _provider_api().validate_provider(_provider_id, _draft_config())
 	if task == null:
-		_status_label.text = Strings.text("PROVIDER_SETTINGS_VALIDATE_UNAVAILABLE")
+		if _status_label.text.is_empty():
+			_status_label.text = Strings.text("PROVIDER_SETTINGS_VALIDATE_UNAVAILABLE")
 		return false
-	TaskQueue.submit(task)
+	_validate_button.disabled = true
+	task.finished.connect(func(_result: Variant) -> void: _validate_button.disabled = false)
+	task.failed.connect(func(_error: Dictionary) -> void: _validate_button.disabled = false)
+	task.canceled.connect(func() -> void: _validate_button.disabled = false)
+	_task_queue_api().submit(task)
 	return true
 
 
 func _build() -> void:
 	title = Strings.text("DIALOG_PROVIDER_SETTINGS_TITLE")
-	ok_button_text = Strings.text("ACTION_CLOSE")
+	ok_button_text = Strings.text("ACTION_SAVE_PROVIDER")
+	cancel_button_text = Strings.text("ACTION_CANCEL")
+	_save_button = get_ok_button()
+	confirmed.connect(save_current_config)
+	canceled.connect(_on_cancel_requested)
 	min_size = Vector2i(DIALOG_WIDTH, DIALOG_HEIGHT)
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", ROOT_SEPARATION)
@@ -117,10 +131,6 @@ func _build() -> void:
 	root.add_child(_form)
 
 	var actions := HBoxContainer.new()
-	_save_button = Button.new()
-	_save_button.text = Strings.text("ACTION_SAVE_PROVIDER")
-	_save_button.pressed.connect(save_current_config)
-	actions.add_child(_save_button)
 	_validate_button = Button.new()
 	_validate_button.text = Strings.text("ACTION_VALIDATE_PROVIDER")
 	_validate_button.pressed.connect(validate_current_provider)
@@ -137,8 +147,8 @@ func _refresh_provider_list() -> void:
 		return
 	var previous := _provider_id
 	_provider_options.clear()
-	for provider_id in ProviderService.get_provider_ids():
-		var descriptor: Dictionary = ProviderService.get_model_descriptor(String(provider_id))
+	for provider_id in _provider_api().get_provider_ids():
+		var descriptor: Dictionary = _provider_api().get_model_descriptor(String(provider_id))
 		_provider_options.add_item(String(descriptor.get("display_name", provider_id)))
 		_provider_options.set_item_metadata(_provider_options.item_count - 1, provider_id)
 	if _provider_options.item_count == 0:
@@ -160,7 +170,10 @@ func _select_provider(provider_id: String) -> void:
 func _on_provider_selected(index: int) -> void:
 	if index < 0 or index >= _provider_options.item_count:
 		return
-	_provider_id = String(_provider_options.get_item_metadata(index))
+	var next_provider_id := String(_provider_options.get_item_metadata(index))
+	if not _provider_id.is_empty() and _provider_id != next_provider_id:
+		_provider_api().restore_provider_config(_provider_id)
+	_provider_id = next_provider_id
 	_render_provider(_provider_id)
 
 
@@ -168,17 +181,19 @@ func _render_provider(provider_id: String) -> void:
 	_fields.clear()
 	for child in _form.get_children():
 		child.queue_free()
-	var provider: PFProvider = ProviderService.get_provider(provider_id)
+	var provider: PFProvider = _provider_api().get_provider(provider_id)
 	if provider == null:
 		return
-	var descriptor: Dictionary = ProviderService.get_model_descriptor(provider_id)
+	_rendering = true
+	var descriptor: Dictionary = _provider_api().get_model_descriptor(provider_id)
 	var capabilities: Dictionary = descriptor.get("capabilities", {})
 	_capabilities_label.text = _capabilities_text(capabilities)
 	_validate_button.visible = bool(capabilities.get("safe_validation", true))
-	var values := ProviderService.get_provider_config(provider_id)
+	var values: Dictionary = _provider_api().get_provider_config(provider_id)
 	for field in provider.get_config_schema():
 		_add_field(field, values)
-	_status_label.text = ProviderService.get_validation_message(provider_id)
+	_status_label.text = _provider_api().get_validation_message(provider_id)
+	_rendering = false
 
 
 func _add_field(schema: Dictionary, values: Dictionary) -> void:
@@ -191,6 +206,7 @@ func _add_field(schema: Dictionary, values: Dictionary) -> void:
 	var control := _make_control(schema, values.get(key, schema.get("default")))
 	_form.add_child(control)
 	_fields[key] = control
+	_connect_draft_signal(control)
 	if String(schema.get("kind", "")) == "password" and bool(values.get("%s_saved" % key, false)):
 		(control as LineEdit).placeholder_text = Strings.text("PROVIDER_SETTINGS_SECRET_SAVED")
 
@@ -253,6 +269,41 @@ func _refresh_budget_text() -> void:
 	_budget_edit.text = "0" if budget == 0 else String(CostService.format_micro_usd(budget))
 
 
+func _draft_config() -> Dictionary:
+	var config := {}
+	for key in _fields.keys():
+		config[String(key)] = _control_value(_fields[key])
+	return config
+
+
+func _connect_draft_signal(control: Control) -> void:
+	if control is LineEdit:
+		control.text_changed.connect(func(_value: String) -> void: _mark_untested())
+	elif control is CheckBox:
+		control.toggled.connect(func(_value: bool) -> void: _mark_untested())
+	elif control is OptionButton:
+		control.item_selected.connect(func(_index: int) -> void: _mark_untested())
+
+
+func _mark_untested() -> void:
+	if _rendering:
+		return
+	_status_label.text = Strings.text("PROVIDER_PING_UNTESTED")
+
+
+func _provider_api() -> Node:
+	return _provider_service if _provider_service != null else ProviderService
+
+
+func _task_queue_api() -> Node:
+	return _task_queue if _task_queue != null else TaskQueue
+
+
+func _on_cancel_requested() -> void:
+	if not _provider_id.is_empty():
+		_provider_api().restore_provider_config(_provider_id)
+
+
 func _on_provider_validation_changed(provider_id: String, _state: String, message: String) -> void:
 	if provider_id == _provider_id:
 		_status_label.text = message
@@ -260,7 +311,8 @@ func _on_provider_validation_changed(provider_id: String, _state: String, messag
 
 func _on_language_changed(_preference: String, _locale: String) -> void:
 	title = Strings.text("DIALOG_PROVIDER_SETTINGS_TITLE")
-	ok_button_text = Strings.text("ACTION_CLOSE")
+	ok_button_text = Strings.text("ACTION_SAVE_PROVIDER")
+	cancel_button_text = Strings.text("ACTION_CANCEL")
 	_provider_label.text = Strings.text("PROVIDER_SETTINGS_PROVIDER")
 	_budget_label.text = Strings.text("PROVIDER_MONTHLY_BUDGET")
 	_save_button.text = Strings.text("ACTION_SAVE_PROVIDER")

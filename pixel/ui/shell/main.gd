@@ -46,6 +46,10 @@ const BOTTOM_BAR_HEIGHT := 32
 const TOOLBAR_BUTTON_WIDTH := 96
 const COMPACT_BUTTON_WIDTH := 72
 const TOOLBAR_BUTTON_HEIGHT := 34
+const API_SETTINGS_BUTTON_WIDTH := 96
+const API_SETTINGS_COMPACT_WIDTH := 52
+const DEVELOPER_MODE_BUTTON_WIDTH := 124
+const DEVELOPER_MODE_COMPACT_WIDTH := 68
 const ZOOM_CONTROL_MARGIN := 12
 const FLEXIBLE_WIDTH := 0
 const CLEANUP_RESULT_GAP := 8
@@ -77,6 +81,7 @@ var _export_flow: Node = null
 var _last_screen_snapshot := {}
 var _localized_toolbar_buttons: Array[Button] = []
 var _responsive_top_bar: HBoxContainer = null
+var _developer_mode_toggle: CheckButton = null
 
 
 func _ready() -> void:
@@ -238,6 +243,9 @@ func _build_ui() -> void:
 	_title_label.add_theme_font_size_override("font_size", UI_FONT_SIZE)
 	top_bar.add_child(_title_label)
 	top_bar.call("setup_title", _title_label)
+	top_bar.connect(
+		"layout_mode_changed", func(_mode: String) -> void: _refresh_toolbar_text("", "")
+	)
 
 	var history_actions := HBoxContainer.new()
 	history_actions.name = "HistoryActions"
@@ -340,6 +348,7 @@ func _build_ui() -> void:
 	_m2_1_ui.export_snapshots_requested.connect(_export_flow.request_export)
 	_m2_1_ui.add_file_menu(global_actions)
 	_m2_1_ui.add_tool_buttons(canvas_actions)
+	_add_api_toolbar_controls(canvas_actions)
 	_add_toolbar_button(
 		canvas_actions,
 		"ACTION_RUN_SELECTION",
@@ -410,6 +419,60 @@ func _add_rail_button(
 	_localized_toolbar_buttons.append(button)
 
 
+func _add_api_toolbar_controls(parent: Control) -> void:
+	var api_settings := Button.new()
+	api_settings.name = "ApiSettingsButton"
+	api_settings.custom_minimum_size = Vector2(API_SETTINGS_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT)
+	api_settings.focus_mode = Control.FOCUS_NONE
+	api_settings.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
+	api_settings.set_meta("text_key", "ACTION_API_SETTINGS")
+	api_settings.set_meta("compact_text_key", "ACTION_API_SETTINGS_COMPACT")
+	api_settings.set_meta("action_id", "api_settings")
+	api_settings.pressed.connect(_open_api_settings)
+	parent.add_child(api_settings)
+	_responsive_top_bar.call(
+		"register_compact_control",
+		api_settings,
+		float(API_SETTINGS_BUTTON_WIDTH),
+		float(API_SETTINGS_COMPACT_WIDTH)
+	)
+	_localized_toolbar_buttons.append(api_settings)
+
+	_developer_mode_toggle = CheckButton.new()
+	_developer_mode_toggle.name = "DeveloperModeToggle"
+	_developer_mode_toggle.custom_minimum_size = Vector2(
+		DEVELOPER_MODE_BUTTON_WIDTH, TOOLBAR_BUTTON_HEIGHT
+	)
+	_developer_mode_toggle.focus_mode = Control.FOCUS_NONE
+	_developer_mode_toggle.add_theme_font_size_override("font_size", UI_SMALL_FONT_SIZE)
+	_developer_mode_toggle.set_meta("text_key", "ACTION_DEVELOPER_MODE")
+	_developer_mode_toggle.set_meta("compact_text_key", "ACTION_DEVELOPER_MODE_COMPACT")
+	_developer_mode_toggle.set_meta("action_id", "developer_mode")
+	_developer_mode_toggle.button_pressed = SettingsService.is_developer_mode_enabled()
+	_developer_mode_toggle.toggled.connect(SettingsService.set_developer_mode_enabled)
+	SettingsService.developer_mode_changed.connect(_on_developer_mode_changed)
+	parent.add_child(_developer_mode_toggle)
+	_responsive_top_bar.call(
+		"register_compact_control",
+		_developer_mode_toggle,
+		float(DEVELOPER_MODE_BUTTON_WIDTH),
+		float(DEVELOPER_MODE_COMPACT_WIDTH)
+	)
+	_localized_toolbar_buttons.append(_developer_mode_toggle)
+	_refresh_toolbar_text("", "")
+
+
+func _open_api_settings() -> void:
+	var dialog := get_node_or_null("M21UiController/ProviderSettingsDialog")
+	if dialog != null:
+		dialog.show_settings("openai_image")
+
+
+func _on_developer_mode_changed(enabled: bool) -> void:
+	if _developer_mode_toggle != null:
+		_developer_mode_toggle.set_pressed_no_signal(enabled)
+
+
 func _workspace_add_input() -> void:
 	_workspace_start.create_input_workspace()
 
@@ -446,7 +509,14 @@ func _refresh_toolbar_text(_preference: String, _locale: String) -> void:
 			elif bool(button.get_meta("adaptive_label", false)):
 				button.call("refresh_text")
 			else:
-				button.text = _toolbar_text(text_key)
+				var compact_key := String(button.get_meta("compact_text_key", ""))
+				var use_compact: bool = (
+					_responsive_top_bar != null
+					and String(_responsive_top_bar.call("get_layout_mode")) == "compact"
+					and not compact_key.is_empty()
+				)
+				button.text = _toolbar_text(compact_key if use_compact else text_key)
+				button.tooltip_text = _toolbar_text(text_key)
 	if _responsive_top_bar != null:
 		_responsive_top_bar.call("refresh_layout")
 	_recovery_dialog.title = Strings.text("DIALOG_RECOVERY_TITLE")
@@ -474,6 +544,14 @@ func _toolbar_text(key: String) -> String:
 			return Strings.text("ACTION_ADD_INPUT")
 		"ACTION_IMPORT_REFERENCE":
 			return Strings.text("ACTION_IMPORT_REFERENCE")
+		"ACTION_API_SETTINGS":
+			return Strings.text("ACTION_API_SETTINGS")
+		"ACTION_API_SETTINGS_COMPACT":
+			return Strings.text("ACTION_API_SETTINGS_COMPACT")
+		"ACTION_DEVELOPER_MODE":
+			return Strings.text("ACTION_DEVELOPER_MODE")
+		"ACTION_DEVELOPER_MODE_COMPACT":
+			return Strings.text("ACTION_DEVELOPER_MODE_COMPACT")
 		_:
 			return Strings.text("ACTION_LIBRARY")
 

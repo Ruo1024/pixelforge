@@ -5,11 +5,13 @@ extends Node
 ## 使用 ConfigFile 包装 user://settings.cfg，并通过 setting_changed 信号通知 UI 刷新。
 
 signal setting_changed(section: String, key: String, value: Variant)
+signal developer_mode_changed(enabled: bool)
 
 const SETTINGS_PATH := "user://settings.cfg"
 const Log := preload("res://core/util/log_util.gd")
 
 var _config := ConfigFile.new()
+var _developer_mode_enabled := false
 
 
 func _ready() -> void:
@@ -47,6 +49,17 @@ func set_setting(section: String, key: String, value: Variant, save_now: bool = 
 
 	if save_now:
 		save_settings()
+
+
+func is_developer_mode_enabled() -> bool:
+	return _developer_mode_enabled
+
+
+func set_developer_mode_enabled(enabled: bool) -> void:
+	if _developer_mode_enabled == enabled:
+		return
+	_developer_mode_enabled = enabled
+	developer_mode_changed.emit(enabled)
 
 
 func get_recent_projects() -> Array:

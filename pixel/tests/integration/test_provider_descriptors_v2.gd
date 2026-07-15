@@ -19,6 +19,14 @@ func test_openai_exact_descriptor_and_schema() -> void:
 		provider.get_config_schema(),
 		[
 			{
+				"key": "base_url",
+				"kind": "string",
+				"label_key": "OPENAI_FIELD_BASE_URL",
+				"help_key": "OPENAI_FIELD_BASE_URL_HELP",
+				"required": true,
+				"default": "https://api.openai.com/v1",
+			},
+			{
 				"key": "api_key",
 				"kind": "password",
 				"label_key": "OPENAI_FIELD_API_KEY",
@@ -94,7 +102,7 @@ func test_service_rejects_nonexact_descriptor_and_config_schema_types() -> void:
 	raw_label[0]["label"] = "API key"
 	assert_false(service._config_schema_is_valid(raw_label))
 	var secret_default := openai.get_config_schema().duplicate(true)
-	secret_default[0]["default"] = "secret"
+	secret_default[1]["default"] = "secret"
 	assert_false(service._config_schema_is_valid(secret_default))
 	var descriptors := openai.get_model_descriptors()
 	assert_true(service._model_descriptors_are_valid("openai_image", descriptors))

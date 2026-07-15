@@ -92,6 +92,14 @@ func test_exact_config_schema() -> void:
 		openai.get_config_schema(),
 		[
 			{
+				"key": "base_url",
+				"kind": "string",
+				"label_key": "OPENAI_FIELD_BASE_URL",
+				"help_key": "OPENAI_FIELD_BASE_URL_HELP",
+				"required": true,
+				"default": "https://api.openai.com/v1",
+			},
+			{
 				"key": "api_key",
 				"kind": "password",
 				"label_key": "OPENAI_FIELD_API_KEY",

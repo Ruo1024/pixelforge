@@ -64,8 +64,43 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "attempt": Handler.safe_retry_count})
         elif self.path == "/credential-sentinel-status":
             self._json(200, {"received": Handler.credential_sentinel_received})
-        elif self.path == "/openai-model":
+        elif self.path in {"/openai-model", "/v1/models/gpt-image-2"}:
             self._json(200, {"id": "gpt-image-2", "object": "model"})
+        elif self.path == "/ping-auth/models/gpt-image-2":
+            self._json(401, {"error": {"code": "invalid_api_key"}})
+        elif self.path == "/ping-model-unconfirmed/models/gpt-image-2":
+            self._json(200, {"data": []})
+        elif self.path == "/ping-rate/models/gpt-image-2":
+            self._json(429, {"error": {"code": "rate_limit"}})
+        elif self.path == "/ping-network/models/gpt-image-2":
+            self.connection.shutdown(socket.SHUT_RDWR)
+            self.connection.close()
+        elif self.path == "/ping-timeout/models/gpt-image-2":
+            time.sleep(0.3)
+            self._json(200, {"id": "gpt-image-2", "object": "model"})
+        elif self.path == "/ping-malformed/models/gpt-image-2":
+            payload = b"{not-json"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        elif self.path == "/ping-protocol/models/gpt-image-2":
+            self._json(503, {"error": {"code": "unexpected_protocol"}})
+        elif self.path == "/ping-redirect/models/gpt-image-2":
+            self.send_response(302)
+            self.send_header("Location", "https://example.invalid/models/gpt-image-2")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif self.path == "/ping-sentinel/models/gpt-image-2":
+            sentinel = "PF_B7F_API_KEY_SENTINEL_C18A7E"
+            Handler.credential_sentinel_received = (
+                self.headers.get("Authorization") == f"Bearer {sentinel}"
+            )
+            if Handler.credential_sentinel_received:
+                self._json(200, {"id": "gpt-image-2", "object": "model"})
+            else:
+                self._json(401, {"error": {"code": "invalid_api_key"}})
         elif self.path == "/system_stats":
             self._json(200, {"system": {"os": "fixture"}, "devices": []})
         elif self.path == "/last-comfy-prompt":
