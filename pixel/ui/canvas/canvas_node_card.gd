@@ -76,6 +76,9 @@ var _more_button: MenuButton = null
 var _params_snapshot := {}
 var _raw_data := {}
 var _lod_camera_zoom := 1.0
+var _prompt_draft_cache := ""
+var _prompt_draft_cached := false
+var _suppress_prompt_draft_tracking := false
 
 
 func setup_from_data(data: Dictionary) -> void:
@@ -93,6 +96,8 @@ func setup_from_data(data: Dictionary) -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	if not LocalizationService.language_changed.is_connected(_on_language_changed):
 		LocalizationService.language_changed.connect(_on_language_changed)
+	_prompt_draft_cache = ""
+	_prompt_draft_cached = false
 	_resolve_graph_node()
 	requested_size = CardContract.normalize_requested_size(_node_type, data.get("size", null))
 	_rebuild_content_controls()
@@ -132,8 +137,10 @@ func is_graph_node() -> bool:
 
 
 func refresh_from_graph() -> void:
+	var interaction_state := _capture_content_interaction_state()
 	_resolve_graph_node()
 	_rebuild_content_controls()
+	_restore_content_interaction_state(interaction_state)
 	_rebuild_header_controls()
 	queue_redraw()
 
@@ -141,8 +148,10 @@ func refresh_from_graph() -> void:
 func set_collapsed(value: bool) -> void:
 	if collapsed == value:
 		return
+	var interaction_state := _capture_content_interaction_state()
 	collapsed = value
 	_rebuild_content_controls()
+	_restore_content_interaction_state(interaction_state)
 	_rebuild_header_controls()
 	queue_redraw()
 
@@ -155,8 +164,10 @@ func set_display_title(value: Variant) -> void:
 
 
 func set_requested_size(value: Variant) -> void:
+	var interaction_state := _capture_content_interaction_state()
 	requested_size = CardContract.normalize_requested_size(_node_type, value)
 	_rebuild_content_controls()
+	_restore_content_interaction_state(interaction_state)
 	_rebuild_header_controls()
 	queue_redraw()
 
@@ -166,8 +177,10 @@ func get_requested_size() -> Vector2i:
 
 
 func set_lod_camera_zoom(value: float) -> void:
+	var was_overview := _is_overview()
 	_lod_camera_zoom = maxf(0.0, value)
-	_rebuild_content_controls()
+	if was_overview != _is_overview():
+		_rebuild_content_controls()
 	_rebuild_header_controls()
 	queue_redraw()
 
@@ -513,6 +526,8 @@ func _rebuild_content_controls() -> void:
 			_build_prompt_preset_controls()
 		"pixel_cleanup":
 			_build_cleanup_shell_controls()
+	_configure_internal_scroll_ownership()
+	call_deferred("_configure_internal_scroll_ownership")
 
 
 func _rebuild_header_controls() -> void:
@@ -644,13 +659,18 @@ func _build_object_list_controls() -> void:
 func _build_text_prompt_controls() -> void:
 	_text_prompt_edit = TextEdit.new()
 	_text_prompt_edit.name = "PromptEdit"
-	_text_prompt_edit.text = String(_params_snapshot.get("text", ""))
+	_text_prompt_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	_text_prompt_edit.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+	_text_prompt_edit.scroll_horizontal = 0
+	_text_prompt_edit.text = (
+		_prompt_draft_cache if _prompt_draft_cached else String(_params_snapshot.get("text", ""))
+	)
 	_text_prompt_edit.custom_minimum_size = Vector2(FLEXIBLE_WIDTH, AppTheme.PROMPT_MIN_HEIGHT)
 	_text_prompt_edit.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_text_prompt_edit.placeholder_text = Strings.text("CONTENT_PROMPT_PLACEHOLDER")
-	_text_prompt_edit.focus_exited.connect(_commit_text_prompt)
-	_text_prompt_edit.text_changed.connect(_sync_prompt_draft)
-	_text_prompt_edit.gui_input.connect(_on_prompt_input)
+	_text_prompt_edit.focus_exited.connect(_commit_text_prompt.bind(_text_prompt_edit))
+	_text_prompt_edit.text_changed.connect(_on_prompt_text_changed.bind(_text_prompt_edit))
+	_text_prompt_edit.gui_input.connect(_on_prompt_input.bind(_text_prompt_edit))
 	_content_root.add_child(_text_prompt_edit)
 	var footer := HBoxContainer.new()
 	_prompt_draft_label = Label.new()
@@ -791,6 +811,7 @@ func _build_reference_set_controls() -> void:
 	var scroll := ScrollContainer.new()
 	scroll.name = "ReferenceSetScroll"
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	var rows := GridContainer.new()
 	rows.name = "ReferenceSetRows"
 	rows.columns = maxi(1, int(floor(float(requested_size.x - 32) / 108.0)))
@@ -924,15 +945,27 @@ func _change_reference_set_item(asset_ids: Array, index: int, action: String) ->
 	params_commit_requested.emit(graph_id, node_id, {"asset_ids": updated})
 
 
-func _commit_text_prompt() -> void:
-	if _text_prompt_edit == null:
+func _commit_text_prompt(editor: TextEdit = null) -> void:
+	var target := editor if editor != null else _text_prompt_edit
+	if target == null or target != _text_prompt_edit:
 		return
-	var text := _text_prompt_edit.text
+	var text := target.text
 	if text == String(_params_snapshot.get("text", "")):
+		_prompt_draft_cached = false
 		_sync_prompt_draft()
 		return
-	params_commit_requested.emit(graph_id, node_id, {"text": text})
 	_params_snapshot["text"] = text
+	_prompt_draft_cache = text
+	_prompt_draft_cached = false
+	_sync_prompt_draft()
+	params_commit_requested.emit(graph_id, node_id, {"text": text})
+
+
+func _on_prompt_text_changed(editor: TextEdit) -> void:
+	if editor != _text_prompt_edit or _suppress_prompt_draft_tracking:
+		return
+	_prompt_draft_cache = editor.text
+	_prompt_draft_cached = editor.text != String(_params_snapshot.get("text", ""))
 	_sync_prompt_draft()
 
 
@@ -948,17 +981,131 @@ func _sync_prompt_draft() -> void:
 		)
 
 
-func _on_prompt_input(event: InputEvent) -> void:
+func _on_prompt_input(event: InputEvent, editor: TextEdit = null) -> void:
 	if not (event is InputEventKey) or not event.pressed:
 		return
+	var target := editor if editor != null else _text_prompt_edit
+	if target == null or target != _text_prompt_edit:
+		return
 	if event.keycode == KEY_ESCAPE:
-		_text_prompt_edit.text = String(_params_snapshot.get("text", ""))
-		_text_prompt_edit.release_focus()
+		_suppress_prompt_draft_tracking = true
+		target.text = String(_params_snapshot.get("text", ""))
+		_suppress_prompt_draft_tracking = false
+		_prompt_draft_cache = target.text
+		_prompt_draft_cached = false
+		target.release_focus()
 		_sync_prompt_draft()
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_ENTER and event.is_command_or_control_pressed():
-		_commit_text_prompt()
+		_commit_text_prompt(target)
 		get_viewport().set_input_as_handled()
+
+
+func _configure_internal_scroll_ownership() -> void:
+	if _content_root == null:
+		return
+	var controls: Array[Control] = []
+	_collect_internal_scroll_controls(_content_root, controls)
+	for control in controls:
+		if control.has_meta("_pf_scroll_owner_wired"):
+			continue
+		control.set_meta("_pf_scroll_owner_wired", true)
+		control.gui_input.connect(_on_internal_scroll_input.bind(control))
+
+
+func _collect_internal_scroll_controls(node: Node, result: Array[Control]) -> void:
+	for child in node.get_children():
+		if child is ScrollContainer or child is TextEdit:
+			result.append(child)
+		_collect_internal_scroll_controls(child, result)
+
+
+func _on_internal_scroll_input(event: InputEvent, control: Control) -> void:
+	if not _is_plain_internal_scroll_event(event):
+		return
+	# A card-owned scroll gesture never falls through at its boundary to canvas zoom/pan.
+	control.accept_event()
+
+
+func _is_plain_internal_scroll_event(event: InputEvent) -> bool:
+	if event is InputEventMouseButton:
+		return (
+			event.pressed
+			and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]
+			and not event.ctrl_pressed
+			and not event.meta_pressed
+		)
+	if event is InputEventPanGesture:
+		return not event.ctrl_pressed and not event.meta_pressed
+	return false
+
+
+func _capture_content_interaction_state() -> Dictionary:
+	if _content_root == null:
+		return {}
+	var state := {"scrolls": {}}
+	var focus_owner := get_viewport().gui_get_focus_owner() if is_inside_tree() else null
+	if focus_owner != null and _content_root.is_ancestor_of(focus_owner):
+		state["focus_path"] = _content_root.get_path_to(focus_owner)
+		if focus_owner is LineEdit:
+			state["focus_text"] = focus_owner.text
+			state["caret_column"] = focus_owner.caret_column
+		elif focus_owner is TextEdit:
+			state["focus_text"] = focus_owner.text
+			state["caret_line"] = focus_owner.get_caret_line()
+			state["caret_column"] = focus_owner.get_caret_column()
+			state["text_scroll"] = [focus_owner.scroll_horizontal, focus_owner.scroll_vertical]
+	var scrolls: Dictionary = state["scrolls"]
+	_capture_scroll_offsets(_content_root, scrolls)
+	if _text_prompt_edit != null:
+		_prompt_draft_cache = _text_prompt_edit.text
+		_prompt_draft_cached = (_prompt_draft_cache != String(_params_snapshot.get("text", "")))
+	return state
+
+
+func _capture_scroll_offsets(node: Node, result: Dictionary) -> void:
+	for child in node.get_children():
+		if child is ScrollContainer:
+			result[_content_root.get_path_to(child)] = [
+				child.scroll_horizontal, child.scroll_vertical
+			]
+		_capture_scroll_offsets(child, result)
+
+
+func _restore_content_interaction_state(state: Dictionary) -> void:
+	if state.is_empty() or _content_root == null:
+		return
+	var focus_path: NodePath = state.get("focus_path", NodePath(""))
+	if not focus_path.is_empty():
+		var focus_owner := _content_root.get_node_or_null(focus_path) as Control
+		if focus_owner is LineEdit:
+			focus_owner.text = String(state.get("focus_text", focus_owner.text))
+			focus_owner.caret_column = int(state.get("caret_column", focus_owner.text.length()))
+			focus_owner.grab_focus()
+		elif focus_owner is TextEdit:
+			_suppress_prompt_draft_tracking = true
+			focus_owner.text = String(state.get("focus_text", focus_owner.text))
+			_suppress_prompt_draft_tracking = false
+			focus_owner.set_caret_line(int(state.get("caret_line", 0)))
+			focus_owner.set_caret_column(int(state.get("caret_column", 0)))
+			var text_scroll: Array = state.get("text_scroll", [0, 0])
+			focus_owner.scroll_horizontal = int(text_scroll[0])
+			focus_owner.scroll_vertical = float(text_scroll[1])
+			focus_owner.grab_focus()
+	_restore_scroll_offsets(state.get("scrolls", {}))
+	call_deferred("_restore_scroll_offsets", state.get("scrolls", {}))
+
+
+func _restore_scroll_offsets(scrolls: Dictionary) -> void:
+	if _content_root == null:
+		return
+	for path_value in scrolls:
+		var scroll := _content_root.get_node_or_null(NodePath(path_value)) as ScrollContainer
+		if scroll == null:
+			continue
+		var offsets: Array = scrolls[path_value]
+		scroll.scroll_horizontal = int(offsets[0])
+		scroll.scroll_vertical = int(offsets[1])
 
 
 func _generation_card_snapshot() -> Dictionary:
@@ -1078,8 +1225,10 @@ func _reference_action_text(action: String) -> String:
 
 
 func _on_language_changed(_preference: String, _locale: String) -> void:
+	var interaction_state := _capture_content_interaction_state()
 	_resolve_graph_node()
 	_rebuild_content_controls()
+	_restore_content_interaction_state(interaction_state)
 	_rebuild_header_controls()
 	queue_redraw()
 
