@@ -89,10 +89,11 @@ func set_scroll_offset(value: float) -> void:
 func handle_wheel(direction: int, zoom_modifier: bool) -> bool:
 	if zoom_modifier or direction == 0:
 		return false
-	var before := scroll_offset
 	var step := float(maxi(48, int(_layout()["tile_size"]) + Layout.TILE_GAP))
 	set_scroll_offset(scroll_offset + step * float(-direction))
-	return not is_equal_approx(before, scroll_offset)
+	# A card-owned scroll surface keeps the gesture even at either boundary so the
+	# same wheel event cannot fall through and zoom the canvas.
+	return true
 
 
 func _on_gui_input(event: InputEvent) -> void:

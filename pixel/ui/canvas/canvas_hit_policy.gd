@@ -17,10 +17,12 @@ static func hit_at_world(
 	node_card_script: Script,
 	frame_script: Script = null
 ) -> Dictionary:
-	var children := item_layer.get_children()
+	var children := _hit_order_children(
+		item_layer, batch_card_script, sprite_script, node_card_script, frame_script
+	)
 	var frame_hit: Dictionary = {}
 	for index in range(children.size() - 1, -1, -1):
-		var item := children[index]
+		var item: Node = children[index]
 		if not _is_canvas_item(
 			item, batch_card_script, sprite_script, node_card_script, frame_script
 		):
@@ -45,6 +47,31 @@ static func hit_at_world(
 		if not frame_hit.is_empty()
 		else {"kind": KIND_EMPTY, "item": null, "item_id": "", "asset_index": -1}
 	)
+
+
+static func _hit_order_children(
+	item_layer: Node,
+	batch_card_script: Script,
+	sprite_script: Script,
+	node_card_script: Script,
+	frame_script: Script
+) -> Array:
+	var regular := []
+	var selected := []
+	for child in item_layer.get_children():
+		if _is_canvas_item(child, batch_card_script, sprite_script, node_card_script, frame_script):
+			regular.append(child)
+			continue
+		if child.name != "SelectedItemLayer":
+			continue
+		for selected_child in child.get_children():
+			if _is_canvas_item(
+				selected_child, batch_card_script, sprite_script, node_card_script, frame_script
+			):
+				selected.append(selected_child)
+	regular.sort_custom(func(a: Node, b: Node) -> bool: return a.z_index < b.z_index)
+	regular.append_array(selected)
+	return regular
 
 
 static func _is_canvas_item(

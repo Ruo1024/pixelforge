@@ -37,6 +37,38 @@ func test_canvas_left_click_on_batch_thumbnail_does_not_start_card_drag() -> voi
 	assert_false(canvas._selection.is_dragging_items)
 
 
+func test_selected_card_layer_is_ephemeral_topmost_and_not_persisted() -> void:
+	var canvas: Control = _canvas()
+	_set_graph(
+		"graph_hit", [_graph_node("lower", "object_list"), _graph_node("upper", "object_list")]
+	)
+	var lower: Node = canvas._add_node_direct(
+		_node_item("lower_item", "graph_hit", "lower", Vector2(100, 100))
+	)
+	var upper: Node = canvas._add_node_direct(
+		_node_item("upper_item", "graph_hit", "upper", Vector2(120, 120))
+	)
+	var lower_z: int = lower.z_index
+	var upper_z: int = upper.z_index
+	var undo_before := UndoService.get_undo_count()
+
+	canvas._select_only(["lower_item"])
+
+	assert_eq(lower.get_parent().name, "SelectedItemLayer")
+	assert_eq(_hit(canvas, Vector2(140, 140))["item_id"], "lower_item")
+	assert_eq(lower.z_index, lower_z)
+	assert_eq(upper.z_index, upper_z)
+	assert_eq(UndoService.get_undo_count(), undo_before)
+	var exported: Dictionary = canvas.export_canvas_data()
+	var exported_lower: Array = exported["items"].filter(
+		func(item: Dictionary) -> bool: return item["id"] == "lower_item"
+	)
+	assert_eq(exported_lower[0]["z_index"], lower_z)
+
+	canvas._clear_selection()
+	assert_eq(lower.get_parent(), canvas.item_layer)
+
+
 func test_canvas_hit_policy_keeps_output_tile_available_at_25_percent() -> void:
 	var canvas: Control = _canvas()
 	var ids := [_register_asset(Color.RED, "red")]

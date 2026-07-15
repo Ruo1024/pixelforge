@@ -28,7 +28,7 @@ func test_wheel_boundary_and_zoom_modifier_priority() -> void:
 	assert_false(grid.handle_wheel(-1, true))
 	assert_true(grid.handle_wheel(-1, false))
 	grid.set_scroll_offset(grid.max_scroll_offset())
-	assert_false(grid.handle_wheel(-1, false))
+	assert_true(grid.handle_wheel(-1, false))
 	assert_true(grid.handle_wheel(1, false))
 
 

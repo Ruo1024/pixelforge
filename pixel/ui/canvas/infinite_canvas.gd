@@ -70,6 +70,7 @@ var _viewport_scale_factor_override := 0.0
 var _items_by_id := {}
 var _unrendered_items: Array[Dictionary] = []
 var _selection: Variant = CanvasSelectionScript.new()
+var _selected_item_layer := Node2D.new()
 var _cleanup_grid_overlay: Control = null
 var _cleanup_grid_active := false
 var _cleanup_grid_scale := 4.0
@@ -102,6 +103,9 @@ func _ready() -> void:
 	item_layer.name = "ItemLayer"
 	item_layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	add_child(item_layer)
+	_selected_item_layer.name = "SelectedItemLayer"
+	_selected_item_layer.z_index = 2048
+	item_layer.add_child(_selected_item_layer)
 
 	_cleanup_grid_overlay = CleanupGridOverlayScript.new()
 	_cleanup_grid_overlay.name = "CleanupGridOverlay"
@@ -542,7 +546,7 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 
 func export_canvas_data() -> Dictionary:
 	var items := _unrendered_items.duplicate(true)
-	var nodes := item_layer.get_children()
+	var nodes := _items_by_id.values()
 	nodes.sort_custom(func(a: Node, b: Node) -> bool: return a.z_index < b.z_index)
 
 	for node in nodes:
@@ -1758,10 +1762,13 @@ func _remove_item_direct(item_id: String) -> void:
 	elif item.get_script() == CanvasBatchCardScript:
 		for asset_id in item.asset_ids:
 			AssetLibrary.release_ref(asset_id)
+	if item.get_parent() == _selected_item_layer:
+		item.reparent(item_layer, false)
 	_items_by_id.erase(item_id)
 	if item_id == _cleanup_preview.source_item_id:
 		clear_cleanup_preview()
 	_selection.remove_item_reference(item_id)
+	_sync_selected_item_layer(_selection.get_selected_ids())
 	item_layer.remove_child(item)
 	item.free()
 	queue_redraw()
@@ -1875,11 +1882,23 @@ func _emit_zoom_changed() -> void:
 
 
 func _on_selection_changed(selected_ids: Array) -> void:
+	_sync_selected_item_layer(selected_ids)
 	if not selected_ids.has(_cleanup_preview.source_item_id):
 		clear_cleanup_preview()
 	_sync_cleanup_grid_overlay()
 	selection_changed.emit(selected_ids.duplicate())
 	queue_redraw()
+
+
+func _sync_selected_item_layer(selected_ids: Array) -> void:
+	for child in _selected_item_layer.get_children():
+		child.reparent(item_layer, false)
+	for index in range(selected_ids.size() - 1, -1, -1):
+		var item: Node = _items_by_id.get(selected_ids[index], null)
+		if item == null or item.get_script() not in [CanvasNodeCardScript, CanvasBatchCardScript]:
+			continue
+		item.reparent(_selected_item_layer, false)
+		break
 
 
 func _sync_cleanup_grid_overlay() -> void:
